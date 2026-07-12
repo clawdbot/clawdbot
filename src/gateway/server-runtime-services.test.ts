@@ -16,7 +16,11 @@ const hoisted = vi.hoisted(() => {
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
-    startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
+    startChannelHealthMonitor: vi.fn(() => ({
+      stop: vi.fn(),
+      shutdown: vi.fn(),
+      waitForIdle: vi.fn(async () => {}),
+    })),
     stopModelPricingRefresh,
     startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
     loadModelPricingCacheModule: vi.fn(),

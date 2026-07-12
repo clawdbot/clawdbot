@@ -170,7 +170,7 @@ export type {
   ChannelSetupInput,
 } from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
-export type { NormalizedLocation } from "../channels/location.js";
+export type { NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 export type { PollInput } from "../polls.js";

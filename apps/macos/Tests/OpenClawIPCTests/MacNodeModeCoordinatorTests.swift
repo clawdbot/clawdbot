@@ -433,6 +433,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
         #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+        #expect(commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
     }
 
     @Test func `local mode advertises browser proxy when enabled`() {

@@ -222,6 +222,58 @@ describe("startGatewayService", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("requests repair before start when the managed port differs from config", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "19001" },
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    });
+
+    const result = await startGatewayService(
+      service,
+      {
+        env: {},
+        stdout: process.stdout,
+      },
+      19_001,
+    );
+
+    expect(result.outcome).toBe("repair-required");
+    if (result.outcome === "repair-required") {
+      expect(result.issues).toContainEqual({
+        code: "port-mismatch",
+        message: "service port 18789 does not match current gateway config port 19001",
+      });
+    }
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("uses the command-line port before a stale managed environment port", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "--port", "19001"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    });
+
+    const result = await startGatewayService(
+      service,
+      {
+        env: {},
+        stdout: process.stdout,
+      },
+      19_001,
+    );
+
+    expect(result.outcome).toBe("started");
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
   it("requests repair before start when the loaded service points at temporary install paths", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({

@@ -1,4 +1,5 @@
 // Tlon tests cover sse client plugin behavior.
+import { Readable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";
@@ -192,6 +193,135 @@ describe("UrbitSSEClient", () => {
       expect(logger.error).toHaveBeenCalledWith(
         "Error parsing SSE event: Error: Tlon Urbit SSE event was malformed JSON",
       );
+    });
+
+    it("guards JSON.parse against oversized SSE payload to prevent OOM", () => {
+      const errors: string[] = [];
+      const logger = { error: (msg: string) => errors.push(msg) };
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", { logger });
+
+      const cap = 16 * 1024 * 1024;
+      // Valid JSON 1 KiB above the 16 MiB cap — size check fires before parse.
+      const prefix = '{"json":{"ok":true,"x":"';
+      const suffix = '"}}';
+      const jsonOverhead = Buffer.byteLength(prefix + suffix, "utf8");
+      const padLen = cap + 1024 - jsonOverhead;
+      const hugeJson = prefix + "A".repeat(padLen) + suffix;
+
+      client.processEvent(`id: 1\ndata: ${hugeJson}`);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toBe(
+        "Error parsing SSE event: Error: Tlon Urbit SSE payload exceeds 16 MiB limit",
+      );
+    });
+
+    it("accepts SSE payload at the 16 MiB boundary", () => {
+      const cap = 16 * 1024 * 1024;
+      // Allocate valid JSON whose byteLength exactly equals cap.
+      const prefix = '{"json":{"ok":true,"x":"';
+      const suffix = '"}}';
+      const jsonOverhead = Buffer.byteLength(prefix + suffix, "utf8");
+      const padLen = cap - jsonOverhead;
+      const hugeJson = prefix + "A".repeat(padLen) + suffix;
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      const handler = vi.fn();
+      client.eventHandlers.set(1, { event: handler });
+
+      client.processEvent(`id: 1\ndata: ${hugeJson}`);
+      expect(handler).toHaveBeenCalledTimes(1);
+      const payload = handler.mock.calls[0]?.[0] as { ok?: boolean; x?: string } | undefined;
+      expect(payload?.ok).toBe(true);
+      expect(payload?.x).toHaveLength(padLen);
+    });
+
+    describe("stream buffer bounding", () => {
+      it("rejects oversized stream buffer before unbounded accumulation", async () => {
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
+        const oneMb = 1024 * 1024;
+        const megaChunk = "x".repeat(oneMb);
+
+        // Feed 17 chunks × 1 MiB with no \n\n — buffer exceeds 16 MiB cap.
+        const stream = Readable.from(
+          (async function* () {
+            for (let i = 0; i < 17; i++) {
+              yield megaChunk;
+            }
+          })(),
+        );
+
+        await expect(client.processStream(stream)).rejects.toThrow(
+          "Tlon Urbit SSE stream buffer exceeded 16 MiB limit",
+        );
+      });
+
+      it("drains a cross-chunk event boundary before retaining the next event", async () => {
+        const cap = 16 * 1024 * 1024;
+        const prefix = 'id: 1\ndata: {"json":{"value":"';
+        const suffix = '"}}\n';
+        const padLen = cap - Buffer.byteLength(prefix + suffix, "utf8") - 128;
+        const nextValue = "b".repeat(256);
+        const firstChunk = prefix + "a".repeat(padLen) + suffix;
+        const secondChunk = `\nid: 1\ndata: {"json":{"value":"${nextValue}"}}\n\n`;
+        expect(Buffer.byteLength(firstChunk + secondChunk, "utf8")).toBeGreaterThan(cap);
+
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+        const stream = Readable.from([firstChunk, secondChunk]);
+
+        await client.processStream(stream);
+        expect(handler).toHaveBeenCalledTimes(2);
+        expect((handler.mock.calls[0]?.[0] as { value?: string } | undefined)?.value).toHaveLength(
+          padLen,
+        );
+        expect(handler.mock.calls[1]?.[0]).toEqual({ value: nextValue });
+      });
+
+      it("preserves split UTF-8 code points and split event delimiters", async () => {
+        const encoded = Buffer.from('id: 1\ndata: {"json":{"text":"😀"}}\n\n');
+        const emojiStart = encoded.indexOf(Buffer.from("😀"));
+        const stream = Readable.from([
+          encoded.subarray(0, emojiStart + 2),
+          encoded.subarray(emojiStart + 2, -1),
+          encoded.subarray(-1),
+        ]);
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+
+        await client.processStream(stream);
+        expect(handler).toHaveBeenCalledWith({ text: "😀" });
+      });
+
+      it("accepts a boundary-sized event with split surrogate pair and delimiter", async () => {
+        const cap = 16 * 1024 * 1024;
+        const prefix = 'id: 1\ndata: {"json":{"text":"';
+        const suffix = '"}}';
+        const padLen = cap - Buffer.byteLength(prefix + "😀" + suffix, "utf8");
+        const stream = Readable.from([
+          prefix + "a".repeat(padLen) + "\uD83D",
+          `\uDE00${suffix}\n`,
+          "\n",
+        ]);
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+          autoReconnect: false,
+        });
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+
+        await client.processStream(stream);
+        const payload = handler.mock.calls[0]?.[0] as { text?: string } | undefined;
+        expect(payload?.text).toHaveLength(padLen + 2);
+        expect(payload?.text?.endsWith("😀")).toBe(true);
+      });
     });
 
     it("ignores malformed event ids when deciding whether to ack", async () => {

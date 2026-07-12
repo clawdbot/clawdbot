@@ -5,7 +5,7 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
@@ -25,6 +25,53 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
+
+function buildAppToolPolicyProjections(params: {
+  catalog: McpToolCatalog;
+  modelTools: readonly AnyAgentTool[];
+  reservedToolNames?: Iterable<string>;
+}): AnyAgentTool[] {
+  const tools = params.modelTools.filter(
+    (tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool",
+  );
+  const reservedNames = normalizeReservedToolNames([
+    ...(params.reservedToolNames ?? []),
+    ...params.modelTools.map((tool) => tool.name),
+  ]);
+  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
+    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+    return serverOrder || a.toolName.localeCompare(b.toolName);
+  });
+  for (const tool of appOnlyTools) {
+    const name = buildSafeToolName({
+      serverName: tool.safeServerName,
+      toolName: tool.toolName,
+      reservedNames,
+    });
+    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+    const projection: AnyAgentTool = {
+      name,
+      label: tool.title ?? tool.toolName,
+      description: tool.description || tool.fallbackDescription,
+      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      execute: async () => {
+        throw new Error("MCP App policy projections cannot execute tools");
+      },
+    };
+    setPluginToolMeta(projection, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
+    });
+    tools.push(projection);
+  }
+  return tools.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function toAgentToolResult(params: {
@@ -351,6 +398,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
+  let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = params.runtime.acquireLease?.();
   params.runtime.markUsed();
   let catalog;
@@ -360,9 +408,12 @@ export async function materializeBundleMcpToolsForRun(params: {
     releaseLease?.();
     throw error;
   }
+  const reservedToolNames = params.reservedToolNames
+    ? Array.from(params.reservedToolNames)
+    : undefined;
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
-    reservedToolNames: params.reservedToolNames,
+    reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
@@ -372,6 +423,9 @@ export async function materializeBundleMcpToolsForRun(params: {
         result,
       });
       if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+        const allowedAppToolNames = allowedAppToolsByServer
+          ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
+          : undefined;
         const view = await fetchMcpAppView({
           runtime: params.runtime,
           serverName: tool.serverName,
@@ -379,6 +433,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           uiResourceUri: tool.uiResourceUri,
           toolInput: input,
           toolResult: result,
+          ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
         if (view) {
           (agentResult.details as Record<string, unknown>).mcpAppPreview =
@@ -432,12 +487,31 @@ export async function materializeBundleMcpToolsForRun(params: {
         }
       : undefined,
   });
+  const appTools = buildAppToolPolicyProjections({
+    catalog,
+    modelTools: tools,
+    reservedToolNames,
+  });
 
   return {
     tools,
+    appTools,
     ...(catalog.diagnostics && catalog.diagnostics.length > 0
       ? { diagnostics: catalog.diagnostics }
       : {}),
+    restrictAppTools: (allowedTools) => {
+      const next = new Map<string, Set<string>>();
+      for (const allowedTool of allowedTools) {
+        const mcp = getPluginToolMeta(allowedTool)?.mcp;
+        if (!mcp || mcp.operation !== "tool") {
+          continue;
+        }
+        const names = next.get(mcp.serverName) ?? new Set<string>();
+        names.add(mcp.toolName);
+        next.set(mcp.serverName, names);
+      }
+      allowedAppToolsByServer = next;
+    },
     dispose: async () => {
       if (disposed) {
         return;

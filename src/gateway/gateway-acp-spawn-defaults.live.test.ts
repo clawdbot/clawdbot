@@ -254,7 +254,6 @@ function createConfig(params: {
         acpx: {
           enabled: true,
           config: {
-            probeAgent: params.acpAgentId,
             permissionMode: "approve-all",
             nonInteractivePermissions: "deny",
             agents: {

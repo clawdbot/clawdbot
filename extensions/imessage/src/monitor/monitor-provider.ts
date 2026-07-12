@@ -24,6 +24,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -772,7 +773,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       };
 
       if (entries.length === 1) {
-        await dispatchUnit(entries, entries[0].message);
+        await dispatchUnit(
+          entries,
+          expectDefined(entries[0], "single iMessage dispatch entry").message,
+        );
         return;
       }
 

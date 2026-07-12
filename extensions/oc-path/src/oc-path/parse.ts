@@ -12,6 +12,7 @@
  */
 
 import MarkdownIt from "markdown-it";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -54,13 +55,13 @@ function detectFrontmatter(
   lines: readonly string[],
   diagnostics: Diagnostic[],
 ): FrontmatterRange | null {
-  if (lines.length < 2 || lines[0] !== FENCE) {
+  if (lines.length < 2 || lines.at(0) !== FENCE) {
     return null;
   }
   let closeIndex = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i] === FENCE) {
-      closeIndex = i;
+  for (const [offset, line] of lines.slice(1).entries()) {
+    if (line === FENCE) {
+      closeIndex = offset + 1;
       break;
     }
   }
@@ -74,10 +75,12 @@ function detectFrontmatter(
     return null;
   }
   const entries: FrontmatterEntry[] = [];
-  for (let i = 1; i < closeIndex; i++) {
-    const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(lines[i]);
+  for (const [offset, line] of lines.slice(1, closeIndex).entries()) {
+    const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m !== null) {
-      entries.push({ key: m[1], value: unquote(m[2].trim()), line: i + 1 });
+      const key = expectDefined(m[1], "frontmatter key capture");
+      const value = expectDefined(m[2], "frontmatter value capture");
+      entries.push({ key, value: unquote(value.trim()), line: offset + 2 });
     }
   }
   return { entries, endLine: closeIndex };
@@ -103,11 +106,14 @@ function walkBlocks(
 ): { preamble: string; blocks: AstBlock[] } {
   // Match atx `##` only; setext h2 has `markup: "-"`.
   const h2: { tokenIdx: number; lineIdx: number; text: string }[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
+  for (const [i, t] of tokens.entries()) {
     if (t.type === "heading_open" && t.tag === "h2" && t.markup === "##" && t.map !== null) {
       const inline = tokens[i + 1];
-      h2.push({ tokenIdx: i, lineIdx: t.map[0], text: inline?.content ?? "" });
+      h2.push({
+        tokenIdx: i,
+        lineIdx: expectDefined(t.map.at(0), "heading token map start"),
+        text: inline?.content ?? "",
+      });
     }
   }
 
@@ -115,20 +121,22 @@ function walkBlocks(
     return { preamble: bodyLines.join("\n"), blocks: [] };
   }
 
-  const preamble = bodyLines.slice(0, h2[0].lineIdx).join("\n");
+  const firstHeading = expectDefined(h2.at(0), "non-empty heading list");
+  const preamble = bodyLines.slice(0, firstHeading.lineIdx).join("\n");
   const blocks: AstBlock[] = [];
 
-  for (let h = 0; h < h2.length; h++) {
-    const start = h2[h].lineIdx;
-    const end = h + 1 < h2.length ? h2[h + 1].lineIdx : bodyLines.length;
+  for (const [h, heading] of h2.entries()) {
+    const nextHeading = h2.at(h + 1);
+    const start = heading.lineIdx;
+    const end = nextHeading?.lineIdx ?? bodyLines.length;
     // Slice by INDEX so unmapped descendants (cells, markers, inline)
     // ride along with their parent. h2 = open + inline + close = 3.
-    const tokenStart = h2[h].tokenIdx + 3;
-    const tokenEnd = h + 1 < h2.length ? h2[h + 1].tokenIdx : tokens.length;
+    const tokenStart = heading.tokenIdx + 3;
+    const tokenEnd = nextHeading?.tokenIdx ?? tokens.length;
     const blockTokens = tokens.slice(tokenStart, tokenEnd);
     blocks.push({
-      heading: h2[h].text,
-      slug: slugify(h2[h].text),
+      heading: heading.text,
+      slug: slugify(heading.text),
       line: bodyFileLine + start,
       bodyText: bodyLines.slice(start + 1, end).join("\n"),
       items: extractItems(blockTokens, bodyFileLine),
@@ -144,8 +152,7 @@ function walkBlocks(
 // sub-bullets); lint rules flag depth / duplicate-slug collisions.
 function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[] {
   const items: AstItem[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
+  for (const [i, t] of tokens.entries()) {
     if (t.type !== "list_item_open" || t.map === null) {
       continue;
     }
@@ -153,7 +160,7 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
     let nestedDepth = 0;
     let text = "";
     for (let j = i + 1; j < tokens.length; j++) {
-      const x = tokens[j];
+      const x = expectDefined(tokens[j], "item scan index is in bounds");
       if (x.type === "list_item_close" && nestedDepth === 0) {
         break;
       }
@@ -166,11 +173,15 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
       }
     }
     const kvMatch = KV_RE.exec(text);
+    const kvKey = kvMatch === null ? undefined : expectDefined(kvMatch[1], "item key capture");
+    const kvValue = kvMatch === null ? undefined : expectDefined(kvMatch[2], "item value capture");
     items.push({
       text,
-      slug: kvMatch ? slugify(kvMatch[1]) : slugify(text),
-      line: bodyFileLine + t.map[0],
-      ...(kvMatch !== null ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } } : {}),
+      slug: kvKey === undefined ? slugify(text) : slugify(kvKey),
+      line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
+      ...(kvKey !== undefined && kvValue !== undefined
+        ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
+        : {}),
     });
   }
   return items;

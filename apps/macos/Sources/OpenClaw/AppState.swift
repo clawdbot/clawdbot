@@ -895,10 +895,6 @@ final class AppState {
         }
     }
 
-    func setWorking(_ working: Bool) {
-        self.isWorking = working
-    }
-
     // MARK: - Chime persistence
 
     private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
@@ -1239,9 +1235,6 @@ extension AppState {
 @MainActor
 enum AppStateStore {
     static let shared = AppState()
-    static var isPausedFlag: Bool {
-        UserDefaults.standard.bool(forKey: pauseDefaultsKey)
-    }
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {

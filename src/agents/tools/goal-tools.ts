@@ -37,12 +37,12 @@ type GoalSessionScope = {
 
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
-    description: "Concrete objective to pursue. Create only when explicitly requested.",
+    description: "Concrete objective; explicit request only.",
   }),
   token_budget: Type.Optional(
     Type.Integer({
       minimum: 1,
-      description: "Optional positive token budget for this goal.",
+      description: "Optional positive token budget.",
     }),
   ),
 });
@@ -80,7 +80,7 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     label: "Get Goal",
     name: "get_goal",
     displaySummary: "Get the current thread goal",
-    description: "Get the current goal for this thread, including status and token usage.",
+    description: "Get thread goal, status, token usage.",
     parameters: Type.Object({}),
     execute: async () => {
       const snapshot = await getSessionGoal({
@@ -99,7 +99,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. Fails if a goal already exists; use user-facing goal controls to clear it.",
+      "Create goal only explicit user/system request. Existing goal => fail; user-facing controls clear it.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -126,7 +126,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "update_goal",
     displaySummary: "Complete or block a thread goal",
     description:
-      "Mark the current goal complete only when achieved, or blocked only after the same blocking condition recurs for at least three consecutive goal turns. Do not use blocked for ordinary difficulty or missing polish.",
+      "complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

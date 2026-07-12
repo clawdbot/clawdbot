@@ -1,4 +1,5 @@
 // Qqbot plugin module implements message queue behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -132,11 +133,11 @@ export function mergeGroupMessages(batch: QueuedMessage[]): QueuedMessage {
     throw new Error("mergeGroupMessages: empty batch");
   }
   if (batch.length === 1) {
-    return batch[0];
+    return expectDefined(batch.at(0), "single-message merge batch");
   }
 
-  const first = batch[0];
-  const last = batch[batch.length - 1];
+  const first = expectDefined(batch.at(0), "non-empty merge batch first message");
+  const last = expectDefined(batch.at(-1), "non-empty merge batch last message");
 
   const mergedContent = batch
     .map((m) => `[${m.senderName ?? m.senderId}]: ${m.content}`)

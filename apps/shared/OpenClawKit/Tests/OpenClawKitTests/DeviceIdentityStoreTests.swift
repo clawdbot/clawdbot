@@ -5,6 +5,40 @@ import Testing
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test
+    func `task scoped state directories isolate concurrent identity stores`() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stateDirectories = [
+            root.appendingPathComponent("a", isDirectory: true),
+            root.appendingPathComponent("b", isDirectory: true),
+        ]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let observed = await withTaskGroup(of: String.self) { group in
+            for stateDirectory in stateDirectories {
+                group.addTask {
+                    await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+                        let identity = DeviceIdentityStore.loadOrCreate()
+                        await Task.yield()
+                        #expect(DeviceIdentityStore.loadOrCreate().deviceId == identity.deviceId)
+                        return identity.deviceId
+                    }
+                }
+            }
+            return await group.reduce(into: Set<String>()) { result, deviceId in
+                result.insert(deviceId)
+            }
+        }
+
+        #expect(observed.count == stateDirectories.count)
+        for stateDirectory in stateDirectories {
+            #expect(FileManager.default.fileExists(
+                atPath: stateDirectory.appendingPathComponent("identity/device.json").path))
+        }
+    }
+
     @Test(.stateDirectoryIsolated)
     func `device auth store reports failed durable writes`() throws {
         let tempDir = FileManager.default.temporaryDirectory

@@ -778,14 +778,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       <div class="sidebar-brand">
         <a
           class="sidebar-brand__identity"
-          href=${pathForRoute("chat", this.basePath)}
-          aria-label=${t("nav.chat")}
+          href=${pathForRoute("new-session", this.basePath)}
+          aria-label=${titleForRoute("new-session")}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
             }
             event.preventDefault();
-            this.onNavigate?.("chat");
+            this.onNavigate?.("new-session");
           }}
         >
           <span class="sidebar-brand__logo-slot">

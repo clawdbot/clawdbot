@@ -42,12 +42,12 @@ function summarizeServer(name: string, value: unknown): McpServerRow {
   const command = typeof server.command === "string" ? server.command : "";
   const transport = url ? "http" : command ? "stdio" : "invalid";
   const auth = typeof server.auth === "string" ? server.auth : null;
-  const launch = url || command || "missing transport";
+  const launch = url || command || t("mcpPage.missingTransport");
   const tls =
     server.sslVerify === false
-      ? "TLS verify off"
+      ? t("mcpPage.tlsVerifyOff")
       : server.clientCert || server.clientKey
-        ? "mTLS"
+        ? t("mcpPage.mtls")
         : null;
   return {
     name,
@@ -75,15 +75,15 @@ function renderServerRow(server: McpServerRow) {
         <div class="mcp-server-row__title">
           <span>${server.name}</span>
           <span class="pill pill--sm ${server.enabled ? "pill--ok" : ""}">
-            ${server.enabled ? "Enabled" : "Disabled"}
+            ${server.enabled ? t("common.enabled") : t("common.disabled")}
           </span>
         </div>
         <div class="mcp-server-row__launch">${server.launch}</div>
         <div class="mcp-server-row__meta">
           <span>${server.transport}</span>
           ${server.auth ? html`<span>${server.auth}</span>` : nothing}
-          ${server.toolFilter ? html`<span>tool filter</span>` : nothing}
-          ${server.parallel ? html`<span>parallel</span>` : nothing}
+          ${server.toolFilter ? html`<span>${t("mcpPage.toolFilter")}</span>` : nothing}
+          ${server.parallel ? html`<span>${t("mcpPage.parallel")}</span>` : nothing}
           ${server.tls ? html`<span>${server.tls}</span>` : nothing}
         </div>
       </div>
@@ -107,29 +107,29 @@ export function renderMcp(props: McpViewProps) {
     <section class="mcp-page">
       <div class="mcp-page__summary">
         <div class="stat">
-          <div class="stat-label">Servers</div>
+          <div class="stat-label">${t("mcpPage.servers")}</div>
           <div class="stat-value">${rows.length}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Enabled</div>
+          <div class="stat-label">${t("common.enabled")}</div>
           <div class="stat-value ${enabledCount === rows.length ? "ok" : "warn"}">
             ${enabledCount}
           </div>
         </div>
         <div class="stat">
-          <div class="stat-label">OAuth</div>
+          <div class="stat-label">${t("mcpPage.oauth")}</div>
           <div class="stat-value">${oauthCount}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Filtered</div>
+          <div class="stat-label">${t("mcpPage.filtered")}</div>
           <div class="stat-value">${filteredCount}</div>
         </div>
       </div>
 
       <section class="card mcp-command-card">
         <div>
-          <div class="card-title">MCP operator commands</div>
-          <div class="card-sub">Status, diagnostics, auth, probing, and runtime reload.</div>
+          <div class="card-title">${t("mcpPage.operatorCommands")}</div>
+          <div class="card-sub">${t("mcpPage.operatorCommandsHint")}</div>
         </div>
         <div class="mcp-command-card__grid">
           <code>openclaw mcp status --verbose</code>
@@ -142,16 +142,15 @@ export function renderMcp(props: McpViewProps) {
       <section class="card mcp-server-list">
         <div class="mcp-server-list__header">
           <div>
-            <div class="card-title">Configured servers</div>
+            <div class="card-title">${t("mcpPage.configuredServers")}</div>
             <div class="card-sub">
-              Runtime changes apply after save and publish; active agents rebuild MCP runtimes on
-              next use.
+              ${t("mcpPage.runtimeHint")}
               <a href=${props.pluginsHref}>${t("mcpPage.manageServersLink")}</a>
             </div>
           </div>
           <div class="mcp-server-list__actions">
             <button class="btn btn--sm" ?disabled=${saveDisabled} @click=${props.onSaveConfig}>
-              Save
+              ${t("common.save")}
             </button>
             <button
               class="btn btn--sm primary"
@@ -161,7 +160,7 @@ export function renderMcp(props: McpViewProps) {
               props.configSaving}
               @click=${props.onApplyConfig}
             >
-              ${props.configApplying ? "Publishing..." : "Save & Publish"}
+              ${props.configApplying ? t("mcpPage.publishing") : t("common.saveAndPublish")}
             </button>
           </div>
         </div>
@@ -169,7 +168,7 @@ export function renderMcp(props: McpViewProps) {
           ? html`<div class="mcp-server-list__rows">
               ${rows.map((row) => renderServerRow(row))}
             </div>`
-          : html`<div class="data-table-empty-state">No MCP servers configured.</div>`}
+          : html`<div class="data-table-empty-state">${t("mcpPage.noServers")}</div>`}
       </section>
 
       ${props.editor}

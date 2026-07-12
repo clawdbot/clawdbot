@@ -25,7 +25,10 @@ import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
-import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
+import {
+  isProvisionalSubagentKillTask,
+  isTaskFlowCancellationPending,
+} from "./task-cancellation-state.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -38,6 +41,7 @@ import {
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
+  ensureTaskFlowRegistryReady,
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
@@ -77,7 +81,12 @@ const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSess
 const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
-let restoreAttempted = false;
+type TaskRegistryRestoreState =
+  | { status: "uninitialized" }
+  | { status: "restoring" }
+  | { status: "ready" }
+  | { status: "failed"; error: Error };
+let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 type TaskRegistryDeliveryRuntime = Pick<
   typeof import("./task-registry-delivery-runtime.js"),
@@ -206,6 +215,27 @@ function assertParentFlowLinkAllowed(params: {
       flowId,
       status: flow.status,
     });
+  }
+}
+
+function ensureLinkedTaskFlowRegistryReady(task: Pick<TaskRecord, "parentFlowId">): void {
+  if (task.parentFlowId?.trim()) {
+    ensureTaskFlowRegistryReady();
+  }
+}
+
+function ensureTaskCancellationReady(task: TaskRecord): void {
+  const runId = task.runId?.trim();
+  const linkedTasks =
+    runId && (task.runtime === "acp" || task.runtime === "subagent")
+      ? getTasksByRunScope({
+          runId,
+          runtime: task.runtime,
+          sessionKey: task.childSessionKey,
+        })
+      : [task];
+  for (const linkedTask of linkedTasks.length > 0 ? linkedTasks : [task]) {
+    ensureLinkedTaskFlowRegistryReady(linkedTask);
   }
 }
 
@@ -933,6 +963,7 @@ function mergeExistingTaskForCreate(
     notifyPolicy?: TaskNotifyPolicy;
   },
 ): TaskRecord | null {
+  ensureLinkedTaskFlowRegistryReady(existing);
   const patch: Partial<TaskRecord> = {};
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
@@ -1208,36 +1239,54 @@ function clearTaskFlowSyncRetries(): void {
 }
 
 function restoreTaskRegistryOnce() {
-  if (restoreAttempted) {
-    return;
+  switch (taskRegistryRestoreState.status) {
+    case "ready":
+      return;
+    case "failed":
+      throw taskRegistryRestoreState.error;
+    case "restoring":
+      throw new Error("Task registry restore is already in progress.");
+    case "uninitialized":
+      break;
   }
-  restoreAttempted = true;
+  taskRegistryRestoreState = { status: "restoring" };
   try {
     const restored = getTaskRegistryStore().loadSnapshot();
-    if (restored.tasks.size === 0 && restored.deliveryStates.size === 0) {
-      return;
-    }
+    const restoredTasks = new Map<string, TaskRecord>();
     for (const [taskId, task] of restored.tasks.entries()) {
-      tasks.set(taskId, normalizeTaskTimestamps(task));
+      restoredTasks.set(taskId, normalizeTaskTimestamps(task));
     }
-    for (const [taskId, state] of restored.deliveryStates.entries()) {
+    const restoredDeliveryStates = new Map(restored.deliveryStates);
+
+    clearTaskRegistryMemory();
+    for (const [taskId, task] of restoredTasks.entries()) {
+      tasks.set(taskId, task);
+    }
+    for (const [taskId, state] of restoredDeliveryStates.entries()) {
       taskDeliveryStates.set(taskId, state);
     }
     rebuildRunIdIndex();
     rebuildOwnerKeyIndex();
     rebuildParentFlowIdIndex();
     rebuildRelatedSessionKeyIndex();
-    emitTaskRegistryObserverEvent(() => ({
-      kind: "restored",
-      tasks: snapshotTaskRecords(tasks),
-    }));
+    taskRegistryRestoreState = { status: "ready" };
+    if (restoredTasks.size > 0 || restoredDeliveryStates.size > 0) {
+      emitTaskRegistryObserverEvent(() => ({
+        kind: "restored",
+        tasks: snapshotTaskRecords(tasks),
+      }));
+    }
   } catch (error) {
+    clearTaskRegistryMemory();
     const message = formatErrorMessage(error);
+    const restoreError = new Error(`Task registry restore failed: ${message}`, { cause: error });
+    taskRegistryRestoreState = { status: "failed", error: restoreError };
     // Compact console logs omit structured metadata, so keep the rejected value visible there too.
     log.warn("Failed to restore task registry", {
       error: message,
       consoleMessage: `Failed to restore task registry: ${message}`,
     });
+    throw restoreError;
   }
 }
 
@@ -1248,8 +1297,8 @@ export function ensureTaskRegistryReady() {
 
 export function reloadTaskRegistryFromStore(): void {
   clearTaskRegistryMemory();
-  restoreAttempted = false;
-  restoreTaskRegistryOnce();
+  taskRegistryRestoreState = { status: "uninitialized" };
+  ensureTaskRegistryReady();
 }
 
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
@@ -1272,6 +1321,8 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
+  ensureLinkedTaskFlowRegistryReady(current);
+  ensureLinkedTaskFlowRegistryReady(next);
   // Persist before mutating memory. If the store rejects the write, keep the
   // in-memory mirror at the durable value and report that no mutation applied.
   if (!tryPersistTaskUpsert(next, "update")) {
@@ -1428,6 +1479,7 @@ async function runTaskDeliveryWithIndependentAdmission(
   taskId: string,
   deliver: () => Promise<TaskRecord | null>,
 ): Promise<TaskRecord | null> {
+  ensureTaskRegistryReady();
   let admitted = false;
   try {
     return await runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -1439,6 +1491,7 @@ async function runTaskDeliveryWithIndependentAdmission(
     // restart closes admission. An already-admitted delivery still reports its
     // own failures instead of hiding them behind a concurrent restart.
     if (!admitted && isGatewayRestartDraining()) {
+      ensureTaskRegistryReady();
       const current = tasks.get(taskId);
       return current ? cloneTaskRecord(current) : null;
     }
@@ -2287,6 +2340,7 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
+    ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
     if (task.runtime !== "cli") {
@@ -2475,6 +2529,18 @@ export async function cancelTaskById(params: {
   }
 }
 
+export function assertTaskCancellationReadyById(taskId: string): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const task = tasks.get(taskId.trim());
+  if (!task) {
+    return null;
+  }
+  if (!isTerminalTaskStatus(task.status) || isProvisionalSubagentKillTask(task)) {
+    ensureTaskCancellationReady(task);
+  }
+  return cloneTaskRecord(task);
+}
+
 // Callers that provide their own order use this cloned snapshot to avoid paying
 // for listTaskRecords' createdAt sort before immediately discarding that order.
 export function listTaskRecordsUnsorted(): TaskRecord[] {
@@ -2653,6 +2719,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  ensureLinkedTaskFlowRegistryReady(current);
   // Persist the delete before mutating memory, as a single atomic store
   // operation. If persistence fails, leave the in-memory record intact and
   // report that no delete was applied.
@@ -2675,7 +2742,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   clearTaskRegistryMemory();
-  restoreAttempted = false;
+  taskRegistryRestoreState = { status: "uninitialized" };
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
     listenerStop();

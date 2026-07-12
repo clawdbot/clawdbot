@@ -150,7 +150,7 @@ openclaw_e2e_enable_openclaw_cli_timeout
 fixture_dir="$(mktemp -d /tmp/openclaw-live-plugin-tool.XXXXXX)"
 plugin_dir="$fixture_dir/package"
 mkdir -p "$plugin_dir"
-node scripts/e2e/lib/live-plugin-tool/assertions.mjs write-fixture "$plugin_dir"
+node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs write-fixture "$plugin_dir"
 (cd "$plugin_dir" && npm pack --pack-destination "$fixture_dir" --silent) \
   >/tmp/openclaw-live-plugin-tool-pack.log 2>&1
 plugin_tgzs=()
@@ -166,11 +166,11 @@ plugin_tgz="${plugin_tgzs[0]}"
 
 echo "Installing fixture plugin from npm-pack: $plugin_tgz"
 openclaw plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1
-node scripts/e2e/lib/live-plugin-tool/assertions.mjs configure
+node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs configure
 openclaw plugins enable "$PLUGIN_ID" >/tmp/openclaw-plugin-enable.log 2>&1
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect "$PLUGIN_ID" --runtime --json >/tmp/openclaw-plugin-inspect.json
-node scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-installed
+node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-installed
 
 echo "Running live OpenAI agent turn that must call $TOOL_NAME..."
 openclaw agent --local \
@@ -182,7 +182,7 @@ openclaw agent --local \
   --timeout "${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}" \
   --json >/tmp/openclaw-agent.json 2>/tmp/openclaw-agent.err
 
-node scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-agent-turn
+node --disable-warning=ExperimentalWarning scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-agent-turn
 
 echo "Live plugin tool Docker E2E passed"
 EOF

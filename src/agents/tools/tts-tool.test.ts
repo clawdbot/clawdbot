@@ -34,9 +34,9 @@ describe("createTtsTool", () => {
   it("requires explicit user or config audio intent in guidance text", () => {
     const tool = createTtsTool();
 
-    expect(tool.description).toContain("Use only for explicit audio intent");
+    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
     expect(tool.description).toContain("active TTS config");
-    expect(tool.description).toContain("Never use for ordinary text replies");
+    expect(tool.description).toContain("never ordinary text reply");
   });
 
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {

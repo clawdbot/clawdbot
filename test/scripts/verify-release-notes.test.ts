@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
+  collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
@@ -15,9 +16,12 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  releaseProvenanceMarkers,
   renderedContributionRecordReferences,
+  resolvedReleasePullRequests,
   standardRevertedHash,
   subtractShippedPullRequests,
+  validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
@@ -49,6 +53,105 @@ describe("release-note verification", () => {
         `verify-release-notes-${"a".repeat(40)}-${"b".repeat(40)}.json`,
       ),
     );
+  });
+
+  it("accepts only exact release provenance markers for active commits", () => {
+    const releaseCommit = "a".repeat(40);
+    const markerCommit = "b".repeat(40);
+    const body = [
+      `Release provenance: ${releaseCommit} -> #104905, #102980, #104956`,
+      `Release provenance for ${"c".repeat(40)} -> #123`,
+    ].join("\n");
+
+    expect(releaseProvenanceMarkers(body)).toEqual([
+      {
+        commit: releaseCommit,
+        pullRequests: [104905, 102980, 104956],
+      },
+    ]);
+    expect(
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        { body, hash: markerCommit },
+      ]),
+    ).toEqual(new Map([[releaseCommit, [104905, 102980, 104956]]]));
+    expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
+      104905, 102980, 104956,
+    ]);
+  });
+
+  it("rejects malformed, out-of-range, or conflicting release provenance markers", () => {
+    const releaseCommit = "a".repeat(40);
+    const firstMarkerCommit = "b".repeat(40);
+    const secondMarkerCommit = "c".repeat(40);
+
+    expect(() => releaseProvenanceMarkers("Release provenance: short -> #123")).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        {
+          body: `Release provenance: ${"d".repeat(40)} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+      ]),
+    ).toThrow("release provenance marker targets commit outside the active range");
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104956`,
+          hash: secondMarkerCommit,
+        },
+      ]),
+    ).toThrow(`conflicting release provenance markers for ${releaseCommit}`);
+  });
+
+  it("requires release provenance PRs to be merged into current main", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const mergeCommit = "c".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const validNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: mergeCommit },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => true,
+      ),
+    ).not.toThrow();
+    for (const node of [
+      { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, mergedAt: null },
+    ]) {
+      expect(() =>
+        validateReleaseProvenanceOverrides(
+          overrides,
+          new Map([[104905, node]]),
+          mainCommit,
+          () => true,
+        ),
+      ).toThrow("references non-main PR #104905");
+    }
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => false,
+      ),
+    ).toThrow("references non-main PR #104905");
   });
 
   it("uses the original main PR for explicit and uniquely matched backports", () => {

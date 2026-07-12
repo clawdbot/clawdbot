@@ -7,6 +7,7 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -15,6 +16,7 @@ import {
   getFreeGatewayPort,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -517,9 +519,20 @@ describeLive("gateway live trajectory export", () => {
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
 
-      const trajectoryFiles = await listDirectoryNames(trajectoryDir);
-      logLiveStep("runtime-traces", { trajectoryDir, files: trajectoryFiles });
-      expect(trajectoryFiles.length).toBeGreaterThan(0);
+      const { entry, storePath } = loadSessionEntry(sessionKey);
+      if (!entry?.sessionId) {
+        throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
+      }
+      const runtimeEvents = await loadSqliteTrajectoryRuntimeEvents({
+        agentId: "dev",
+        sessionId: entry.sessionId,
+        storePath,
+      });
+      logLiveStep("runtime-events", {
+        count: runtimeEvents.length,
+        types: runtimeEvents.map((event) => event.type),
+      });
+      expect(runtimeEvents.length).toBeGreaterThan(0);
 
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));

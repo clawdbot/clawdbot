@@ -414,10 +414,16 @@ function visibleApprovalBindingMatches(
   const visibleDecisions: ExecApprovalReplyDecision[] = [];
   for (const line of lines) {
     const match = line.match(APPROVE_COMMAND_LINE_RE);
-    if (!match || (match[1] !== binding.approvalId && match[1] !== binding.approvalSlug)) {
+    const approvalId = match?.[1];
+    const decisionsText = match?.[2];
+    if (
+      !approvalId ||
+      !decisionsText ||
+      (approvalId !== binding.approvalId && approvalId !== binding.approvalSlug)
+    ) {
       continue;
     }
-    for (const token of match[2].split(/[\s|,]+/)) {
+    for (const token of decisionsText.split(/[\s|,]+/)) {
       const decision = normalizeApprovalDecision(token);
       if (decision && !visibleDecisions.includes(decision)) {
         visibleDecisions.push(decision);
@@ -539,13 +545,17 @@ export function extractIMessageApprovalPromptBinding(text: string): {
     return null;
   }
   const approvalId = idHeaderMatch[1];
+  if (!approvalId) {
+    return null;
+  }
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
   for (const line of lines) {
     const match = line.match(APPROVE_COMMAND_LINE_RE);
-    if (!match || match[1] !== approvalId) {
+    const decisionsText = match?.[2];
+    if (!match || match[1] !== approvalId || !decisionsText) {
       continue;
     }
-    const decisions = match[2].split(/[\s|,]+/);
+    const decisions = decisionsText.split(/[\s|,]+/);
     for (const decisionText of decisions) {
       const decision = normalizeApprovalDecision(decisionText);
       if (decision && !allowedDecisions.includes(decision)) {

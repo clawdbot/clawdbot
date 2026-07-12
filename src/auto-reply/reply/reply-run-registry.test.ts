@@ -21,6 +21,7 @@ import {
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  ReplyRunAlreadyActiveError,
   replyRunRegistry,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
@@ -1059,5 +1060,67 @@ describe("reply run registry", () => {
     expect(abortActiveReplyRuns({ mode: "compacting" })).toBe(true);
     expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     expect(runningOperation.result).toBeNull();
+  });
+
+  it("moves a queued reservation to the target slot and frees the source", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:rekey-user";
+    const targetSessionKey = "agent:main:telegram:group:rekey-target";
+    const operation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "rekey-session",
+      resetTriggered: false,
+    });
+    const sourceIdle = replyRunRegistry.waitForIdle(sourceSessionKey, 1_000);
+
+    operation.updateSessionKey(targetSessionKey);
+
+    expect(operation.key).toBe(targetSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(operation);
+    expect(resolveActiveReplyRunSessionId(targetSessionKey)).toBe("rekey-session");
+    await expect(sourceIdle).resolves.toBe(true);
+
+    const targetWait = waitForReplyRunEndBySessionId("rekey-session", 1_000);
+    operation.complete();
+    await expect(targetWait).resolves.toBe(true);
+    expect(replyRunRegistry.get(targetSessionKey)).toBeUndefined();
+  });
+
+  it("refuses to rekey onto an owned target slot and keeps the source slot", () => {
+    const targetSessionKey = "agent:main:telegram:group:rekey-owned";
+    const sourceSessionKey = "agent:main:telegram:slash:rekey-blocked";
+    const blocker = createReplyOperation({
+      sessionKey: targetSessionKey,
+      sessionId: "owned-session",
+      resetTriggered: false,
+    });
+    const operation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "blocked-session",
+      resetTriggered: false,
+    });
+
+    expect(() => operation.updateSessionKey(targetSessionKey)).toThrow(ReplyRunAlreadyActiveError);
+    expect(operation.key).toBe(sourceSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(blocker);
+
+    blocker.complete();
+    operation.complete();
+  });
+
+  it("refuses to rekey after the run leaves the queued phase", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:rekey-late",
+      sessionId: "late-session",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+
+    expect(() => operation.updateSessionKey("agent:main:telegram:group:rekey-late")).toThrow(
+      /Cannot rekey reply operation/,
+    );
+
+    operation.complete();
   });
 });

@@ -108,7 +108,7 @@ function parseWebpSize(buffer: Buffer): ImageSize | null {
   // VP8 (lossy)
   if (chunkType === "VP8 ") {
     // The VP8 frame header starts at byte 23 and uses the 9D 01 2A signature.
-    if (buffer.length >= 30 && buffer[23] === 0x9d && buffer[24] === 0x01 && buffer[25] === 0x2a) {
+    if (buffer.length >= 30 && buffer.subarray(23, 26).equals(Buffer.from([0x9d, 0x01, 0x2a]))) {
       const width = buffer.readUInt16LE(26) & 0x3fff;
       const height = buffer.readUInt16LE(28) & 0x3fff;
       return { width, height };
@@ -130,8 +130,8 @@ function parseWebpSize(buffer: Buffer): ImageSize | null {
   if (chunkType === "VP8X") {
     if (buffer.length >= 30) {
       // Width and height live at 24..26 and 27..29 as 24-bit little-endian values.
-      const width = (buffer[24] | (buffer[25] << 8) | (buffer[26] << 16)) + 1;
-      const height = (buffer[27] | (buffer[28] << 8) | (buffer[29] << 16)) + 1;
+      const width = buffer.readUIntLE(24, 3) + 1;
+      const height = buffer.readUIntLE(27, 3) + 1;
       return { width, height };
     }
   }
@@ -211,6 +211,9 @@ function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
     }
 
     const base64Data = matches[1];
+    if (base64Data === undefined) {
+      return null;
+    }
     const buffer = Buffer.from(base64Data, "base64");
 
     const size = parseImageSize(buffer);

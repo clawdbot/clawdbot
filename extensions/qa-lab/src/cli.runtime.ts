@@ -316,12 +316,24 @@ function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntime
 }
 
 function resolveQaRuntimeParityTierScenarioIds(params: {
+  channelDriver?: QaScorecardChannelDriver | null;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+  primaryModel: string;
+  providerMode: QaProviderMode;
   scenarioIds: string[];
   runtimeParityTiers: readonly QaRuntimeParityTier[];
   runtimePair: boolean;
-}): { scenarioIds: string[]; excludedNonFlowScenarios: string[] } {
+}): {
+  scenarioIds: string[];
+  excludedLaneScenarios: string[];
+  excludedNonFlowScenarios: string[];
+} {
   if (params.runtimeParityTiers.length === 0) {
-    return { scenarioIds: params.scenarioIds, excludedNonFlowScenarios: [] };
+    return {
+      scenarioIds: params.scenarioIds,
+      excludedLaneScenarios: [],
+      excludedNonFlowScenarios: [],
+    };
   }
   const tierSet = new Set(params.runtimeParityTiers);
   const matchingScenarios = readQaScenarioPack().scenarios.filter(
@@ -335,6 +347,18 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
   const compatibleScenarios = params.runtimePair
     ? matchingScenarios.filter((scenario) => scenario.execution.kind === "flow")
     : matchingScenarios;
+  const laneCompatibleScenarios = compatibleScenarios.filter((scenario) =>
+    scenarioMatchesQaProviderLane({
+      scenario,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      channelDriver: params.channelDriver,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+    }),
+  );
+  const excludedLaneScenarios = compatibleScenarios
+    .filter((scenario) => !laneCompatibleScenarios.includes(scenario))
+    .map((scenario) => scenario.id);
   const excludedNonFlowScenarios = params.runtimePair
     ? matchingScenarios
         .filter((scenario) => scenario.execution.kind !== "flow")
@@ -345,11 +369,17 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
       `--runtime-parity-tier matched no execution.kind: flow scenarios for ${params.runtimeParityTiers.join(", ")}; incompatible scenario(s): ${excludedNonFlowScenarios.join(", ")}.`,
     );
   }
+  if (params.scenarioIds.length === 0 && laneCompatibleScenarios.length === 0) {
+    throw new Error(
+      `--runtime-parity-tier matched no scenarios for provider mode ${params.providerMode}; incompatible scenario(s): ${excludedLaneScenarios.join(", ")}.`,
+    );
+  }
   return {
     scenarioIds: uniqueStrings([
       ...params.scenarioIds,
-      ...compatibleScenarios.map((scenario) => scenario.id),
+      ...laneCompatibleScenarios.map((scenario) => scenario.id),
     ]),
+    excludedLaneScenarios,
     excludedNonFlowScenarios,
   };
 }
@@ -908,6 +938,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
   const runtimePair = parseQaRuntimePair(opts.runtimePair);
+  const providerMode = normalizeQaProviderMode(opts.providerMode);
+  const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
+  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
   const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
     scenarioIds: resolveQaParityPackScenarioIds({
@@ -917,6 +952,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   });
   const runtimeParityTiers = parseQaRuntimeParityTierFilters(opts.runtimeParityTier);
   const runtimeParityTierSelection = resolveQaRuntimeParityTierScenarioIds({
+    channelDriver,
+    claudeCliAuthMode,
+    primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+    providerMode,
     scenarioIds: explicitScenarioIds,
     runtimeParityTiers,
     runtimePair: runtimePair !== undefined,
@@ -930,12 +969,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       `QA runtime-pair tier selection excluded incompatible non-flow scenario(s): ${runtimeParityTierSelection.excludedNonFlowScenarios.join(", ")}\n`,
     );
   }
+  if (runtimeParityTierSelection.excludedLaneScenarios.length > 0) {
+    process.stderr.write(
+      `QA runtime-pair tier selection excluded lane-incompatible scenario(s): ${runtimeParityTierSelection.excludedLaneScenarios.join(", ")}\n`,
+    );
+  }
   const allowFailures = opts.allowFailures === true;
-  const providerMode = normalizeQaProviderMode(opts.providerMode);
-  const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
-  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
-  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
-  const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
   if (opts.channel?.trim() && channelDriver !== "crabline" && channelDriver !== "live") {
     throw new Error("--channel override requires --channel-driver crabline or live.");
   }

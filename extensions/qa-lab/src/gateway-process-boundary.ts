@@ -253,13 +253,18 @@ export function parseQaGatewayProcStat(raw: string): QaGatewayProcStat {
   if (fields.length < 20) {
     throw new Error("invalid /proc stat field count");
   }
-  const pgrp = Number(fields[2]);
+  const state = fields[0];
+  const pgrpText = fields[2];
   const startTicks = fields[19];
+  if (!state || !pgrpText || !startTicks) {
+    throw new Error("invalid /proc stat process identity");
+  }
+  const pgrp = Number(pgrpText);
   if (!Number.isSafeInteger(pgrp) || pgrp <= 1 || !/^[0-9]+$/.test(startTicks)) {
     throw new Error("invalid /proc stat process identity");
   }
   return {
-    state: fields[0],
+    state,
     pgrp,
     startTicks,
   };

@@ -41,7 +41,8 @@ function isMatrixQaCliSecretPositionalArg(args: string[], index: number): boolea
 
 function redactMatrixQaCliArgs(args: string[]): string[] {
   return args.map((arg, index) => {
-    const [flag] = arg.split("=", 1);
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex >= 0 ? arg.slice(0, equalsIndex) : arg;
     if (MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(flag) && arg.includes("=")) {
       return `${flag}=[REDACTED]`;
     }

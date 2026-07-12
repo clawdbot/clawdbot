@@ -13,6 +13,15 @@ class SessionKeyTest {
   }
 
   @Test
+  fun buildAndroidAppSessionLabelIncludesDeviceDisplayName() {
+    assertEquals("OpenClaw App · 1234567890ab", buildAndroidAppSessionLabel(null, "1234567890abcdef"))
+    assertEquals(
+      "OpenClaw App · Pixel · 1234567890ab",
+      buildAndroidAppSessionLabel(" Pixel ", "1234567890abcdef"),
+    )
+  }
+
+  @Test
   fun resolveAgentIdFromMainSessionKeyParsesCanonicalAgentKey() {
     assertEquals("ops", resolveAgentIdFromMainSessionKey("agent:ops:main"))
     assertNull(resolveAgentIdFromMainSessionKey("global"))

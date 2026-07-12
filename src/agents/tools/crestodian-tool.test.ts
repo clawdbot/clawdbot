@@ -48,7 +48,11 @@ function toolText(result: unknown): string {
 
 describe("crestodian tool", () => {
   it("stays directly callable instead of entering tool catalogs", () => {
-    expect(createCrestodianTool({ surface: "cli" }).catalogMode).toBe("direct-only");
+    const tool = createCrestodianTool({ surface: "cli" });
+    expect(tool.catalogMode).toBe("direct-only");
+    expect(tool.description).toContain(
+      "approved=true only after user clearly agrees to exact change in this conversation",
+    );
   });
 
   it("runs read actions immediately", async () => {

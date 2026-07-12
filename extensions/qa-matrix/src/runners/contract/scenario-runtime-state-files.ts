@@ -467,7 +467,10 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
       ...(params.userId ? { userId: params.userId } : {}),
     });
     if (sqliteCursors.length > 0) {
-      return sqliteCursors[0];
+      const cursor = sqliteCursors[0];
+      if (cursor) {
+        return cursor;
+      }
     }
     const pathname = await resolveBestMatrixStateFile({
       context: params.context,

@@ -67,7 +67,7 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
   active: 0,
 }));
-const reloadTaskRegistryFromStore = vi.fn();
+const reloadTaskRuntimeStateFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
@@ -180,7 +180,7 @@ vi.mock("../../tasks/cron-task-cancel.js", () => ({
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
-  reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
+  reloadTaskRuntimeStateFromStore: () => reloadTaskRuntimeStateFromStore(),
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -947,7 +947,10 @@ describe("runGatewayLoop", () => {
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
-      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRuntimeStateFromStore.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        start.mock.invocationCallOrder[1] ?? Infinity,
+      );
       expect(
         rotateAgentEventLifecycleGeneration.mock.invocationCallOrder[0] ?? Infinity,
       ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? Infinity);
@@ -983,7 +986,7 @@ describe("runGatewayLoop", () => {
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
-      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+      expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();
@@ -1095,7 +1098,7 @@ describe("runGatewayLoop", () => {
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         expect(resetAllLanes).toHaveBeenCalledTimes(1);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
-        expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+        expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
       } finally {
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -1284,7 +1287,7 @@ describe("runGatewayLoop", () => {
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
-        expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+        expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
         expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
         expect(gatewayLog.error).toHaveBeenCalledWith(
           expect.stringContaining("gateway startup failed: restart startup failed."),
@@ -1356,13 +1359,109 @@ describe("runGatewayLoop", () => {
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
-        expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+        expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
         expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
       } finally {
         sigterm();
         await expect(exited).resolves.toBe(0);
       }
     });
+  });
+
+  it("keeps the process alive and retries after task runtime state restores fail", async () => {
+    vi.clearAllMocks();
+    reloadTaskRuntimeStateFromStore.mockReset();
+    reloadTaskRuntimeStateFromStore
+      .mockImplementationOnce(() => {
+        throw new Error("task-flow registry restore failed");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("task registry restore failed");
+      });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const closeFirst = createCloseMock();
+        const closeSecond = createCloseMock();
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        let resolveSecondStart: (() => void) | null = null;
+        const startedSecond = new Promise<void>((resolve) => {
+          resolveSecondStart = resolve;
+        });
+        const start = vi
+          .fn()
+          .mockResolvedValueOnce({ close: closeFirst })
+          .mockImplementationOnce(async () => {
+            resolveSecondStart?.();
+            return { close: closeSecond };
+          });
+
+        const { runGatewayLoop } = await import("./run-loop.js");
+        void runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 1,
+          "expected initial gateway start",
+        );
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        try {
+          sigusr1();
+          await waitForLoopCondition(
+            () =>
+              gatewayLog.error.mock.calls.some(([message]) =>
+                String(message).includes(
+                  "gateway startup failed: task-flow registry restore failed.",
+                ),
+              ),
+            "expected failed task-flow registry restore to be logged",
+          );
+
+          expectRestartCloseCall(closeFirst, 90_000);
+          expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
+          expect(start).toHaveBeenCalledTimes(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          sigusr1();
+          await waitForLoopCondition(
+            () =>
+              gatewayLog.error.mock.calls.some(([message]) =>
+                String(message).includes("gateway startup failed: task registry restore failed."),
+              ),
+            "expected failed task-registry restore to be logged",
+          );
+
+          expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
+          expect(start).toHaveBeenCalledTimes(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          sigusr1();
+          await startedSecond;
+
+          expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(3);
+          expect(start).toHaveBeenCalledTimes(2);
+          expect(runtime.exit).not.toHaveBeenCalled();
+        } finally {
+          sigterm();
+          await expect(exited).resolves.toBe(0);
+        }
+
+        expect(closeSecond).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+      });
+    } finally {
+      reloadTaskRuntimeStateFromStore.mockReset();
+    }
   });
 
   it("uses the default restart drain timeout when config omits deferralTimeoutMs", async () => {

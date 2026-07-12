@@ -827,10 +827,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      - name: Check Control UI i18n
-        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-        run: pnpm ui:i18n:check
-
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 
@@ -1064,6 +1060,28 @@ jobs:
           else
             pnpm --dir ui test
           fi
+
+  control-ui-i18n:
+    permissions:
+      contents: read
+    name: control-ui-i18n
+    needs: [preflight]
+    if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+    # Locale refresh runs separately on main and nightly. Keep drift visible on
+    # automatic runs without blocking unrelated work; release CI stays strict.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Check Control UI locale parity
+        run: pnpm ui:i18n:check
 
   checks-fast-core:
     permissions:
@@ -1677,7 +1695,6 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
-          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
         shell: bash
@@ -2461,6 +2478,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard
       - checks-fast-channel-contracts-shard

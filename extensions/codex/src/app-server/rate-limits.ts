@@ -2,6 +2,7 @@
  * Parses Codex account rate-limit payloads into user-facing usage summaries,
  * reset hints, and enriched usage-limit error messages.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromEpochSeconds,
@@ -160,7 +161,9 @@ export function summarizeCodexAccountUsage(
   if (snapshots.length === 0) {
     return undefined;
   }
-  const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
+  const usageSnapshot =
+    snapshots.find(isCodexLimitSnapshot) ??
+    expectDefined(snapshots[0], "displayable Codex rate-limit snapshot");
   const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
   const blockingSnapshot =
     blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;

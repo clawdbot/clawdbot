@@ -191,12 +191,12 @@ export async function runDoctorConfigPreflight(
     crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
-  const stateMigrations =
-    options.migrateState !== false ? await loadDoctorStateMigrations() : undefined;
+  const stateMigrationsRequested = options.migrateState !== false;
   const startupCheckpoint =
     options.requireStartupMigrationCheckpoint === true
       ? await import("../infra/startup-migration-checkpoint.js")
       : undefined;
+  let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
   let startupMigrationEnv = process.env;
   let shouldRecordStartupCheckpoint = false;
   let startupMigrationLease: StartupMigrationLease | undefined;
@@ -215,7 +215,7 @@ export async function runDoctorConfigPreflight(
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
     const stateMigrationsAllowed =
-      stateMigrations === undefined ||
+      !stateMigrationsRequested ||
       options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations());
     if (startupCheckpoint && !stateMigrationsAllowed) {
@@ -241,6 +241,12 @@ export async function runDoctorConfigPreflight(
         startupMigrationHeartbeat.unref?.();
       }
     }
+    // A current version checkpoint proves this state root already completed every automatic
+    // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
+    stateMigrations =
+      stateMigrationsRequested && (!startupCheckpoint || shouldRecordStartupCheckpoint)
+        ? await loadDoctorStateMigrations()
+        : undefined;
     if (stateMigrations && stateMigrationsAllowed) {
       const { autoMigrateLegacyStateDir } = stateMigrations;
       const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });

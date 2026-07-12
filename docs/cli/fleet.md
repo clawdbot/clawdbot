@@ -14,6 +14,8 @@ Fleet is **experimental**. Command names, flags, output shapes, and the containe
 
 Fleet supports Docker and Podman. The default image is `ghcr.io/openclaw/openclaw:latest`.
 
+Fleet is tested on Linux and macOS hosts. Windows hosts are currently untested.
+
 ## Quick start
 
 ```bash
@@ -85,6 +87,12 @@ Automatic allocation selects the first unused registry port at or above `19100`.
 Image references are passed as one container-runtime argument. Empty references and values beginning with `-` are rejected so an image cannot be interpreted as a Docker or Podman option.
 
 The selected Docker or Podman endpoint must be local. Fleet rejects remote Docker contexts, `DOCKER_HOST` endpoints, and remote Podman services before reserving a port or creating local state; remote cell hosts need a separate storage and endpoint contract and are deferred from this MVP.
+
+When Fleet starts a new cell, create waits up to about a minute for its Gateway to answer `/healthz`. If the cell does not become healthy, Fleet leaves its container and registry row intact for `fleet status`, `fleet logs`, or explicit removal. `--no-start` skips this health gate. The generated Gateway token of an unhealthy new cell is not lost - it remains in the container environment (`docker|podman inspect`), and because the cell has served no traffic yet, `fleet rm --force` followed by a fresh create is always a safe alternative.
+
+### Pinning by digest
+
+Create and upgrade accept digest-pinned image references such as `--image ghcr.io/openclaw/openclaw@sha256:<digest>`. Fleet passes the image reference through verbatim to Docker or Podman, which lets an operator keep a cell on immutable image bytes instead of a moving tag.
 
 The create result includes the tenant ID, container name, host port, Gateway token, and local URL. Even in JSON output, treat the result as secret-bearing because it contains the token.
 

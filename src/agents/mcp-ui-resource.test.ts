@@ -83,6 +83,39 @@ describe("MCP App UI resources", () => {
     ).toBeUndefined();
   });
 
+  it("keeps valid Apps when optional listing metadata fails", async () => {
+    const readResource = vi.fn(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
+        },
+      ],
+    }));
+    const sessionRuntime = runtime(readResource);
+    sessionRuntime.listResources = vi.fn(async () => {
+      throw new Error("resources/list unavailable");
+    });
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(result?.viewId).toMatch(/^mcp-app-/u);
+    expect(readResource).toHaveBeenCalledWith("demo", "ui://demo/app", {
+      failureBackoff: "ignore",
+    });
+    expect(sessionRuntime.listResources).toHaveBeenCalledWith("demo", {
+      failureBackoff: "ignore",
+    });
+  });
+
   it("rejects oversized and incorrectly typed resources", async () => {
     for (const content of [
       {

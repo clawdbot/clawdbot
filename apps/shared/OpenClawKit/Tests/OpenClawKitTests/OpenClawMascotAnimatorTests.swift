@@ -157,7 +157,7 @@ struct OpenClawMascotAnimatorTests {
         #expect(celebrating.leftClawDegrees > 0)
         #expect(celebrating.mouthCurve > 0)
         let idle = OpenClawMascotPose.staticPose(for: .idle)
-        #expect(idle == .still)
+        #expect(idle == OpenClawMascotPose())
     }
 
     @Test func `clamp channels bounds every channel`() {

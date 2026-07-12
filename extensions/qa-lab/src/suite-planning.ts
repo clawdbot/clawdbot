@@ -449,7 +449,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
       const index = nextIndex;
       nextIndex += 1;
       await waitForStartSlot(nextIndex < items.length);
-      results[index] = await mapper(items[index], index);
+      const item = items[index];
+      if (item === undefined) {
+        return;
+      }
+      results[index] = await mapper(item, index);
     }
   });
   await Promise.all(workers);

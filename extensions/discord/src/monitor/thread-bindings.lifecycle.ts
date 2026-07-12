@@ -1,6 +1,7 @@
-// Discord plugin module implements thread bindings.lifecycle behavior.
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements thread bindings.lifecycle behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -71,13 +72,16 @@ async function mapWithConcurrency<TItem, TResult>(params: {
       if (index >= params.items.length) {
         return;
       }
-      resultsByIndex.set(index, await params.worker(params.items[index], index));
+      const item = expectDefined(params.items[index], "bounded worker item index");
+      resultsByIndex.set(index, await params.worker(item, index));
     }
   };
 
   const workers = Array.from({ length: Math.min(limit, params.items.length) }, () => runWorker());
   await Promise.all(workers);
-  return params.items.map((_item, index) => resultsByIndex.get(index)!);
+  return params.items.map((_item, index) =>
+    expectDefined(resultsByIndex.get(index), "completed bounded worker result"),
+  );
 }
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {

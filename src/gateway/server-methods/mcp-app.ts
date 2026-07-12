@@ -46,6 +46,10 @@ function isAppCallableListedTool(tool: Tool): boolean {
   return visibility === undefined || visibility.includes("app");
 }
 
+function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
+  return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
+}
+
 function requireActiveView(params: Record<string, unknown>): {
   runtime: SessionMcpRuntime;
   view: McpAppViewLease;
@@ -87,14 +91,14 @@ async function withActiveView<T>(
 
 async function requireCallableTool(
   runtime: SessionMcpRuntime,
-  serverName: string,
+  view: McpAppViewLease,
   toolName: string,
 ): Promise<McpCatalogTool> {
   const catalog = await runtime.getCatalog();
   const tool = catalog.tools.find(
-    (entry) => entry.serverName === serverName && entry.toolName === toolName,
+    (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
-  if (!tool || !isAppCallableTool(tool)) {
+  if (!tool || !isAppCallableTool(tool) || !isAllowedByView(view, toolName)) {
     throw new Error(`MCP tool "${toolName}" is not app-callable`);
   }
   return tool;
@@ -140,7 +144,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
       async () =>
         await withActiveView(params, "tool", async ({ runtime, view }) => {
           const toolName = requireString(params, "toolName");
-          await requireCallableTool(runtime, view.serverName, toolName);
+          await requireCallableTool(runtime, view, toolName);
           return await runtime.callTool(view.serverName, toolName, params.arguments ?? {});
         }),
     );
@@ -159,7 +163,12 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           ]);
           const allowed = new Set(
             catalog.tools
-              .filter((tool) => tool.serverName === view.serverName && isAppCallableTool(tool))
+              .filter(
+                (tool) =>
+                  tool.serverName === view.serverName &&
+                  isAppCallableTool(tool) &&
+                  isAllowedByView(view, tool.toolName),
+              )
               .map((tool) => tool.toolName),
           );
           return {

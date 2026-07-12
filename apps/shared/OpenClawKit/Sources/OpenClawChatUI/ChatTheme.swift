@@ -21,7 +21,6 @@ enum OpenClawChatTheme {
         static let lightCanvasMiddle = UIColor(red: 250 / 255.0, green: 251 / 255.0, blue: 252 / 255.0, alpha: 1)
         static let lightCanvasBottom = UIColor.white
         static let lightAccent = UIColor(red: 220 / 255.0, green: 38 / 255.0, blue: 38 / 255.0, alpha: 1)
-        static let lightAccentHot = UIColor(red: 239 / 255.0, green: 68 / 255.0, blue: 68 / 255.0, alpha: 1)
         static let darkCanvasTop = UIColor(red: 12 / 255.0, green: 13 / 255.0, blue: 15 / 255.0, alpha: 1)
         static let darkCanvasMiddle = UIColor(red: 7 / 255.0, green: 8 / 255.0, blue: 10 / 255.0, alpha: 1)
         static let darkCanvasBottom = UIColor(red: 4 / 255.0, green: 5 / 255.0, blue: 6 / 255.0, alpha: 1)
@@ -29,7 +28,6 @@ enum OpenClawChatTheme {
         static let darkPanelRaised = UIColor(red: 17 / 255.0, green: 18 / 255.0, blue: 21 / 255.0, alpha: 1)
         static let darkComposer = UIColor(red: 24 / 255.0, green: 25 / 255.0, blue: 28 / 255.0, alpha: 1)
         static let darkAccent = UIColor(red: 198 / 255.0, green: 49 / 255.0, blue: 42 / 255.0, alpha: 1)
-        static let darkAccentHot = UIColor(red: 239 / 255.0, green: 62 / 255.0, blue: 82 / 255.0, alpha: 1)
     }
 
     private static func adaptiveColor(
@@ -66,14 +64,6 @@ enum OpenClawChatTheme {
         dynamicProvider: resolvedOnboardingAssistantBubbleColor(for:))
     #endif
 
-    static var surface: Color {
-        #if os(macOS)
-        Color(nsColor: .windowBackgroundColor)
-        #else
-        Color(uiColor: .systemBackground)
-        #endif
-    }
-
     @ViewBuilder
     static var background: some View {
         #if os(macOS)
@@ -98,14 +88,6 @@ enum OpenClawChatTheme {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
         }
-        #endif
-    }
-
-    static var card: Color {
-        #if os(macOS)
-        Color(nsColor: .textBackgroundColor)
-        #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanel)
         #endif
     }
 

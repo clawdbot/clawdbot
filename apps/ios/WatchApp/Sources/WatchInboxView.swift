@@ -80,7 +80,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Now",
                 title: self.greetingText,
                 subtitle: self.connectionLine,
-                isOnline: self.store.appSnapshot?.gatewayConnected == true,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -118,7 +117,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Inbox",
                 title: "What needs you",
                 subtitle: self.inboxSubtitle,
-                isOnline: self.chatCount > 0 || self.approvalCount > 0,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -237,7 +235,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Approvals",
                 title: self.approvalHeadline,
                 subtitle: self.approvalHeaderSubtitle,
-                isOnline: self.approvalCount > 0,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -274,7 +271,7 @@ private struct WatchControlSurfaceView: View {
                     title: "Loading approval",
                     subtitle: self.store.execApprovalReviewStatusText ?? "Waiting for your iPhone",
                     accessory: "Syncing")
-            } else if self.approvalCount > 0 {
+            } else if self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus {
                 WatchHeroCard(
                     label: "Unavailable",
                     title: "Approval not loaded",
@@ -310,7 +307,6 @@ private struct WatchControlSurfaceView: View {
                 section: "Connection",
                 title: self.directNode.isConnected ? "Watch node online" : "Direct Gateway",
                 subtitle: self.directNode.statusText,
-                isOnline: self.directNode.isConnected,
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -692,7 +688,6 @@ private struct WatchFaceHeader: View {
     let section: String
     let title: String
     let subtitle: String
-    let isOnline: Bool
     var avatarImageSource: String?
     var avatarText: String?
 

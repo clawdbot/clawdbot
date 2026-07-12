@@ -478,20 +478,11 @@ function assertSessionMetadataMigrated(stateDir) {
   const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
   const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const targetStorePath = path.join(agentSessionsDir, "sessions.json");
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   assert(
     !fs.existsSync(legacyStorePath),
     `legacy sessions.json survived migration: ${legacyStorePath}`,
   );
-  for (const sessionId of [
-    LEGACY_SESSION_MAIN_ID,
-    LEGACY_SESSION_DIRECT_ID,
-    LEGACY_SESSION_GROUP_ID,
-  ]) {
-    assert(
-      fs.existsSync(path.join(agentSessionsDir, `${sessionId}.jsonl`)),
-      `legacy session transcript was not moved for ${sessionId}`,
-    );
-  }
 
   const store = readMigratedSessionStore(stateDir, targetStorePath);
   const main = store["agent:main:main"];
@@ -500,18 +491,44 @@ function assertSessionMetadataMigrated(stateDir) {
   assert(main?.sessionId === LEGACY_SESSION_MAIN_ID, "main legacy session row missing");
   assert(direct?.sessionId === LEGACY_SESSION_DIRECT_ID, "direct legacy session row missing");
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
-  assert(
-    main?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
-    "main legacy session row still points at the old sessions directory",
-  );
-  assert(
-    direct?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
-    "direct legacy session row still points at the old sessions directory",
-  );
-  assert(
-    group?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
-    "channel legacy session row still points at the old sessions directory",
-  );
+  const migratedSessionIds = [
+    LEGACY_SESSION_MAIN_ID,
+    LEGACY_SESSION_DIRECT_ID,
+    LEGACY_SESSION_GROUP_ID,
+  ];
+  if (fs.existsSync(dbPath)) {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const count = db.prepare(
+        "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
+      );
+      for (const sessionId of migratedSessionIds) {
+        const row = count.get(sessionId);
+        assert(
+          Number(row?.count ?? 0) > 0,
+          `legacy session transcript was not imported for ${sessionId}`,
+        );
+      }
+    } finally {
+      db.close();
+    }
+  } else {
+    for (const [sessionId, entry] of [
+      [LEGACY_SESSION_MAIN_ID, main],
+      [LEGACY_SESSION_DIRECT_ID, direct],
+      [LEGACY_SESSION_GROUP_ID, group],
+    ]) {
+      const expectedPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
+      assert(
+        fs.existsSync(expectedPath),
+        `legacy session transcript was not moved for ${sessionId}`,
+      );
+      assert(
+        entry?.sessionFile === expectedPath,
+        `legacy session row still points at the old sessions directory for ${sessionId}`,
+      );
+    }
+  }
   assert(
     main.skillsSnapshot?.prompt === "legacy prompt survives as metadata",
     "legacy session metadata prompt was not preserved",
@@ -533,15 +550,28 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
-      .all("session_entries");
+    const hasSessionEntries = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
+      .get();
+    const rows = hasSessionEntries
+      ? db
+          .prepare(
+            `SELECT se.session_key AS key, sr.session_id, se.entry_json AS value_json
+             FROM session_entries AS se
+             INNER JOIN session_routes AS sr ON sr.session_key = se.session_key`,
+          )
+          .all()
+      : db
+          .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
+          .all("session_entries");
     const store = {};
     for (const row of rows) {
       if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
         continue;
       }
-      store[row.key] = JSON.parse(row.value_json);
+      const entry = JSON.parse(row.value_json);
+      store[row.key] =
+        typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
     }
     return store;
   } finally {

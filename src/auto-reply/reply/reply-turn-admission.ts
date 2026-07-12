@@ -101,6 +101,12 @@ export async function admitReplyTurn(params: {
   kind: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  /**
+   * Move this already-held operation into sessionKey's run slot instead of
+   * creating a new one. Used when a native command turn (admitted under its
+   * slash source key) continues into a full agent turn on the target session.
+   */
+  adoptOperation?: ReplyOperation;
   upstreamAbortSignal?: AbortSignal;
   waitTimeoutMs?: number;
   waitForActive?: boolean;
@@ -211,15 +217,23 @@ export async function admitReplyTurn(params: {
         });
       }
       try {
-        operation = createReplyOperation({
-          sessionKey: params.sessionKey,
-          sessionId,
-          resetTriggered: params.resetTriggered,
-          routeThreadId: params.routeThreadId,
-          upstreamAbortSignal: params.upstreamAbortSignal,
-          respectFollowupAdmissionBarrier:
-            params.kind === "queued_followup" || params.kind === "heartbeat",
-        });
+        if (params.adoptOperation) {
+          // The dispatch closures own this object's abort/delivery lifecycle,
+          // so the reservation must move rather than be recreated. Throws
+          // ReplyRunAlreadyActiveError into the shared busy handling below.
+          params.adoptOperation.updateSessionKey(params.sessionKey);
+          operation = params.adoptOperation;
+        } else {
+          operation = createReplyOperation({
+            sessionKey: params.sessionKey,
+            sessionId,
+            resetTriggered: params.resetTriggered,
+            routeThreadId: params.routeThreadId,
+            upstreamAbortSignal: params.upstreamAbortSignal,
+            respectFollowupAdmissionBarrier:
+              params.kind === "queued_followup" || params.kind === "heartbeat",
+          });
+        }
       } catch (error) {
         if (
           error instanceof ReplyRunAlreadyActiveError &&
@@ -240,6 +254,9 @@ export async function admitReplyTurn(params: {
         // The lifecycle fence follows hooks, media work, agent execution, and
         // final delivery. Reset/delete interrupts the operation and waits until
         // its actual owner clears it before mutating the persisted session.
+        // Adoption rebinds the map to this target lease; the source-key lease
+        // stays registered via its own after-clear callback (release is
+        // idempotent), so both identities free on operation clear.
         retainReplyOperationUntilComplete(operation);
         lifecycleAdmissionByOperation.set(operation, admission);
         runAfterReplyOperationClear(operation, () => {

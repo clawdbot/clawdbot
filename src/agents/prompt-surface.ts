@@ -28,6 +28,7 @@ export function buildOpenClawToolFallbackText(params: {
       "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
       "- sessions_list: list sessions",
       "- sessions_history: fetch session history",
+      "- sessions_search: search past session transcripts",
       "- sessions_send: send to another session",
       "- sessions_spawn: spawn an isolated sub-agent session",
       "- sessions_yield: end this turn and wait for sub-agent completion events",

@@ -201,13 +201,6 @@ extension SessionRow {
     }
 }
 
-struct ModelChoice: Identifiable, Hashable, Codable {
-    let id: String
-    let name: String
-    let provider: String
-    let contextWindow: Int?
-}
-
 extension String? {
     var isNilOrEmpty: Bool {
         switch self {

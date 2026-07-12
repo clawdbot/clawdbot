@@ -1759,9 +1759,7 @@ describe("image tool implicit imageModel config", () => {
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
       expect(typeof tool?.execute).toBe("function");
-      expect(tool?.description).toContain(
-        "Only use this tool when images were NOT already provided",
-      );
+      expect(tool?.description).toContain("use only for images not provided");
     });
   });
 

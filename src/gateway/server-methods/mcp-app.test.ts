@@ -27,6 +27,7 @@ const view = {
   toolName: "show",
   uiResourceUri: "ui://demo/app",
   html: "<html>demo</html>",
+  allowedAppToolNames: undefined as ReadonlySet<string> | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
   expiresAtMs: Date.now() + 60_000,
@@ -91,6 +92,7 @@ describe("MCP App gateway bridge", () => {
     view.requestCount = 0;
     view.toolCallCount = 0;
     view.activeRequests = 0;
+    view.allowedAppToolNames = undefined;
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
@@ -143,6 +145,19 @@ describe("MCP App gateway bridge", () => {
     ]);
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "model-only" });
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("keeps the originating run allowlist authoritative for App calls", async () => {
+    view.allowedAppToolNames = new Set(["shared"]);
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+
+    const listed = await invoke("mcp.app.listTools", params);
+    expect(listed.mock.calls[0]?.[1].tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "shared",
+    ]);
+
+    const denied = await invoke("mcp.app.callTool", { ...params, toolName: "app-only" });
     expect(denied.mock.calls[0]?.[0]).toBe(false);
   });
 

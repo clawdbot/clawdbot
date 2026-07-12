@@ -10,8 +10,8 @@ import {
 } from "./app-navigation.ts";
 
 describe("sidebar pinned routes", () => {
-  it("defaults to no pinned routes so sessions stay the sidebar's core content", () => {
-    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual([]);
+  it("keeps operational destinations visible by default", () => {
+    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["usage", "cron", "plugins"]);
   });
 
   it("drops the retired overview route from persisted pins", () => {

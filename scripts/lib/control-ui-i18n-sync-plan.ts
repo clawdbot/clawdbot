@@ -71,6 +71,21 @@ export function shouldReuseExistingTranslation(options: {
   return !options.isFallback || (!options.allowTranslate && !options.force);
 }
 
+export function resolveLocaleMetaProvenance(options: {
+  didTranslate: boolean;
+  model: string;
+  previousMeta: LocaleMeta | null;
+  provider: string;
+}): { model: string; provider: string } {
+  if (options.didTranslate) {
+    return { model: options.model, provider: options.provider };
+  }
+  return {
+    model: options.previousMeta?.model ?? options.model,
+    provider: options.previousMeta?.provider ?? options.provider,
+  };
+}
+
 export function createControlUiLocaleSyncPlan(input: {
   allowTranslate: boolean;
   cacheKeyFor: (key: string, textHash: string) => string;

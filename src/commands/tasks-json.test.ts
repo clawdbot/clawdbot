@@ -5,6 +5,7 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
@@ -237,6 +238,46 @@ describe("tasks JSON commands", () => {
           code: null,
         },
       });
+    });
+  });
+
+  it("keeps task-flow restore failures inspectable in audit JSON", async () => {
+    await withTaskJsonStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow audit restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+      const runtime = createRuntime();
+
+      await tasksAuditJsonCommand({ json: true }, runtime);
+
+      expect(readJsonLog(runtime)).toMatchObject({
+        count: 1,
+        summary: {
+          taskFlows: {
+            total: 1,
+            errors: 1,
+            byCode: {
+              restore_failed: 1,
+            },
+          },
+        },
+        findings: [
+          {
+            kind: "task_flow",
+            severity: "error",
+            code: "restore_failed",
+            detail:
+              "task-flow registry restore failed: SQLITE_IOERR: task-flow audit restore failed",
+          },
+        ],
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -102,7 +102,7 @@ describe("buildAttemptSystemPrompt", () => {
 
     expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
-    expect(result.systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(result.systemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
     expect(result.systemPrompt).toContain("Bootstrap context was truncated.");
     expect(result.systemPrompt).toContain("# Project Context");
@@ -177,7 +177,7 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(result.systemPrompt).toBe("");
   });
 });

@@ -11,10 +11,11 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
-  CATEGORY_LABELS,
   SLASH_COMMANDS,
   getHiddenCommandCount,
+  getSlashCommandCategoryLabel,
   getSlashCommandCompletions,
+  getSlashCommandDescription,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -442,7 +443,7 @@ function renderChatGoal(
           ${showActions && actions.onGoalEdit && goal.status !== "complete"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-edit",
-                label: "Edit goal",
+                label: t("chat.goals.edit"),
                 icon: icons.penLine,
                 onClick: () => actions.onGoalEdit?.(goal),
               })
@@ -450,7 +451,7 @@ function renderChatGoal(
           ${showActions && goal.status === "active"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-pause",
-                label: "Pause goal",
+                label: t("chat.goals.pause"),
                 icon: icons.pause,
                 onClick: () => actions.onGoalCommand?.("/goal pause"),
               })
@@ -458,7 +459,7 @@ function renderChatGoal(
           ${showActions && canResume
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-resume",
-                label: "Resume goal",
+                label: t("chat.goals.resume"),
                 icon: icons.play,
                 onClick: () => actions.onGoalCommand?.("/goal resume"),
               })
@@ -466,7 +467,7 @@ function renderChatGoal(
           ${showActions
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-clear",
-                label: "Clear goal",
+                label: t("chat.goals.clear"),
                 icon: icons.trash,
                 onClick: () => actions.onGoalCommand?.("/goal clear"),
               })
@@ -743,7 +744,7 @@ function getActiveSlashMenuOptionLabel(state: ChatComposerState): string {
     return "";
   }
   const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${cmd.description}`;
+  return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
 function scrollActiveSlashMenuOptionIntoView(state: ChatComposerState, paneId: string): void {
@@ -801,10 +802,15 @@ function renderSlashMenu(
     state.slashMenuArgItems.length > 0
   ) {
     return html`
-      <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div
+        id=${listboxId}
+        class="slash-menu"
+        role="listbox"
+        aria-label=${t("chat.commands.arguments")}
+      >
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
-            /${state.slashMenuCommand.name} ${state.slashMenuCommand.description}
+            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
           </div>
           ${state.slashMenuArgItems.map(
             (arg, i) => html`
@@ -833,7 +839,9 @@ function renderSlashMenu(
           )}
         </div>
         <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
+          <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+          <kbd>Enter</kbd> ${t("chat.commands.run")} <kbd>Esc</kbd>
+          ${t("chat.commands.close")}
         </div>
       </div>
     `;
@@ -861,7 +869,7 @@ function renderSlashMenu(
   for (const [cat, entries] of grouped) {
     sections.push(html`
       <div class="slash-menu-group">
-        <div class="slash-menu-group__label">${CATEGORY_LABELS[cat]}</div>
+        <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(cat)}</div>
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
@@ -882,11 +890,15 @@ function renderSlashMenu(
                 : nothing}
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
-              <span class="slash-menu-desc">${cmd.description}</span>
+              <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
               ${cmd.argOptions?.length
-                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                ? html`<span class="slash-menu-badge"
+                    >${t("chat.commands.optionCount", {
+                      count: String(cmd.argOptions.length),
+                    })}</span
+                  >`
                 : cmd.executeLocal && !cmd.args
-                  ? html` <span class="slash-menu-badge">instant</span> `
+                  ? html` <span class="slash-menu-badge">${t("chat.commands.instant")}</span> `
                   : nothing}
             </div>
           `,
@@ -898,7 +910,7 @@ function renderSlashMenu(
   const hiddenCount = state.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${listboxId} class="slash-menu" role="listbox" aria-label=${t("chat.commands.menu")}>
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -910,11 +922,15 @@ function renderSlashMenu(
               updateSlashMenu(draft, requestUpdate, props);
             }}
           >
-            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+            ${hiddenCount === 1
+              ? t("chat.commands.showMoreOne")
+              : t("chat.commands.showMoreMany", { count: String(hiddenCount) })}
           </button>`
         : nothing}
       <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+        <kbd>Enter</kbd> ${t("chat.commands.select")} <kbd>Esc</kbd>
+        ${t("chat.commands.close")}
       </div>
     </div>
   `;
@@ -989,7 +1005,9 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
         ${failed ? icons.alertTriangle : icons.clock}
       </span>
       ${steered
-        ? html`<span class="chat-queue__badge chat-queue__badge--steered">Steered</span>`
+        ? html`<span class="chat-queue__badge chat-queue__badge--steered"
+            >${t("chat.queue.steered")}</span
+          >`
         : nothing}
       ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
       <span class="chat-queue__text" title=${text}>${text}</span>
@@ -1012,22 +1030,22 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
               <button
                 class="chat-queue__steer"
                 type="button"
-                aria-label="Steer queued message"
+                aria-label=${t("chat.queue.steerQueuedMessage")}
                 @click=${() => props.onQueueSteer?.(item.id)}
               >
                 ${icons.cornerDownRight}
-                <span>Steer</span>
+                <span>${t("chat.queue.steer")}</span>
               </button>
             `
           : nothing}
         ${busy
           ? nothing
           : html`
-              <openclaw-tooltip content="Remove queued message">
+              <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
                 <button
                   class="chat-queue__remove"
                   type="button"
-                  aria-label="Remove queued message"
+                  aria-label=${t("chat.queue.removeQueuedMessage")}
                   @click=${() => props.onQueueRemove(item.id)}
                 >
                   ${icons.x}
@@ -1251,11 +1269,11 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                     </div>
                   </openclaw-tooltip>
                 `}
-            <openclaw-tooltip content="Remove attachment">
+            <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
               <button
                 class="chat-attachment-remove"
                 type="button"
-                aria-label="Remove attachment"
+                aria-label=${t("chat.composer.removeAttachment")}
                 @click=${() => {
                   const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
                   releaseChatAttachmentPayload(att.id);
@@ -1292,12 +1310,13 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
   if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
     return nothing;
   }
+  const interrupted = t("chat.composer.runInterrupted");
   return html`
     <span
       class="agent-chat__run-status agent-chat__run-status--interrupted"
-      aria-label="Run status: Interrupted"
+      aria-label=${t("chat.composer.runStatus", { status: interrupted })}
     >
-      ${icons.stop}<span class="agent-chat__run-status-label">Interrupted</span>
+      ${icons.stop}<span class="agent-chat__run-status-label">${interrupted}</span>
     </span>
   `;
 }
@@ -1857,7 +1876,7 @@ export function renderContextNotice(
                 ? "context-ring__action--busy"
                 : ""}"
               type="button"
-              aria-label="Compact recommended session context"
+              aria-label=${t("chat.composer.compactRecommendedContext")}
               ?disabled=${compactDisabled}
               @click=${(event: Event) => {
                 event.preventDefault();
@@ -2109,12 +2128,12 @@ export function renderChatComposer(props: ChatComposerProps) {
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel =
     submittedProgress?.sendState === "waiting-model"
-      ? "Preparing model..."
+      ? t("chat.composer.preparingModel")
       : props.stream !== null
-        ? `${assistantName} is responding...`
+        ? t("chat.composer.responding", { name: assistantName })
         : props.sending || submittedProgress
-          ? "Sending message..."
-          : `${assistantName} is working...`;
+          ? t("chat.composer.sendingMessage")
+          : t("chat.composer.working", { name: assistantName });
   // Persistent sr-only live region: run phases are otherwise conveyed only
   // visually (thread spark, content arriving, interrupted toast).
   const runStatusAnnouncement =
@@ -2123,8 +2142,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       : composerRunStatus.phase === "in-progress"
         ? inProgressLabel
         : composerRunStatus.phase === "done"
-          ? "Done"
-          : "Interrupted";
+          ? t("chat.composer.runDone")
+          : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
@@ -2423,8 +2442,8 @@ export function renderChatComposer(props: ChatComposerProps) {
                   type="button"
                   class="chat-reply-preview__dismiss"
                   @click=${() => props.onClearReply?.()}
-                  aria-label="Cancel reply"
-                  title="Cancel reply"
+                  aria-label=${t("chat.composer.cancelReply")}
+                  title=${t("chat.composer.cancelReply")}
                 >
                   ${icons.x}
                 </button>

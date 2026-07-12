@@ -415,6 +415,9 @@ export async function waitForQaTransportOutboundSequence(params: {
       return undefined;
     }
     const candidate = events[finalIndex];
+    if (!candidate) {
+      return undefined;
+    }
     const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
     const latest = sequenceEvents.at(-1);
     if (

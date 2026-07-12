@@ -29,6 +29,7 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
+  diffGatewayReloadPaths,
   type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
@@ -131,6 +132,29 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
     ]);
   });
+
+  it.each([
+    {
+      label: "added",
+      prev: {},
+      next: { mcp: { apps: { enabled: true } } },
+    },
+    {
+      label: "removed",
+      prev: { mcp: { apps: { enabled: true } } },
+      next: {},
+    },
+  ])(
+    "preserves the Apps restart boundary when the whole MCP config is $label",
+    ({ prev, next }) => {
+      const changedPaths = diffGatewayReloadPaths(prev, next);
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain("mcp.apps");
+    },
+  );
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -202,6 +226,21 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["gateway.port"]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("gateway.port");
+  });
+
+  it("restarts the gateway when MCP Apps listener config changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "mcp.apps.enabled",
+      "mcp.apps.sandboxPort",
+      "mcp.apps.sandboxOrigin",
+    ]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([
+      "mcp.apps.enabled",
+      "mcp.apps.sandboxPort",
+      "mcp.apps.sandboxOrigin",
+    ]);
+    expect(plan.disposeMcpRuntimes).toBe(false);
   });
 
   it("restarts the gateway for operator terminal config changes", () => {

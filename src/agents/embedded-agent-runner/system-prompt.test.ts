@@ -173,9 +173,9 @@ describe("buildEmbeddedSystemPrompt", () => {
       userTimezone: "UTC",
     });
 
-    expect(prompt).toContain("tools.fs.workspaceOnly is enabled");
+    expect(prompt).toContain("tools.fs.workspaceOnly ON");
     expect(prompt).toContain("`.openclaw/tmp/`");
-    expect(prompt).toContain("Do not write files to `/tmp/...`");
+    expect(prompt).toContain("never exec-write `/tmp`");
   });
 
   it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
@@ -202,8 +202,8 @@ describe("buildEmbeddedSystemPrompt", () => {
       userTimezone: "UTC",
     });
 
-    expect(prompt).not.toContain("tools.fs.workspaceOnly is enabled");
-    expect(prompt).not.toContain("Do not write files to `/tmp/...`");
+    expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
+    expect(prompt).not.toContain("never exec-write `/tmp`");
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
@@ -286,9 +286,9 @@ describe("buildEmbeddedSystemPrompt", () => {
       userTimezone: "UTC",
     });
 
-    expect(prompt).toContain("Active background exec sessions in this scope:");
+    expect(prompt).toContain("Active exec sessions:");
     expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
-    expect(prompt).toContain("Use process log before interactive input");
+    expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
   });

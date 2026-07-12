@@ -56,7 +56,10 @@ function resolveFeishuRequesterConversation(params: {
   if (requesterSessionKey) {
     const existingBindings = manager.listBySessionKey(requesterSessionKey);
     if (existingBindings.length === 1) {
-      const existing = existingBindings[0];
+      const existing = existingBindings.at(0);
+      if (existing === undefined) {
+        return null;
+      }
       return {
         accountId: existing.accountId,
         conversationId: existing.conversationId,
@@ -72,7 +75,10 @@ function resolveFeishuRequesterConversation(params: {
             !entry.parentConversationId,
         );
         if (directMatches.length === 1) {
-          const existing = directMatches[0];
+          const existing = directMatches.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,
@@ -93,7 +99,10 @@ function resolveFeishuRequesterConversation(params: {
           );
         });
         if (matchingTopicBindings.length === 1) {
-          const existing = matchingTopicBindings[0];
+          const existing = matchingTopicBindings.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,
@@ -111,7 +120,10 @@ function resolveFeishuRequesterConversation(params: {
           senderScopedTopicBindings.length === 1 &&
           matchingTopicBindings.length === senderScopedTopicBindings.length
         ) {
-          const existing = senderScopedTopicBindings[0];
+          const existing = senderScopedTopicBindings.at(0);
+          if (existing === undefined) {
+            return null;
+          }
           return {
             accountId: existing.accountId,
             conversationId: existing.conversationId,

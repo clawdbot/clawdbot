@@ -29,13 +29,67 @@ describe("startup migration checkpoint", () => {
     };
 
     expect(readStartupMigrationVersion(env)).toBeNull();
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
 
-    recordSuccessfulStartupMigrations({ env, version: "2026.7.1", nowMs: 1234 });
+    recordSuccessfulStartupMigrations({
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+      nowMs: 1234,
+    });
 
     expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1" })).toBe(false);
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.2" })).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:01:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.2",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the fast path disabled without immutable build provenance", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+
+    recordSuccessfulStartupMigrations({
+      env,
+      version: "2026.7.1",
+      buildIdentity: null,
+      nowMs: 1234,
+    });
+
+    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1", buildIdentity: null })).toBe(
+      true,
+    );
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+      }),
+    ).toBe(true);
   });
 
   it("serializes startup migrations with an expiring shared-state lease", () => {

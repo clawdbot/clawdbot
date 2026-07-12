@@ -1,6 +1,7 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -2337,7 +2338,7 @@ function splitArgs(value: string | undefined): string[] {
 function parseBindArgs(args: string[]): ParsedBindArgs {
   const parsed: ParsedBindArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex bind argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2389,7 +2390,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
   const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
   const filter: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex sessions argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2429,7 +2430,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
 function parseResumeArgs(args: string[]): ParsedResumeArgs {
   const parsed: ParsedResumeArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex resume argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;

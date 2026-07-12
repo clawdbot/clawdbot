@@ -1338,12 +1338,9 @@ function assignOtelLogEventAttributes(
   if (!eventAttributes) {
     return;
   }
-  for (const rawKey in eventAttributes) {
+  for (const [rawKey, value] of Object.entries(eventAttributes)) {
     if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
       break;
-    }
-    if (!Object.hasOwn(eventAttributes, rawKey)) {
-      continue;
     }
     const key = rawKey.trim();
     if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
@@ -1355,7 +1352,7 @@ function assignOtelLogEventAttributes(
     if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
       continue;
     }
-    assignOtelLogAttribute(attributes, `openclaw.${key}`, eventAttributes[rawKey]);
+    assignOtelLogAttribute(attributes, `openclaw.${key}`, value);
   }
 }
 
@@ -1366,12 +1363,9 @@ function assignOtelSecurityEventAttributes(
   if (!eventAttributes) {
     return;
   }
-  for (const rawKey in eventAttributes) {
+  for (const [rawKey, value] of Object.entries(eventAttributes)) {
     if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
       break;
-    }
-    if (!Object.hasOwn(eventAttributes, rawKey)) {
-      continue;
     }
     const key = rawKey.trim();
     if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
@@ -1383,7 +1377,6 @@ function assignOtelSecurityEventAttributes(
     if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
       continue;
     }
-    const value = eventAttributes[rawKey];
     assignOtelLogAttribute(
       attributes,
       `openclaw.security.attribute.${key}`,

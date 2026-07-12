@@ -121,6 +121,9 @@ export function parseWidgetRequestPath(
     return null;
   }
   const [frameToken, name, ...entry] = segments;
+  if (!frameToken || !name) {
+    return null;
+  }
   if (!BRIDGE_TOKEN_PATTERN.test(frameToken)) {
     return null;
   }

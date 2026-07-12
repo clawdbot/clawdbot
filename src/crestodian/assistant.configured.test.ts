@@ -323,8 +323,12 @@ describe("Crestodian configured-model planner", () => {
         authProfileIdSource: "user",
         agentHarnessRuntimeOverride: "codex",
         disableTools: true,
+        disableTrajectory: true,
         toolsAllow: [],
       }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionKey: expect.anything() }),
     );
   });
 

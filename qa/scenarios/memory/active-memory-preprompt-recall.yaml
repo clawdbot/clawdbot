@@ -122,9 +122,9 @@ flow:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:
               expr: "`doctor --fix did not migrate the Active Memory session toggle: ${doctorFixOutput}`"
-        - set: requestCountBeforeBaseline
+        - set: requestCursorBeforeBaseline
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: baselineStartIndex
           value:
             expr: "state.getSnapshot().messages.length"
@@ -155,16 +155,16 @@ flow:
             then:
               - set: baselineMockRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeBaseline)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
         - set: baselineSessionStore
           value:
             expr: "await readRawQaSessionStore(env)"
         - assert:
             expr: "!Array.isArray(baselineSessionStore[baselineSessionKey]?.pluginDebugEntries) || !baselineSessionStore[baselineSessionKey].pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory')"
             message: baseline session unexpectedly recorded active-memory plugin activity
-        - set: requestCountBeforeActive
+        - set: requestCursorBeforeActive
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: activeStartIndex
           value:
             expr: "state.getSnapshot().messages.length"
@@ -227,7 +227,7 @@ flow:
             then:
               - set: mockRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeActive)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_search')"
                   message: expected mock Active Memory search request

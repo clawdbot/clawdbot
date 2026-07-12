@@ -55,15 +55,18 @@ export function isWhatsAppUserTarget(value: string): boolean {
 function extractUserJidPhone(jid: string): string | null {
   const userMatch = jid.match(WHATSAPP_USER_JID_RE);
   if (userMatch) {
-    return userMatch[1];
+    const phone = userMatch[1];
+    return phone ? phone : null;
   }
   const legacyUserMatch = jid.match(WHATSAPP_LEGACY_USER_JID_RE);
   if (legacyUserMatch) {
-    return legacyUserMatch[1];
+    const phone = legacyUserMatch[1];
+    return phone ? phone : null;
   }
   const lidMatch = jid.match(WHATSAPP_LID_RE);
   if (lidMatch) {
-    return lidMatch[1];
+    const phone = lidMatch[1];
+    return phone ? phone : null;
   }
   return null;
 }

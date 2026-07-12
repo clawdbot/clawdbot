@@ -235,6 +235,96 @@ test("sessions.create execNode binds session exec routing", async () => {
   expect(created.payload?.entry.execNode).toBe("macbook");
 });
 
+test("sessions.create accepts a node-host cwd without provisioning a Gateway worktree", async () => {
+  await createSessionStoreDir();
+  const created = await directSessionReq<{
+    entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", execNode: "macbook", cwd: "/Users/peter/Projects/openclaw" },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    execHost: "node",
+    execNode: "macbook",
+    execCwd: "/Users/peter/Projects/openclaw",
+  });
+  expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+});
+
+test("sessions.create accepts a Windows node-host cwd from a non-Windows Gateway", async () => {
+  await createSessionStoreDir();
+  const created = await directSessionReq<{
+    entry: { execNode?: string; execCwd?: string; spawnedCwd?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", execNode: "windows-box", cwd: "C:\\Users\\peter\\Projects" },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    execNode: "windows-box",
+    execCwd: "C:\\Users\\peter\\Projects",
+  });
+  expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+});
+
+test("sessions.create reset-in-place clears a prior node binding for Gateway execution", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-node-parent") } });
+
+  const nodeSession = await directSessionReq<{
+    entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      execNode: "macbook",
+      cwd: "/Users/peter/Projects/openclaw",
+    },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  expect(nodeSession.ok).toBe(true);
+  expect(nodeSession.payload?.entry).toMatchObject({
+    execHost: "node",
+    execNode: "macbook",
+    execCwd: "/Users/peter/Projects/openclaw",
+  });
+  expect(nodeSession.payload?.entry.spawnedCwd).toBeUndefined();
+
+  const gatewaySession = await directSessionReq<{
+    entry: { execHost?: string; execNode?: string; execCwd?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
+    { client: { connect: { scopes: ["operator.write"] } } as never },
+  );
+  expect(gatewaySession.ok).toBe(true);
+  expect(gatewaySession.payload?.entry.execHost).toBeUndefined();
+  expect(gatewaySession.payload?.entry.execNode).toBeUndefined();
+  expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
+});
+
+test("sessions.create rejects a Gateway worktree targeting a node", async () => {
+  await createSessionStoreDir();
+  const created = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", execNode: "macbook", worktree: true },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: { message: "sessions.create worktree cannot target execNode" },
+  });
+});
+
 test("sessions.create provisions a worktree from an admin-selected cwd", async () => {
   const configuredRoot = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-configured-workspace-"),
@@ -308,7 +398,7 @@ test("sessions.create rejects cwd without a managed worktree", async () => {
   expect(created.ok).toBe(false);
   expect(created.error).toMatchObject({
     code: "INVALID_REQUEST",
-    message: "sessions.create cwd requires worktree=true",
+    message: "sessions.create cwd requires worktree=true or execNode",
   });
 });
 

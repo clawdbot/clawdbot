@@ -48,9 +48,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: sessionKey
           value:
             expr: "`agent:qa:anthropic-thinking-error:${randomUUID().slice(0, 8)}`"
@@ -83,7 +83,7 @@ flow:
             then:
               - set: scenarioRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
               - assert:
                   expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic' && request.plannedToolName === 'read')"
                   message: expected replay-safe read request on the Anthropic mock route

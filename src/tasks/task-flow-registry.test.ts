@@ -6,10 +6,12 @@ import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   deleteTaskFlowRecordById,
+  getTaskFlowRegistryRestoreFailure,
   failFlow,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
+  reloadTaskFlowRegistryFromStore,
   resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
@@ -237,6 +239,78 @@ describe("task-flow-registry", () => {
     expect(events[1]?.flow?.flowId).toBe(created.flowId);
     expect(events[2]?.kind).toBe("deleted");
     expect(events[2]?.flowId).toBe(created.flowId);
+  });
+
+  it("keeps restore failures sticky until an explicit reload succeeds", () => {
+    const hiddenFlow: TaskFlowRecord = {
+      flowId: "hidden-flow",
+      syncMode: "managed",
+      ownerKey: "agent:main:main",
+      controllerId: "tests/hidden-flow",
+      revision: 4,
+      status: "running",
+      notifyPolicy: "done_only",
+      goal: "Existing durable flow",
+      createdAt: 10,
+      updatedAt: 20,
+    };
+    const loadSnapshot = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("SQLITE_CORRUPT: task-flow restore failed");
+      })
+      .mockReturnValue({
+        flows: new Map([[hiddenFlow.flowId, hiddenFlow]]),
+      });
+    const upsertFlow = vi.fn();
+    const deleteFlow = vi.fn();
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot,
+        saveSnapshot: () => {},
+        upsertFlow,
+        deleteFlow,
+      },
+    });
+
+    expect(() => listTaskFlowRecords()).toThrow(
+      "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow restore failed",
+    );
+    expect(getTaskFlowRegistryRestoreFailure()).toBe("SQLITE_CORRUPT: task-flow restore failed");
+    expect(() =>
+      createManagedTaskFlowOrNull({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/restore-failure",
+        goal: "Must not persist over hidden flows",
+      }),
+    ).toThrow("Task-flow registry restore failed: SQLITE_CORRUPT: task-flow restore failed");
+    expect(() =>
+      updateFlowRecordByIdExpectedRevision({
+        flowId: hiddenFlow.flowId,
+        expectedRevision: hiddenFlow.revision,
+        patch: { currentStep: "must not overwrite hidden state" },
+      }),
+    ).toThrow("Task-flow registry restore failed: SQLITE_CORRUPT: task-flow restore failed");
+    expect(() => deleteTaskFlowRecordById(hiddenFlow.flowId)).toThrow(
+      "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow restore failed",
+    );
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(upsertFlow).not.toHaveBeenCalled();
+    expect(deleteFlow).not.toHaveBeenCalled();
+
+    reloadTaskFlowRegistryFromStore();
+
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+    expect(getTaskFlowRegistryRestoreFailure()).toBeNull();
+    expect(listTaskFlowRecords()).toEqual([expect.objectContaining(hiddenFlow)]);
+    expect(
+      createManagedTaskFlowOrNull({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/restore-recovery",
+        goal: "Create after explicit recovery",
+      }),
+    ).not.toBeNull();
+    expect(upsertFlow).toHaveBeenCalledTimes(1);
   });
 
   it("does not throw or register memory when flow create persistence fails", () => {

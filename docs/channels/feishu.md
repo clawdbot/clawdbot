@@ -324,6 +324,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 
 `tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
 
+Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
+directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
+keeps the legacy root-directory lookup available through `drive:drive:readonly`.
+
 ### ACP sessions
 
 Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is text-command driven - there are no native slash-command menus, so use `/acp ...` messages directly in the conversation.

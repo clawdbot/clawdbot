@@ -661,13 +661,11 @@ private enum IPadSkillWorkshopPreviewFixtures {
         return IPadSkillProposal(
             entry: IPadSkillProposalManifestEntry(
                 id: id,
-                kind: "skill",
                 status: status,
                 title: title,
                 description: description,
                 skillName: title,
                 skillKey: id,
-                createdAt: updatedAt,
                 updatedAt: updatedAt,
                 scanState: "complete"),
             previous: nil)

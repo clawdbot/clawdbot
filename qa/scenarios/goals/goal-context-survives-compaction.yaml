@@ -133,9 +133,9 @@ flow:
             expr: "!normalizeLowercaseStringOrEmpty(compactReply.text).includes('skipped')"
             message:
               expr: "`manual compaction did not compact the seeded session: ${compactReply.text}`"
-        - set: requestCountBeforePostCompactionTurn
+        - set: requestCursorBeforePostCompactionTurn
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: postCompactOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -154,7 +154,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforePostCompactionTurn).find((request) => String(request.prompt ?? '').includes(config.postCompactionMessage))"
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforePostCompactionTurn}`)).find((request) => String(request.prompt ?? '').includes(config.postCompactionMessage))"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 100
         - waitForOutbound:

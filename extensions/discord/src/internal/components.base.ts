@@ -1,4 +1,5 @@
 // Discord plugin module implements components.base behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { BaseComponentInteraction } from "./interactions.js";
 
 export type ComponentParserResult = {
@@ -13,9 +14,13 @@ export type ComponentData<
 export type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
 
 export function parseCustomId(id: string): ComponentParserResult {
-  const [rawKey, ...parts] = id.split(";");
+  const [rawKeyValue, ...parts] = id.split(";");
+  const rawKey = expectDefined(rawKeyValue, "custom id split first segment");
   const [keyPart, firstValue] = rawKey.split("=");
-  const key = keyPart.includes(":") ? keyPart.split(":")[0] : keyPart;
+  const definedKeyPart = expectDefined(keyPart, "custom id key segment");
+  const key = definedKeyPart.includes(":")
+    ? expectDefined(definedKeyPart.split(":").at(0), "namespaced custom id key")
+    : definedKeyPart;
   const data: ComponentParserResult["data"] = {};
   const entries = firstValue === undefined ? parts : [rawKey.slice(key.length + 1), ...parts];
   for (const entry of entries) {

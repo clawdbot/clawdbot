@@ -172,7 +172,11 @@ function sanitizePlainSpokenText(text: string): string | null {
 
   const paragraphs = normalizeStringEntries(withoutCodeFences.split(/\n\s*\n+/));
 
-  while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
+  while (paragraphs.length > 1) {
+    const firstParagraph = paragraphs.at(0);
+    if (!firstParagraph || !isLikelyMetaReasoningParagraph(firstParagraph)) {
+      break;
+    }
     paragraphs.shift();
   }
 

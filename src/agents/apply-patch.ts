@@ -108,8 +108,7 @@ export function createApplyPatchTool(
   return {
     name: "apply_patch",
     label: "apply_patch",
-    description:
-      "Apply a patch to one or more files using the apply_patch format. The input should include *** Begin Patch and *** End Patch markers.",
+    description: "Patch one/many files. Input requires *** Begin Patch and *** End Patch.",
     parameters: applyPatchSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { input?: string };

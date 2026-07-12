@@ -103,7 +103,7 @@ function fixPathEncoding(
         if (code <= 0xff) {
           bytes.push(code);
         } else {
-          const charBytes = Buffer.from(decoded[i], "utf8");
+          const charBytes = Buffer.from(decoded.charAt(i), "utf8");
           bytes.push(...charBytes);
         }
       }
@@ -141,7 +141,11 @@ function isInsideCodeBlock(text: string, position: number): boolean {
   let openFence: { pos: number; ticks: number } | null = null;
 
   while ((fenceMatch = fenceRegex.exec(text)) !== null) {
-    const ticks = fenceMatch[1].length;
+    const ticksText = fenceMatch[1];
+    if (ticksText === undefined) {
+      continue;
+    }
+    const ticks = ticksText.length;
     if (!openFence) {
       openFence = { pos: fenceMatch.index, ticks };
     } else if (ticks >= openFence.ticks) {
@@ -206,7 +210,11 @@ export function findFirstClosedMediaTag(
     }
 
     const textBefore = text.slice(0, match.index);
-    const tagName = match[1].toLowerCase();
+    const rawTagName = match[1];
+    if (rawTagName === undefined) {
+      continue;
+    }
+    const tagName = rawTagName.toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
 
     mediaPath = normalizePath(mediaPath);
@@ -446,7 +454,7 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
   let fallbackPos = -1; // 最右边触发回溯的 < 的位置
 
   for (let i = lastLine.length - 1; i >= 0; i--) {
-    const ch = lastLine[i];
+    const ch = lastLine.charAt(i);
     if (ch !== "<" && ch !== "\uFF1C") {
       continue;
     }
@@ -461,7 +469,11 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
       if (!nameMatch || isClosing) {
         continue;
       }
-      const cand = nameMatch[1].toLowerCase();
+      const candidateName = nameMatch[1];
+      if (candidateName === undefined) {
+        continue;
+      }
+      const cand = candidateName.toLowerCase();
       if (!isMedia(cand)) {
         continue;
       }
@@ -505,6 +517,9 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
     }
 
     const tag = nameMatch[1];
+    if (tag === undefined) {
+      continue;
+    }
     const restAfterName = nameStr.slice(tag.length);
     const hasGT = /[>＞]/.test(restAfterName);
 

@@ -4,6 +4,7 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -1152,7 +1153,7 @@ function resolvePendingDialogForResponse(params: {
     throw new Error(`Dialog "${dialogId}" is not pending.`);
   }
   if (params.state.pendingDialogs.length === 1) {
-    return params.state.pendingDialogs[0];
+    return expectDefined(params.state.pendingDialogs.at(0), "single pending browser dialog");
   }
   if (params.state.pendingDialogs.length > 1) {
     throw new Error("Multiple dialogs are pending; pass dialogId.");
@@ -1488,7 +1489,7 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = accessible[0];
+  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
   if (!opts.targetId) {
     bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
     return first.page;

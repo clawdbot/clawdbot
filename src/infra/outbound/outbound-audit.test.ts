@@ -219,6 +219,33 @@ describe("outbound audit projection", () => {
     });
   });
 
+  it("normalizes a routed target used as the fallback conversation identifier", () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    try {
+      emitOutboundAuditTerminals({
+        context: {
+          channel: "discord",
+          to: "discord:channel:123456789",
+          payloads: [{ text: "sent" }],
+        },
+        terminals: uniformOutboundAuditTerminals(1, {
+          outcome: "sent",
+          results: [{ channel: "discord", messageId: "message-1" }],
+        }),
+        startedAt: Date.now(),
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      conversationId: "123456789",
+      targetId: "discord:channel:123456789",
+    });
+  });
+
   function conversationKindFor(
     context: Omit<Parameters<typeof emitOutboundAuditTerminals>[0]["context"], "payloads">,
   ): string | undefined {

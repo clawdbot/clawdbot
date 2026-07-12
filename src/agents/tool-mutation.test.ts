@@ -247,6 +247,7 @@ describe("tool mutation helpers", () => {
       "read",
       "sessions_history",
       "sessions_list",
+      "sessions_search",
       "tool_describe",
       "tool_search",
     ]) {

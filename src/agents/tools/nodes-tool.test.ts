@@ -215,8 +215,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
       properties?: { node?: { description?: string } };
     };
 
-    expect(tool.description).toContain("List paired nodes with status");
-    expect(tool.description).toContain("specific node by passing node");
+    expect(tool.description).toContain("Paired nodes: status/list");
+    expect(tool.description).toContain("pass node to describe/control");
     expect(schema.properties?.node?.description).toBe(
       "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
     );

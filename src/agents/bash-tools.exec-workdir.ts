@@ -337,6 +337,7 @@ export async function resolveExecWorkdir(params: {
   host: ExecHost;
   workdir?: string;
   defaultCwd?: string;
+  nodeCwd?: string;
   sandbox?: BashSandboxConfig;
 }): Promise<ExecWorkdirResolution> {
   const explicitWorkdir = normalizeExplicitWorkdirInput(params.workdir);
@@ -345,9 +346,11 @@ export async function resolveExecWorkdir(params: {
   }
 
   if (params.host === "node") {
-    return explicitWorkdir.kind === "specified"
-      ? { kind: "node", remoteCwd: explicitWorkdir.value }
-      : { kind: "node" };
+    const remoteCwd =
+      explicitWorkdir.kind === "specified"
+        ? explicitWorkdir.value
+        : normalizeOptionalString(params.nodeCwd);
+    return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
   }
 
   const defaultCwd = normalizeOptionalString(params.defaultCwd);

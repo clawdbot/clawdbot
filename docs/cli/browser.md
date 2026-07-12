@@ -20,7 +20,11 @@ Related: [Browser tool](/tools/browser)
 - `--timeout <ms>`: request timeout in ms (default: `30000`).
 - `--expect-final`: wait for a final Gateway response.
 - `--browser-profile <name>`: choose a browser profile (default: `openclaw`, or `browser.defaultProfile`).
-- `--json`: machine-readable output (where supported).
+- `--json`: machine-readable output (where supported). This is a browser-level option, so
+  place it before the subcommand for an unambiguous form, such as
+  `openclaw browser --json status`. Trailing placement such as
+  `openclaw browser status --json` also works when the selected child command does not
+  define its own `--json`.
 
 ## Quick start (local)
 
@@ -64,7 +68,7 @@ openclaw browser --browser-profile openclaw reset-profile
 - For a running local managed profile, `status` and `doctor` report cached
   graphics diagnostics from Chrome: hardware/software classification, renderer,
   backend, device/driver, feature and disabled-status details, and accelerated
-  video capabilities. `status --json` returns the full structured payload.
+  video capabilities. `openclaw browser --json status` returns the full structured payload.
   Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides even for `attachOnly` and remote CDP profiles where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.

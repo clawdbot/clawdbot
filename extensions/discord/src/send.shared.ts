@@ -1,8 +1,9 @@
-// Discord plugin module implements send.shared behavior.
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements send.shared behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -378,7 +379,8 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     return { result, replyToId: chunkReplyTo };
   };
   if (chunks.length === 1) {
-    const { result, replyToId } = await sendChunk(chunks[0], true);
+    const chunk = expectDefined(chunks.at(0), "single Discord text chunk");
+    const { result, replyToId } = await sendChunk(chunk, true);
     await onResult?.(result, "text", replyToId);
     return { ...result, platformMessageIds: result.id ? [result.id] : [] };
   }

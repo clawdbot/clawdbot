@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import WebKit
 

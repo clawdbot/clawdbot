@@ -262,7 +262,13 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
+          allowCommands: [
+            "system.run",
+            "system.run.prepare",
+            "system.which",
+            "browser.proxy",
+            "fs.listDir",
+          ],
         },
       },
     });
@@ -642,6 +648,59 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(directProxy.ok, JSON.stringify(directProxy.error)).toBe(true);
+      expect(sawInvoke).toBe(true);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("requires admin scope for direct fs.listDir node.invoke", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["fs.listDir"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.write"]);
+    try {
+      const directList = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "fs.listDir",
+        params: { path: "/tmp" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directList.ok).toBe(false);
+      expect(directList.error?.message ?? "").toContain("missing scope: operator.admin");
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("allows direct fs.listDir node.invoke for admin-scoped operators", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["fs.listDir"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.admin"]);
+    try {
+      const directList = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "fs.listDir",
+        params: { path: "/tmp" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directList.ok, JSON.stringify(directList.error)).toBe(true);
       expect(sawInvoke).toBe(true);
     } finally {
       ws.close();

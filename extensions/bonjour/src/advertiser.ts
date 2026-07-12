@@ -431,13 +431,11 @@ export async function startGatewayBonjourAdvertiser(
 
     const hostnameRaw =
       process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
-    const hostname = truncateToDnsLabel(
-      hostnameRaw
-        .replace(/\.local$/i, "")
-        .split(".")[0]
-        .trim() || "openclaw",
-      "openclaw",
-    );
+    const hostnameWithoutLocal = hostnameRaw.replace(/\.local$/i, "");
+    const dotIndex = hostnameWithoutLocal.indexOf(".");
+    const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
+    const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
+    const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
         ? opts.instanceName.trim()

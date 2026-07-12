@@ -116,6 +116,8 @@ actor MacNodeRuntime {
         self.eventSender = sender
     }
 
+    // One branch per advertised node command keeps command ownership explicit.
+    // swiftlint:disable:next cyclomatic_complexity
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
         if self.isCanvasCommand(command), !Self.canvasEnabled() {
@@ -162,6 +164,8 @@ actor MacNodeRuntime {
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
+            case OpenClawFileSystemCommand.listDir.rawValue:
+                return try MacNodeFileSystemCommands.listDirectory(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
                  MacNodeCodexThreadCatalogContract.turnsCommand:
                 return try await self.handleCodexThreadInvoke(req)

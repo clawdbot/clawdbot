@@ -234,6 +234,28 @@ const TARGET_KIND_TO_ROUTE_KINDS: Record<
 };
 const TARGET_PREFIX_RE = /^\s*([a-z][a-z0-9_-]*):/i;
 
+function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
+  conversationId: string;
+  withoutProvider: string;
+  allowedRouteKinds: readonly ("channel" | "direct" | "dm" | "group")[] | undefined;
+} {
+  const channel = context.channel.toLowerCase();
+  const aliasChannel = resolveTargetPrefixedChannel(context.to);
+  const targetPrefix = TARGET_PREFIX_RE.exec(context.to)?.[1];
+  const providerPrefixes =
+    aliasChannel === channel
+      ? [context.channel, targetPrefix ?? context.channel]
+      : [context.channel];
+  const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
+  const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
+  const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
+  const conversationId = stripTargetKindPrefix(
+    withoutProvider,
+    Object.keys(TARGET_KIND_TO_ROUTE_KINDS),
+  );
+  return { conversationId, withoutProvider, allowedRouteKinds };
+}
+
 /** True when a parsed session route provably names this delivery's destination. */
 function routeNamesDestination(
   route: ReturnType<typeof parseSessionDeliveryRoute>,
@@ -242,26 +264,14 @@ function routeNamesDestination(
   if (!route || route.channel !== context.channel.toLowerCase()) {
     return false;
   }
-  // Targets can nest a provider prefix around a kind prefix ("discord:dm:123",
-  // alias "tg:123"), so strip the provider layer first — including registered
-  // plugin aliases proven to belong to this channel — and evaluate the kind on
-  // what remains.
-  const aliasChannel = resolveTargetPrefixedChannel(context.to);
-  const providerPrefixes =
-    aliasChannel === context.channel.toLowerCase()
-      ? [context.channel, TARGET_PREFIX_RE.exec(context.to)?.[1] ?? context.channel]
-      : [context.channel];
-  const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
-  const prefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
-  const allowedRouteKinds = prefix ? TARGET_KIND_TO_ROUTE_KINDS[prefix] : undefined;
+  // Provider aliases and kind prefixes are routing syntax, not platform ids.
+  // Keep this shared with audit correlation so both decisions peel the same layers.
+  const { conversationId, withoutProvider, allowedRouteKinds } =
+    resolveOutboundTargetFacts(context);
   if (allowedRouteKinds && !allowedRouteKinds.includes(route.peerKind)) {
     return false;
   }
-  const candidates = [
-    context.to,
-    withoutProvider,
-    stripTargetKindPrefix(withoutProvider, Object.keys(TARGET_KIND_TO_ROUTE_KINDS)),
-  ];
+  const candidates = [context.to, withoutProvider, conversationId];
   return candidates.some((candidate) => {
     const normalized = normalizeSessionPeerId({
       channel: route.channel,
@@ -313,25 +323,26 @@ function firstIdentifier(...values: Array<string | undefined>): string | undefin
   return undefined;
 }
 
-function resolveResultIdentifiers(results: readonly OutboundDeliveryResult[]): {
+function resolveResultIdentifiers(
+  context: OutboundAuditDeliveryContext,
+  results: readonly OutboundDeliveryResult[],
+): {
   conversationId?: string;
   messageId?: string;
 } {
   const last = results.at(-1);
-  if (!last) {
-    return {};
-  }
-  const conversationId = firstIdentifier(
-    last.conversationId,
-    last.chatId,
-    last.channelId,
-    last.roomId,
-    last.toJid,
-  );
+  const conversationId =
+    firstIdentifier(
+      last?.conversationId,
+      last?.chatId,
+      last?.channelId,
+      last?.roomId,
+      last?.toJid,
+    ) ?? resolveOutboundTargetFacts(context).conversationId;
   const messageId = firstIdentifier(
-    last.messageId,
-    last.receipt?.primaryPlatformMessageId,
-    last.receipt?.platformMessageIds.at(-1),
+    last?.messageId,
+    last?.receipt?.primaryPlatformMessageId,
+    last?.receipt?.platformMessageIds.at(-1),
   );
   return {
     ...(conversationId ? { conversationId } : {}),
@@ -354,7 +365,7 @@ function emitOutboundAuditTerminal(params: {
     const { context, terminal } = params;
     const results = terminal.results ?? [];
     const agentId = context.session?.agentId ?? context.mirror?.agentId;
-    const identifiers = resolveResultIdentifiers(results);
+    const identifiers = resolveResultIdentifiers(context, results);
     const sentBeforeError =
       (terminal.outcome === "failed" || terminal.outcome === "unknown") &&
       terminal.sentBeforeError === true;

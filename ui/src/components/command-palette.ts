@@ -93,7 +93,7 @@ function getPaletteBaseItems(): PaletteItem[] {
       icon: "terminal",
       category: "search",
       action: "/verbose full",
-      description: "Toggle verbose mode.",
+      description: t("palette.descriptions.verboseMode"),
     },
   ];
 }

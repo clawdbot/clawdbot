@@ -54,9 +54,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -84,7 +84,7 @@ flow:
               expr: "`expected exactly one fallback group reply, saw ${matchingOutbound.length}`"
         - set: scenarioRequests
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
         - assert:
             expr: "!env.mock || scenarioRequests.length > 0"
             message: expected mock request evidence for fallback scenario

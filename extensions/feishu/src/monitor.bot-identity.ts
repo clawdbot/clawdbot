@@ -31,12 +31,13 @@ async function retryBotIdentityProbe(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  for (let i = 0; i < BOT_IDENTITY_RETRY_DELAYS_MS.length; i += 1) {
+  const nextDelays = BOT_IDENTITY_RETRY_DELAYS_MS.slice(1)[Symbol.iterator]();
+  for (const [i, delayMs] of BOT_IDENTITY_RETRY_DELAYS_MS.entries()) {
     if (abortSignal?.aborted) {
       return;
     }
 
-    const delayElapsed = await waitForAbortableDelay(BOT_IDENTITY_RETRY_DELAYS_MS[i], abortSignal);
+    const delayElapsed = await waitForAbortableDelay(delayMs, abortSignal);
     if (!delayElapsed) {
       return;
     }
@@ -50,7 +51,8 @@ async function retryBotIdentityProbe(
       return;
     }
 
-    const nextDelay = BOT_IDENTITY_RETRY_DELAYS_MS[i + 1];
+    const nextDelayResult = nextDelays.next();
+    const nextDelay = nextDelayResult.done ? undefined : nextDelayResult.value;
     error(
       `feishu[${accountId}]: bot identity background retry ${i + 1}/${BOT_IDENTITY_RETRY_DELAYS_MS.length} failed` +
         (nextDelay ? `; next attempt in ${nextDelay / 1000}s` : ""),

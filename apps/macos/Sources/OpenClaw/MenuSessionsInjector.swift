@@ -27,7 +27,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
     private var cachedUsageSummary: GatewayUsageSummary?
-    private var cachedUsageErrorText: String?
     private var usageCacheUpdatedAt: Date?
     private let usageRefreshIntervalSeconds: TimeInterval = 30
     private var cachedCostSummary: GatewayCostUsageSummary?
@@ -777,7 +776,6 @@ extension MenuSessionsInjector {
             self.cachedUsageSummary = try await UsageLoader.loadSummary()
         } catch {
             self.cachedUsageSummary = nil
-            self.cachedUsageErrorText = nil
         }
         self.usageCacheUpdatedAt = Date()
     }
@@ -1283,9 +1281,8 @@ extension MenuSessionsInjector {
         self.cacheUpdatedAt = Date()
     }
 
-    func setTestingUsageSummary(_ summary: GatewayUsageSummary?, errorText: String? = nil) {
+    func setTestingUsageSummary(_ summary: GatewayUsageSummary?) {
         self.cachedUsageSummary = summary
-        self.cachedUsageErrorText = errorText
         self.usageCacheUpdatedAt = Date()
     }
 

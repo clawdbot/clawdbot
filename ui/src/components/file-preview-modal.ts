@@ -1,6 +1,7 @@
 // Control UI component implements the file preview modal element.
 import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
@@ -15,14 +16,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property({ attribute: false }) files: FilePreviewModalFile[] = [];
   @property() activePath = "";
   @property() query = "";
-  @property() label = "Support files";
-  @property() listLabel = "Files";
-  @property() searchPlaceholder = "Search files...";
+  @property() label = "";
+  @property() listLabel = "";
+  @property() searchPlaceholder = "";
   @property() contextLabel = "";
-  @property() readOnlyLabel = "read-only";
-  @property() emptyTitle = "No files match";
-  @property() emptySubtitle = "Try another file name or content search.";
-  @property() copyLabel = "Copy file";
+  @property() readOnlyLabel = "";
+  @property() emptyTitle = "";
+  @property() emptySubtitle = "";
+  @property() copyLabel = "";
   @query(".search") private searchInput?: HTMLInputElement;
   @query(".detail-body") private detailBody?: HTMLElement;
 
@@ -501,15 +502,21 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     const activeFile = this.activeFile;
     const fileCount =
       filteredFiles.length === this.files.length
-        ? `${this.files.length} files`
-        : `${filteredFiles.length}/${this.files.length} files`;
+        ? t("filePreview.fileCount", { count: String(this.files.length) })
+        : t("filePreview.filteredFileCount", {
+            count: String(filteredFiles.length),
+            total: String(this.files.length),
+          });
+    const label = this.label || t("filePreview.label");
+    const listLabel = this.listLabel || t("filePreview.listLabel");
+    const searchPlaceholder = this.searchPlaceholder || t("filePreview.searchPlaceholder");
 
     return html`
       <div class="backdrop" @click=${this.emitClose}></div>
       <div
         class="modal"
         role="dialog"
-        aria-label=${this.label}
+        aria-label=${label}
         aria-modal="true"
         tabindex="-1"
         @keydown=${this.handleKeydown}
@@ -518,7 +525,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
           <span class="search-icon">⌕</span>
           <input
             class="search"
-            placeholder=${this.searchPlaceholder}
+            placeholder=${searchPlaceholder}
             .value=${this.query}
             @input=${this.handleQueryInput}
           />
@@ -526,9 +533,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         </header>
         <div class="body">
           <aside class="list">
-            <div class="list-section">${this.listLabel} · ${filteredFiles.length}</div>
+            <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
             ${filteredFiles.length === 0
-              ? html`<div class="empty-list">No files match.</div>`
+              ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
               : filteredFiles.map(
                   (file) => html`
                     <button
@@ -547,10 +554,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
           ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
         </div>
         <footer class="foot">
-          <span class="foot-group"><span class="kbd">↑↓</span> navigate</span>
+          <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
           <span class="spacer"></span>
           <button class="button" @click=${this.emitClose}>
-            Close <span class="kbd">esc</span>
+            ${t("common.close")} <span class="kbd">esc</span>
           </button>
         </footer>
       </div>
@@ -563,12 +570,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         <div class="detail-head">
           <div class="detail-title-row">
             <h2 class="title">${file.path}</h2>
-            ${file.contents ? renderCopyButton(file.contents, this.copyLabel) : ""}
+            ${file.contents
+              ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+              : ""}
           </div>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>
             <span class="chip">${file.size}</span>
-            <span class="chip">${this.readOnlyLabel}</span>
+            <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
             ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
           </div>
         </div>
@@ -586,8 +595,8 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   private renderEmpty() {
     return html`
       <section class="detail empty">
-        <p class="empty-title">${this.emptyTitle}</p>
-        <p class="empty-subtitle">${this.emptySubtitle}</p>
+        <p class="empty-title">${this.emptyTitle || t("filePreview.emptyTitle")}</p>
+        <p class="empty-subtitle">${this.emptySubtitle || t("filePreview.emptySubtitle")}</p>
       </section>
     `;
   }

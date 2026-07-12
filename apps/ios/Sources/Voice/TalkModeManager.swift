@@ -4076,7 +4076,6 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
     private var lastLoggedAt = Date.distantPast
     private var lastLevelEmitAt = Date.distantPast
     private var maxRmsWindow: Float = 0
-    private var lastRms: Float = 0
 
     init(label: String, onLevel: (@Sendable (Float) -> Void)? = nil) {
         self.label = label
@@ -4107,7 +4106,6 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
 
         let resolvedRms = Float(TalkAudioLevel.rms(buffer: buffer))
         self.lock.lock()
-        self.lastRms = resolvedRms
         if resolvedRms > self.maxRmsWindow { self.maxRmsWindow = resolvedRms }
         let maxRms = self.maxRmsWindow
         if shouldLog { self.maxRmsWindow = 0 }

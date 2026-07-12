@@ -25,6 +25,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "image",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "sessions_spawn",
   "sessions_yield",

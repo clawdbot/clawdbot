@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 
 /** Keeps transcript rows limited to roles Android renders as user-visible chat. */
 internal fun normalizeVisibleChatMessageRole(role: String?): String? =

@@ -64,6 +64,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_spawn",
   // Continuation: leaf workers cannot spawn further delegates.
   // Chain-hop delegates spawned with drainsContinuationDelegateQueue: true

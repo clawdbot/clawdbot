@@ -12,18 +12,26 @@ import type {
   GatewayServiceState,
 } from "../../daemon/service.js";
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 /** Repair a loaded but stale Gateway service definition and report the start result. */
 export async function repairLoadedGatewayServiceForStart(params: {
+  action?: "restart" | "start";
   service: GatewayService;
+  port?: number;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
-}): Promise<{ result: "started"; message: string; warnings?: string[]; loaded: boolean }> {
+}): Promise<{
+  result: "restarted" | "started";
+  message: string;
+  warnings?: string[];
+  loaded: boolean;
+}> {
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
@@ -34,7 +42,10 @@ export async function repairLoadedGatewayServiceForStart(params: {
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
-  const port = resolveGatewayPort(cfg);
+  const installedPort =
+    parseTcpPortFromArgs(params.state.command?.programArguments) ??
+    parseTcpPort(params.state.command?.environment?.OPENCLAW_GATEWAY_PORT);
+  const port = params.port ?? installedPort ?? resolveGatewayPort(cfg);
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -94,9 +105,11 @@ export async function repairLoadedGatewayServiceForStart(params: {
   }
 
   return {
-    result: "started",
+    result: params.action === "restart" ? "restarted" : "started",
     message:
-      "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
+      params.action === "restart"
+        ? "Gateway service definition repaired and restarted."
+        : "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
   };

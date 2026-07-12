@@ -27,7 +27,7 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,
-  "execHost" | "execSecurity" | "execAsk" | "execNode"
+  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd"
 >;
 
 // Resolved exec config layers come from global config, agent config, legacy

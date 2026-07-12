@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -954,13 +955,13 @@ async function collectSessionIngestionBatches(params: {
       };
       const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
       const unchanged =
-        Boolean(previous) &&
+        previous !== undefined &&
         previous.mtimeMs === fingerprint.mtimeMs &&
         previous.size === fingerprint.size &&
         previous.contentHash.length > 0 &&
         cursorAtEnd;
       if (unchanged) {
-        nextFiles[stateKey] = previous!;
+        nextFiles[stateKey] = expectDefined(previous, "unchanged dreaming file state");
         continue;
       }
 

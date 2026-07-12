@@ -7,6 +7,7 @@
 
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
@@ -224,7 +225,7 @@ export function parseAdminCommand(text: string): AdminCommand | null {
   // "unblock ~ship" - unblock a specific ship
   const unblockMatch = trimmed.match(/^unblock\s+(~[\w-]+)$/);
   if (unblockMatch) {
-    return { type: "unblock", ship: unblockMatch[1] };
+    return { type: "unblock", ship: expectDefined(unblockMatch[1], "unblock ship capture") };
   }
 
   return null;

@@ -60,6 +60,7 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "sessions_spawn",
   "sessions_yield",

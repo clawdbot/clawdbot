@@ -117,7 +117,8 @@ function buildNewEventKey(order: { persistedAt: number; sequence: number }): str
 /** Recover the sequence segment from newer event keys. */
 function parseEventKeySequence(key: string): number {
   const match = /^event:[^:]+:(\d+):/.exec(key);
-  return match ? Number.parseInt(match[1], 10) : 0;
+  const sequence = match?.[1];
+  return sequence ? Number.parseInt(sequence, 10) : 0;
 }
 
 /** Parse a stored call record line from v2 envelope or legacy raw-call JSON. */

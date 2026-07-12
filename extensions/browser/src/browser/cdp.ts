@@ -4,6 +4,7 @@
  * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -517,7 +518,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
         continue;
       }
       tree[index]?.children.push(childIndex);
-      tree[childIndex].parent = index;
+      expectDefined(tree[childIndex], "CDP child node index").parent = index;
       childIndexes.add(childIndex);
     }
   }
@@ -529,7 +530,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    tree[current.index].depth = current.depth;
+    expectDefined(tree[current.index], "CDP traversal node index").depth = current.depth;
     for (const child of (tree[current.index]?.children ?? []).toReversed()) {
       stack.push({ index: child, depth: current.depth + 1 });
     }
@@ -857,7 +858,7 @@ async function buildCdpRoleSnapshot(params: {
     if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
       node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
       if (node.ref && refs[node.ref]) {
-        refs[node.ref].frameId = node.frameId;
+        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
       }
     }
   }

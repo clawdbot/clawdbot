@@ -92,6 +92,8 @@ export type RuntimeNodeInvokeParams = {
 
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
+  /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
+  scopes?: OperatorScope[];
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */

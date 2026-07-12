@@ -14,9 +14,14 @@ async function makeTempRoot(): Promise<string> {
   return await fs.realpath(root);
 }
 
-async function call(params: Record<string, unknown>) {
+async function call(
+  params: Record<string, unknown>,
+  context: Record<string, unknown> = {
+    nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
+  },
+) {
   const respond = vi.fn();
-  await fsHandlers["fs.listDir"]?.({ params, respond } as never);
+  await fsHandlers["fs.listDir"]?.({ params, respond, context } as never);
   return respond.mock.calls[0];
 }
 
@@ -85,5 +90,60 @@ describe("fs.listDir", () => {
     const [ok, , error] = await call({ path: path.join(root, "does-not-exist") });
     expect(ok).toBe(false);
     expect((error as { message?: string })?.message).toContain("ENOENT");
+  });
+
+  it("routes node listings through the connected node capability", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        path: "/Users/peter",
+        home: "/Users/peter",
+        entries: [{ name: "Projects", path: "/Users/peter/Projects" }],
+      }),
+    });
+    const context = {
+      nodeRegistry: {
+        get: vi.fn().mockReturnValue({
+          connId: "conn-1",
+          commands: ["system.run", "fs.listDir"],
+        }),
+        invoke,
+      },
+    };
+
+    const [ok, result] = await call({ nodeId: "macbook" }, context);
+
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ path: "/Users/peter", home: "/Users/peter" });
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "macbook",
+      expectedConnId: "conn-1",
+      command: "fs.listDir",
+      params: {},
+    });
+  });
+
+  it("rejects disconnected and directory-browse-incompatible nodes", async () => {
+    const disconnected = await call(
+      { nodeId: "offline" },
+      { nodeRegistry: { get: vi.fn(), invoke: vi.fn() } },
+    );
+    expect(disconnected[0]).toBe(false);
+    expect(disconnected[2]).toMatchObject({ code: "UNAVAILABLE" });
+
+    const unsupported = await call(
+      { nodeId: "old-node" },
+      {
+        nodeRegistry: {
+          get: vi.fn().mockReturnValue({ connId: "conn-2", commands: ["system.run"] }),
+          invoke: vi.fn(),
+        },
+      },
+    );
+    expect(unsupported[0]).toBe(false);
+    expect(unsupported[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("does not support"),
+    });
   });
 });

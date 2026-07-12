@@ -59,9 +59,6 @@ vi.mock("./install.runtime.js", async () => {
     scanPackageInstallSource: (
       ...args: Parameters<typeof installSecurityScan.scanPackageInstallSource>
     ) => installSecurityScan.scanPackageInstallSource(...args),
-    scanFileInstallSource: (
-      ...args: Parameters<typeof installSecurityScan.scanFileInstallSource>
-    ) => installSecurityScan.scanFileInstallSource(...args),
   };
 });
 

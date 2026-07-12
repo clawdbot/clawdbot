@@ -31,12 +31,14 @@ import {
   listTaskFlowRecords,
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findLatestTaskForFlowId,
   findTaskByRunId,
+  markTaskTerminalById,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
@@ -360,6 +362,39 @@ describe("task-executor", () => {
       expect(succeededFlow?.endedAt).toBe(40);
       expect(succeededFlow?.goal).toBe("Write summary");
       expect(succeededFlow?.notifyPolicy).toBe("done_only");
+    });
+  });
+
+  it("keeps detached tasks standalone when task-flow restore fails", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:standalone",
+        runId: "run-executor-flow-restore-failed",
+        task: "Continue without a one-task flow",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      expect(created.parentFlowId).toBeUndefined();
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "running",
+        parentFlowId: undefined,
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -743,6 +778,75 @@ describe("task-executor", () => {
     });
   });
 
+  it("dispatches cancellation for tasks owned only by the registered runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: "runtime-owned-task",
+        reason: "operator request",
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+        cfg: {} as never,
+        taskId: "runtime-owned-task",
+        reason: "operator request",
+      });
+      expect(cancelled).toEqual({
+        found: true,
+        cancelled: true,
+      });
+    });
+  });
+
+  it("checks linked flow readiness before invoking a registered cancellation runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningAcpChildTaskRun({
+        runId: "run-external-cancel-restore-failed",
+      });
+      expect(child.parentFlowId).toBeTruthy();
+      const cancelDetachedTaskRunByIdSpy = spyOnRuntimeCancel();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: cancellation flow restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).not.toHaveBeenCalled();
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: expect.stringContaining(
+          "Task-flow registry restore failed: SQLITE_IOERR: cancellation flow restore failed",
+        ),
+        task: {
+          taskId: child.taskId,
+          status: "running",
+        },
+      });
+      expect(getTaskById(child.taskId)?.status).toBe("running");
+    });
+  });
+
   it("falls back to the legacy canceller when the registered runtime declines task ownership", async () => {
     await withTaskExecutorStateDir(async () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
@@ -810,6 +914,102 @@ describe("task-executor", () => {
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("running");
       expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("dispatches provisional terminal projections to their registered runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:provisional",
+        runId: "run-provisional-runtime-owned",
+        task: "Cancel provisional runtime task",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+      markTaskTerminalById({
+        taskId: child.taskId,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+      expect(cancelled).toEqual({
+        found: true,
+        cancelled: true,
+      });
+    });
+  });
+
+  it("checks linked flow readiness before dispatching provisional terminal projections", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:provisional-restore-failed",
+        runId: "run-provisional-runtime-restore-failed",
+        task: "Gate provisional runtime cancellation",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+      expect(child.parentFlowId).toBeTruthy();
+      markTaskTerminalById({
+        taskId: child.taskId,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: provisional cancellation restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).not.toHaveBeenCalled();
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: expect.stringContaining(
+          "Task-flow registry restore failed: SQLITE_IOERR: provisional cancellation restore failed",
+        ),
+      });
     });
   });
 

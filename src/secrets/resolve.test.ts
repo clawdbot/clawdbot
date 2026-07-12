@@ -58,6 +58,8 @@ describe("secret ref resolver", () => {
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
   let execInheritedErrorScriptPath = "";
+  let execProviderErrorScriptPath = "";
+  let execUnsafeProviderErrorScriptPath = "";
   let execInvalidJsonScriptPath = "";
   let execFastExitScriptPath = "";
 
@@ -175,6 +177,26 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
+    execProviderErrorScriptPath = path.join(sharedExecDir, "resolver-error.sh");
+    await writeSecureFile(
+      execProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execUnsafeProviderErrorScriptPath = path.join(sharedExecDir, "resolver-unsafe-error.sh");
+    await writeSecureFile(
+      execUnsafeProviderErrorScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
     execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
     await writeSecureFile(
       execInvalidJsonScriptPath,
@@ -237,6 +259,30 @@ describe("secret ref resolver", () => {
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");
+  });
+
+  itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
+    const error = await resolveExecSecret(execProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key" (NOT_FOUND).',
+    );
+    expect((error as Error).message).not.toContain("provider-private-detail-7f3c");
+  });
+
+  itPosix("suppresses exec error codes outside the bounded format", async () => {
+    const error = await resolveExecSecret(execUnsafeProviderErrorScriptPath).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Exec provider "execmain" failed for id "openai/api-key".',
+    );
+    expect((error as Error).message).not.toContain("PROVIDERPRIVATEDETAIL9C2E");
   });
 
   itPosix("clamps oversized exec provider timeouts", async () => {

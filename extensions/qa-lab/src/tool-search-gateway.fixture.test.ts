@@ -10,6 +10,11 @@ import {
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   assertToolSearchLaneResults,
@@ -23,6 +28,22 @@ afterEach(() => {
 });
 
 describe("tool search gateway e2e fetch helper", () => {
+  it("builds and validates mock request cursor reads", () => {
+    expect(readQaMockRequestCursor({ cursor: 42 })).toBe(42);
+    expect(qaMockRequestCursorUrl("http://mock.test/")).toBe(
+      "http://mock.test/debug/request-cursor",
+    );
+    expect(qaMockRequestsAfterUrl("http://mock.test/", 42)).toBe(
+      "http://mock.test/debug/requests?after=42",
+    );
+    expect(() => readQaMockRequestCursor({ cursor: -1 })).toThrow(
+      "mock provider request cursor response was invalid",
+    );
+    expect(() => readQaMockRequestCursor([])).toThrow(
+      "mock provider request cursor response was invalid",
+    );
+  });
+
   it("rejects loose numeric env limits instead of parsing prefixes", () => {
     expect(() =>
       readToolSearchGatewayFetchLimits({
@@ -222,7 +243,7 @@ describe("tool search gateway e2e lane result", () => {
       });
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ cursor: 0 }))
       .mockResolvedValueOnce(jsonResponse({ output: [], status: "completed" }))
       .mockResolvedValueOnce(
         jsonResponse([

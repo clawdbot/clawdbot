@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
@@ -955,7 +956,7 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   if (!match) {
     return body;
   }
-  const label = match[1];
+  const label = expectDefined(match[1], "envelope body sender capture");
   if (label === ENVELOPE_BODY_SELF_PREFIX || label === ENVELOPE_BODY_DIRECT_PREFIX) {
     return body.slice(match[0].length);
   }
@@ -1701,11 +1702,12 @@ export default definePluginEntry({
               };
             }
 
-            if (results.length === 1 && results[0].score > 0.9) {
-              await db.delete(results[0].entry.id);
+            const singleResult = results.length === 1 ? results[0] : undefined;
+            if (singleResult && singleResult.score > 0.9) {
+              await db.delete(singleResult.entry.id);
               return {
-                content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
-                details: { action: "deleted", id: results[0].entry.id },
+                content: [{ type: "text", text: `Forgotten: "${singleResult.entry.text}"` }],
+                details: { action: "deleted", id: singleResult.entry.id },
               };
             }
 

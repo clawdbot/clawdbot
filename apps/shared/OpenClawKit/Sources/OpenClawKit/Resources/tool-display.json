@@ -528,6 +528,15 @@
         "includeTools"
       ]
     },
+    "sessions_search": {
+      "emoji": "🔎",
+      "title": "Session Search",
+      "detailKeys": [
+        "query",
+        "sessionKey",
+        "limit"
+      ]
+    },
     "transcripts": {
       "emoji": "🎙️",
       "title": "Transcripts",

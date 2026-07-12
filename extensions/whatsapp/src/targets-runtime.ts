@@ -135,8 +135,13 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
     const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(normalized));
     addEquivalentDirectChatCandidate(candidates, mappedLid);
 
-    const mappedLocalLid = readLidForwardMapping({ phoneDigits: pnMatch[1], opts });
-    const localLidDomain = pnMatch[2].toLowerCase() === "hosted" ? "hosted.lid" : "lid";
+    const phoneDigits = pnMatch[1];
+    const pnDomain = pnMatch[2];
+    if (!phoneDigits || !pnDomain) {
+      return candidates;
+    }
+    const mappedLocalLid = readLidForwardMapping({ phoneDigits, opts });
+    const localLidDomain = pnDomain.toLowerCase() === "hosted" ? "hosted.lid" : "lid";
     addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
     return candidates;
   }
@@ -146,9 +151,13 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
     const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(normalized));
     addEquivalentDirectChatCandidate(candidates, mappedPn);
 
+    const lidDomain = lidMatch[2];
+    if (!lidMatch[1] || !lidDomain) {
+      return candidates;
+    }
     const e164 = jidToE164(normalized, { ...opts, logMissing: false });
     const localPnJid =
-      e164 && lidMatch[2].toLowerCase() === "hosted.lid"
+      e164 && lidDomain.toLowerCase() === "hosted.lid"
         ? `${e164.replace(/\D/g, "")}@hosted`
         : e164
           ? toWhatsappJid(e164)
@@ -221,16 +230,21 @@ function readLidForwardMapping(params: {
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   const match = jid.match(/^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/);
-  if (match) {
-    return `+${match[1]}`;
+  const phoneDigits = match?.[1];
+  if (phoneDigits) {
+    return `+${phoneDigits}`;
   }
 
   const lidMatch = jid.match(/^(\d+)(?::\d+)?@(lid|hosted\.lid)$/);
   if (!lidMatch) {
     return null;
   }
+  const lid = lidMatch[1];
+  if (!lid) {
+    return null;
+  }
   const phone = readLidReverseMapping({
-    lid: lidMatch[1],
+    lid,
     opts,
   });
   if (phone) {

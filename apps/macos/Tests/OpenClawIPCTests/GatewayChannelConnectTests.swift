@@ -201,7 +201,7 @@ struct GatewayChannelConnectTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        return try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        return try await DeviceIdentityStore.withStateDirectory(tempDir) {
             try await operation()
         }
     }

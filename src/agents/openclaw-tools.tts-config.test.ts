@@ -209,8 +209,8 @@ describe("createOpenClawTools TTS config wiring", () => {
         throw new Error("missing tts tool");
       }
 
-      expect(tool.description).toContain("Use only for explicit audio intent");
-      expect(tool.description).toContain("Never use for ordinary text replies");
+      expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
+      expect(tool.description).toContain("never ordinary text reply");
     } finally {
       testing.setDepsForTest();
     }

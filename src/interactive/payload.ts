@@ -968,6 +968,7 @@ export function hasReplyPayloadContent(
     interactive?: unknown;
     presentation?: unknown;
     channelData?: unknown;
+    location?: unknown;
   },
   options?: {
     trimText?: boolean;
@@ -982,7 +983,7 @@ export function hasReplyPayloadContent(
     interactive: payload.interactive,
     presentation: payload.presentation,
     hasChannelData: options?.hasChannelData ?? hasReplyChannelData(payload.channelData),
-    extraContent: options?.extraContent,
+    extraContent: options?.extraContent ?? payload.location != null,
   });
 }
 

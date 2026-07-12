@@ -34,6 +34,7 @@ function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
 }
 
 type QaSessionTranscriptSummary = {
+  assistantToolCallCounts: Record<string, number>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
   lastAssistantContentTypes?: string[];
@@ -81,6 +82,7 @@ function summarizeSessionTranscriptEvents(
   sessionKey: string,
 ): QaSessionTranscriptSummary {
   const scanner = createDirectReplyTranscriptSentinelScanner();
+  const assistantToolCallCounts: Record<string, number> = {};
   let finalText = "";
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
@@ -110,6 +112,9 @@ function summarizeSessionTranscriptEvents(
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
     lastAssistantToolNames = readAssistantToolNames(message);
+    for (const toolName of lastAssistantToolNames) {
+      assistantToolCallCounts[toolName] = (assistantToolCallCounts[toolName] ?? 0) + 1;
+    }
     scanner.recordMessage(message);
   }
 
@@ -118,6 +123,7 @@ function summarizeSessionTranscriptEvents(
   }
 
   return {
+    assistantToolCallCounts,
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),

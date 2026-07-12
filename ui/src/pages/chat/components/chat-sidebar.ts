@@ -286,11 +286,11 @@ function renderFileSidebarContent(
       <div class="sidebar-file-view__path-bar">
         <div class="sidebar-file-view__path-field">
           <span class="sidebar-file-view__path" title=${content.path}>${content.path}</span>
-          <openclaw-tooltip content="Copy path">
+          <openclaw-tooltip .content=${t("chat.detailPanel.copyPath")}>
             <button
               class="btn btn--sm sidebar-file-view__action"
               type="button"
-              aria-label="Copy path"
+              aria-label=${t("chat.detailPanel.copyPath")}
               @click=${() => void copyToClipboard(content.path)}
             >
               ${icons.copy}
@@ -316,17 +316,17 @@ function renderFileSidebarContent(
                         ?disabled=${controls.saving}
                         @click=${controls.onDiscard}
                       >
-                        Discard
+                        ${t("chat.detailPanel.discard")}
                       </button>
                     `
                   : html`
                       ${content.edit
                         ? html`
-                            <openclaw-tooltip content="Edit file">
+                            <openclaw-tooltip .content=${t("chat.detailPanel.editFile")}>
                               <button
                                 class="btn btn--sm sidebar-file-view__action"
                                 type="button"
-                                aria-label="Edit file"
+                                aria-label=${t("chat.detailPanel.editFile")}
                                 ?disabled=${controls.loadingEditor}
                                 @click=${controls.onEdit}
                               >
@@ -335,11 +335,11 @@ function renderFileSidebarContent(
                             </openclaw-tooltip>
                           `
                         : nothing}
-                      <openclaw-tooltip content="Search in file">
+                      <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
                         <button
                           class="btn btn--sm sidebar-file-view__action"
                           type="button"
-                          aria-label="Search in file"
+                          aria-label=${t("chat.detailPanel.searchInFile")}
                           aria-pressed=${String(controls.searchOpen)}
                           @click=${controls.onToggleSearch}
                         >
@@ -348,11 +348,11 @@ function renderFileSidebarContent(
                       </openclaw-tooltip>
                       ${controls.onReveal
                         ? html`
-                            <openclaw-tooltip content="Show in Files">
+                            <openclaw-tooltip .content=${t("chat.detailPanel.showInFiles")}>
                               <button
                                 class="btn btn--sm sidebar-file-view__action"
                                 type="button"
-                                aria-label="Show in Files"
+                                aria-label=${t("chat.detailPanel.showInFiles")}
                                 @click=${() => controls.onReveal?.(content.path)}
                               >
                                 ${icons.folder}
@@ -417,8 +417,8 @@ function renderFileSidebarContent(
             <div class="file-view__search">
               <input
                 type="search"
-                aria-label="Search in file"
-                placeholder="Search"
+                aria-label=${t("chat.detailPanel.searchInFile")}
+                placeholder=${t("common.search")}
                 .value=${controls.query}
                 @input=${(event: Event) =>
                   controls.onSearchInput((event.currentTarget as HTMLInputElement).value)}
@@ -430,7 +430,7 @@ function renderFileSidebarContent(
               <button
                 class="btn btn--sm file-view__search-action file-view__search-action--previous"
                 type="button"
-                aria-label="Previous match"
+                aria-label=${t("chat.detailPanel.previousMatch")}
                 ?disabled=${controls.matches.length === 0}
                 @click=${controls.onPreviousMatch}
               >
@@ -439,7 +439,7 @@ function renderFileSidebarContent(
               <button
                 class="btn btn--sm file-view__search-action"
                 type="button"
-                aria-label="Next match"
+                aria-label=${t("chat.detailPanel.nextMatch")}
                 ?disabled=${controls.matches.length === 0}
                 @click=${controls.onNextMatch}
               >
@@ -465,7 +465,7 @@ function renderFileSidebarContent(
                         ?disabled=${controls.saving}
                         @click=${controls.onReload}
                       >
-                        Reload
+                        ${t("common.reload")}
                       </button>
                       <button
                         class="btn btn--sm"
@@ -473,7 +473,7 @@ function renderFileSidebarContent(
                         ?disabled=${controls.saving}
                         @click=${controls.onOverwrite}
                       >
-                        Overwrite
+                        ${t("chat.detailPanel.overwrite")}
                       </button>
                     </div>
                   `
@@ -484,7 +484,7 @@ function renderFileSidebarContent(
       <div class="file-view">
         ${keyed(controls?.mountKey ?? content, html`<div class="file-view__mount"></div>`)}
         ${controls?.loadingEditor
-          ? html`<div class="file-view__loading muted">Loading…</div>`
+          ? html`<div class="file-view__loading muted">${t("common.loading")}</div>`
           : nothing}
       </div>
       ${controls?.editing
@@ -492,7 +492,7 @@ function renderFileSidebarContent(
         : html`
             <div class="sidebar-file-view__footer">
               <button @click=${onViewRawText} class="btn btn--sm" type="button">
-                View Raw Text
+                ${t("chat.detailPanel.viewRawText")}
               </button>
             </div>
           `}
@@ -554,8 +554,13 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
     <div class="sidebar-panel">
       <div class="sidebar-header">
         <div class="sidebar-title">${title}</div>
-        <openclaw-tooltip content="Close sidebar">
-          <button @click=${props.onClose} class="btn" type="button" aria-label="Close sidebar">
+        <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+          <button
+            @click=${props.onClose}
+            class="btn"
+            type="button"
+            aria-label=${t("chat.detailPanel.close")}
+          >
             ${icons.x}
           </button>
         </openclaw-tooltip>
@@ -572,7 +577,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       type="button"
                       style="margin-top: 12px;"
                     >
-                      View Raw Text
+                      ${t("chat.detailPanel.viewRawText")}
                     </button>
                   `
                 : nothing}
@@ -605,7 +610,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                           ? html`
                               <div style="margin-top: 12px;">
                                 <button @click=${props.onViewRawText} class="btn" type="button">
-                                  View Raw Text
+                                  ${t("chat.detailPanel.viewRawText")}
                                 </button>
                               </div>
                             `
@@ -627,7 +632,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             ? html`
                                 <div style="margin-top: 12px;">
                                   <button @click=${props.onViewRawText} class="btn" type="button">
-                                    View Raw Text
+                                    ${t("chat.detailPanel.viewRawText")}
                                   </button>
                                 </div>
                               `
@@ -640,14 +645,14 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             <div class="sidebar-markdown-shell__intro">
                               <div class="sidebar-markdown-shell__eyebrow">
                                 ${icons.scrollText}
-                                <span>Rendered Markdown</span>
+                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                               </div>
                               <div class="sidebar-markdown-shell__hint">
-                                Sanitized rich-text preview for quick reading.
+                                ${t("chat.detailPanel.renderedMarkdownHint")}
                               </div>
                             </div>
                             <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                              View Raw Text
+                              ${t("chat.detailPanel.viewRawText")}
                             </button>
                           </div>
                           ${markdownHtml
@@ -658,12 +663,12 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                               `
                             : html`
                                 <div class="sidebar-markdown-empty">
-                                  No previewable markdown content.
+                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
                                 </div>
                               `}
                         </section>
                       `
-            : html` <div class="muted">No content available</div> `}
+            : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>
   `;

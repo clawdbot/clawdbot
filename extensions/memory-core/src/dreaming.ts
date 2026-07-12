@@ -1,5 +1,6 @@
-// Memory Core plugin module implements dreaming behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Memory Core plugin module implements dreaming behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
@@ -481,7 +482,8 @@ export async function reconcileShortTermDreamingCronJob(params: {
     }
   }
 
-  const patch = buildManagedDreamingPatch(primary, desired);
+  const managedPrimary = expectDefined(primary, "non-empty managed dreaming jobs");
+  const patch = buildManagedDreamingPatch(managedPrimary, desired);
   if (!patch) {
     if (removed > 0) {
       params.logger.info("memory-core: pruned duplicate managed dreaming cron jobs.");
@@ -489,7 +491,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
     return { status: "noop", removed };
   }
 
-  await cron.update(primary.id, patch);
+  await cron.update(managedPrimary.id, patch);
   params.logger.info("memory-core: updated managed dreaming cron job.");
   return { status: "updated", removed };
 }

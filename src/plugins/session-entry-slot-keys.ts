@@ -66,6 +66,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "execSecurity",
   "execAsk",
   "execNode",
+  "execCwd",
   "responseUsage",
   "usageFamilyKey",
   "usageFamilySessionIds",

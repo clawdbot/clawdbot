@@ -1,10 +1,11 @@
-// Telegram plugin module implements group policy behavior.
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
+// Telegram plugin module implements group policy behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 function parseTelegramGroupId(value?: string | null) {
   const raw = value?.trim() ?? "";
@@ -12,16 +13,33 @@ function parseTelegramGroupId(value?: string | null) {
     return { chatId: undefined, topicId: undefined };
   }
   const parts = raw.split(":").filter(Boolean);
+  const chatId = parts[0];
+  const second = parts[1];
+  const third = parts[2];
   if (
     parts.length >= 3 &&
-    parts[1] === "topic" &&
-    /^-?\d+$/.test(parts[0]) &&
-    /^\d+$/.test(parts[2])
+    second === "topic" &&
+    chatId !== undefined &&
+    /^-?\d+$/.test(chatId) &&
+    third !== undefined &&
+    /^\d+$/.test(third)
   ) {
-    return { chatId: parts[0], topicId: parts[2] };
+    return {
+      chatId: expectDefined(chatId, "validated Telegram group chat id"),
+      topicId: expectDefined(third, "validated Telegram topic id"),
+    };
   }
-  if (parts.length >= 2 && /^-?\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
-    return { chatId: parts[0], topicId: parts[1] };
+  if (
+    parts.length >= 2 &&
+    chatId !== undefined &&
+    /^-?\d+$/.test(chatId) &&
+    second !== undefined &&
+    /^\d+$/.test(second)
+  ) {
+    return {
+      chatId: expectDefined(chatId, "validated Telegram group chat id"),
+      topicId: expectDefined(second, "validated Telegram topic id"),
+    };
   }
   return { chatId: raw, topicId: undefined };
 }

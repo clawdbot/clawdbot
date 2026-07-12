@@ -511,6 +511,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
+      await state.channelHealthMonitor?.waitForIdle();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
     }
 

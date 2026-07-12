@@ -144,13 +144,13 @@ function createCronScheduleSchema(): TSchema {
         expr: Type.Optional(
           Type.String({
             description:
-              'Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr "0 18 * * *", tz "Asia/Shanghai".',
+              'Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
           }),
         ),
         tz: Type.Optional(
           Type.String({
             description:
-              'IANA timezone for cron wall-clock fields, e.g. "Asia/Shanghai"; omitted => Gateway host local timezone.',
+              'IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example "Asia/Shanghai".',
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
@@ -222,7 +222,7 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
         failureDestination: params.nullableClears
           ? Type.Optional(
               Type.Union([failureDestinationObject, Type.Null()], {
-                description: "Failure destination, or null to clear",
+                description: "Failure destination; null clears.",
               }),
             )
           : Type.Optional(failureDestinationObject),
@@ -254,14 +254,12 @@ function createCronFailureAlertSchema(): TSchema {
         channel: Type.Optional(Type.String({ description: "Alert channel" })),
         to: Type.Optional(Type.String({ description: "Alert target" })),
         cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
-        includeSkipped: Type.Optional(
-          Type.Boolean({ description: "Skipped runs count toward alert" }),
-        ),
+        includeSkipped: Type.Optional(Type.Boolean({ description: "Count skipped runs." })),
         mode: optionalStringEnum(["announce", "webhook"] as const),
         accountId: Type.Optional(Type.String()),
       },
       additionalProperties: true,
-      description: "Failure alert object; false disables alerts",
+      description: "Failure alert; false disables.",
     }),
   );
 }
@@ -273,7 +271,7 @@ function createCronJobObjectSchema(): TSchema {
         name: Type.Optional(Type.String({ description: "Job name" })),
         declarationKey: Type.Optional(
           Type.String({
-            description: "Idempotent declaration identity key",
+            description: "Idempotent declaration key.",
             minLength: 1,
             maxLength: 200,
             pattern: "\\S",
@@ -895,92 +893,41 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     label: "Cron",
     name: "cron",
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.
-
-Main cron => system events for heartbeat. Isolated cron => background task in \`openclaw tasks\`.
+    description: `Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in \`openclaw tasks\`.
 
 ACTIONS:
-- status: scheduler status
-- list: compact job summaries; includeDisabled true includes disabled; use get for full job details; agentId filter auto-filled from session
-- get: one job; needs jobId
-- add: create job; needs job object
-- update: patch job; needs jobId + patch
-- remove: delete job; needs jobId
-- run: run only if due by default; needs jobId; pass runMode="force" to trigger now
-- runs: run history; needs jobId
-- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane owned by the calling agent.
+- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId
+- add job; update jobId+patch; remove jobId
+- run jobId (due only; runMode="force" now); runs jobId history
+- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.
 
-JOB SCHEMA (for add action):
-{
-  "name": "string",
-  "schedule": { ... },      // required
-  "trigger": { "script": "...", "once": false }, // optional condition gate for every/cron
-  "payload": { ... },       // required
-  "delivery": { ... },      // optional announce for isolated/current/session, webhook for any target
-  "sessionTarget": "main" | "isolated" | "current" | "session:<id>",
-  "enabled": true | false   // default true
-}
+ADD JOB:
+{ "name":"...", "schedule":{...}, "trigger":{ "script":"...", "once":false }, "payload":{...}, "delivery":{...}, "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
+Required: schedule,payload. enabled default true. trigger only every/cron.
 
-SESSION TARGET OPTIONS:
-- "main": main session; requires payload.kind="systemEvent"
-- "isolated": ephemeral isolated session; requires payload.kind="agentTurn"
-- "current": bind current session at creation
-- "session:<id>": persistent named session
+TARGET/PAYLOAD:
+- main => systemEvent {kind:"systemEvent",text:"..."}; systemEvent defaults main.
+- isolated/current/session:<id> => agentTurn {kind:"agentTurn",message:"...",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.
+- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.
 
-DEFAULTS:
-- payload.kind="systemEvent" → defaults to "main"
-- payload.kind="agentTurn" → defaults to "isolated"
-Current binding needs sessionTarget="current".
+SCHEDULE:
+- at: {kind:"at",at:"ISO-8601"}; timezone-less = UTC.
+- every: {kind:"every",everyMs:<ms>,anchorMs?}.
+- cron: {kind:"cron",expr:"...",tz?:"IANA"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:"cron",expr:"0 18 * * *",tz:"Asia/Shanghai"}.
 
-SCHEDULE TYPES (schedule.kind):
-- "at": one-shot absolute time
-  { "kind": "at", "at": "<ISO-8601 timestamp>" }
-- "every": recurring interval
-  { "kind": "every", "everyMs": <ms>, "anchorMs": <optional-ms> }
-- "cron": expr in supplied timezone, or Gateway host local timezone when tz omitted
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-IANA-timezone>" }
-  Write expr in local wall-clock time; do not convert the requested local time to UTC first.
-  tz omitted => Gateway host local timezone, not UTC.
-  Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
+TRIGGER SCRIPT:
+- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.
+- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.
+- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.
+- Silent watcher: top-level delivery.mode="none". Omitted delivery on isolated agentTurn announces and missing route may fail.
+- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.
+- Hidden Code Mode tools: await tools.call("exec", {command:"..."}); unknown id => search/describe.
 
-TRIGGER SCRIPTS (every/cron only):
-- Gate: cron.triggers.enabled. Disabled add -> explain; no model-poll fallback.
-- Headless; owner tool allowlist; quiet check uses no model. Prior JSON: frozen trigger.state. Return/json({ fire: boolean, message?: string, state?: JSONValue }); new state only; never mutate old.
-- fire:false: save state; no payload/run history. fire:true: run payload; append message to systemEvent/agentTurn. Fired state saves only after payload success. Check reads; payload acts.
-- Silent watcher: top-level delivery.mode="none". Isolated agentTurn with no delivery => announce; missing route may fail payload.
-- once:true: disable after first successful fired payload. Limits/check: 30s, 5 tool calls, 16KB state.
-- Tools via hidden Code Mode catalog: await tools.call("exec", { command: "..." }); unclear id -> search/describe.
+DELIVERY top-level: {mode:"none|announce|webhook",channel?,to?,threadId?,bestEffort?}
+- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.
+- webhook posts finished-run event to URL in to.
 
-For "at", ISO timestamps without timezone are UTC.
-
-PAYLOAD TYPES (payload.kind):
-- "systemEvent": inject text as system event
-  { "kind": "systemEvent", "text": "<message>" }
-- "agentTurn": run agent with prompt; isolated/current/session only
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0=no timeout> }
-
-DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
-  - isolated agentTurn default when omitted: "announce"
-  - announce: send to chat channel; isolated/current/session only; optional channel/to
-  - threadId: chat thread/topic id
-  - webhook: POST finished-run event to delivery.to URL
-  - Specific chat/recipient: set announce delivery.channel/to; do not call messaging tools inside run.
-
-CRITICAL CONSTRAINTS:
-- sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
-- Webhook: delivery.mode="webhook" and delivery.to URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
-
-RESTRICTED CRON RUNS:
-- Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.
-
-WAKE MODES (for wake action):
-- "next-heartbeat" default: wake next heartbeat
-- "now": wake immediately
-
-Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.`,
+Restricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.`,
     parameters: createCronToolSchema(),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

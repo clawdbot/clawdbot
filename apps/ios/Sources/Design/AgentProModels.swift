@@ -30,9 +30,7 @@ struct AgentOverviewSnapshot {
     let dreaming: DreamingStatusLite?
     let dreamDiary: DreamDiaryLite?
     let usage: CostUsageSummaryLite?
-    let activeAgentId: String
     let agentSkillFilter: [String]?
-    let loadedAt: Date
 
     var hasAnyLiveData: Bool {
         self.skills != nil

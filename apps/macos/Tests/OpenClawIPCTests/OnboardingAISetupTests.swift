@@ -1,10 +1,10 @@
 import CryptoKit
 import Foundation
-@testable import OpenClaw
 import OpenClawChatUI
-import OpenClawKit
 import OpenClawProtocol
 import Testing
+@testable import OpenClaw
+@testable import OpenClawKit
 
 private actor ActivationMarkerObservation {
     private var observed = false
@@ -2521,7 +2521,7 @@ struct OnboardingAISetupTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             let deviceAuthGatewayID = "local"
             let originalToken = "receipt-device-token-a"

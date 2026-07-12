@@ -235,6 +235,8 @@ describe("selectBatchFrames", () => {
 describe("sampleFrames", () => {
   it("keeps small sets and evenly samples large ones", () => {
     expect(sampleFrames([1, 2, 3], 16)).toEqual([1, 2, 3]);
+    expect(sampleFrames([1, 2, 3], 1)).toEqual([1]);
+    expect(sampleFrames([1, 2, 3], 0)).toEqual([]);
     const sampled = sampleFrames(
       Array.from({ length: 100 }, (_, i) => i),
       16,

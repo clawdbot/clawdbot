@@ -257,9 +257,14 @@ async function preValidateTarball(
     };
   }
 
-  for (let i = 0; i < paths.length; i++) {
-    const entryPath = paths[i];
-    const t = typeChars[i];
+  for (const [index, entryPath] of paths.entries()) {
+    const t = typeChars.at(index);
+    if (t === undefined) {
+      return {
+        ok: false,
+        reason: `tar -tzf and tar -tzvf disagree on entry count (${paths.length} vs ${typeChars.length}); refusing`,
+      };
+    }
     if (t === "l" || t === "h") {
       return { ok: false, reason: `archive contains link entry: ${entryPath}` };
     }

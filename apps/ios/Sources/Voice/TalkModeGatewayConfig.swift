@@ -18,7 +18,6 @@ struct TalkRuntimeIssue: Equatable {
     let model: String?
     let transport: String?
     let phase: String?
-    let occurredAt: Date
 
     init(
         code: Code,
@@ -26,8 +25,7 @@ struct TalkRuntimeIssue: Equatable {
         provider: String? = nil,
         model: String? = nil,
         transport: String? = nil,
-        phase: String? = nil,
-        occurredAt: Date = Date())
+        phase: String? = nil)
     {
         self.code = code
         self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,7 +33,6 @@ struct TalkRuntimeIssue: Equatable {
         self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.occurredAt = occurredAt
     }
 
     var displayMessage: String {

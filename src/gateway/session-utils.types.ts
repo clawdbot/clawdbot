@@ -49,6 +49,8 @@ export type GatewaySessionRow = {
   worktree?: SessionEntry["worktree"];
   /** Session-scoped exec node binding (exec host=node routing). */
   execNode?: string;
+  /** Working directory interpreted only by the bound exec node. */
+  execCwd?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];

@@ -14,6 +14,7 @@ export function buildDraftSessionCreateParams(draft: {
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
+  const execNode = normalizeOptionalString(draft.execNode);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
     agentId: normalizeAgentId(draft.agentId),
@@ -28,11 +29,9 @@ export function buildDraftSessionCreateParams(draft: {
           ...(normalizeOptionalString(draft.worktreeName)
             ? { worktreeName: normalizeOptionalString(draft.worktreeName) }
             : {}),
-          ...(customFolder ? { cwd: customFolder } : {}),
+          ...(customFolder && !execNode ? { cwd: customFolder } : {}),
         }
       : {}),
-    ...(normalizeOptionalString(draft.execNode)
-      ? { execNode: normalizeOptionalString(draft.execNode) }
-      : {}),
+    ...(execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

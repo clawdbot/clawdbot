@@ -489,6 +489,7 @@ jobs:
             }
 
   lock-closed-issues:
+    needs: stale
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
@@ -499,94 +500,49 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - name: Lock closed issues after 48h of no comments
+      - name: Lock closed issues after 48h of no activity
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const lockAfterHours = 48;
             const lockAfterMs = lockAfterHours * 60 * 60 * 1000;
-            const perPage = 100;
+            const maxLocksPerRun = 50;
+            const mutationDelayMs = 1100;
             const cutoffMs = Date.now() - lockAfterMs;
             const { owner, repo } = context.repo;
 
-            let locked = 0;
-            let inspected = 0;
-            let cursor = null;
+            const cutoff = new Date(cutoffMs).toISOString();
+            const query = [
+              `repo:${owner}/${repo}`,
+              "is:issue",
+              "is:closed",
+              "is:unlocked",
+              `updated:<${cutoff}`,
+            ].join(" ");
+            const { data } = await github.rest.search.issuesAndPullRequests({
+              q: query,
+              sort: "updated",
+              order: "asc",
+              per_page: maxLocksPerRun,
+            });
+            const candidates = data.items.filter(issue => {
+              const updatedAtMs = Date.parse(issue.updated_at);
+              return Number.isFinite(updatedAtMs) && updatedAtMs <= cutoffMs;
+            });
 
-            while (true) {
-              const result = await github.graphql(
-                `query ClosedIssuesForLocking(
-                  $owner: String!
-                  $repo: String!
-                  $cursor: String
-                  $perPage: Int!
-                ) {
-                  repository(owner: $owner, name: $repo) {
-                    issues(
-                      first: $perPage
-                      after: $cursor
-                      states: CLOSED
-                      orderBy: { field: CREATED_AT, direction: ASC }
-                    ) {
-                      nodes {
-                        number
-                        locked
-                        closedAt
-                        comments(last: 1) {
-                          nodes {
-                            createdAt
-                          }
-                        }
-                      }
-                      pageInfo {
-                        hasNextPage
-                        endCursor
-                      }
-                    }
-                  }
-                }`,
-                {
-                  owner,
-                  repo,
-                  cursor,
-                  perPage,
-                },
-              );
-              const issues = result.repository.issues;
-
-              for (const issue of issues.nodes) {
-                if (issue.locked || !issue.closedAt) {
-                  continue;
-                }
-
-                inspected += 1;
-                const closedAtMs = Date.parse(issue.closedAt);
-                if (!Number.isFinite(closedAtMs) || closedAtMs > cutoffMs) {
-                  continue;
-                }
-
-                const lastComment = issue.comments.nodes[0];
-                const lastCommentMs = lastComment ? Date.parse(lastComment.createdAt) : 0;
-                const lastActivityMs = Math.max(closedAtMs, lastCommentMs || 0);
-                if (lastActivityMs > cutoffMs) {
-                  continue;
-                }
-
-                await github.rest.issues.lock({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
-                  lock_reason: "resolved",
-                });
-
-                locked += 1;
+            for (const [index, issue] of candidates.entries()) {
+              await github.rest.issues.lock({
+                owner,
+                repo,
+                issue_number: issue.number,
+                lock_reason: "resolved",
+              });
+              if (index < candidates.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, mutationDelayMs));
               }
-
-              if (!issues.pageInfo.hasNextPage || !issues.pageInfo.endCursor) {
-                break;
-              }
-              cursor = issues.pageInfo.endCursor;
             }
 
-            core.info(`Inspected ${inspected} closed issues; locked ${locked}.`);
+            core.info(
+              `Found ${data.total_count} unlocked issues inactive for 48h; locked ${candidates.length}.`,
+            );

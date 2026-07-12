@@ -557,7 +557,8 @@ export async function deliverSlackSlashReplies(params: {
     throw failure;
   };
   const initialRemaining = responseBudget.remaining();
-  if (initialRemaining !== undefined && minimumRemainingCalls[0] > initialRemaining) {
+  const initialMinimumCalls = minimumCalls.reduce((total, calls) => total + calls, 0);
+  if (initialRemaining !== undefined && initialMinimumCalls > initialRemaining) {
     await failOversizedDelivery();
   }
 

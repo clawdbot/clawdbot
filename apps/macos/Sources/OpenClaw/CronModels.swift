@@ -419,11 +419,3 @@ struct CronRunLogEntry: Codable, Identifiable {
         return Date(timeIntervalSince1970: TimeInterval(runAtMs) / 1000)
     }
 }
-
-struct CronListResponse: Codable {
-    let jobs: [CronJob]
-}
-
-struct CronRunsResponse: Codable {
-    let entries: [CronRunLogEntry]
-}

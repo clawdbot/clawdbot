@@ -36,11 +36,6 @@ struct LowCoverageHelperTests {
         #expect(color == nil)
     }
 
-    @Test func `view metrics reduce width`() {
-        let value = ViewMetricsTesting.reduceWidth(current: 120, next: 180)
-        #expect(value == 180)
-    }
-
     @Test func `shell executor handles empty command`() async {
         let result = await ShellExecutor.runDetailed(command: [], cwd: nil, env: nil, timeout: nil)
         #expect(result.success == false)

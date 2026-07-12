@@ -13,6 +13,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -179,14 +180,9 @@ function formatDoctorFailureMessage(report: { message: string; details?: unknown
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
-function normalizeProbeAgent(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
-}
-
 function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
   for (const agent of ctx.config.acp?.allowedAgents ?? []) {
-    const normalized = normalizeProbeAgent(agent);
+    const normalized = normalizeLowercaseStringOrEmpty(agent);
     if (normalized) {
       return normalized;
     }

@@ -53,7 +53,11 @@ export function migrateSlackChannelsInPlace(
   if (Object.hasOwn(channels, newChannelId)) {
     return { migrated: false, skippedExisting: true };
   }
-  channels[newChannelId] = channels[oldChannelId];
+  const channelConfig = channels[oldChannelId];
+  if (!channelConfig) {
+    return { migrated: false, skippedExisting: false };
+  }
+  channels[newChannelId] = channelConfig;
   delete channels[oldChannelId];
   return { migrated: true, skippedExisting: false };
 }

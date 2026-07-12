@@ -55,9 +55,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -80,7 +80,7 @@ flow:
             message:
               expr: "`expected short READY pre-action reply, got: ${preActionOutbound.text}`"
         - assert:
-            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.preActionPrompt)).some((request) => request.plannedToolName)"
+            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.preActionPrompt)).some((request) => request.plannedToolName)"
             message: pre-approval personal tool-safety turn should not plan a tool
         - set: beforeApprovalCursor
           value:
@@ -102,6 +102,6 @@ flow:
             - expr: liveTurnTimeoutMs(env, 20000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
-            expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.approvalPromptSnippet)).some((request) => request.plannedToolName === 'read')"
+            expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.approvalPromptSnippet)).some((request) => request.plannedToolName === 'read')"
             message: expected safe read tool followthrough in mock mode
       detailsExpr: outbound.text

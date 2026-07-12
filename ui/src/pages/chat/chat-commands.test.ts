@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  SLASH_COMMANDS,
+  getSlashCommandCategoryLabel,
+  getSlashCommandDescription,
+  type SlashCommandDef,
+} from "../../lib/chat/commands.ts";
 import { refreshSlashCommands, resetChatSlashCommandMetadataForTest } from "./chat-commands.ts";
 
 afterEach(() => {
@@ -26,6 +31,16 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
 }
 
 describe("refreshSlashCommands", () => {
+  it("resolves localized UI command metadata", () => {
+    const clear = SLASH_COMMANDS.find((entry) => entry.name === "clear");
+    const redirect = SLASH_COMMANDS.find((entry) => entry.name === "redirect");
+    expect(getSlashCommandDescription(clear as SlashCommandDef)).toBe("Clear chat history");
+    expect(getSlashCommandDescription(redirect as SlashCommandDef)).toBe(
+      "Abort and restart with a new message",
+    );
+    expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
+  });
+
   it("exposes /learn through the browser fallback registry", () => {
     expectRecordFields(requireCommandByName("learn"), "learn command", {
       description: "Draft a reusable skill from recent work or named sources.",

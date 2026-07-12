@@ -1,7 +1,6 @@
 /**
  * Canvas host server and static-file/live-reload handler implementation.
  */
-import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -246,15 +245,7 @@ async function resolveDocumentCspSandbox(
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(resolveStateDir(), "canvas")];
-  const existing = candidates.find((dir) => {
-    try {
-      return fsSync.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  return existing ?? candidates[0];
+  return path.join(resolveStateDir(), "canvas");
 }
 
 function resolveDefaultWatchFactory(): ChokidarWatch {

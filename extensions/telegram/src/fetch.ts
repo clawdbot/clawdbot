@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
@@ -223,10 +224,15 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
       continue;
     }
     const parsed = entry.match(/^(.+):(\d+)$/);
+    const parsedHostname = parsed?.[1];
+    const parsedPort = parsed?.[2];
+    if (parsed && (parsedHostname === undefined || parsedPort === undefined)) {
+      continue;
+    }
     const entryHostname = normalizeLowercaseStringOrEmpty(
-      (parsed ? parsed[1] : entry).replace(/^\*?\./, ""),
+      (parsedHostname ?? entry).replace(/^\*?\./, ""),
     );
-    const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
+    const entryPort = parsedPort === undefined ? 0 : Number.parseInt(parsedPort, 10);
     if (entryPort && entryPort !== targetPort) {
       continue;
     }
@@ -678,7 +684,7 @@ export function resolveTelegramTransport(
   };
 
   const getAttemptCooldownError = (attemptIndex: number): Error | null => {
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
@@ -689,7 +695,7 @@ export function resolveTelegramTransport(
     if (!shouldUseTelegramTransportFallback(err)) {
       return;
     }
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     health.consecutiveFailures += 1;
     if (health.consecutiveFailures < TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD) {
       return;
@@ -715,7 +721,10 @@ export function resolveTelegramTransport(
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
     }
-    const nextAttempt = transportAttempts[nextIndex];
+    const nextAttempt = expectDefined(
+      transportAttempts[nextIndex],
+      "validated fallback attempt index",
+    );
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
       const logLine = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
@@ -731,7 +740,7 @@ export function resolveTelegramTransport(
   };
 
   const recordSuccessfulAttempt = (attemptIndex: number): void => {
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     health.consecutiveFailures = 0;
     health.cooldownMs = TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS;
     health.unhealthyUntilMs = 0;
@@ -811,7 +820,10 @@ export function resolveTelegramTransport(
       attemptIndex < transportAttempts.length;
       attemptIndex += 1
     ) {
-      const attempt = transportAttempts[attemptIndex];
+      const attempt = expectDefined(
+        transportAttempts[attemptIndex],
+        "transport attempt loop index",
+      );
       if (attemptIndex > startIndex) {
         promoteStickyAttempt(attemptIndex, err);
       }

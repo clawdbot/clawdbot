@@ -809,10 +809,10 @@ export function createImageTool(options?: {
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
-    ? "Analyze images with vision model. Use image for one path/URL, images for max 20. Only use this tool when images were NOT already provided; prompt images already visible."
+    ? "Analyze image(s): image one path/URL, images max 20. Prompt images already visible; use only for images not provided."
     : explicitImageModelConfig
-      ? "Analyze images with configured image model. Use image for one path/URL, images for max 20. Prompt says what to inspect."
-      : "Analyze images with available vision model. Use image for one path/URL, images for max 20. Prompt says what to inspect.";
+      ? "Analyze image(s) with configured model: image one path/URL, images max 20; prompt says inspection."
+      : "Analyze image(s) with available vision: image one path/URL, images max 20; prompt says inspection.";
 
   return {
     label: "Image",

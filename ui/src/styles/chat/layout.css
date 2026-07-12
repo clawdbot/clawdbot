@@ -4206,6 +4206,35 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 }
 
+/* Phones (and short landscape): scale the welcome hero down so the composer
+   and recent chats fit the first screenful on the start screen and /new. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .agent-chat__welcome {
+    gap: 8px;
+    padding: 16px 12px;
+  }
+
+  .agent-chat__welcome h2 {
+    font-size: 20px;
+  }
+
+  .agent-chat__welcome-avatar {
+    width: 64px;
+    height: 64px;
+  }
+
+  .agent-chat__welcome-clawd {
+    width: 88px;
+    height: 77px;
+  }
+
+  .agent-chat__welcome .agent-chat__avatar--text {
+    width: 64px;
+    height: 64px;
+    font-size: 22px;
+  }
+}
+
 .agent-chat__avatar--text {
   width: 80px;
   height: 80px;

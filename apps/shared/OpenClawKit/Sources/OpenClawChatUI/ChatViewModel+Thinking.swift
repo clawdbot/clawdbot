@@ -57,11 +57,6 @@ extension OpenClawChatViewModel {
         self.sessions[index].thinkingLevel = thinkingLevel
     }
 
-    /// `agent-command.ts` throws for explicit unsupported levels, so hidden controls must send `off`.
-    var effectiveThinkingLevelForSend: String {
-        self.effectiveThinkingLevelForSend(self.preferredThinkingLevel)
-    }
-
     func effectiveThinkingLevelForSend(
         _ storedLevel: String,
         sessionKey: String? = nil,

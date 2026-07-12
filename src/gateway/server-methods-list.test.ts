@@ -111,11 +111,11 @@ describe("listGatewayMethods", () => {
     ]);
     expect(methods).toContain("tts.speak");
     expect(coreMethods.slice(-5)).toEqual([
-      "sessions.catalog.read",
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
+      "sessions.search",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

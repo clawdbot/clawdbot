@@ -457,7 +457,7 @@ export async function verifyReplacementHealthy(params: {
   checkpoint: () => void;
   timeoutMs: number;
   pollMs: number;
-  context: "upgrade" | "restore";
+  context: "upgrade" | "restore" | "create";
 }): Promise<void> {
   const deadline = params.now() + params.timeoutMs;
   for (;;) {

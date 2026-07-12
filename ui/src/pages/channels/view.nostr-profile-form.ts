@@ -202,12 +202,12 @@ export function renderNostrProfileForm(params: {
         : nothing}
       ${renderPicturePreview()}
       ${renderField("name", t("channels.nostr.username"), {
-        placeholder: "satoshi",
+        placeholder: t("channels.nostr.placeholders.username"),
         maxLength: 256,
         help: t("channels.nostr.usernameHelp"),
       })}
       ${renderField("displayName", t("channels.nostr.displayName"), {
-        placeholder: "Satoshi Nakamoto",
+        placeholder: t("channels.nostr.placeholders.displayName"),
         maxLength: 256,
         help: t("channels.nostr.displayNameHelp"),
       })}
@@ -219,7 +219,7 @@ export function renderNostrProfileForm(params: {
       })}
       ${renderField("picture", t("channels.nostr.avatarUrl"), {
         type: "url",
-        placeholder: "https://example.com/avatar.jpg",
+        placeholder: t("channels.nostr.placeholders.avatarUrl"),
         help: t("channels.nostr.avatarHelp"),
       })}
       ${state.showAdvanced
@@ -233,20 +233,20 @@ export function renderNostrProfileForm(params: {
 
               ${renderField("banner", t("channels.nostr.bannerUrl"), {
                 type: "url",
-                placeholder: "https://example.com/banner.jpg",
+                placeholder: t("channels.nostr.placeholders.bannerUrl"),
                 help: t("channels.nostr.bannerHelp"),
               })}
               ${renderField("website", t("channels.nostr.website"), {
                 type: "url",
-                placeholder: "https://example.com",
+                placeholder: t("channels.nostr.placeholders.website"),
                 help: t("channels.nostr.websiteHelp"),
               })}
               ${renderField("nip05", t("channels.nostr.nip05Identifier"), {
-                placeholder: "you@example.com",
+                placeholder: t("channels.nostr.placeholders.nip05"),
                 help: t("channels.nostr.nip05Help"),
               })}
               ${renderField("lud16", t("channels.nostr.lightningAddress"), {
-                placeholder: "you@getalby.com",
+                placeholder: t("channels.nostr.placeholders.lightningAddress"),
                 help: t("channels.nostr.lightningHelp"),
               })}
             </div>

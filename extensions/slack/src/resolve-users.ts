@@ -137,6 +137,9 @@ function resolveSlackUserFromMatches(
     .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
     .toSorted((a, b) => b.score - a.score);
   const best = scored[0]?.user ?? matches[0];
+  if (!best) {
+    return { input, resolved: false };
+  }
   return {
     input,
     resolved: true,

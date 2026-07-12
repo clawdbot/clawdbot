@@ -113,4 +113,22 @@ describe("live-agent-probes", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("validates a current-bound cron job for an implicit live probe", () => {
+    expect(
+      assertCronJobMatches({
+        job: {
+          name: "live-mcp-def",
+          sessionTarget: "current",
+          agentId: "dev",
+          sessionKey: "agent:dev:test",
+          payload: { kind: "agentTurn", message: "probe-def" },
+        },
+        expectedName: "live-mcp-def",
+        expectedMessage: "probe-def",
+        expectedSessionKey: "agent:dev:test",
+        expectedSessionTarget: "current",
+      }),
+    ).toBeUndefined();
+  });
 });

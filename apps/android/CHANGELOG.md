@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+Creates or adopts Android's existing per-device chat session before loading connected history, preserving prior conversations while isolating each device. Thanks @snowzlmbot.
 Routes exec approval review through the Gateway's durable approval records, including first-answer-wins results from other authorized surfaces, fail-closed reconciliation after ambiguous writes, and compatibility with older Gateway v4 peers.
 Keeps Android session search in the Sessions screen with direct focus, clear controls, and accurate loading and no-match states. Thanks @IWhatsskill.
 Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.

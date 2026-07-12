@@ -170,7 +170,7 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(tool?.description).toContain("Search web");
+    expect(tool?.description).toContain("Search current web");
     expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
   });
 

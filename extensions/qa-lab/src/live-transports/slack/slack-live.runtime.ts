@@ -29,6 +29,7 @@ import {
   normalizeQaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
+import type { RuntimeId } from "../../runtime-parity.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -146,6 +147,14 @@ type SlackQaScenarioId =
 
 type SlackQaApprovalKind = "exec" | "plugin";
 type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
+const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
+const SlackQaApprovalActionValueSchema = z
+  .object({
+    approvalId: z.string().min(1),
+    approvalKind: z.enum(["exec", "plugin"]),
+    decision: z.enum(["allow-always", "allow-once", "deny"]),
+  })
+  .strict();
 type SlackQaCodexApprovalMethod =
   | "item/commandExecution/requestApproval"
   | "item/fileChange/requestApproval";
@@ -253,6 +262,7 @@ type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenario
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
   defaultEnabled?: boolean;
+  forcedRuntime?: RuntimeId;
 };
 
 type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
@@ -736,6 +746,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/commandExecution/requestApproval",
@@ -756,6 +767,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/fileChange/requestApproval",
@@ -1150,6 +1162,19 @@ function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
 }
 
+function parseSlackNativeApprovalAction(value: string) {
+  if (!value.startsWith(SLACK_QA_APPROVAL_ACTION_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const decoded: unknown = JSON.parse(value.slice(SLACK_QA_APPROVAL_ACTION_PREFIX.length));
+    const parsed = SlackQaApprovalActionValueSchema.safeParse(decoded);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectSlackButtonLabels(blocks?: unknown[]) {
   const labels: string[] = [];
   function visit(value: unknown) {
@@ -1187,7 +1212,7 @@ function buildSlackApprovalCheckpointMessage(
   return {
     actionLabels: collectSlackButtonLabels(message.blocks),
     blockText: collectSlackBlockText(message.blocks),
-    hasNativeActions: actionValues.some((value) => value.includes("/approve")),
+    hasNativeActions: actionValues.some((value) => parseSlackNativeApprovalAction(value)),
     text: message.text ?? "",
   };
 }
@@ -1197,12 +1222,13 @@ function hasSlackNativeApprovalActions(params: {
   approvalId?: string;
   decision: SlackQaApprovalDecision;
 }) {
-  return params.actionValues.some(
-    (value) =>
-      value.includes("/approve") &&
-      (!params.approvalId || value.includes(params.approvalId)) &&
-      value.includes(params.decision),
-  );
+  return params.actionValues.some((value) => {
+    const action = parseSlackNativeApprovalAction(value);
+    return (
+      action?.decision === params.decision &&
+      (!params.approvalId || action.approvalId === params.approvalId)
+    );
+  });
 }
 
 function extractSlackNativeApprovalId(params: {
@@ -1210,12 +1236,9 @@ function extractSlackNativeApprovalId(params: {
   decision: SlackQaApprovalDecision;
 }) {
   for (const value of params.actionValues) {
-    if (!value.includes("/approve") || !value.includes(params.decision)) {
-      continue;
-    }
-    const match = value.match(/\b((?:exec|plugin):[^\s]+)/);
-    if (match?.[1]) {
-      return match[1];
+    const action = parseSlackNativeApprovalAction(value);
+    if (action?.decision === params.decision) {
+      return action.approvalId;
     }
   }
   return undefined;
@@ -1785,7 +1808,7 @@ function matchesSlackApprovalResolvedUpdate(params: {
     ) &&
     (!params.token || params.text.includes(params.token)) &&
     (params.extraTextMatches ?? []).every((match) => params.text.includes(match)) &&
-    !params.actionValues.some((value) => value.includes("/approve"))
+    !params.actionValues.some((value) => parseSlackNativeApprovalAction(value))
   );
 }
 
@@ -2992,6 +3015,7 @@ export async function runSlackQaLive(params: {
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
+            forcedRuntime: scenario.forcedRuntime,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
               buildSlackQaConfig(cfg, {
@@ -3397,6 +3421,7 @@ export const testing = {
   isSlackChannelReadyForQa,
   matchesSlackApprovalResolvedUpdate,
   matchesSlackApprovalPromptText,
+  parseSlackNativeApprovalAction,
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
   quiesceCodexApprovalAgentRun,

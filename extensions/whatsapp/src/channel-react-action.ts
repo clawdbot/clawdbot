@@ -76,7 +76,8 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
 
 function extractBase64Payload(encoded: string): string {
   const match = /^data:[^;]+;base64,(.*)$/i.exec(encoded.trim());
-  return match ? match[1] : encoded;
+  const payload = match?.[1];
+  return payload !== undefined ? payload : encoded;
 }
 
 function estimateBase64DecodedBytes(encoded: string): number {

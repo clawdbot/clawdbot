@@ -60,6 +60,14 @@ describe("hasReplyContent", () => {
 });
 
 describe("hasReplyPayloadContent", () => {
+  it("treats portable locations as content", () => {
+    expect(
+      hasReplyPayloadContent({
+        location: { latitude: 1, longitude: 2 },
+      }),
+    ).toBe(true);
+  });
+
   it("trims text and falls back to channel data by default", () => {
     expect(
       hasReplyPayloadContent({

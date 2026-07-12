@@ -805,6 +805,54 @@ function backportPullRequestOrigins(message) {
   ].map((match) => Number(match[1]));
 }
 
+export function releaseProvenanceMarkers(message) {
+  const markers = [];
+  for (const line of message.split("\n")) {
+    if (!/^Release provenance:/i.test(line)) {
+      continue;
+    }
+    const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
+    if (!match) {
+      fail(`invalid release provenance marker: ${line}`);
+    }
+    markers.push({
+      commit: match[1].toLowerCase(),
+      pullRequests: [...match[2].matchAll(/#(\d+)/g)].map((reference) => Number(reference[1])),
+    });
+  }
+  return markers;
+}
+
+export function collectReleaseProvenanceOverrides(activeCommits) {
+  const activeCommitHashes = new Set(activeCommits.map((commit) => commit.hash));
+  const overrides = new Map();
+  for (const commit of activeCommits) {
+    for (const marker of releaseProvenanceMarkers(commit.body)) {
+      if (!activeCommitHashes.has(marker.commit)) {
+        fail(`release provenance marker targets commit outside the active range: ${marker.commit}`);
+      }
+      const existing = overrides.get(marker.commit);
+      if (existing && existing.join(",") !== marker.pullRequests.join(",")) {
+        fail(`conflicting release provenance markers for ${marker.commit}`);
+      }
+      overrides.set(marker.commit, marker.pullRequests);
+    }
+  }
+  return overrides;
+}
+
+export function resolvedReleasePullRequests(
+  currentPullRequests,
+  mainPullRequests,
+  hasCanonicalMainCommit,
+  provenanceOverride,
+) {
+  return (
+    provenanceOverride ??
+    canonicalPullRequests(currentPullRequests, mainPullRequests, hasCanonicalMainCommit)
+  );
+}
+
 function changedPathsForCommit(hash) {
   return new Set(
     git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", hash, "--"])
@@ -1080,7 +1128,9 @@ function sourceCommits(base, target, mainRef) {
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
   );
+  const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits);
   const mainCommits = canonicalMainCommits(base, mainRef);
+  const mainCommit = gitCommit(mainRef, true);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
@@ -1183,10 +1233,11 @@ function sourceCommits(base, target, mainRef) {
         (hash) => canonicalMainPullRequests.get(hash) ?? [],
       );
     const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
-    const associatedPullRequests = canonicalPullRequests(
+    const associatedPullRequests = resolvedReleasePullRequests(
       currentPullRequests,
       mainPullRequests,
       matchedMainCommits.length > 0,
+      provenanceOverrides.get(commit.hash),
     );
     commit.pullRequests = associatedPullRequests;
     const suppressedBackportPullRequests = new Set(
@@ -1249,8 +1300,10 @@ function sourceCommits(base, target, mainRef) {
   return {
     activeCommits,
     coauthorsByReference,
+    mainCommit,
     mergeBase,
     pullRequests,
+    provenanceOverrides,
     references,
     revertedReferences,
     target: targetCommit,
@@ -1456,7 +1509,9 @@ function resolveReferences(numbers) {
             ... on PullRequest {
               number
               title
+              baseRefName
               mergedAt
+              mergeCommit { oid }
               author { __typename login }
               closingIssuesReferences(first: 100) {
                 nodes { number }
@@ -1476,6 +1531,29 @@ function resolveReferences(numbers) {
     }
   }
   return resolveIssueRelationshipPages(nodes);
+}
+
+export function validateReleaseProvenanceOverrides(
+  provenanceOverrides,
+  nodes,
+  mainCommit,
+  isMainAncestor = gitIsAncestor,
+) {
+  for (const [commit, pullRequests] of provenanceOverrides) {
+    for (const number of pullRequests) {
+      const node = nodes.get(number);
+      // Markers may name current-main forward-ports, but never release-only or unmerged PRs.
+      if (
+        node?.__typename !== "PullRequest" ||
+        node.baseRefName !== "main" ||
+        !node.mergedAt ||
+        !node.mergeCommit?.oid ||
+        !isMainAncestor(node.mergeCommit.oid, mainCommit)
+      ) {
+        fail(`release provenance marker for ${commit} references non-main PR #${number}`);
+      }
+    }
+  }
 }
 
 function resolveGitHubHandles(handles) {
@@ -2248,6 +2326,7 @@ function main() {
         .join(", ")}`,
     );
   }
+  validateReleaseProvenanceOverrides(source.provenanceOverrides, nodes, source.mainCommit);
   const provisionalEntries = references
     .map((number) => nodes.get(number))
     .filter((node) => node?.__typename === "PullRequest");

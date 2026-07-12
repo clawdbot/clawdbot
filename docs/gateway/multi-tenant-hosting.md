@@ -14,6 +14,8 @@ OpenClaw's default security model is one trusted operator boundary per Gateway, 
 
 Fleet is **experimental**: its commands, flags, and container profile can change between releases without a deprecation window while the surface settles.
 
+Fleet is tested on Linux and macOS hosts. Windows hosts are currently untested.
+
 ## Why each tenant needs a cell
 
 An authenticated operator inside one Gateway has a trusted control-plane role. Session IDs select routing; they do not authorize one tenant against another. Agent sandboxing can reduce the effect of untrusted content and tool execution, but it does not turn one shared Gateway into a tenant authorization boundary.

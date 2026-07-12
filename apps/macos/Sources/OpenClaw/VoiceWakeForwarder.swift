@@ -138,12 +138,6 @@ enum VoiceWakeForwarder {
         return .failure(.rpcFailed(message))
     }
 
-    static func checkConnection() async -> Result<Void, VoiceWakeForwardError> {
-        let status = await GatewayConnection.shared.status()
-        if status.ok { return .success(()) }
-        return .failure(.rpcFailed(status.error ?? "agent rpc unreachable"))
-    }
-
     private static func loadSessionRouteEntry(sessionKey: String) async -> SessionRouteEntry? {
         do {
             let data = try await GatewayConnection.shared.request(

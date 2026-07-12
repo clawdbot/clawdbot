@@ -1,6 +1,7 @@
-// Discord plugin module implements manager behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -1225,7 +1226,10 @@ export class DiscordVoiceManager {
       if (this.botUserId && remainingLookups === 1) {
         break;
       }
-      const guildId = guildIds[(start + offset) % guildIds.length];
+      const guildId = expectDefined(
+        guildIds[(start + offset) % guildIds.length],
+        "voice reconciliation guild index",
+      );
       const userLimit = this.resolveFollowUserReconcileUserLookupLimit(
         followedUserIds.length,
         remainingLookups,
@@ -1269,7 +1273,10 @@ export class DiscordVoiceManager {
     let scanned = 0;
     let assigned = 0;
     for (; scanned < guildIds.length && assigned < remainingLookups; scanned += 1) {
-      const guildId = guildIds[(start + scanned) % guildIds.length];
+      const guildId = expectDefined(
+        guildIds[(start + scanned) % guildIds.length],
+        "bot voice reconciliation guild index",
+      );
       const plan = plansByGuild.get(guildId);
       if (!plan?.checkedAllUsers) {
         continue;
@@ -1301,10 +1308,15 @@ export class DiscordVoiceManager {
       return { userIds: followedUserIds, completedCycle: true };
     }
     const start = this.followUsersReconcileUserCursors.get(guildId) ?? 0;
-    const selected = Array.from(
-      { length: limit },
-      (_, offset) => followedUserIds[(start + offset) % followedUserIds.length],
-    );
+    const selected: string[] = [];
+    for (let offset = 0; offset < limit; offset += 1) {
+      selected.push(
+        expectDefined(
+          followedUserIds[(start + offset) % followedUserIds.length],
+          "followed user selection index",
+        ),
+      );
+    }
     const completedCycle = start + selected.length >= followedUserIds.length;
     this.followUsersReconcileUserCursors.set(
       guildId,
@@ -1464,7 +1476,9 @@ export class DiscordVoiceManager {
       return null;
     }
     const guildAllowed = this.allowedChannels.filter((entry) => entry.guildId === guildId);
-    return guildAllowed.length === 1 ? guildAllowed[0] : null;
+    return guildAllowed.length === 1
+      ? expectDefined(guildAllowed.at(0), "single allowed guild voice channel")
+      : null;
   }
 
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {

@@ -165,11 +165,7 @@ export {
   getRichMenu,
   getRichMenuIdOfUser,
   getRichMenuList,
-  linkRichMenuToUser,
-  linkRichMenuToUsers,
   setDefaultRichMenu,
-  unlinkRichMenuFromUser,
-  unlinkRichMenuFromUsers,
   uploadRichMenuImage,
 } from "./src/rich-menu.js";
 export type {

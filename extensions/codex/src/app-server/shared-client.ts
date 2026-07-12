@@ -767,8 +767,7 @@ async function startInitializedCodexAppServerClient(params: {
   const acquireStartedAt = Date.now();
   const timeoutMs = params.timeoutMs ?? 0;
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
-  for (let index = 0; index < startOptionsCandidates.length; index += 1) {
-    const startOptions = startOptionsCandidates[index];
+  for (const [index, startOptions] of startOptionsCandidates.entries()) {
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
       : undefined;
@@ -905,8 +904,7 @@ function resolveManagedFallbackStartOptions(
 ): CodexAppServerStartOptions[] {
   const commands = [startOptions.command, ...(startOptions.managedFallbackCommandPaths ?? [])];
   const candidates: CodexAppServerStartOptions[] = [];
-  for (let index = 0; index < commands.length; index += 1) {
-    const command = commands[index];
+  for (const [index, command] of commands.entries()) {
     const managedFallbackCommandPaths = commands.slice(index + 1);
     const candidate = {
       ...startOptions,

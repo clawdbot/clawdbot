@@ -78,8 +78,12 @@ export {
   // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
-export type { LocationSource, NormalizedLocation } from "../channels/location.js";
-export { formatLocationText, toLocationContext } from "../channels/location.js";
+export type { LocationSource, NormalizedLocation, OutboundLocation } from "../channels/location.js";
+export {
+  formatLocationText,
+  normalizeOutboundLocation,
+  toLocationContext,
+} from "../channels/location.js";
 export type { LogFn } from "../channels/logging.js";
 export { logInboundDrop } from "../channels/logging.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";

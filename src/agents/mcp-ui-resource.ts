@@ -28,6 +28,7 @@ export type McpAppViewLease = {
   html: string;
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
+  allowedAppToolNames?: ReadonlySet<string>;
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -150,15 +151,24 @@ async function resolveListingUiMeta(
   serverName: string,
   uri: string,
 ): Promise<Record<string, unknown> | undefined> {
-  const listed = await runtime.listResources?.(serverName);
-  const resources = Array.isArray(listed)
-    ? listed
-    : Array.isArray(asRecord(listed)?.resources)
-      ? (asRecord(listed)?.resources as unknown[])
-      : [];
-  const resource = resources.map(asRecord).find((entry) => entry?.uri === uri);
-  const { _meta: metadata } = resource ?? {};
-  return asRecord(asRecord(metadata)?.ui);
+  try {
+    const listed = await runtime.listResources?.(serverName, { failureBackoff: "ignore" });
+    const resources = Array.isArray(listed)
+      ? listed
+      : Array.isArray(asRecord(listed)?.resources)
+        ? (asRecord(listed)?.resources as unknown[])
+        : [];
+    const resource = resources.map(asRecord).find((entry) => entry?.uri === uri);
+    const { _meta: metadata } = resource ?? {};
+    return asRecord(asRecord(metadata)?.ui);
+  } catch (error) {
+    // UI resources may be omitted from resources/list. Listing metadata is only
+    // a fallback, so its failure must not discard valid resources/read content.
+    logWarn(
+      `mcp-app: failed to read optional listing metadata for ${uri} from "${serverName}": ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
 }
 
 export async function fetchMcpAppView(params: {
@@ -168,6 +178,7 @@ export async function fetchMcpAppView(params: {
   uiResourceUri: string;
   toolInput: unknown;
   toolResult: CallToolResult;
+  allowedAppToolNames?: ReadonlySet<string>;
 }): Promise<{ viewId: string; title: string } | undefined> {
   let releaseRuntimeLease: (() => void) | undefined;
   try {
@@ -175,7 +186,9 @@ export async function fetchMcpAppView(params: {
       return undefined;
     }
     const result = asRecord(
-      await params.runtime.readResource(params.serverName, params.uiResourceUri),
+      await params.runtime.readResource(params.serverName, params.uiResourceUri, {
+        failureBackoff: "ignore",
+      }),
     );
     const contents = Array.isArray(result?.contents) ? result.contents : [];
     if (contents.length !== 1) {
@@ -209,6 +222,9 @@ export async function fetchMcpAppView(params: {
       html,
       ...(csp ? { csp } : {}),
       ...(permissions ? { permissions } : {}),
+      ...(params.allowedAppToolNames
+        ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
+        : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,

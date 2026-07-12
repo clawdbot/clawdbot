@@ -92,7 +92,6 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
     const runId = `crestodian-planner-${randomUUID()}`;
     const shared = {
       sessionId: `${runId}-session`,
-      sessionKey: `temp:crestodian-planner:${runId}`,
       agentId: "crestodian",
       trigger: "manual" as const,
       sessionFile: path.join(tempDir, "session.jsonl"),
@@ -110,6 +109,7 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
       messageChannel: "crestodian",
       messageProvider: "crestodian",
       disableTools: true,
+      disableTrajectory: true,
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =

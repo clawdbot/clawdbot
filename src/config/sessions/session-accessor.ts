@@ -94,11 +94,6 @@ import {
   type SessionEntryLifecycleMutationResult,
   type SessionEntryLifecycleRemoval,
   type SessionEntryLifecycleUpsert,
-  type SessionEntryPatchProjectionContext,
-  type SessionEntryPatchProjectionFailure,
-  type SessionEntryPatchProjectionResult,
-  type SessionEntryPatchProjectionSnapshot,
-  type SessionEntryPatchProjectionTarget,
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
@@ -786,12 +781,25 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
-export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
+export type SessionPatchProjectionSnapshot = {
+  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
+};
+
+export type SessionPatchProjectionTarget = {
+  candidateKeys?: readonly string[];
+  primaryKey: string;
+};
+
+export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
+  SessionPatchProjectionTarget & {
+    existingEntry?: SessionEntry;
+  };
+
+export type SessionPatchProjectionFailure = { ok: false };
+
 export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
-  SessionEntryPatchProjectionResult<TFailure>;
-export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot;
-export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
+  | { ok: true; entry: SessionEntry }
+  | TFailure;
 
 export type {
   DeleteSessionEntryLifecycleResult,

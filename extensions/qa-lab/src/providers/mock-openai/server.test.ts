@@ -1,5 +1,6 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -232,6 +233,75 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("keeps cursor reads correct when retained debug requests rotate", async () => {
+    const server = await startMockServer();
+    const debugRequestLimit = 2_000;
+    const readCursor = async () =>
+      readQaMockRequestCursor(
+        await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
+      );
+
+    expect(await readCursor()).toBe(0);
+    for (let index = 0; index < debugRequestLimit; index += 1) {
+      await expectResponsesJson(server, {
+        stream: false,
+        model: "gpt-5.6-luna",
+        input: [makeUserInput(`cursor request ${index}`)],
+      });
+    }
+    const cursor = await readCursor();
+    expect(cursor).toBe(debugRequestLimit);
+
+    await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput("cursor request overflow")],
+    });
+
+    const retained = requireArray(
+      await fetch(`${server.baseUrl}/debug/requests`).then((response) => response.json()),
+      "retained debug requests",
+    );
+    expect(retained).toHaveLength(debugRequestLimit);
+    expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
+    expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
+      debugRequestLimit + 1,
+    );
+
+    const nextRequests = requireArray(
+      await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
+        response.json(),
+      ),
+      "debug requests after cursor",
+    );
+    expect(nextRequests).toHaveLength(1);
+    expect(String(requireRecord(nextRequests[0], "next request").prompt)).toContain("overflow");
+
+    const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
+    expect(expired.status).toBe(409);
+    expect(await expired.json()).toEqual({
+      error: "request cursor expired",
+      after: 0,
+      oldestCursor: 2,
+      latestCursor: debugRequestLimit + 1,
+    });
+
+    const futureCursor = debugRequestLimit + 2;
+    const future = await fetch(`${server.baseUrl}/debug/requests?after=${futureCursor}`);
+    expect(future.status).toBe(409);
+    expect(await future.json()).toEqual({
+      error: "request cursor is ahead of the latest recorded request",
+      after: futureCursor,
+      latestCursor: debugRequestLimit + 1,
+    });
+
+    const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({
+      error: "after must be a non-negative safe integer",
+    });
+  });
+
   it("retains enough debug requests for long shared QA runs", async () => {
     const server = await startMockServer();
 
@@ -1820,6 +1890,39 @@ describe("qa mock openai server", () => {
     expect(await response.text()).toContain(
       '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
     );
+  });
+
+  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: true,
+      model: "gpt-5.6-luna",
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Nothing to say: entire reply exactly NO_REPLY",
+            },
+          ],
+        },
+        makeUserInput(
+          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"name":"read"');
+    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
+    expect(body).not.toContain('"text":"NO_REPLY"');
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
+    expect(debugPayload.plannedToolName).toBe("read");
   });
 
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {

@@ -1,10 +1,11 @@
-// Matrix plugin module implements verification manager behavior.
 import {
   VerificationPhase,
   VerificationRequestEvent,
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+// Matrix plugin module implements verification manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -341,7 +342,7 @@ export class MatrixVerificationManager {
       return txId === id;
     });
     if (transactionMatches.length === 1) {
-      return transactionMatches[0];
+      return expectDefined(transactionMatches[0], "single Matrix verification session");
     }
     if (transactionMatches.length > 1) {
       throw new Error(

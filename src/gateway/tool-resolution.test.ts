@@ -26,9 +26,7 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(messageTool?.description).toContain("This turn visible reply");
   });
 
   it("keeps webchat room-event turns on automatic source delivery", () => {
@@ -54,9 +52,7 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
-    expect(messageTool?.description).toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(messageTool?.description).toContain("This turn visible reply");
   });
 
   it("keeps ordinary loopback turns under the configured profile", () => {

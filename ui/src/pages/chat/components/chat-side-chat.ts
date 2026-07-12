@@ -5,6 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import { t } from "../../../i18n/index.ts";
 import { buildSideChatFollowUpCommand } from "../../../lib/chat/side-question.ts";
 import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -50,7 +51,7 @@ function renderSideChatPendingTurn(pending: ChatSideResultPending): TemplateResu
   return html`
     <article class="chat-side-chat__turn chat-side-chat__turn--pending">
       <div class="chat-side-chat__question" dir=${detectTextDirection(question)}>${question}</div>
-      <div class="chat-side-chat__thinking">Thinking…</div>
+      <div class="chat-side-chat__thinking">${t("chat.sideChat.thinking")}</div>
     </article>
   `;
 }
@@ -92,28 +93,28 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
     input.value = "";
   };
   return html`
-    <section class="chat-side-chat" role="dialog" aria-label="Side chat">
+    <section class="chat-side-chat" role="dialog" aria-label=${t("chat.sideChat.title")}>
       <header class="chat-side-chat__header">
         <div class="chat-side-chat__heading">
-          <h2 class="chat-side-chat__title">Side chat</h2>
-          <span class="chat-side-chat__meta">Not saved to chat history</span>
+          <h2 class="chat-side-chat__title">${t("chat.sideChat.title")}</h2>
+          <span class="chat-side-chat__meta">${t("chat.sideChat.notSaved")}</span>
         </div>
         <div class="chat-side-chat__actions">
-          <openclaw-tooltip content="Clear side chat">
+          <openclaw-tooltip .content=${t("chat.sideChat.clear")}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn"
               type="button"
-              aria-label="Clear side chat"
+              aria-label=${t("chat.sideChat.clear")}
               @click=${() => props.onClear?.()}
             >
               ${icons.trash}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip content="Close side chat">
+          <openclaw-tooltip .content=${t("chat.sideChat.close")}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn"
               type="button"
-              aria-label="Close side chat"
+              aria-label=${t("chat.sideChat.close")}
               @click=${() => props.onClose?.()}
             >
               ${icons.x}
@@ -133,8 +134,8 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
                 <input
                   class="chat-side-chat__input"
                   type="text"
-                  placeholder=${pending ? "Thinking…" : "Follow up…"}
-                  aria-label="Follow up in side chat"
+                  placeholder=${pending ? t("chat.sideChat.thinking") : t("chat.sideChat.followUp")}
+                  aria-label=${t("chat.sideChat.followUpLabel")}
                   .disabled=${pending != null}
                   @keydown=${(event: KeyboardEvent) => {
                     if (event.key !== "Enter" || event.isComposing) {
@@ -147,7 +148,7 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
                 <button
                   class="btn btn--ghost btn--icon chat-icon-btn chat-side-chat__send"
                   type="button"
-                  aria-label="Send follow-up"
+                  aria-label=${t("chat.sideChat.sendFollowUp")}
                   .disabled=${pending != null}
                   @click=${(event: MouseEvent) => {
                     const input = (event.currentTarget as HTMLElement)

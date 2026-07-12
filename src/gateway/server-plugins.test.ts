@@ -996,6 +996,26 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("lets trusted official plugins request explicit Gateway scopes", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-admin"));
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () =>
+        runtime.gateway.request(
+          "browser.request",
+          { method: "GET", path: "/tabs" },
+          { scopes: ["operator.admin"] },
+        ),
+    );
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
   test("reports whether trusted in-process Gateway dispatch is available", async () => {
     const runtime = runtimeModule.createPluginRuntime();
 
@@ -1066,7 +1086,12 @@ describe("loadGatewayPlugins", () => {
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
         { pluginId: "third-party", pluginOrigin: "global" },
-        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+        () =>
+          runtime.gateway.request(
+            "voicecall.start",
+            { to: "+15550001234" },
+            { scopes: ["operator.admin"] },
+          ),
       ),
     ).rejects.toThrow("bundled or trusted official plugins");
     expect(handleGatewayRequest).not.toHaveBeenCalled();

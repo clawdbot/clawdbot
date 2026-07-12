@@ -273,8 +273,7 @@ export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
   function seed(ids: string[]): void {
     const now = Date.now();
     // Seed in reverse order so first IDs end up at front
-    for (let i = ids.length - 1; i >= 0; i--) {
-      const id = ids[i];
+    for (const id of ids.toReversed()) {
       if (!entries.has(id) && entries.size < maxEntries) {
         insertAtFront(id, now);
       }

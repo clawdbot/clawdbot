@@ -129,7 +129,7 @@ function renderFilterChips(
                 <button
                   class="filter-chip-remove"
                   @click=${onClearDays}
-                  aria-label="Remove days filter"
+                  aria-label=${t("usage.filters.removeDays")}
                 >
                   ×
                 </button>
@@ -145,7 +145,7 @@ function renderFilterChips(
                 <button
                   class="filter-chip-remove"
                   @click=${onClearHours}
-                  aria-label="Remove hours filter"
+                  aria-label=${t("usage.filters.removeHours")}
                 >
                   ×
                 </button>
@@ -161,7 +161,7 @@ function renderFilterChips(
                 <button
                   class="filter-chip-remove"
                   @click=${onClearSessions}
-                  aria-label="Remove session filter"
+                  aria-label=${t("usage.filters.removeSession")}
                 >
                   ×
                 </button>

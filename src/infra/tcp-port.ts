@@ -15,3 +15,26 @@ export function parseTcpPort(raw: unknown): number | null {
   }
   return parsed;
 }
+
+/** Extract the effective `--port` value from command arguments. */
+export function parseTcpPortFromArgs(programArguments: string[] | undefined): number | null {
+  if (!programArguments?.length) {
+    return null;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const argument = programArguments[index];
+    if (argument === "--port") {
+      const parsed = parseTcpPort(programArguments[index + 1]);
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+    if (argument?.startsWith("--port=")) {
+      const parsed = parseTcpPort(argument.slice("--port=".length));
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}

@@ -53,7 +53,7 @@ struct OnboardingModeSelectionSections: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .disabled(self.selectedMode == nil || self.isConnecting)
-            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48, cornerRadius: 16))
+            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48))
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)

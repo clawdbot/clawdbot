@@ -225,6 +225,9 @@ export function resolveCanvasHttpPathToLocalPath(
     return null;
   }
   const [rawDocumentId, ...entrySegments] = segments;
+  if (!rawDocumentId) {
+    return null;
+  }
   try {
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
     const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));

@@ -102,7 +102,13 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
     );
-  const partitions = QA_SMOKE_CI_PARTS.map(() => ({ cost: 0, scenarios: [] as typeof scenarios }));
+  const partitions: [
+    { cost: number; scenarios: typeof scenarios },
+    { cost: number; scenarios: typeof scenarios },
+  ] = [
+    { cost: 0, scenarios: [] },
+    { cost: 0, scenarios: [] },
+  ];
   for (const scenario of defaultChannelScenarios) {
     const partition = partitions[0].cost <= partitions[1].cost ? partitions[0] : partitions[1];
     partition.scenarios.push(scenario);
@@ -111,11 +117,12 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
 
   const matrixPartIndex = 1;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
+  const selectedPartition = partId === QA_SMOKE_CI_PARTS[0] ? partitions[0] : partitions[1];
   const runs: QaSmokeCiRun[] = [
     {
       channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       slug: "primary",
-      scenario_ids: partitions[partIndex].scenarios.map((scenario) => scenario.id).toSorted(),
+      scenario_ids: selectedPartition.scenarios.map((scenario) => scenario.id).toSorted(),
     },
   ];
   if (partIndex === matrixPartIndex) {

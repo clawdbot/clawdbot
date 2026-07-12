@@ -43,6 +43,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
@@ -387,7 +388,7 @@ function computerFrameImageIdentity(
   if (images.length !== 1) {
     return undefined;
   }
-  const image = images[0];
+  const image = expectDefined(images[0], "single Codex computer frame image");
   return createHash("sha256")
     .update(JSON.stringify([image.mimeType, image.data]))
     .digest("hex");
@@ -1147,7 +1148,7 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
     return new AbortController().signal;
   }
   if (activeSignals.length === 1) {
-    return activeSignals[0];
+    return expectDefined(activeSignals[0], "single active Codex abort signal");
   }
   return AbortSignal.any(activeSignals);
 }

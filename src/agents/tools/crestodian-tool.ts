@@ -350,14 +350,13 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
     // scopes it to this run and the model must receive it directly.
     catalogMode: "direct-only",
     description: [
-      "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) and open_setup(target=channels, channel=...) start guided channel setup in this chat; open_agent hands off to the normal agent.",
-      "configure_model_provider and open_setup(target=guided|classic) cannot change or reconfigure the active inference route inside Crestodian. Tell the user to exit Crestodian and run `openclaw onboard`; never ask for provider credentials here.",
-      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation. The host applies an approved action after this turn so it can re-check the live inference owner first.",
-      "Setup preserves the verified default inference route. To change providers, credentials, or the default model, exit Crestodian and run `openclaw onboard`.",
-      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes. Raw writes under auth/models/env/secrets/plugins/tools/agent-route paths or $include are refused; use typed workflows. Plugin uninstall is refused because it could remove active inference; exit Crestodian and use the CLI.",
-      "Doctor repairs are unavailable because they can change the active inference route; exit Crestodian and run `openclaw doctor --fix`.",
-      "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
+      "Ring-zero setup/repair. Reads (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run now.",
+      "connect_channel/open_setup(target=channels) starts guided chat setup; open_agent hands off normal agent.",
+      "Cannot change active inference route here. configure_model_provider/open_setup guided|classic, provider/credential/default-model change: exit and `openclaw onboard`; never ask credentials here.",
+      "Writes (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) need approved=true only after user clearly agrees to exact change in this conversation. Host applies after turn and rechecks live inference owner.",
+      "Unknown config path: config_schema first; schema is truth. Secret: config_set_ref env, never plaintext. Raw auth/models/env/secrets/plugins/tools/agent-route/$include writes refused; typed workflow only.",
+      "Plugin uninstall refused: exit, CLI. Doctor repair refused: exit, `openclaw doctor --fix`.",
+      "Every write validated/audited. CONFIG INVALID => fix immediately.",
     ].join(" "),
     parameters: CrestodianToolSchema,
     execute: async (_toolCallId, args) => {

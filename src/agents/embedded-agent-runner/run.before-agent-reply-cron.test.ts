@@ -25,6 +25,7 @@ function firstBeforeAgentReplyCall() {
 
 function firstAttemptParams(): {
   cleanupBundleMcpOnRunEnd?: boolean;
+  disableTrajectory?: boolean;
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
@@ -34,6 +35,7 @@ function firstAttemptParams(): {
     | [
         {
           cleanupBundleMcpOnRunEnd?: boolean;
+          disableTrajectory?: boolean;
           modelRun?: boolean;
           promptMode?: string;
           promptCacheKey?: string;
@@ -153,19 +155,21 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards one-shot model-run flags into the embedded attempt", async () => {
-    // Model-run mode is request-scoped; it must pass through to the first
-    // attempt without becoming a persistent session setting.
+  it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {
+    // Auxiliary-run flags are request-scoped; they must pass through to the
+    // first attempt without becoming persistent session settings.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "user",
+      disableTrajectory: true,
       modelRun: true,
       promptMode: "none",
     });
 
     const attemptParams = firstAttemptParams();
+    expect(attemptParams.disableTrajectory).toBe(true);
     expect(attemptParams.modelRun).toBe(true);
     expect(attemptParams.promptMode).toBe("none");
   });

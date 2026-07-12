@@ -1,4 +1,5 @@
 // Discord plugin module implements mentions behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -38,7 +39,7 @@ export function formatMention(params: {
   if (values.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }
-  const target = values[0];
+  const target = expectDefined(values.at(0), "single Discord mention target");
   if (target.kind === "user") {
     return `<@${target.id}>`;
   }

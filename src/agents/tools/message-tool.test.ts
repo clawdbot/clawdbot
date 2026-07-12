@@ -722,18 +722,12 @@ describe("message tool secret scoping", () => {
     });
     const defaultTool = createMessageTool();
 
-    expect(scopedTool.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
-    expect(scopedTool.description).toContain("target defaults to the current source conversation");
-    expect(scopedTool.description).toContain("Normal final answers stay private");
-    expect(explicitTargetTool.description).toContain("Include target when sending");
-    expect(explicitTargetTool.description).not.toContain(
-      "target defaults to the current source conversation",
-    );
-    expect(defaultTool.description).not.toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(scopedTool.description).toContain("target defaults current source");
+    expect(scopedTool.description).toContain("Final answer private");
+    expect(explicitTargetTool.description).toContain("send needs target");
+    expect(explicitTargetTool.description).not.toContain("target defaults current source");
+    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -742,9 +736,7 @@ describe("message tool secret scoping", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     }).find((candidate) => candidate.name === "message");
 
-    expect(tool?.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
+    expect(tool?.description).toContain('visible reply: action="send" + message');
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -1488,7 +1480,7 @@ describe("message tool delivery mode schema", () => {
       | undefined;
 
     expect(bestEffort?.type).toBe("boolean");
-    expect(bestEffort?.description).toContain("required durable delivery");
+    expect(bestEffort?.description).toContain("requiring durable delivery");
   });
 });
 
@@ -2322,8 +2314,7 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(properties)).toContain("read");
     expectStringSchema(properties.messageId, {
-      description:
-        "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+      description: "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
     });
   });
 });
@@ -2399,7 +2390,7 @@ describe("message tool description", () => {
     const userId = properties.userId as { description?: string } | undefined;
 
     expect(userId?.description).toMatch(/member-info/i);
-    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+    expect(userId?.description).toMatch(/not.*target|does not accept.*target/i);
   });
 
   it("hides iMessage group actions for DM targets", () => {
@@ -2563,7 +2554,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("omits the thread read hint when the current channel does not support read", () => {
@@ -2584,7 +2575,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).not.toContain('Use action="read" with threadId');
+    expect(tool.description).not.toContain('action="read" + threadId');
   });
 
   it("includes the thread read hint in the generic fallback when configured actions include read", () => {
@@ -2605,7 +2596,7 @@ describe("message tool description", () => {
     });
 
     expect(tool.description).toContain("Supports actions:");
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("includes broadcast in the generic fallback description", () => {

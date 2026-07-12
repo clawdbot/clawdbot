@@ -31,7 +31,12 @@ import {
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
-import type { GoogleMeetChromeHealth } from "./types.js";
+import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./types.js";
+import type {
+  GoogleMeetBrowserTab,
+  GoogleMeetChromeHealth,
+  GoogleMeetTranscriptSnapshot,
+} from "./types.js";
 
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
@@ -48,13 +53,18 @@ const chromeTransportDeps: {
   callGatewayFromCli,
 };
 
+const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
+
 export const testing = {
   setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
   meetStatusScriptForTest: meetStatusScript,
+  meetTranscriptScriptForTest: meetTranscriptScript,
+  meetLeaveScriptForTest: meetLeaveScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
   resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
+  resolveLocalBrowserRequestForTest: resolveLocalBrowserRequest,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -118,6 +128,7 @@ export async function launchChromeMeet(params: {
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
+  tab?: GoogleMeetBrowserTab;
 }> {
   const checkRealtimeAudioPrerequisites = async () => {
     if (!isGoogleMeetTalkBackMode(params.mode)) {
@@ -207,9 +218,10 @@ export async function launchChromeMeet(params: {
   }
 
   const result = await openMeetWithBrowserRequest({
-    callBrowser: callLocalBrowserRequest,
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
     config: params.config,
     mode: params.mode,
+    meetingSessionId: params.meetingSessionId,
     url: params.url,
   });
   const shouldStartRealtimeBridge =
@@ -319,6 +331,28 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
   );
 }
 
+async function resolveLocalBrowserRequest(runtime: PluginRuntime): Promise<BrowserRequestCaller> {
+  // Gateway-hosted plugin work stays in-process; otherwise agent tools would
+  // need an external operator.admin token just to reach the local browser.
+  if (!(await runtime.gateway.isAvailable())) {
+    return callLocalBrowserRequest;
+  }
+  return async (params) =>
+    await runtime.gateway.request(
+      "browser.request",
+      {
+        method: params.method,
+        path: params.path,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      },
+      {
+        timeoutMs: resolveBrowserGatewayTimeoutMs(params.timeoutMs),
+        scopes: ["operator.admin"],
+      },
+    );
+}
+
 function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
   return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
@@ -383,6 +417,7 @@ async function grantMeetMediaPermissions(params: {
 function meetStatusScript(params: {
   allowMicrophone: boolean;
   autoJoin: boolean;
+  captionSessionId?: string;
   captureCaptions: boolean;
   guestName: string;
   readOnly?: boolean;
@@ -390,6 +425,7 @@ function meetStatusScript(params: {
   return `async () => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
+  const captionSessionId = ${JSON.stringify(params.captionSessionId)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const readOnly = ${JSON.stringify(Boolean(params.readOnly))};
   const buttons = [...document.querySelectorAll('button')];
@@ -521,42 +557,125 @@ function meetStatusScript(params: {
     if (!captureCaptions) return undefined;
     const w = window;
     if (!inCall && !w.__openclawMeetCaptions) return undefined;
-    if (!w.__openclawMeetCaptions) {
+    // A reused tab starts a fresh logical transcript for each OpenClaw session.
+    // Status refreshes omit the id, so they preserve the active page-owned buffer.
+    if (!w.__openclawMeetCaptions || (captionSessionId && w.__openclawMeetCaptions.sessionId !== captionSessionId)) {
+      if (w.__openclawMeetCaptions?.settleTimer !== undefined) {
+        clearTimeout(w.__openclawMeetCaptions.settleTimer);
+      }
+      w.__openclawMeetCaptions?.observer?.disconnect?.();
       w.__openclawMeetCaptions = {
+        sessionId: captionSessionId,
+        epoch: Date.now() + "-" + Math.random().toString(36).slice(2),
         enabledAttempted: false,
         observerInstalled: false,
+        observer: undefined,
+        droppedLines: 0,
         lines: [],
-        seen: {}
+        settleTimer: undefined,
+        visible: []
       };
     }
     return w.__openclawMeetCaptions;
   })();
-  const recordCaption = (speaker, captionText) => {
+  const normalizeCaption = (speaker, captionText) => {
     if (!captionState) return;
     const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
     const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
-    if (!clean || clean.length < 2) return;
-    if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return;
-    const key = (cleanSpeaker + "\\n" + clean).toLowerCase();
-    if (captionState.seen[key]) return;
-    captionState.seen[key] = true;
-    const entry = { at: new Date().toISOString(), speaker: cleanSpeaker || undefined, text: clean };
-    captionState.lines.push(entry);
-    if (captionState.lines.length > 50) captionState.lines.splice(0, captionState.lines.length - 50);
+    if (!clean || clean.length < 2) return undefined;
+    if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return undefined;
+    return { speaker: cleanSpeaker || undefined, text: clean };
+  };
+  const commitLines = (state, entries) => {
+    state.lines.push(...entries.map((entry) => ({
+      at: entry.at,
+      speaker: entry.speaker,
+      text: entry.text
+    })));
+    const excess = state.lines.length - ${GOOGLE_MEET_TRANSCRIPT_MAX_LINES};
+    if (excess > 0) {
+      state.lines.splice(0, excess);
+      state.droppedLines = (state.droppedLines || 0) + excess;
+    }
   };
   const scrapeCaptions = () => {
     if (!captionState) return;
     const regions = [...document.querySelectorAll(captionSelector)];
+    const rows = [];
     for (const region of regions) {
       const raw = text(region);
       if (!raw) continue;
       const pieces = raw.split(/\\n+/).map((part) => part.trim()).filter(Boolean);
-      if (pieces.length >= 2) {
-        recordCaption(pieces[0], pieces.slice(1).join(" "));
-      } else {
-        recordCaption("", pieces[0] || raw);
-      }
+      const row = pieces.length >= 2
+        ? normalizeCaption(pieces[0], pieces.slice(1).join(" "))
+        : normalizeCaption("", pieces[0] || raw);
+      if (row) rows.push({ ...row, node: region });
     }
+    if (rows.length === 0) {
+      // Meet briefly removes caption rows while rerendering. Keep them mutable
+      // for one settle window so a DOM gap cannot fabricate a repeated line.
+      if (captionState.visible.length > 0 && captionState.settleTimer === undefined) {
+        const pendingState = captionState;
+        pendingState.settleTimer = setTimeout(() => {
+          if (window.__openclawMeetCaptions !== pendingState) return;
+          commitLines(pendingState, pendingState.visible);
+          pendingState.visible = [];
+          pendingState.settleTimer = undefined;
+        }, ${GOOGLE_MEET_CAPTION_SETTLE_MS});
+      }
+      return;
+    }
+    if (captionState.settleTimer !== undefined) {
+      clearTimeout(captionState.settleTimer);
+      captionState.settleTimer = undefined;
+    }
+    const previous = Array.isArray(captionState.visible) ? captionState.visible : [];
+    const unmatchedPrevious = [...previous];
+    const nextVisible = [];
+    const now = Date.now();
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const priorIndex = unmatchedPrevious.findIndex((candidate) => {
+        const sameTextLifecycle =
+          candidate.text === row.text ||
+          row.text.startsWith(candidate.text) ||
+          candidate.text.startsWith(row.text);
+        const sameDomLifecycle =
+          candidate.node === row.node || now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS};
+        return candidate.speaker === row.speaker && sameTextLifecycle && sameDomLifecycle;
+      });
+      const prior = priorIndex >= 0 ? unmatchedPrevious.splice(priorIndex, 1)[0] : undefined;
+      const sameSpeaker = Boolean(prior) && prior.speaker === row.speaker;
+      if (sameSpeaker && prior.text === row.text) {
+        prior.node = row.node;
+        prior.seenAt = now;
+        nextVisible.push(prior);
+        continue;
+      }
+      if (sameSpeaker && row.text.startsWith(prior.text)) {
+        prior.text = row.text;
+        prior.node = row.node;
+        prior.seenAt = now;
+        nextVisible.push(prior);
+        continue;
+      }
+      if (sameSpeaker && prior.text.startsWith(row.text)) {
+        prior.node = row.node;
+        prior.seenAt = now;
+        nextVisible.push(prior);
+        continue;
+      }
+      const entry = {
+        at: new Date().toISOString(),
+        node: row.node,
+        seenAt: now,
+        speaker: row.speaker,
+        text: row.text
+      };
+      nextVisible.push(entry);
+    }
+    commitLines(captionState, unmatchedPrevious);
+    captionState.visible = nextVisible;
   };
   if (captionState) {
     if (!readOnly && inCall && !captionState.enabledAttempted) {
@@ -575,7 +694,8 @@ function meetStatusScript(params: {
     }
     if (inCall && !captionState.observerInstalled) {
       captionState.observerInstalled = true;
-      new MutationObserver(scrapeCaptions).observe(document.body, {
+      captionState.observer = new MutationObserver(scrapeCaptions);
+      captionState.observer.observe(document.body, {
         childList: true,
         subtree: true,
         characterData: true
@@ -585,17 +705,19 @@ function meetStatusScript(params: {
     if (inCall) {
       scrapeCaptions();
     }
-    const lines = Array.isArray(captionState.lines) ? captionState.lines : [];
+    const committedLines = Array.isArray(captionState.lines) ? captionState.lines : [];
+    const visibleLines = Array.isArray(captionState.visible) ? captionState.visible : [];
+    const lines = [...committedLines, ...visibleLines];
     const last = lines[lines.length - 1];
     captioning = document.querySelector(captionSelector) !== null || lines.length > 0;
-    transcriptLines = lines.length;
+    transcriptLines = (captionState.droppedLines || 0) + lines.length;
     lastCaptionAt = last?.at;
     lastCaptionSpeaker = last?.speaker;
     lastCaptionText = last?.text;
     recentTranscript = lines.slice(-5);
   }
   const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
-  const leaveReason = /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
+  const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
     ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
     : undefined;
   let manualActionReason;
@@ -647,13 +769,471 @@ function meetStatusScript(params: {
 }`;
 }
 
+function meetTranscriptScript(meetingUrl: string, meetingSessionId: string, finalize: boolean) {
+  const expectedMeetingUrl = normalizeMeetUrlForReuse(meetingUrl);
+  return `() => {
+  const expectedMeetingUrl = ${JSON.stringify(expectedMeetingUrl)};
+  const expectedSessionId = ${JSON.stringify(meetingSessionId)};
+  let currentMeetingUrl;
+  try {
+    const currentUrl = new URL(location.href);
+    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
+  } catch {
+    return JSON.stringify({ urlMatched: false });
+  }
+  if (!expectedMeetingUrl || currentMeetingUrl !== expectedMeetingUrl) {
+    return JSON.stringify({ urlMatched: false });
+  }
+  const state = window.__openclawMeetCaptions;
+  if (state?.sessionId && state.sessionId !== expectedSessionId) {
+    return JSON.stringify({ urlMatched: true, sessionMatched: false });
+  }
+  if (${JSON.stringify(finalize)} && Array.isArray(state?.visible) && state.visible.length > 0) {
+    if (state.settleTimer !== undefined) clearTimeout(state.settleTimer);
+    state.settleTimer = undefined;
+    state.lines = Array.isArray(state.lines) ? state.lines : [];
+    state.lines.push(...state.visible.map((entry) => ({
+      at: entry.at,
+      speaker: entry.speaker,
+      text: entry.text
+    })));
+    state.visible = [];
+    const excess = state.lines.length - ${GOOGLE_MEET_TRANSCRIPT_MAX_LINES};
+    if (excess > 0) {
+      state.lines.splice(0, excess);
+      state.droppedLines = (state.droppedLines || 0) + excess;
+    }
+  }
+  const lines = Array.isArray(state?.lines) ? state.lines : [];
+  return JSON.stringify({
+    urlMatched: true,
+    sessionMatched: true,
+    epoch: typeof state?.epoch === "string" ? state.epoch : undefined,
+    droppedLines: Number.isFinite(state?.droppedLines) ? Math.max(0, Math.trunc(state.droppedLines)) : 0,
+    lines: lines.map((line) => ({
+      at: typeof line?.at === "string" ? line.at : undefined,
+      speaker: typeof line?.speaker === "string" ? line.speaker : undefined,
+      text: typeof line?.text === "string" ? line.text : ""
+    })).filter((line) => line.text)
+  });
+}`;
+}
+
+function parseMeetTranscriptSnapshot(
+  result: unknown,
+): GoogleMeetTranscriptSnapshot & { sessionMatched?: boolean; urlMatched?: boolean } {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const raw = record.result;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { droppedLines: 0, lines: [] };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Google Meet transcript JSON is malformed.");
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Google Meet transcript payload is invalid.");
+  }
+  const payload = parsed as {
+    droppedLines?: unknown;
+    epoch?: unknown;
+    lines?: unknown;
+    sessionMatched?: unknown;
+    urlMatched?: unknown;
+  };
+  const droppedLines =
+    typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
+      ? Math.max(0, payload.droppedLines)
+      : 0;
+  const lines = Array.isArray(payload.lines)
+    ? payload.lines.flatMap((value) => {
+        if (!value || typeof value !== "object") {
+          return [];
+        }
+        const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
+        if (typeof line.text !== "string" || !line.text.trim()) {
+          return [];
+        }
+        return [
+          {
+            ...(typeof line.at === "string" ? { at: line.at } : {}),
+            ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
+            text: line.text,
+          },
+        ];
+      })
+    : [];
+  return {
+    droppedLines,
+    ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
+    lines,
+    ...(typeof payload.urlMatched === "boolean" ? { urlMatched: payload.urlMatched } : {}),
+    ...(typeof payload.sessionMatched === "boolean"
+      ? { sessionMatched: payload.sessionMatched }
+      : {}),
+  };
+}
+
+async function readMeetTranscriptWithBrowserRequest(params: {
+  callBrowser: BrowserRequestCaller;
+  finalize: boolean;
+  meetingUrl: string;
+  meetingSessionId: string;
+  tab: GoogleMeetBrowserTab;
+  timeoutMs: number;
+}): Promise<GoogleMeetTranscriptSnapshot> {
+  const result = await params.callBrowser({
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId: params.tab.targetId,
+      fn: meetTranscriptScript(params.meetingUrl, params.meetingSessionId, params.finalize),
+    },
+    timeoutMs: params.timeoutMs,
+  });
+  const snapshot = parseMeetTranscriptSnapshot(result);
+  if (snapshot.urlMatched === false) {
+    throw new Error("The tracked Meet tab no longer shows this session's meeting URL.");
+  }
+  if (snapshot.sessionMatched === false) {
+    throw new Error("The tracked Meet tab now belongs to another OpenClaw meeting session.");
+  }
+  return {
+    droppedLines: snapshot.droppedLines,
+    ...(snapshot.epoch ? { epoch: snapshot.epoch } : {}),
+    lines: snapshot.lines,
+  };
+}
+
+function meetLeaveScript(meetingUrl: string) {
+  const expectedMeetingUrl = normalizeMeetUrlForReuse(meetingUrl);
+  return `() => {
+  const expectedMeetingUrl = ${JSON.stringify(expectedMeetingUrl)};
+  let currentMeetingUrl;
+  try {
+    const currentUrl = new URL(location.href);
+    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
+  } catch {
+    return JSON.stringify({ departed: false });
+  }
+  if (!expectedMeetingUrl || currentMeetingUrl !== expectedMeetingUrl) {
+    return JSON.stringify({ departed: true, urlMatched: false });
+  }
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  // Locale-independent fallback: Meet renders the leave control as a Material
+  // Symbols icon whose ligature text is "call_end" in every UI language, so a
+  // localized aria-label (e.g. "Anruf verlassen") still resolves to the button.
+  const hasLeaveIcon = (button) => {
+    const icon = button.querySelector ? button.querySelector("i") : null;
+    return icon ? (icon.textContent || "").trim() === "call_end" : false;
+  };
+  const buttons = [...document.querySelectorAll('button')];
+  const label = (button) => [
+    button.getAttribute("aria-label"),
+    button.getAttribute("data-tooltip"),
+    text(button),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const postCall = buttons.some((button) => /\\b(rejoin|return to home screen)\\b/i.test(label(button)));
+  if (postCall) {
+    return JSON.stringify({ departed: true, urlMatched: true });
+  }
+  // Managed join tabs are reused only after the English-tab gate or opened
+  // through the English-UI helper, so follow-up labels are pinned to English.
+  const confirmation = buttons.find((button) => {
+    return !button.disabled && /\\bleave meeting\\b/i.test(label(button));
+  });
+  if (confirmation) {
+    confirmation.click();
+    return JSON.stringify({ departed: false, leaveAction: "confirm", urlMatched: true });
+  }
+  const leave = buttons.find((button) => {
+    if (button.disabled) return false;
+    return /leave call/i.test(label(button)) || hasLeaveIcon(button);
+  });
+  if (leave) {
+    leave.click();
+    return JSON.stringify({ departed: false, leaveAction: "leave", urlMatched: true });
+  }
+  return JSON.stringify({ departed: false, urlMatched: true });
+}`;
+}
+
+function parseMeetLeaveResult(result: unknown): {
+  departed: boolean;
+  leaveAction?: "leave" | "confirm";
+  urlMatched?: boolean;
+} {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const raw = record.result;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { departed: false };
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      departed?: boolean;
+      leaveAction?: string;
+      urlMatched?: boolean;
+    };
+    const leaveAction =
+      parsed.leaveAction === "leave" || parsed.leaveAction === "confirm"
+        ? parsed.leaveAction
+        : undefined;
+    return {
+      departed: parsed.departed === true,
+      ...(leaveAction ? { leaveAction } : {}),
+      ...(typeof parsed.urlMatched === "boolean" ? { urlMatched: parsed.urlMatched } : {}),
+    };
+  } catch {
+    return { departed: false };
+  }
+}
+
+async function leaveMeetInPage(params: {
+  callBrowser: BrowserRequestCaller;
+  meetingUrl: string;
+  targetId: string;
+  timeoutMs: number;
+}): Promise<{
+  departed: boolean;
+  clickedLeave: boolean;
+  clickedConfirmation: boolean;
+  urlMatched?: boolean;
+}> {
+  const deadline = Date.now() + params.timeoutMs;
+  let clickedLeave = false;
+  let clickedConfirmation = false;
+  do {
+    const evaluated = await params.callBrowser({
+      method: "POST",
+      path: "/act",
+      body: {
+        kind: "evaluate",
+        targetId: params.targetId,
+        fn: meetLeaveScript(params.meetingUrl),
+      },
+      timeoutMs: params.timeoutMs,
+    });
+    const step = parseMeetLeaveResult(evaluated);
+    clickedLeave ||= step.leaveAction === "leave";
+    clickedConfirmation ||= step.leaveAction === "confirm";
+    if (step.departed || step.urlMatched !== true) {
+      return {
+        departed: step.departed,
+        clickedLeave,
+        clickedConfirmation,
+        urlMatched: step.urlMatched,
+      };
+    }
+    if (!step.leaveAction && !clickedLeave) {
+      return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+    }
+    if (!step.leaveAction) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+    }
+  } while (Date.now() < deadline);
+  return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+}
+
+// `leave` must remove the browser participant from the call, not just flip local
+// session state; otherwise the tab keeps sitting in the meeting after the CLI
+// reports "left" (#103386). It acts on the exact tab identity persisted at join:
+// clicking Leave call is the graceful path, and the tab is closed afterwards only
+// when the plugin opened it — a reused tab belongs to the user and stays open.
+async function leaveMeetWithBrowserRequest(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  if (!params.config.chrome.launch) {
+    return {
+      left: false,
+      note: "Browser leave skipped because chrome.launch is disabled.",
+    };
+  }
+  const timeoutMs = Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 5_000);
+  const { targetId, openedByPlugin } = params.tab;
+  try {
+    const tabs = asBrowserTabs(
+      await params.callBrowser({ method: "GET", path: "/tabs", timeoutMs }),
+    );
+    const currentTab = tabs.find((entry) => entry.targetId === targetId);
+    if (!currentTab) {
+      return {
+        left: true,
+        note: "Meet tab is already closed.",
+      };
+    }
+    let leaveResult: Awaited<ReturnType<typeof leaveMeetInPage>>;
+    try {
+      leaveResult = await leaveMeetInPage({
+        callBrowser: params.callBrowser,
+        meetingUrl: params.meetingUrl,
+        targetId,
+        timeoutMs,
+      });
+    } catch (error) {
+      return {
+        left: false,
+        note: `Browser control could not verify the Meet tab before leaving: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (leaveResult.urlMatched === false) {
+      return {
+        left: true,
+        note: "Meet tab moved away from this session; left its current page untouched.",
+      };
+    }
+    if (leaveResult.urlMatched !== true) {
+      return {
+        left: false,
+        note: "Browser control could not verify that the tracked tab still showed this meeting.",
+      };
+    }
+    const { clickedLeave, departed } = leaveResult;
+    if (!openedByPlugin) {
+      return {
+        left: departed,
+        note: departed
+          ? "Clicked Meet's Leave call button; kept the reused browser tab open."
+          : clickedLeave
+            ? "Clicked Meet's Leave call button, but could not verify departure; leave it manually."
+            : "Could not find Meet's Leave call button in the reused browser tab; leave it manually.",
+      };
+    }
+    await params.callBrowser({
+      method: "DELETE",
+      path: `/tabs/${targetId}`,
+      timeoutMs,
+    });
+    return {
+      left: true,
+      note: clickedLeave
+        ? "Clicked Meet's Leave call button and closed the Meet tab."
+        : "Closed the Meet tab to leave the meeting (Leave call button was not found).",
+    };
+  } catch (error) {
+    return {
+      left: false,
+      note: `Browser control could not leave the Meet tab: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+export async function leaveChromeMeet(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  return await leaveMeetWithBrowserRequest({
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
+    config: params.config,
+    meetingUrl: params.meetingUrl,
+    tab: params.tab,
+  });
+}
+
+export async function readChromeMeetTranscript(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  finalize?: boolean;
+  meetingUrl: string;
+  meetingSessionId: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<GoogleMeetTranscriptSnapshot> {
+  return await readMeetTranscriptWithBrowserRequest({
+    callBrowser: await resolveLocalBrowserRequest(params.runtime),
+    finalize: params.finalize === true,
+    meetingUrl: params.meetingUrl,
+    meetingSessionId: params.meetingSessionId,
+    tab: params.tab,
+    timeoutMs: Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 10_000),
+  });
+}
+
+export async function readChromeMeetTranscriptOnNode(params: {
+  runtime: PluginRuntime;
+  nodeId?: string;
+  config: GoogleMeetConfig;
+  finalize?: boolean;
+  meetingUrl: string;
+  meetingSessionId: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<GoogleMeetTranscriptSnapshot> {
+  const nodeId =
+    params.nodeId ??
+    (await resolveChromeNode({
+      runtime: params.runtime,
+      requestedNode: params.config.chromeNode.node,
+    }));
+  const timeoutMs = Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 10_000);
+  return await readMeetTranscriptWithBrowserRequest({
+    callBrowser: async (request) =>
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId,
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        timeoutMs: request.timeoutMs,
+      }),
+    finalize: params.finalize === true,
+    meetingUrl: params.meetingUrl,
+    meetingSessionId: params.meetingSessionId,
+    tab: params.tab,
+    timeoutMs,
+  });
+}
+
+export async function leaveChromeMeetOnNode(params: {
+  runtime: PluginRuntime;
+  nodeId?: string;
+  config: GoogleMeetConfig;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+}): Promise<{ left: boolean; note: string }> {
+  const nodeId =
+    params.nodeId ??
+    (await resolveChromeNode({
+      runtime: params.runtime,
+      requestedNode: params.config.chromeNode.node,
+    }));
+  return await leaveMeetWithBrowserRequest({
+    callBrowser: async (request) =>
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId,
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        timeoutMs: request.timeoutMs,
+      }),
+    config: params.config,
+    meetingUrl: params.meetingUrl,
+    tab: params.tab,
+  });
+}
+
 async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
   mode: GoogleMeetMode;
+  meetingSessionId: string;
   url: string;
-}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
   return await openMeetWithBrowserRequest({
     callBrowser: async (request) =>
       await callBrowserProxyOnNode({
@@ -666,6 +1246,7 @@ async function openMeetWithBrowserProxy(params: {
       }),
     config: params.config,
     mode: params.mode,
+    meetingSessionId: params.meetingSessionId,
     url: params.url,
   });
 }
@@ -674,8 +1255,9 @@ async function openMeetWithBrowserRequest(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
   mode: GoogleMeetMode;
+  meetingSessionId: string;
   url: string;
-}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
   if (!params.config.chrome.launch) {
     return { launched: false };
   }
@@ -684,6 +1266,7 @@ async function openMeetWithBrowserRequest(params: {
   let targetId: string | undefined;
   let tab: BrowserTab | undefined;
   let openUrl = params.url;
+  let openedByPlugin = false;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
       await params.callBrowser({
@@ -725,6 +1308,7 @@ async function openMeetWithBrowserRequest(params: {
       }),
     );
     targetId = tab?.targetId;
+    openedByPlugin = Boolean(targetId);
   }
   if (!targetId) {
     return {
@@ -738,6 +1322,7 @@ async function openMeetWithBrowserRequest(params: {
     };
   }
 
+  const tabIdentity: GoogleMeetBrowserTab = { targetId, openedByPlugin };
   const permissionNotes = await grantMeetMediaPermissions({
     allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
     callBrowser: params.callBrowser,
@@ -761,6 +1346,7 @@ async function openMeetWithBrowserRequest(params: {
           targetId,
           fn: meetStatusScript({
             allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
+            captionSessionId: params.meetingSessionId,
             captureCaptions: params.mode === "transcribe",
             guestName: params.config.chrome.guestName,
             autoJoin: params.config.chrome.autoJoin,
@@ -773,10 +1359,10 @@ async function openMeetWithBrowserRequest(params: {
         browser?.inCall === true &&
         (!isGoogleMeetTalkBackMode(params.mode) || browser.micMuted !== true)
       ) {
-        return { launched: true, browser };
+        return { launched: true, browser, tab: tabIdentity };
       }
       if (browser?.manualActionRequired === true) {
-        return { launched: true, browser };
+        return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
       browser = {
@@ -802,7 +1388,7 @@ async function openMeetWithBrowserRequest(params: {
       });
     }
   } while (Date.now() < deadline);
-  return { launched: true, browser };
+  return { launched: true, browser, tab: tabIdentity };
 }
 
 function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
@@ -913,6 +1499,7 @@ async function inspectRecoverableMeetTab(params: {
 }
 
 export async function recoverCurrentMeetTab(params: {
+  runtime: PluginRuntime;
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
@@ -927,8 +1514,9 @@ export async function recoverCurrentMeetTab(params: {
   message: string;
 }> {
   const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const callBrowser = await resolveLocalBrowserRequest(params.runtime);
   const tabs = asBrowserTabs(
-    await callLocalBrowserRequest({
+    await callBrowser({
       method: "GET",
       path: "/tabs",
       timeoutMs: Math.min(timeoutMs, 5_000),
@@ -949,7 +1537,7 @@ export async function recoverCurrentMeetTab(params: {
   return {
     transport: "chrome",
     ...(await inspectRecoverableMeetTab({
-      callBrowser: callLocalBrowserRequest,
+      callBrowser,
       config: params.config,
       mode: params.mode,
       readOnly: params.readOnly,
@@ -1041,6 +1629,7 @@ export async function launchChromeMeetOnNode(params: {
     | { type: "external-command" }
     | ({ type: "node-command-pair" } & ChromeNodeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
+  tab?: GoogleMeetBrowserTab;
 }> {
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
@@ -1069,6 +1658,7 @@ export async function launchChromeMeetOnNode(params: {
     nodeId,
     config: params.config,
     mode: params.mode,
+    meetingSessionId: params.meetingSessionId,
     url: params.url,
   });
   const raw = await params.runtime.nodes.invoke({
@@ -1116,6 +1706,7 @@ export async function launchChromeMeetOnNode(params: {
       launched: browserControl.launched || result.launched === true,
       audioBridge: bridge,
       browser: browserControl.browser ?? result.browser,
+      tab: browserControl.tab,
     };
   }
   if (result.audioBridge?.type === "external-command") {
@@ -1124,12 +1715,14 @@ export async function launchChromeMeetOnNode(params: {
       launched: browserControl.launched || result.launched === true,
       audioBridge: { type: "external-command" },
       browser: browserControl.browser ?? result.browser,
+      tab: browserControl.tab,
     };
   }
   return {
     nodeId,
     launched: browserControl.launched || result.launched === true,
     browser: browserControl.browser ?? result.browser,
+    tab: browserControl.tab,
   };
 }
 export { testing as __testing };

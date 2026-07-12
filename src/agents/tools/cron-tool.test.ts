@@ -75,12 +75,12 @@ describe("cron tool", () => {
   it("tells models to keep cron expressions in local wall-clock time for tz", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("local wall-clock time");
-    expect(tool.description).toContain("do not convert the requested local time to UTC first");
-    expect(tool.description).toContain("Gateway host local timezone");
-    expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
-    expect(tool.description).toContain('"expr": "0 18 * * *"');
-    expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+    expect(tool.description).toContain("requested local wall time");
+    expect(tool.description).toContain("never pre-convert to UTC");
+    expect(tool.description).toContain("Missing tz = Gateway host local");
+    expect(tool.description).toContain("timezone-less = UTC");
+    expect(tool.description).toContain('expr:"0 18 * * *"');
+    expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
@@ -677,25 +677,21 @@ describe("cron tool", () => {
 
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
-    expect(tool.description).toContain(
-      "reminders, check-back-later, delayed follow-ups, recurring work",
-    );
-    expect(tool.description).toContain(
-      "Do not emulate scheduling with exec sleep/process polling.",
-    );
+    expect(tool.description).toContain("reminders, later checks/follow-ups, recurring work");
+    expect(tool.description).toContain("Never exec sleep/process-poll as timer.");
   });
 
   it("documents the event-trigger authoring contract", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("Gate: cron.triggers.enabled");
-    expect(tool.description).toContain("quiet check uses no model");
+    expect(tool.description).toContain("Requires cron.triggers.enabled");
+    expect(tool.description).toContain("quiet check has no model");
     expect(tool.description).toContain("trigger.state");
-    expect(tool.description).toContain("fire:false: save state; no payload/run history");
-    expect(tool.description).toContain("Fired state saves only after payload success");
+    expect(tool.description).toContain("fire:false saves state only; no payload/history");
+    expect(tool.description).toContain("fired state saves only after payload success");
     expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
-    expect(tool.description).toContain("missing route may fail payload");
-    expect(tool.description).toContain("once:true: disable after first successful fired payload");
+    expect(tool.description).toContain("missing route may fail");
+    expect(tool.description).toContain("once:true disables after first successful fire");
     expect(tool.description).toContain('await tools.call("exec"');
   });
 
@@ -704,9 +700,7 @@ describe("cron tool", () => {
     const parameters = tool.parameters as SchemaLike;
     const runMode = parameters.properties?.runMode;
 
-    expect(tool.description).toContain(
-      'run: run only if due by default; needs jobId; pass runMode="force" to trigger now',
-    );
+    expect(tool.description).toContain('run jobId (due only; runMode="force" now)');
     expect(runMode?.description).toContain('omitted defaults to "due"');
     expect(runMode?.description).toContain('use "force" to trigger now');
   });

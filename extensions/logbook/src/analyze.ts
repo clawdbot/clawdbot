@@ -1,5 +1,6 @@
 // Logbook analysis pipeline: frames -> observations -> revised timeline cards.
 // Pure parsing/validation lives here so tests can cover it without the SDK.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { CARD_CATEGORIES } from "./prompts.js";
 import { dayKeyFor } from "./store.js";
 import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.js";
@@ -224,20 +225,28 @@ export function parseCardsJson(params: {
     return { ok: false, error: "Output contained no valid cards." };
   }
   const sorted = drafts.toSorted((a, b) => a.startMs - b.startMs);
-  for (let i = 1; i < sorted.length; i += 1) {
-    const overlapMs = sorted[i - 1].endMs - sorted[i].startMs;
+  const normalized: LogbookCardDraft[] = [];
+  for (const current of sorted) {
+    const previous = normalized.at(-1);
+    if (!previous) {
+      normalized.push(current);
+      continue;
+    }
+    const overlapMs = previous.endMs - current.startMs;
     if (overlapMs > 60 * 1000) {
       return {
         ok: false,
-        error: `Cards ${i - 1} and ${i} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
+        error: `Cards ${normalized.length - 1} and ${normalized.length} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
       };
     }
     if (overlapMs > 0) {
       // Trim sub-minute overlaps instead of round-tripping to the model again.
-      sorted[i] = { ...sorted[i], startMs: sorted[i - 1].endMs };
+      normalized.push({ ...current, startMs: previous.endMs });
+    } else {
+      normalized.push(current);
     }
   }
-  return { ok: true, drafts: sorted };
+  return { ok: true, drafts: normalized };
 }
 
 /** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
@@ -329,7 +338,7 @@ export function selectBatchFrames(params: {
   if (params.frames.length === 0) {
     return null;
   }
-  const first = params.frames[0];
+  const first = expectDefined(params.frames[0], "first pending Logbook frame");
   const firstDay = dayKeyFor(first.capturedAtMs);
   const nextDayStart = new Date(first.capturedAtMs);
   nextDayStart.setHours(24, 0, 0, 0);
@@ -358,7 +367,7 @@ export function selectBatchFrames(params: {
   if (selected.length === 0) {
     return null;
   }
-  const last = selected[selected.length - 1];
+  const last = expectDefined(selected.at(-1), "last selected Logbook frame");
   // Only close a batch once its window has elapsed (or a gap/midnight ended
   // it), so a window in progress keeps accumulating frames; `force` closes an
   // in-progress window immediately (analyze now).
@@ -380,13 +389,19 @@ export function selectBatchFrames(params: {
 
 /** Evenly samples frames so a batch stays within the per-call image budget. */
 export function sampleFrames<T>(frames: T[], max: number): T[] {
+  if (max <= 0) {
+    return [];
+  }
   if (frames.length <= max) {
     return frames;
+  }
+  if (max === 1) {
+    return [expectDefined(frames[0], "first Logbook frame sample")];
   }
   const sampled: T[] = [];
   const step = (frames.length - 1) / (max - 1);
   for (let i = 0; i < max; i += 1) {
-    sampled.push(frames[Math.round(i * step)]);
+    sampled.push(expectDefined(frames[Math.round(i * step)], "sampled Logbook frame"));
   }
   return [...new Set(sampled)];
 }
@@ -400,7 +415,7 @@ export function pickKeyframeId(
     return undefined;
   }
   const midpoint = card.startMs + (card.endMs - card.startMs) / 2;
-  let best = frames[0];
+  let best = expectDefined(frames[0], "first Logbook keyframe candidate");
   for (const frame of frames) {
     if (Math.abs(frame.capturedAtMs - midpoint) < Math.abs(best.capturedAtMs - midpoint)) {
       best = frame;

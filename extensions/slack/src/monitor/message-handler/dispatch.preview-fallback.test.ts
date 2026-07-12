@@ -28,6 +28,7 @@ const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { message
 const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
+const logVerboseMock = vi.fn();
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
   readonly slackCode: string;
@@ -198,6 +199,14 @@ function requireCapturedTyping() {
     throw new Error("expected Slack typing callback");
   }
   return capturedTyping;
+}
+
+function createSlackPlatformError(error: string, details?: { needed?: string; provided?: string }) {
+  // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
+  return Object.assign(new Error(`An API error occurred: ${error}`), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error, ...details },
+  });
 }
 
 function requireCapturedItemEventHandler() {
@@ -819,7 +828,7 @@ vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (message: string) => message,
-  logVerbose: () => {},
+  logVerbose: logVerboseMock,
   shouldLogVerbose: () => false,
 }));
 
@@ -1258,6 +1267,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     stopSlackStreamMock.mockReset();
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
+    logVerboseMock.mockReset();
     for (const value of Object.values(statusReactionControllerMock)) {
       value.mockClear();
     }
@@ -1979,6 +1989,39 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(removeReactionCall[2]).toBe("hourglass_flowing_sand");
     expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
       "xoxb-test",
+    );
+  });
+
+  it("logs the formatted Slack error when adding the typing reaction fails", async () => {
+    reactSlackMessageMock.mockRejectedValueOnce(
+      createSlackPlatformError("missing_scope", {
+        needed: "reactions:write",
+        provided: "chat:write",
+      }),
+    );
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({ typingReaction: "hourglass_flowing_sand" }),
+    );
+    await expect(requireCapturedTyping().start()).resolves.toBeUndefined();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "slack send: typing reaction failed: An API error occurred: missing_scope; code: slack_webapi_platform_error; slack error: missing_scope; needed: reactions:write; provided: chat:write",
+    );
+  });
+
+  it("logs the formatted Slack error when removing the typing reaction fails", async () => {
+    removeSlackReactionMock.mockRejectedValueOnce(createSlackPlatformError("invalid_auth"));
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({ typingReaction: "hourglass_flowing_sand" }),
+    );
+    const typing = requireCapturedTyping();
+    await typing.start();
+    await expect(typing.stop?.()).resolves.toBeUndefined();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "slack send: typing reaction removal failed: An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
     );
   });
 

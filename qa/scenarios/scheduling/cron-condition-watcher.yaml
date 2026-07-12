@@ -59,7 +59,10 @@ flow:
               wakeMode: now
               payload:
                 kind: command
-                argv: ["sh", "-lc", "printf QA-CONDITION-WATCHER-OK"]
+                argv:
+                  - node
+                  - -e
+                  - "process.stdout.write('QA-CONDITION-WATCHER-OK')"
               delivery:
                 mode: none
             - timeoutMs: 30000

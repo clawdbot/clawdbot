@@ -28,6 +28,11 @@ export function bindAbortRelay(controller: AbortController): () => void {
   return relayAbort.bind(controller);
 }
 
+/** Relays a parent abort while preserving its reason. */
+function relayAbortReason(this: AbortController, signal: AbortSignal) {
+  this.abort(signal.reason);
+}
+
 function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
   const trimmed = rawUrl?.trim();
   if (!trimmed) {
@@ -137,10 +142,10 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
     );
   };
   scheduleTimeout();
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
+  const onAbort = signal ? relayAbortReason.bind(controller, signal) : undefined;
+  if (signal && onAbort) {
     if (signal.aborted) {
-      controller.abort();
+      controller.abort(signal.reason);
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -162,7 +167,7 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      if (signal) {
+      if (signal && onAbort) {
         signal.removeEventListener("abort", onAbort);
       }
     },

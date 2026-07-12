@@ -74,9 +74,14 @@ export function parseMxc(url: string): { server: string; mediaId: string } | nul
   if (!match) {
     return null;
   }
+  const server = match[1];
+  const mediaId = match[2];
+  if (!server || !mediaId) {
+    return null;
+  }
   return {
-    server: match[1],
-    mediaId: match[2],
+    server,
+    mediaId,
   };
 }
 

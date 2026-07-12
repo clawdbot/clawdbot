@@ -54,7 +54,11 @@ function extractImageUrls(markdown: string): string[] {
   const urls: string[] = [];
   let match;
   while ((match = regex.exec(markdown)) !== null) {
-    const url = match[1].trim();
+    const capturedUrl = match[1];
+    if (capturedUrl === undefined) {
+      continue;
+    }
+    const url = capturedUrl.trim();
     if (url.startsWith("http://") || url.startsWith("https://")) {
       urls.push(url);
     }
@@ -669,7 +673,7 @@ async function processImages(
   for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
     const url = imageUrls[i];
     const blockId = imageBlocks[i]?.block_id;
-    if (!blockId) {
+    if (!url || !blockId) {
       continue;
     }
 

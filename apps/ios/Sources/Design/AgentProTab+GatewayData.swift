@@ -148,10 +148,8 @@ extension AgentProTab {
             dreaming: loadedDreaming?.dreaming,
             dreamDiary: loadedDreamDiary,
             usage: loadedUsage,
-            activeAgentId: activeAgentID,
             agentSkillFilter: loadedSkills?.agentSkillFilter
-                ?? loadedConfig?.effectiveSkillFilter(agentId: activeAgentID),
-            loadedAt: Date())
+                ?? loadedConfig?.effectiveSkillFilter(agentId: activeAgentID))
 
         if snapshot.hasAnyLiveData {
             self.overview = snapshot

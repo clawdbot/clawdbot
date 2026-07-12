@@ -6,8 +6,10 @@ import { NonEmptyString } from "./primitives.js";
 // gateway; listing stays directories-only so the picker never leaks file names.
 export const FsListDirParamsSchema = Type.Object(
   {
-    /** Absolute directory to list; omitted means the gateway host home directory. */
+    /** Absolute directory to list; omitted means the selected host's home directory. */
     path: Type.Optional(NonEmptyString),
+    /** Connected node host to browse; omitted means the Gateway host. */
+    nodeId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -28,7 +30,7 @@ export const FsListDirResultSchema = Type.Object(
     path: NonEmptyString,
     /** Absent at the filesystem root. */
     parent: Type.Optional(NonEmptyString),
-    /** Gateway host home directory, for the picker's "home" shortcut. */
+    /** Selected host's home directory, for the picker's "home" shortcut. */
     home: NonEmptyString,
     entries: Type.Array(FsDirEntrySchema),
   },

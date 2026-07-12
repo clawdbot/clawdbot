@@ -42,6 +42,10 @@ export type OutboundReplyPayload = {
   sensitiveMedia?: boolean;
   /** Platform message id that the outbound reply should target when supported. */
   replyToId?: string;
+  /** Portable geographic location or named place. */
+  location?: InternalReplyPayload["location"];
+  /** Ask supporting channels to render video media as a round video note. */
+  videoAsNote?: boolean;
 };
 
 /** Minimal payload shape used to identify reasoning/thinking replies. */

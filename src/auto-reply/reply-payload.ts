@@ -1,3 +1,4 @@
+import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
 import type {
@@ -34,6 +35,10 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Send video media as a round video note when the channel supports it. */
+  videoAsNote?: boolean;
+  /** Channel-neutral geographic location or named place. */
+  location?: OutboundLocation;
   /**
    * Text synthesized into an audio-only TTS payload. Exposed to hooks for
    * archival/search use when no visible channel text is sent.

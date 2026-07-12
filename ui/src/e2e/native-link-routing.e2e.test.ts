@@ -242,7 +242,10 @@ describeControlUiE2e("native link routing", () => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });
 
-    await page.getByRole("link", { name: "Usage" }).click({ button: "right" });
+    await page
+      .getByRole("paragraph")
+      .getByRole("link", { name: "Usage" })
+      .click({ button: "right" });
     expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);
     const messageMenu = page.getByRole("menu", { name: "Message actions" });
     await expect.poll(() => messageMenu.isVisible()).toBe(true);

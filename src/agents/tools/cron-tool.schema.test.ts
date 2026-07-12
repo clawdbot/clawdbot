@@ -130,9 +130,9 @@ describe("createCronToolSchema", () => {
     const patchTz = propertyAt(schemaRecord, "patch.schedule.tz");
 
     for (const prop of [jobExpr, patchExpr]) {
-      expect(prop?.description).toMatch(/wall-clock time/i);
-      expect(prop?.description).toMatch(/do not convert/i);
-      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toMatch(/wall-time/i);
+      expect(prop?.description).toMatch(/never UTC-convert/i);
+      expect(prop?.description).toContain("Gateway local");
       expect(prop?.description).toContain("0 18 * * *");
       expect(prop?.description).toContain("Asia/Shanghai");
     }

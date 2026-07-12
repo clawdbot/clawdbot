@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
@@ -230,6 +230,7 @@ const GoogleMeetToolSchema = Type.Object({
       "join",
       "create",
       "status",
+      "transcript",
       "setup_status",
       "resolve_space",
       "preflight",
@@ -288,6 +289,12 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  sinceIndex: Type.Optional(
+    Type.Integer({
+      description: "For transcript, resume from the previous response's nextIndex.",
+      minimum: 0,
+    }),
+  ),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
   timeoutMs: optionalPositiveIntegerSchema({ description: "Probe timeout in milliseconds" }),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
@@ -400,6 +407,7 @@ type GoogleMeetGatewayToolAction =
   | "join"
   | "create"
   | "status"
+  | "transcript"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -480,9 +488,14 @@ async function callGoogleMeetGatewayFromTool(params: {
       return await params.runtime.gateway.request(
         googleMeetGatewayMethodForToolAction(params.action),
         params.raw,
-        { timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config) },
+        {
+          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+          scopes: ["operator.admin"],
+        },
       );
     }
+    // Standalone agent workers connect as this bundled plugin, not as the
+    // model session; its Gateway methods remain the only exposed actions.
     return await googleMeetToolDeps.callGatewayFromCli(
       googleMeetGatewayMethodForToolAction(params.action),
       {
@@ -490,7 +503,7 @@ async function callGoogleMeetGatewayFromTool(params: {
         timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
       },
       params.raw,
-      { progress: false },
+      { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
     const details = readGatewayErrorDetails(err);
@@ -802,6 +815,38 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.transcript",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const sessionId = normalizeOptionalString(params?.sessionId);
+          if (!sessionId) {
+            sendError(respond, new Error("sessionId required"), ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          const sinceIndex = (params as { sinceIndex?: unknown } | undefined)?.sinceIndex;
+          if (
+            sinceIndex !== undefined &&
+            (typeof sinceIndex !== "number" || !Number.isSafeInteger(sinceIndex) || sinceIndex < 0)
+          ) {
+            sendError(
+              respond,
+              new Error("sinceIndex must be a non-negative safe integer"),
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
+          const rt = await ensureRuntime();
+          respond(
+            true,
+            await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.recoverCurrentTab",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -1051,10 +1096,19 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
           const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
-          const agentId = toolContext.agentId ? normalizeAgentId(toolContext.agentId) : undefined;
+          // Agent ownership comes from trusted tool context, never model-supplied params.
+          // Some harnesses omit agentId but still provide its canonical session key.
+          const contextAgentId =
+            toolContext.agentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
+          const agentId = contextAgentId ? normalizeAgentId(contextAgentId) : undefined;
           try {
-            const useTrustedRuntime = agentId ? await api.runtime.gateway.isAvailable() : false;
-            if (agentId && agentId !== "main" && !useTrustedRuntime) {
+            // Main-agent sessions belong to the persistent Gateway runtime. Only
+            // non-default identities need trusted in-process routing metadata.
+            const needsTrustedAgentRouting = Boolean(agentId && agentId !== "main");
+            const useTrustedRuntime = needsTrustedAgentRouting
+              ? await api.runtime.gateway.isAvailable()
+              : false;
+            if (needsTrustedAgentRouting && !useTrustedRuntime) {
               throw new Error("Per-agent Google Meet routing requires a Gateway-hosted agent run.");
             }
             const rawWithRequester = {
@@ -1106,6 +1160,11 @@ export default definePluginEntry({
               }
               case "status": {
                 return json(await callGoogleMeetGatewayFromTool({ config, action: "status", raw }));
+              }
+              case "transcript": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: "transcript", raw }),
+                );
               }
               case "recover_current_tab": {
                 return json(

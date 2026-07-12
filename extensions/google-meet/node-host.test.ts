@@ -63,6 +63,33 @@ describe("google-meet node host bridge sessions", () => {
     );
   });
 
+  it("rejects non-Meet start URLs before local Chrome side effects", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.mocked(spawnSync).mockClear();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://example.com/private-call",
+            mode: "realtime",
+            launch: true,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      ).rejects.toThrow("url must be an explicit https://meet.google.com/... URL");
+
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(children).toHaveLength(0);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("starts observe-only Chrome without BlackHole or bridge processes", async () => {
     const originalPlatform = process.platform;
     children.length = 0;

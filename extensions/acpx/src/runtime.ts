@@ -399,11 +399,16 @@ function isEnvAssignment(value: string): boolean {
 }
 
 function unwrapEnvCommand(parts: string[]): string[] {
-  if (!parts.length || basename(parts[0]) !== "env") {
+  const command = parts.at(0);
+  if (!command || basename(command) !== "env") {
     return parts;
   }
   let index = 1;
-  while (index < parts.length && isEnvAssignment(parts[index])) {
+  while (true) {
+    const part = parts.at(index);
+    if (!part || !isEnvAssignment(part)) {
+      break;
+    }
     index += 1;
   }
   return parts.slice(index);
@@ -667,18 +672,6 @@ function resolveAgentCommand(params: {
   return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
 }
 
-function resolveProbeAgentName(options: AcpRuntimeOptions): string {
-  const { probeAgent } = options as { probeAgent?: unknown };
-  return normalizeAgentName(typeof probeAgent === "string" ? probeAgent : undefined) ?? "codex";
-}
-
-function resolveAgentCommandForName(params: {
-  agentName: string | undefined;
-  agentRegistry: AcpAgentRegistry;
-}): string | undefined {
-  return resolveAgentCommand(params);
-}
-
 function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
   return isOpenClawBridgeCommand(command);
 }
@@ -773,21 +766,13 @@ export class AcpxRuntime implements AcpRuntime {
           this.delegateTestOptions,
         )
       : this.delegate;
-    this.probeDelegate = this.openclawToolsMcpBridgeEnabled
-      ? this.bridgeSafeDelegate
-      : this.resolveDelegateForAgent(resolveProbeAgentName(options));
-  }
-
-  private resolveDelegateForAgent(agentName: string | undefined): BaseAcpxRuntime {
-    const command = resolveAgentCommandForName({
-      agentName,
+    const probeCommand = resolveAgentCommand({
+      agentName: normalizeAgentName(options.probeAgent) ?? "codex",
       agentRegistry: this.agentRegistry,
     });
-    return this.resolveDelegateForCommand(command);
-  }
-
-  private resolveDelegateForCommand(command: string | undefined): BaseAcpxRuntime {
-    return shouldUseBridgeSafeDelegateForCommand(command) ? this.bridgeSafeDelegate : this.delegate;
+    const useBridgeSafeProbe =
+      this.openclawToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
+    this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
   private resolveDelegateForSession(params: {
@@ -858,7 +843,7 @@ export class AcpxRuntime implements AcpRuntime {
       });
     }
     const agentName = readAgentFromHandle(handle);
-    const command = resolveAgentCommandForName({
+    const command = resolveAgentCommand({
       agentName,
       agentRegistry: this.agentRegistry,
     });
@@ -871,7 +856,7 @@ export class AcpxRuntime implements AcpRuntime {
     if (recordCommand) {
       return recordCommand;
     }
-    return resolveAgentCommandForName({
+    return resolveAgentCommand({
       agentName: readAgentFromHandle(handle),
       agentRegistry: this.agentRegistry,
     });
@@ -1040,7 +1025,7 @@ export class AcpxRuntime implements AcpRuntime {
 
     const rootCommand =
       readAgentCommandFromRecord(record) ??
-      resolveAgentCommandForName({
+      resolveAgentCommand({
         agentName: readAgentFromHandle(handle),
         agentRegistry: this.agentRegistry,
       });
@@ -1074,7 +1059,7 @@ export class AcpxRuntime implements AcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
-    const command = resolveAgentCommandForName({
+    const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
     });

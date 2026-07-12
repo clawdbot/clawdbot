@@ -76,9 +76,9 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: goalStartReply
-        - set: requestCountBeforeSecondTurn
+        - set: requestCursorBeforeSecondTurn
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: secondOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -97,7 +97,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeSecondTurn).find((request) => String(request.prompt ?? '').includes(config.secondMessage))"
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeSecondTurn}`)).find((request) => String(request.prompt ?? '').includes(config.secondMessage))"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 100
         - waitForOutbound:

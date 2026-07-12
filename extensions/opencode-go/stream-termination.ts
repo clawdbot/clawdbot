@@ -68,11 +68,12 @@ function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
   cleanup(): void;
 } {
   const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (present.length === 0) {
+  const [firstSignal] = present;
+  if (!firstSignal) {
     return { signal: new AbortController().signal, cleanup: () => undefined };
   }
   if (present.length === 1) {
-    return { signal: present[0], cleanup: () => undefined };
+    return { signal: firstSignal, cleanup: () => undefined };
   }
   const anyFn = (
     AbortSignal as unknown as {

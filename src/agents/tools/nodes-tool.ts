@@ -152,7 +152,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "List paired nodes with status; describe/control a specific node by passing node. Supports pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+      "Paired nodes: status/list; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

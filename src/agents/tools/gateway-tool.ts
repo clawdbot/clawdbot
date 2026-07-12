@@ -456,7 +456,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. For config.patch that intentionally removes array entries, pass replacePaths with the exact affected array path. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
+      "Gateway restart/config/update. Before config edit: config.schema.lookup exact dot path. Partial merge: config.patch; full replace only: config.apply. Removing array entries via patch needs exact array replacePaths. Writes hot-reload/restart as needed. Always human note for post-restart delivery. Internal continuation: one-shot continuationMessage; its visible follow-up uses message tool. Never write restart sentinel directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

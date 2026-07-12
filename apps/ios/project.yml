@@ -309,7 +309,9 @@ targets:
           - Info.plist
       - path: Sources/Services/WatchSessionActivationGate.swift
         group: Sources/Services
-      # Universal talk waveform, compiled directly since the watch links no packages.
+      - path: Sources/Services/ExactOpaqueIdentifier.swift
+        group: Sources/Services
+      # Universal talk waveform, compiled directly to keep the watch styling local.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
       - path: Sources/Fonts
@@ -318,6 +320,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: OpenClawKit
+        product: OpenClawKit
       - sdk: AppIntents.framework
       - sdk: AVFAudio.framework
       - sdk: WatchConnectivity.framework

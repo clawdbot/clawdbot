@@ -15,11 +15,6 @@ final class WebChatPanel: NSPanel {
 enum WebChatPresentation {
     case window
     case panel(anchorProvider: () -> NSRect?)
-
-    var isPanel: Bool {
-        if case .panel = self { return true }
-        return false
-    }
 }
 
 @MainActor

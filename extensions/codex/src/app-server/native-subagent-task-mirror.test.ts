@@ -216,6 +216,58 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
   });
 
+  it("keeps recoverable system errors non-terminal when authoritative recovery is expected", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 35_000,
+      },
+      runtime,
+    );
+    mirror.markAuthoritativeCompletionExpected("child-thread");
+
+    mirror.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+    mirror.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "systemError" },
+      },
+    });
+    mirror.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "active", activeFlags: [] },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenNthCalledWith(1, {
+      runId: codexNativeSubagentRunId("child-thread"),
+      lastEventAt: 35_000,
+      progressSummary: "Codex native subagent is idle.",
+    });
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenNthCalledWith(2, {
+      runId: codexNativeSubagentRunId("child-thread"),
+      lastEventAt: 35_000,
+      progressSummary: "Codex native subagent hit a system error; awaiting recovery.",
+    });
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenNthCalledWith(3, {
+      runId: codexNativeSubagentRunId("child-thread"),
+      lastEventAt: 35_000,
+      progressSummary: "Codex native subagent is active.",
+    });
+  });
+
   it("creates and updates tasks from Codex collab agent item state", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(

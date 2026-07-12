@@ -38,9 +38,13 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-// Sessions are the sidebar's core content; nothing is pinned by default. Users
-// pin pages via the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [] as const satisfies readonly SidebarNavRoute[];
+// Keep the highest-value operational destinations visible on first use. Users
+// can still replace this set through the customize menu.
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "usage",
+  "cron",
+  "plugins",
+] as const satisfies readonly SidebarNavRoute[];
 
 /**
  * Normalize a persisted pinned-route list. Returns null when the value is not a

@@ -41,7 +41,7 @@ describe("buildDraftSessionCreateParams", () => {
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "remote work",
-        worktree: true,
+        worktree: false,
         cwd: "/other/repo",
         workspace: "/workspace",
         execNode: "macbook",
@@ -49,8 +49,25 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({
       agentId: "main",
       message: "remote work",
-      worktree: true,
       cwd: "/other/repo",
+      execNode: "macbook",
+    });
+  });
+
+  it("sends the selected node cwd even when it matches the Gateway workspace path", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "remote work",
+        worktree: false,
+        cwd: "/workspace",
+        workspace: "/workspace",
+        execNode: "macbook",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "remote work",
+      cwd: "/workspace",
       execNode: "macbook",
     });
   });

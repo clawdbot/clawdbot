@@ -49,6 +49,20 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun dropsOversizedInlineImageContentBeforeRendering() {
+    val oversized = "A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","fileName":"large.png","content":"$oversized"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "image", mimeType = "image/png", fileName = "large.png", base64 = null),
+      parseChatMessageContent(image),
+    )
+  }
+
+  @Test
   fun parsesDirectAndAttachmentAudioBlocks() {
     val direct =
       Json.parseToJsonElement(

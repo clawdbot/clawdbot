@@ -16,6 +16,7 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceAlivePayload,
+  validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -227,6 +228,37 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
+  });
+
+  it("validates bounded session transcript search params", () => {
+    expect(validateSessionsSearchParams({ query: "deployment failure" })).toBe(true);
+    expect(
+      validateSessionsSearchParams({
+        agentId: "work",
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        query: "deployment failure",
+        limit: 25,
+      }),
+    ).toBe(true);
+    expect(validateSessionsSearchParams({ agentId: "", query: "deployment failure" })).toBe(false);
+    expect(
+      validateSessionsSearchParams({
+        sessionKey: "agent:work:main",
+        query: "deployment failure",
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", sessionKeys: [] })).toBe(
+      false,
+    );
+    expect(
+      validateSessionsSearchParams({
+        query: "deployment failure",
+        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "" })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {

@@ -74,11 +74,11 @@ Create a Gradium API key, then expose it with an env var or the config key. Conf
 }
 ```
 
-| Key                                             | Type   | Description                                                                       |
-| ----------------------------------------------- | ------ | --------------------------------------------------------------------------------- |
-| `messages.tts.providers.gradium.apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                              |
-| `messages.tts.providers.gradium.baseUrl`        | string | API origin override. Trailing slashes stripped. Default `https://api.gradium.ai`. |
-| `messages.tts.providers.gradium.speakerVoiceId` | string | Default voice id used when no directive override is present.                      |
+| Key                                             | Type   | Description                                                                                             |
+| ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `messages.tts.providers.gradium.apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                                                    |
+| `messages.tts.providers.gradium.baseUrl`        | string | HTTPS Gradium API URL on `api.gradium.ai`. Trailing slashes stripped. Default `https://api.gradium.ai`. |
+| `messages.tts.providers.gradium.speakerVoiceId` | string | Default voice id used when no directive override is present.                                            |
 
 Output format is chosen automatically by target surface (see [Output](#output)) and is not configurable in `openclaw.json`.
 

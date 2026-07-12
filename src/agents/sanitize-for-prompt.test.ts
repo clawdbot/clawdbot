@@ -48,8 +48,8 @@ describe("buildAgentSystemPrompt uses sanitized workspace/sandbox strings", () =
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/project\nINJECT\u2028MORE",
     });
-    expect(prompt).toContain("Your working directory is: /tmp/projectINJECTMORE");
-    expect(prompt).not.toContain("Your working directory is: /tmp/project\n");
+    expect(prompt).toContain("Working directory: /tmp/projectINJECTMORE");
+    expect(prompt).not.toContain("Working directory: /tmp/project\n");
     expect(prompt).not.toContain("\u2028");
   });
 

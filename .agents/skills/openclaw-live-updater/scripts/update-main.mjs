@@ -37,6 +37,8 @@ const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 3;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
+const GATEWAY_STOP_PROOF_ATTEMPTS = 100;
+const GATEWAY_STOP_PROOF_RETRY_DELAY_MS = 100;
 const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
 const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
 set -eu
@@ -875,23 +877,43 @@ export function repointManagedGatewayDeployment(
   };
 }
 
+export function replaceLaunchAgentProgramArgument(programArguments, index, expected, replacement) {
+  if (!Array.isArray(programArguments) || programArguments[index] !== expected) {
+    throw new UpdateInvariantError(
+      "gateway_repoint_failed",
+      "managed Gateway LaunchAgent changed before its entrypoint could be replaced",
+    );
+  }
+  return programArguments.with(index, replacement);
+}
+
 function replaceLaunchAgentEntrypoint(deployment, entrypoint) {
-  const original = readFileSync(deployment.plistPath);
   const temporaryPath = `${deployment.plistPath}.openclaw-live-updater-${randomUUID()}`;
-  writeFileSync(temporaryPath, original, {
+  writeFileSync(temporaryPath, readFileSync(deployment.plistPath), {
     flag: "wx",
     mode: statSync(deployment.plistPath).mode,
   });
   try {
+    const plistResult = spawnSync(
+      "/usr/bin/plutil",
+      ["-convert", "json", "-o", "-", temporaryPath],
+      { encoding: "utf8" },
+    );
+    if (plistResult.status !== 0) {
+      throw new UpdateInvariantError(
+        "gateway_repoint_failed",
+        `could not read the managed Gateway LaunchAgent: ${String(plistResult.stderr).trim()}`,
+      );
+    }
+    const programArguments = replaceLaunchAgentProgramArgument(
+      JSON.parse(plistResult.stdout)?.ProgramArguments,
+      deployment.entrypointIndex,
+      deployment.entrypoint,
+      entrypoint,
+    );
     execFileSync(
       "/usr/bin/plutil",
-      [
-        "-replace",
-        `ProgramArguments.${deployment.entrypointIndex}`,
-        "-string",
-        entrypoint,
-        temporaryPath,
-      ],
+      ["-replace", "ProgramArguments", "-json", JSON.stringify(programArguments), temporaryPath],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
     execFileSync("/usr/bin/plutil", ["-lint", temporaryPath], {
@@ -1140,6 +1162,33 @@ function stopManagedGateway(runCommand, checkout, deployment) {
     "/bin/launchctl",
     ["bootout", `gui/${process.getuid()}/${deployment.label}`],
     checkout,
+  );
+}
+
+function stopManagedGatewayAndProve(runCommand, checkout, deployment, proveGatewayStopped, sleep) {
+  let stopError;
+  try {
+    stopManagedGateway(runCommand, checkout, deployment);
+  } catch (error) {
+    stopError = error;
+  }
+  let proofError;
+  for (let attempt = 0; attempt < GATEWAY_STOP_PROOF_ATTEMPTS; attempt += 1) {
+    try {
+      return proveGatewayStopped(checkout);
+    } catch (error) {
+      proofError = error;
+      if (attempt + 1 < GATEWAY_STOP_PROOF_ATTEMPTS) {
+        sleep(GATEWAY_STOP_PROOF_RETRY_DELAY_MS);
+      }
+    }
+  }
+  if (!stopError) {
+    throw proofError;
+  }
+  throw new AggregateError(
+    [stopError, proofError],
+    "Gateway stop command failed and native stopped proof did not converge",
   );
 }
 
@@ -1802,10 +1851,15 @@ export function maintainMain(options, dependencies = {}) {
         // Native bootout prevents launchd from retaining old ProgramArguments
         // and avoids source launchers that can rebuild stale dist before stopping.
         try {
-          stopManagedGateway(runCommand, update.checkout, gatewayDeploymentBefore);
-          // Retarget only after launchd has discarded the old ProgramArguments.
-          // Otherwise a later kickstart can revive its cached snapshot command.
-          proveGatewayStopped(update.checkout);
+          // launchctl can return before the job and listener have disappeared.
+          // Retarget only after bounded native proof prevents cached snapshot revival.
+          stopManagedGatewayAndProve(
+            runCommand,
+            update.checkout,
+            gatewayDeploymentBefore,
+            proveGatewayStopped,
+            sleep,
+          );
         } catch (error) {
           try {
             resumeSuspension(

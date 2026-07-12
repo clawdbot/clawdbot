@@ -527,6 +527,7 @@ function createMockReplyOperation(): {
       markWaitingForDeferredMaintenance: vi.fn(),
       markDeferredMaintenanceWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
+      updateSessionKey: vi.fn(),
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       freezeAbort: freezeAbortMock,

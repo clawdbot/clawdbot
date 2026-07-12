@@ -30,7 +30,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     label: "Subagents",
     name: "subagents",
     description:
-      "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
+      "List requester-session active/recent subagents. If available, wait via sessions_yield; never poll-loop.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

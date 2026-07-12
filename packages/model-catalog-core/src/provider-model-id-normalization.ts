@@ -53,7 +53,7 @@ export function setCurrentManifestModelIdNormalizationRecords(
 }
 
 /** Return the current process-local manifest normalization policy snapshot. */
-export function getCurrentManifestModelIdNormalizationPolicies():
+function getCurrentManifestModelIdNormalizationPolicies():
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined {
   return currentManifestModelIdNormalizationPolicies;

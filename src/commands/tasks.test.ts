@@ -12,9 +12,12 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
+  getTaskById,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
@@ -209,6 +212,55 @@ describe("tasks commands", () => {
       });
       expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
       expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+    });
+  });
+
+  it("keeps task-flow restore failures inspectable in full audit output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow command audit restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      const jsonRuntime = createRuntime();
+      await tasksAuditCommand({ json: true }, jsonRuntime);
+      expect(readFirstJsonLog(jsonRuntime)).toMatchObject({
+        count: 1,
+        summary: {
+          taskFlows: {
+            total: 1,
+            errors: 1,
+            byCode: {
+              restore_failed: 1,
+            },
+          },
+        },
+        findings: [
+          {
+            kind: "task_flow",
+            severity: "error",
+            code: "restore_failed",
+            detail:
+              "task-flow registry restore failed: SQLITE_IOERR: task-flow command audit restore failed",
+          },
+        ],
+      });
+
+      const textRuntime = createRuntime();
+      await tasksAuditCommand({ json: false }, textRuntime);
+      const output = vi
+        .mocked(textRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain("TaskFlow");
+      expect(output).toContain("restore_failed");
+      expect(output).toContain("task-flow registry restore failed");
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -715,6 +767,63 @@ describe("tasks commands", () => {
       expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
     });
   });
+
+  it.each([false, true])(
+    "refuses all maintenance when task-flow restore fails (apply=%s)",
+    async (apply) => {
+      await withTaskCommandStateDir(async (state) => {
+        const now = Date.now();
+        vi.useFakeTimers();
+        vi.setSystemTime(now - 8 * 24 * 60 * 60_000);
+        const staleTask = createTaskRecord({
+          runtime: "cli",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          runId: `stale-task-${String(apply)}`,
+          task: "Task that maintenance would prune",
+          status: "succeeded",
+          deliveryStatus: "not_applicable",
+        });
+        vi.setSystemTime(now);
+        const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const staleSessionKey = "agent:main:cron:done-job:run:old-run";
+        await writeSessionEntries(storePath, {
+          [staleSessionKey]: {
+            sessionId: "old-run",
+            updatedAt: Date.now() - 8 * 24 * 60 * 60_000,
+          },
+        });
+        const loadSnapshot = vi.fn(() => {
+          throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
+        });
+        const saveSnapshot = vi.fn();
+        const upsertFlow = vi.fn();
+        const deleteFlow = vi.fn();
+        configureTaskFlowRegistryRuntime({
+          store: {
+            loadSnapshot,
+            saveSnapshot,
+            upsertFlow,
+            deleteFlow,
+          },
+        });
+        const runtime = createRuntime();
+
+        await expect(tasksMaintenanceCommand({ json: true, apply }, runtime)).rejects.toThrow(
+          "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow maintenance restore failed. Refusing task maintenance.",
+        );
+
+        expect(loadSnapshot).toHaveBeenCalledTimes(1);
+        expect(saveSnapshot).not.toHaveBeenCalled();
+        expect(upsertFlow).not.toHaveBeenCalled();
+        expect(deleteFlow).not.toHaveBeenCalled();
+        expect(runtime.log).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeDefined();
+        reloadTaskRegistryFromStore();
+        expect(getTaskById(staleTask.taskId)?.taskId).toBe(staleTask.taskId);
+      });
+    },
+  );
 
   it("applies a conservative session registry sweep for stale cron run sessions", async () => {
     await withTaskCommandStateDir(async (state) => {

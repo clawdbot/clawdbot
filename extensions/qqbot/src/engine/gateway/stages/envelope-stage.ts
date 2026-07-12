@@ -117,6 +117,9 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
   for (let i = 0; i < processed.imageUrls.length; i++) {
     const u = processed.imageUrls[i];
     const t = processed.imageMediaTypes[i] ?? "image/png";
+    if (u === undefined) {
+      continue;
+    }
     if (u.startsWith("http://") || u.startsWith("https://")) {
       remoteMediaUrls.push(u);
       remoteMediaTypes.push(t);

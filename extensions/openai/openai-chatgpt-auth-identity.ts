@@ -35,7 +35,11 @@ function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
   }
 
   try {
-    const decoded = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = parts.at(1);
+    if (!payload) {
+      return null;
+    }
+    const decoded = Buffer.from(payload, "base64url").toString("utf8");
     const parsed = JSON.parse(decoded);
     return parsed && typeof parsed === "object" ? (parsed as CodexJwtPayload) : null;
   } catch {

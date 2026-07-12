@@ -839,10 +839,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-1",
                     commandText: "echo first",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
-                    agentId: "main",
                     expiresAtMs: 1)))
 
         let firstPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
@@ -856,7 +852,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     id: "approval-2",
                     commandText: "echo second",
                     allowedDecisions: ["allow-once", "allow-always", "deny"],
-                    host: "gateway",
                     nodeId: "node-2",
                     agentId: nil,
                     expiresAtMs: 2)))
@@ -880,10 +875,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-a",
                 commandText: "echo visible-a",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
         {
@@ -1011,9 +1002,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-malformed",
                 commandText: "echo guarded",
                 allowedDecisions: decisions,
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 200) == nil)
         }
     }
@@ -1108,9 +1096,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "npm publish",
                 warningText: "Publishes a package",
                 allowedDecisions: ["allow-once", "allow-always", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 200)))
         #expect(try await appModel._test_applyUnifiedExecApprovalResolveResult(
             responseJSON,
@@ -1136,9 +1121,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-race",
                 commandText: "npm publish",
                 allowedDecisions: ["allow-once", "allow-always", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 200)))
         let ownWinnerResponse = responseJSON.replacingOccurrences(
             of: #""applied": false"#,
@@ -1193,9 +1175,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-legacy-ack",
                 commandText: "echo legacy",
                 allowedDecisions: ["deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: nil)))
 
         await appModel._test_applyLegacyExecApprovalTerminal(
@@ -1242,10 +1221,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-denied-elsewhere",
                 commandText: "rm -rf build",
                 warningText: "Deletes build output",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 200)))
 
         #expect(try await appModel._test_applyUnifiedExecApprovalResolveResult(
@@ -1318,10 +1293,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "shared-approval-id",
                 gatewayStableID: gatewayA.effectiveStableID,
                 commandText: "deploy gateway A",
-                allowedDecisions: ["allow-once", "deny"],
                 host: "gateway-a",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: nil)))
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "recovery-a",
@@ -1354,10 +1326,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "shared-approval-id",
                 gatewayStableID: gatewayB.effectiveStableID,
                 commandText: "deploy gateway B",
-                allowedDecisions: ["allow-once", "deny"],
                 host: "gateway-b",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: nil)))
 
         watchService.emitExecApprovalResolve(WatchExecApprovalResolveEvent(
@@ -1386,10 +1355,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo uncertain",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(prompt)
 
@@ -1430,10 +1395,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
                 commandText: "echo fenced",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         let fetchGate = WatchSnapshotSendGate()
         appModel._test_setUnifiedExecApprovalGetResponse(
@@ -1464,10 +1425,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo expired",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 1))
         let firstModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
         firstModel._test_presentExecApprovalPrompt(prompt)
@@ -1495,10 +1452,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo watch",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(prompt)
         appModel._test_setPendingExecApprovalPromptUncertain("Awaiting canonical state.")
@@ -1534,18 +1487,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let firstPrompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: "approval-uncertain-replaced",
             commandText: "echo first",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         let secondPrompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: "approval-visible-replacement",
             commandText: "echo second",
             allowedDecisions: ["deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(firstPrompt)
         let writeGate = ExecApprovalResolutionGate()
@@ -1583,10 +1529,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
                 commandText: "echo terminal",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         let writeGate = ExecApprovalResolutionGate()
         appModel._test_setExecApprovalResolutionUncertainHandler { _, _, _ in
@@ -1650,10 +1592,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: approvalID,
             gatewayStableID: gatewayA.effectiveStableID,
             commandText: "echo switch",
-            allowedDecisions: ["allow-once", "deny"],
             host: "gateway-a",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
 
         appModel.applyGatewayConnectConfig(gatewayA)
@@ -1732,10 +1671,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: approvalID,
             gatewayStableID: gatewayA.effectiveStableID,
             commandText: "echo fence",
-            allowedDecisions: ["allow-once", "deny"],
             host: "gateway-a",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
 
         appModel.applyGatewayConnectConfig(gatewayA)
@@ -1810,10 +1746,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: approvalID,
             gatewayStableID: gatewayA.effectiveStableID,
             commandText: "echo readback",
-            allowedDecisions: ["allow-once", "deny"],
             host: "gateway-a",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
 
         appModel.applyGatewayConnectConfig(gatewayA)
@@ -1866,10 +1799,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo watch retry",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(prompt)
         appModel._test_setExecApprovalResolutionUnknownAck()
@@ -1949,10 +1878,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: approvalID,
             gatewayStableID: gatewayA.effectiveStableID,
             commandText: "echo watch switch",
-            allowedDecisions: ["allow-once", "deny"],
             host: "gateway-a",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
 
         appModel.applyGatewayConnectConfig(gatewayA)
@@ -2037,10 +1963,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-exact-gateway-switch",
                 gatewayStableID: composedGatewayID,
                 commandText: "echo composed",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         switchModel.applyGatewayConnectConfig(decomposedGateway)
         #expect(switchModel._test_pendingExecApprovalPrompt() == nil)
@@ -2057,9 +1979,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 gatewayStableID: composedGatewayID,
                 commandText: "echo resolve",
                 allowedDecisions: ["deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         resolveModel._test_setConnectedGatewayID(decomposedGatewayID)
 
@@ -3656,7 +3575,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "route A",
                 allowedDecisions: ["deny"],
                 host: nil,
-                nodeId: nil,
                 agentId: nil,
                 expiresAtMs: nil)))
         while await !(gate.hasStarted()) {
@@ -3671,7 +3589,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "route B",
                 allowedDecisions: ["deny"],
                 host: nil,
-                nodeId: nil,
                 agentId: nil,
                 expiresAtMs: nil)))
         await gate.resume()
@@ -3696,9 +3613,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-active",
                     commandText: "echo keep",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
                     agentId: nil,
                     expiresAtMs: 1)))
 
@@ -3716,10 +3630,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-watch-sync",
                 commandText: "npm publish",
                 warningText: "Publishes a package",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
                 nodeId: "node-1",
-                agentId: "main",
                 expiresAtMs: 1234))
 
         appModel._test_presentExecApprovalPrompt(prompt)
@@ -3748,9 +3659,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-watch-snapshot",
                     commandText: "echo from watch",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
                     agentId: nil,
                     expiresAtMs: futureExpiryMs)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
@@ -3817,9 +3725,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-watch-foreground",
                     commandText: "echo foreground",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
                     agentId: nil,
                     expiresAtMs: futureExpiryMs)))
         let canonicalResponse = #"""
@@ -4008,10 +3913,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 id: "approval-watch-exact-owner",
                 gatewayStableID: composedGatewayID,
                 commandText: "echo exact owner",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
         {
@@ -4066,10 +3967,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-not-found",
                 commandText: "echo cached",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setExecApprovalPromptFetchStale()
         await waitForMainActorWork { watchService.lastSentExecApprovalSnapshot != nil }
@@ -4101,10 +3998,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-stale-cache",
                 commandText: "echo stale",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
         {
@@ -4256,10 +4149,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-b",
                 commandText: "echo visible-b",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
         {
@@ -4341,10 +4230,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-newer-b",
                 commandText: "echo newer-b",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
 
         await fetchGate.resume()
@@ -4365,10 +4250,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
                 commandText: "echo guarded",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
         watchService.lastSentExecApprovalPrompt = nil
@@ -4434,10 +4315,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "approval-reconnect-restore",
             commandText: "echo restore",
             warningText: "Review after reconnect",
-            allowedDecisions: ["allow-once", "deny"],
-            host: "gateway",
-            nodeId: nil,
-            agentId: "main",
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(prompt)
         appModel.dismissPendingExecApprovalPrompt()
@@ -4488,10 +4365,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-reconcile",
                 commandText: "echo reconcile",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
         appModel._test_dismissPendingExecApprovalPrompt()
@@ -4536,10 +4409,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
                 commandText: "echo race",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setUnifiedExecApprovalGetResponse(#"""
         {
@@ -4603,10 +4472,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
                 commandText: "echo serialized",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
         watchService.lastSentExecApprovalPrompt = nil
@@ -4659,10 +4524,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: approvalID,
                     commandText: "echo cached \(approvalID)",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
-                    agentId: "main",
                     expiresAtMs: 4_000_000_000_000)))
         }
         let responseTemplate = #"""
@@ -4714,10 +4575,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-b",
                 commandText: "newer visible b",
-                allowedDecisions: ["allow-once", "deny"],
-                host: "gateway",
-                nodeId: nil,
-                agentId: "main",
                 expiresAtMs: 4_000_000_000_000)))
         await fetchGate.resume()
         _ = await reconciling.value
@@ -4870,7 +4727,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-watch-app-count",
                     commandText: "rm -rf build",
-                    allowedDecisions: ["allow-once", "deny"],
                     host: "Mac",
                     nodeId: "node-1",
                     agentId: "agent-1",
@@ -5767,9 +5623,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-watch-clear",
                     commandText: "echo clear",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
@@ -5883,9 +5736,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-event-resolved",
                     commandText: "echo clear",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
@@ -5973,10 +5823,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: approvalID,
                     commandText: "echo exact",
-                    allowedDecisions: ["allow-once", "deny"],
-                    host: "gateway",
-                    nodeId: nil,
-                    agentId: "main",
                     expiresAtMs: 4_000_000_000_000)))
         }
 

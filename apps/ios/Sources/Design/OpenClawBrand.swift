@@ -270,7 +270,6 @@ private struct OpenClawCraftSurfaceModifier: ViewModifier {
 struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 54
-    var cornerRadius: CGFloat = 18
 
     private var resolvedCornerRadius: CGFloat {
         self.height / 2
@@ -349,7 +348,6 @@ struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
 struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 50
-    var cornerRadius: CGFloat = 18
     var shadowOpacity: Double = 0.035
 
     private var resolvedCornerRadius: CGFloat {

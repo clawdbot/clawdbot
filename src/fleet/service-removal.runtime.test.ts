@@ -6,10 +6,21 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import { getFleetCell, reserveFleetCell } from "./registry.js";
-import { createFleetService } from "./service.runtime.js";
+import {
+  createFleetService as createFleetServiceRuntime,
+  type FleetServiceOptions,
+} from "./service.runtime.js";
 
 let root: string;
 const TEST_ATTEMPT_ID = "22222222222222222222222222222222";
+
+function createFleetService(options: FleetServiceOptions = {}) {
+  return createFleetServiceRuntime({
+    fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+    probePort: async () => true,
+    ...options,
+  });
+}
 
 function fleetLabels(tenant = "acme", attemptId = TEST_ATTEMPT_ID): Record<string, string> {
   return {
@@ -56,7 +67,13 @@ function createContainerMock(
   },
 ) {
   const assertLocal = vi.fn<FleetContainerRuntime["assertLocal"]>(async () => undefined);
-  const inspect = vi.fn<FleetContainerRuntime["inspect"]>(async () => initialInspection);
+  const inspections = new Map<string, FleetContainerInspectResult>();
+  const removedContainers = new Set<string>();
+  const inspect = vi.fn<FleetContainerRuntime["inspect"]>(async (_runtime, name) =>
+    removedContainers.has(name)
+      ? { kind: "missing", state: "missing" }
+      : (inspections.get(name) ?? initialInspection),
+  );
   const networks = new Map<
     string,
     Extract<Awaited<ReturnType<FleetContainerRuntime["inspectNetwork"]>>, { kind: "ok" }>
@@ -65,7 +82,22 @@ function createContainerMock(
     async (_runtime, name) => networks.get(name) ?? { kind: "missing" },
   );
   const isDockerRootless = vi.fn<FleetContainerRuntime["isDockerRootless"]>(async () => false);
-  const run = vi.fn<FleetContainerRuntime["run"]>(async () => undefined);
+  const run = vi.fn<FleetContainerRuntime["run"]>(async (profile, start) => {
+    removedContainers.delete(profile.containerName);
+    inspections.set(
+      profile.containerName,
+      runningInspection({
+        state: start ? "running" : "created",
+        running: start,
+        labels: fleetLabels(profile.tenantId, profile.attemptId),
+        environment: { ...profile.environment },
+        imageId: `sha256:${profile.attemptId}`,
+        memory: profile.memory,
+        cpus: profile.cpus,
+        pidsLimit: profile.pidsLimit,
+      }),
+    );
+  });
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
     async (_runtime, name, labels, options) => {
@@ -80,11 +112,18 @@ function createContainerMock(
   const removeNetwork = vi.fn<FleetContainerRuntime["removeNetwork"]>(async (_runtime, name) => {
     networks.delete(name);
   });
-  const start = vi.fn<FleetContainerRuntime["start"]>(async () => undefined);
+  const start = vi.fn<FleetContainerRuntime["start"]>(async (_runtime, name) => {
+    const current = await inspect("docker", name);
+    if (current.kind === "ok") {
+      inspections.set(name, { ...current, state: "running", running: true });
+    }
+  });
   const stop = vi.fn<FleetContainerRuntime["stop"]>(async () => undefined);
   const restart = vi.fn<FleetContainerRuntime["restart"]>(async () => undefined);
   const logs = vi.fn<FleetContainerRuntime["logs"]>(async () => undefined);
-  const remove = vi.fn<FleetContainerRuntime["remove"]>(async () => {
+  const remove = vi.fn<FleetContainerRuntime["remove"]>(async (_runtime, name) => {
+    inspections.delete(name);
+    removedContainers.add(name);
     inspect.mockResolvedValue({ kind: "missing", state: "missing" });
   });
   return {
@@ -199,6 +238,7 @@ describe("fleet service filesystem and removal", () => {
     const betaDir = path.join(root, "fleet", "cells", "beta");
     await fs.rm(acmeDir, { recursive: true });
     await fs.symlink(betaDir, acmeDir, "dir");
+    containers.inspect.mockClear();
 
     await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).rejects.toThrow(
       /symlinked fleet tenant directory/iu,
@@ -214,6 +254,7 @@ describe("fleet service filesystem and removal", () => {
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
     await service.create({ tenant: "beta", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
     await service.remove({ tenant: "acme" });
     const acmeConfig = path.join(root, "fleet", "cells", "acme", "openclaw.json");
     const betaConfig = path.join(root, "fleet", "cells", "beta", "openclaw.json");
@@ -243,6 +284,7 @@ describe("fleet service filesystem and removal", () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
     await service.remove({ tenant: "acme" });
     const configPath = path.join(root, "fleet", "cells", "acme", "openclaw.json");
     const configBefore = await fs.readFile(configPath, "utf8");

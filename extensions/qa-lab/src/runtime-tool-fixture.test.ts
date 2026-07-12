@@ -118,7 +118,7 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
   const failureCallId = `call-${params.toolName}-failure`;
   const fetchJson = vi
     .fn()
-    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce({ cursor: 0 })
     .mockResolvedValueOnce([
       {
         allInputText: promptSnippet,
@@ -526,7 +526,7 @@ describe("runtime tool fixture", () => {
 
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -577,7 +577,7 @@ describe("runtime tool fixture", () => {
 
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -631,7 +631,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -678,7 +678,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -733,7 +733,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -789,7 +789,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -838,7 +838,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -890,7 +890,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -942,7 +942,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -989,7 +989,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=image_generate",
@@ -1036,7 +1036,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -1091,7 +1091,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -1199,7 +1199,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -1254,7 +1254,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",
@@ -1309,7 +1309,7 @@ describe("runtime tool fixture", () => {
     });
     const fetchJson = vi
       .fn()
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ cursor: 0 })
       .mockResolvedValueOnce([
         {
           allInputText: "target=read",

@@ -1,6 +1,7 @@
 /**
  * Meta model catalog helpers derived from the plugin manifest.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -28,5 +29,5 @@ export function buildMetaModelDefinition(
     providerId: "meta",
     catalog: { ...META_MANIFEST_CATALOG, models: [model] },
   });
-  return providerConfig.models[0];
+  return expectDefined(providerConfig.models.at(0), "normalized Meta manifest model");
 }

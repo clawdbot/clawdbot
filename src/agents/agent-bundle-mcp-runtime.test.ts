@@ -62,6 +62,7 @@ async function writeListToolsMcpServer(params: {
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
+  resourceReadJsonRpcError?: boolean;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
@@ -90,6 +91,7 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
+const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
 
 let buffer = "";
 let listCount = 0;
@@ -200,6 +202,22 @@ function handle(message) {
       jsonrpc: "2.0",
       id: message.id,
       result: { resources: [] },
+    });
+    return;
+  }
+  if (message.method === "resources/read") {
+    if (resourceReadJsonRpcError) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32000, message: "resource read failed" },
+      });
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { contents: [{ uri: message.params?.uri, text: "resource ok" }] },
     });
   }
 }
@@ -1631,6 +1649,48 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.listResources("failing")).rejects.toThrow(
         'bundle-mcp server "failing" is paused after repeated tool failures',
       );
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pause tools after optional preview read failures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-preview-failure-"));
+    const serverPath = path.join(tempDir, "preview-failure.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourceReadJsonRpcError: true,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-preview-failure",
+      sessionKey: "agent:test:session-preview-failure",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            failing: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.readResource) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      for (let index = 0; index < 3; index += 1) {
+        await expect(
+          runtime.readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
+        ).rejects.toThrow("resource read failed");
+      }
+      await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

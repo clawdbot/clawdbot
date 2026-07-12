@@ -118,8 +118,7 @@ export function neutralizeMediaDirectives(text: string): string {
   }
   const lines = text.split("\n");
   let changed = false;
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     const leading = line.length - line.trimStart().length;
     const rest = line.slice(leading);
     if (/^MEDIA:/i.test(rest)) {

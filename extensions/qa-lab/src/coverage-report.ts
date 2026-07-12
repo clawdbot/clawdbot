@@ -537,7 +537,10 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
   ];
 
   if (commandGroups.length === 1) {
-    lines.push(`- Suite command: \`${formatSuiteCommand(commandGroups[0].matches)}\``);
+    const group = commandGroups[0];
+    if (group) {
+      lines.push(`- Suite command: \`${formatSuiteCommand(group.matches)}\``);
+    }
   } else if (commandGroups.length > 1) {
     lines.push("- Suite commands:");
     for (const group of commandGroups) {

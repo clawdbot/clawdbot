@@ -26,7 +26,7 @@ function resolveInlineReasoningVisibleText(params: {
   final: boolean;
 }): InlineReasoningVisibleTextResolution {
   const match = INLINE_REASONING_BOUNDARY_RE.exec(params.text);
-  if (!match) {
+  if (!match || match[1] === undefined) {
     if (!params.final && params.text.length <= INLINE_REASONING_MAX_PENDING_CHARS) {
       return { kind: "pending" };
     }

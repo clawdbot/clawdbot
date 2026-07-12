@@ -11,6 +11,7 @@ import {
 import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
 const mcpAppMocks = vi.hoisted(() => ({ fetchMcpAppView: vi.fn() }));
 
@@ -133,6 +134,16 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["demo__model_tool"]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual([
+      "demo__app_tool",
+      "demo__hidden_tool",
+      "demo__model_tool",
+    ]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      }).map((tool) => tool.name),
+    ).toEqual(["demo__model_tool"]);
   });
 
   it("attaches app previews without converting typed image results to text", async () => {
@@ -157,12 +168,16 @@ describe("createBundleMcpToolRuntime", () => {
     });
     sessionRuntime.mcpAppsEnabled = true;
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+    materialized.restrictAppTools?.(materialized.tools);
 
     const result = await materialized.tools[0].execute("call-1", {}, undefined, undefined);
     expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
     expect(result.details).toMatchObject({
       mcpAppPreview: { mcpApp: { viewId: "cv_app" } },
     });
+    expect(mcpAppMocks.fetchMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedAppToolNames: new Set(["show"]) }),
+    );
   });
 
   it("materializes bundle MCP tools and executes them", async () => {
@@ -310,6 +325,31 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+  });
+
+  it("reuses one-shot reserved names for App-only policy projections", async () => {
+    function* reservedToolNames() {
+      yield "demo__app_tool";
+    }
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "demo",
+        tools: [
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "app_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "app",
+            uiVisibility: ["app"],
+          },
+        ],
+      }),
+      reservedToolNames: reservedToolNames(),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["demo__app_tool-2"]);
   });
 
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {

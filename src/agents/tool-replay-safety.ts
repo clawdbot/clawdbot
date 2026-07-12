@@ -16,6 +16,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "memory_get",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "agents_list",
   "get_goal",
   "update_plan",

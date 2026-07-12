@@ -173,8 +173,7 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
     // Some startup repair logs are emitted on stdout before command JSON.
     const lines = cleaned.split(/\r?\n/);
     const candidates: unknown[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
+    for (const [index, line] of lines.entries()) {
       const candidate = line.trimStart();
       if (candidate !== line || (!candidate.startsWith("{") && !candidate.startsWith("["))) {
         continue;

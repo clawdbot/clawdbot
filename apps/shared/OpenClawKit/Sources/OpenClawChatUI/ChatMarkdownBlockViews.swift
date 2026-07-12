@@ -141,7 +141,7 @@ struct ChatMarkdownTableView: View {
                 GridRow {
                     ForEach(self.table.header.indices, id: \.self) { column in
                         // One cell per column carries the GFM alignment.
-                        self.cell(self.table.header[column], column: column, isHeader: true)
+                        self.cell(self.table.header[column], isHeader: true)
                             .gridColumnAlignment(self.columnAlignment(column))
                     }
                 }
@@ -149,7 +149,7 @@ struct ChatMarkdownTableView: View {
                 ForEach(self.table.rows.indices, id: \.self) { rowIndex in
                     GridRow {
                         ForEach(self.table.rows[rowIndex].indices, id: \.self) { column in
-                            self.cell(self.table.rows[rowIndex][column], column: column, isHeader: false)
+                            self.cell(self.table.rows[rowIndex][column], isHeader: false)
                         }
                     }
                 }
@@ -165,7 +165,7 @@ struct ChatMarkdownTableView: View {
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
     }
 
-    private func cell(_ text: String, column: Int, isHeader: Bool) -> some View {
+    private func cell(_ text: String, isHeader: Bool) -> some View {
         Text(self.inlineMarkdown(text))
             .font(isHeader ? OpenClawChatTypography.footnoteSemiBold : OpenClawChatTypography.footnote)
             .foregroundStyle(OpenClawChatTheme.assistantText)

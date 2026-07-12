@@ -122,7 +122,6 @@ import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
@@ -242,6 +241,7 @@ import {
 } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -1638,9 +1638,7 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  const nativeSubagentMonitorRef: {
-    current?: ReturnType<typeof registerCodexNativeSubagentMonitor>;
-  } = {};
+  let nativeSubagentMonitor: ReturnType<typeof registerCodexNativeSubagentMonitor> | undefined;
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
   let nativePreToolUseFailureFallbackActive = false;
@@ -1718,12 +1716,28 @@ export async function runCodexAppServerAttempt(
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const unregisterNativeSubagentMonitor = () => {
+    nativeSubagentMonitor?.unregister();
+    nativeSubagentMonitor = undefined;
+  };
+  const registerNativeSubagentMonitor = (parentThreadId: string) => {
+    unregisterNativeSubagentMonitor();
+    nativeSubagentMonitor = registerCodexNativeSubagentMonitor({
+      client,
+      parentThreadId,
+      requesterSessionKey: params.sessionKey,
+      taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+      agentId: sessionAgentId,
+      retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
+    });
+  };
   const releaseCurrentRoute = () => {
     detachRouteAbort();
     detachRouteAbort = () => undefined;
     turnRoute?.release();
     turnRoute = undefined;
     routeActivated = false;
+    unregisterNativeSubagentMonitor();
   };
   let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
   let codexExecutionCwd = effectiveCwd;
@@ -2502,18 +2516,7 @@ export async function runCodexAppServerAttempt(
     await turnRoute?.drain();
   };
 
-  const nativeSubagentCodexHome =
-    appServer.start.transport === "stdio"
-      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
-      : undefined;
-  nativeSubagentMonitorRef.current = registerCodexNativeSubagentMonitor({
-    client,
-    parentThreadId: thread.threadId,
-    requesterSessionKey: params.sessionKey,
-    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
-    agentId: params.agentId,
-    codexHome: nativeSubagentCodexHome,
-  });
+  registerNativeSubagentMonitor(thread.threadId);
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
@@ -2861,6 +2864,9 @@ export async function runCodexAppServerAttempt(
       throw new Error("codex app-server turn route was not reserved");
     }
     if (!routeActivated) {
+      if (!nativeSubagentMonitor) {
+        registerNativeSubagentMonitor(thread.threadId);
+      }
       detachRouteAbort = attachRouteAbort(turnRoute);
       await turnRoute.activate({
         onNotificationReceived: noteNotificationReceived,
@@ -3876,20 +3882,7 @@ export async function runCodexAppServerAttempt(
     if (!timedOut && !runAbortController.signal.aborted) {
       await steeringQueueRef.current?.flushPending();
     }
-    const yieldedOneShotCleanupDeferred =
-      !timedOut &&
-      params.cleanupBundleMcpOnRunEnd === true &&
-      yieldDetected &&
-      nativeSubagentMonitorRef.current?.deferUntilParentSettles(thread.threadId, async () => {
-        // Keep the parent subscription alive until native child delivery;
-        // unsubscribing first drops the completion signal that settles cleanup.
-        await unsubscribeCodexThreadBestEffort(client, {
-          threadId: thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        await releaseSharedClientLeaseAndRetireOneShotClient();
-      });
-    if (!timedOut && !yieldedOneShotCleanupDeferred) {
+    if (!timedOut) {
       await unsubscribeCodexThreadBestEffort(client, {
         threadId: thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -3898,9 +3891,7 @@ export async function runCodexAppServerAttempt(
     userInputBridgeRef.current?.cancelPending();
     turnWatches.clearAllTimers();
     releaseCurrentRoute();
-    if (!yieldedOneShotCleanupDeferred) {
-      await releaseSharedClientLeaseAndRetireOneShotClient();
-    }
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a

@@ -30,14 +30,6 @@ enum ChatLinkPreviewResult: Equatable {
 
 struct ChatLinkPreviewThumbnail: @unchecked Sendable {
     let image: CGImage
-
-    var pixelWidth: Int {
-        self.image.width
-    }
-
-    var pixelHeight: Int {
-        self.image.height
-    }
 }
 
 enum ChatLinkPreviewImageResult: @unchecked Sendable {
@@ -352,7 +344,6 @@ extension [UInt8] {
 }
 
 func chatLinkPreviewRedirectURL(
-    response: HTTPURLResponse,
     request: URLRequest,
     redirectCount: Int,
     hostPolicy: (URL) -> Bool = chatLinkPreviewAllowsHost) -> URL?
@@ -568,13 +559,12 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
+        willPerformHTTPRedirection _: HTTPURLResponse,
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void)
     {
         let nextURL = self.lock.withLock {
             let url = chatLinkPreviewRedirectURL(
-                response: response,
                 request: request,
                 redirectCount: self.redirectCount,
                 hostPolicy: self.hostPolicy)

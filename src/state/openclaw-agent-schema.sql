@@ -235,6 +235,23 @@ CREATE TABLE IF NOT EXISTS memory_index_state (
   revision INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS session_transcript_index_state (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  indexed_seq INTEGER NOT NULL,
+  leaf_event_id TEXT,
+  needs_rebuild INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
+  text,
+  session_id UNINDEXED,
+  message_id UNINDEXED,
+  role UNINDEXED,
+  timestamp UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
 INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
 
 CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert

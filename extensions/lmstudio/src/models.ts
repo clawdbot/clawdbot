@@ -303,11 +303,15 @@ function normalizeConfiguredReasoningEffortMap(value: unknown): Record<string, s
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const normalized = Object.fromEntries(
-    Object.entries(value)
-      .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-      .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
-  );
+  const entries: Array<[string, string]> = [];
+  for (const [key, mapped] of Object.entries(value)) {
+    const normalizedKey = key.trim();
+    const normalizedValue = typeof mapped === "string" ? mapped.trim() : "";
+    if (normalizedKey && normalizedValue) {
+      entries.push([normalizedKey, normalizedValue]);
+    }
+  }
+  const normalized = Object.fromEntries(entries);
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 

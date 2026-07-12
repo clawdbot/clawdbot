@@ -290,7 +290,7 @@ function resolveLiveAccountProfileId(params: {
     return (
       params.order.find((profileId) => {
         const credential = params.store.profiles[profileId];
-        if (!isChatGptSubscriptionProfile(credential)) {
+        if (!credential || !isChatGptSubscriptionProfile(credential)) {
           return false;
         }
         const profileEmail =

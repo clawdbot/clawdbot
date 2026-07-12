@@ -332,7 +332,7 @@ export function renderChatControls(props: ChatControlsProps) {
                 aria-label=${cronLabel}
               >
                 ${renderCronFilterIcon(hiddenCronCount)}
-                <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
+                <span class="chat-settings-action__text">${t("cron.actions.history")}</span>
               </button>
             </openclaw-tooltip>
           </div>

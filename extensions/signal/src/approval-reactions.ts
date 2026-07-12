@@ -414,6 +414,9 @@ function extractSignalApprovalPromptBinding(text: string): {
     return null;
   }
   const approvalId = idHeaderMatch[1];
+  if (!approvalId) {
+    return null;
+  }
   const approvalKind = resolveStandaloneApprovalPromptKind(text);
   if (!approvalKind) {
     return null;
@@ -421,10 +424,12 @@ function extractSignalApprovalPromptBinding(text: string): {
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
   for (const line of lines) {
     const match = line.match(APPROVE_REPLY_COMMAND_LINE_RE);
-    if (!match || match[1] !== approvalId) {
+    const commandApprovalId = match?.[1];
+    const decisionList = match?.[2];
+    if (commandApprovalId !== approvalId || !decisionList) {
       continue;
     }
-    for (const decisionText of match[2].split(/[\s|,]+/)) {
+    for (const decisionText of decisionList.split(/[\s|,]+/)) {
       const decision = normalizeApprovalDecision(decisionText);
       if (decision && !allowedDecisions.includes(decision)) {
         allowedDecisions.push(decision);

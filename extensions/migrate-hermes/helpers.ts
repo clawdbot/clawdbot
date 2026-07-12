@@ -56,7 +56,11 @@ export function parseEnv(content: string | undefined): Record<string, string> {
       continue;
     }
     const key = match[1];
-    let value = match[2] ?? "";
+    const rawValue = match[2];
+    if (!key || rawValue === undefined) {
+      continue;
+    }
+    let value = rawValue;
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))

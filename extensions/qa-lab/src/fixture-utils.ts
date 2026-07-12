@@ -311,7 +311,7 @@ async function countNeedlesInFile(filePath: string, needles: Record<string, stri
       continue;
     }
     for (const [key, needle] of Object.entries(needles)) {
-      counts[key] += countOccurrences(scanText, needle);
+      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
     }
   }
   return counts;
@@ -348,7 +348,7 @@ function countNeedlesInSqliteTranscriptEvents(
         continue;
       }
       for (const [key, needle] of Object.entries(needles)) {
-        counts[key] += countOccurrences(scanText, needle);
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
       }
     }
     return counts;

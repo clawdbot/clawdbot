@@ -6,6 +6,7 @@ import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
 } from "./config.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
   outputMentionsBlackHole2ch,
@@ -278,10 +279,7 @@ function clearAudio(params: Record<string, unknown>) {
 }
 
 function startChrome(params: Record<string, unknown>) {
-  const url = readString(params.url);
-  if (!url) {
-    throw new Error("url required");
-  }
+  const url = normalizeMeetUrl(params.url);
   const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
   const mode = readString(params.mode);
 

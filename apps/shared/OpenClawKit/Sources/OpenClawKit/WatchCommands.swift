@@ -40,7 +40,7 @@ public enum OpenClawWatchExecApprovalCloseReason: String, Codable, Sendable, Equ
     case resolved
 }
 
-public struct OpenClawWatchAction: Codable, Sendable, Equatable {
+public struct OpenClawWatchAction: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var label: String
     public var style: String?

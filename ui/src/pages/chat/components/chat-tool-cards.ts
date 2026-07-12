@@ -256,7 +256,9 @@ export function renderToolPreview(
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
+        <span class="chat-tool-card__preview-label"
+          >${preview.title?.trim() || t("chat.toolCards.canvas")}</span
+        >
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${preview.mcpApp
@@ -264,10 +266,10 @@ export function renderToolPreview(
               .sessionKey=${options?.sessionKey ?? ""}
               .viewId=${preview.mcpApp.viewId}
               .height=${preview.preferredHeight ?? 600}
-              .title=${preview.title?.trim() || "MCP App"}
+              .title=${preview.title?.trim() || t("mcpApp.title")}
             ></mcp-app-view>`
           : renderPreviewFrame({
-              title: preview.title?.trim() || "Canvas",
+              title: preview.title?.trim() || t("chat.toolCards.canvas"),
               src: resolveCanvasIframeUrl(
                 preview.url,
                 options?.canvasPluginSurfaceUrl,
@@ -643,7 +645,7 @@ function renderToolWorkspaceFilePath(
         <button
           class="chat-tool-card__detail chat-tool-card__detail-link"
           type="button"
-          title="Open file"
+          title=${t("chat.toolCards.openFile")}
           @click=${() => onOpenWorkspaceFile({ path })}
         >
           ${label}
@@ -845,12 +847,12 @@ export function renderExpandedToolCardContent(
   const sidebarAction = canOpenSidebar
     ? html`
         <div class="chat-tool-card__actions">
-          <openclaw-tooltip content="Open in the side panel">
+          <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
             <button
               class="chat-tool-card__action-btn"
               type="button"
               @click=${() => onOpenSidebar?.(sidebarActionContent)}
-              aria-label="Open tool details in side panel"
+              aria-label=${t("chat.toolCards.openDetails")}
             >
               <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
             </button>

@@ -2010,6 +2010,22 @@ export async function runEmbeddedAttempt(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
+    if (bundleMcpRuntime?.restrictAppTools) {
+      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
+        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
+        effectiveToolsAllow,
+        { toolMeta: (tool) => getPluginToolMeta(tool) },
+      );
+      const allowedAppTools = applyFinalEffectiveToolPolicy({
+        bundledTools: runtimeAllowedAppTools,
+        config: params.config,
+        conversationCapabilityProfile: runtimeCapabilityProfile,
+        warn: (message) => log.warn(message),
+      });
+      // The view outlives this attempt. Capture policy against the complete MCP
+      // catalog now, including App-only tools that never enter the model surface.
+      bundleMcpRuntime.restrictAppTools(allowedAppTools);
+    }
     const trustedPluginLocalMediaToolNames = collectTrustedPluginLocalMediaToolNames({
       tools: toolsEnabled ? [...tools, ...filteredBundledTools] : [],
     });
@@ -3255,18 +3271,20 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
       });
-      trajectoryRecorder = createTrajectoryRuntimeRecorder({
-        cfg: params.config,
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: trajectorySessionFile,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
+      trajectoryRecorder = params.disableTrajectory
+        ? null
+        : createTrajectoryRuntimeRecorder({
+            cfg: params.config,
+            env: process.env,
+            runId: params.runId,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: trajectorySessionFile,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            workspaceDir: params.workspaceDir,
+          });
       trajectoryRecorder?.recordEvent("session.started", {
         trigger: params.trigger,
         sessionFile: params.sessionFile,

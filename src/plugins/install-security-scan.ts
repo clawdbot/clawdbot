@@ -113,7 +113,10 @@ export async function scanInstalledPackageDependencyTree(params: {
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
-/** Scans one file-based plugin install source. */
+/**
+ * Retained for install.runtime compatibility with pre-v2026.6.5 lazy install chunks.
+ * Remove only with the matching runtime-postbuild legacy alias cleanup.
+ */
 export async function scanFileInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;

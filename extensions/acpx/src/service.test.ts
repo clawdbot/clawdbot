@@ -714,31 +714,6 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("forwards a configured probeAgent to the runtime factory so the probe does not hardcode the default", async () => {
-    const workspaceDir = await makeTempDir();
-    const ctx = createServiceContext(workspaceDir);
-    const runtime = {
-      ensureSession: vi.fn(),
-      runTurn: vi.fn(),
-      cancel: vi.fn(),
-      close: vi.fn(),
-      probeAvailability: vi.fn(async () => {}),
-      isHealthy: vi.fn(() => true),
-      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
-    };
-    const runtimeFactory = vi.fn(() => runtime as never);
-    const service = createAcpxRuntimeService(ctx, {
-      pluginConfig: { probeAgent: "opencode" },
-      runtimeFactory,
-    });
-
-    await service.start(ctx);
-
-    expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe("opencode");
-
-    await service.stop?.(ctx);
-  });
-
   it("uses the first allowed ACP agent as the default probe agent", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

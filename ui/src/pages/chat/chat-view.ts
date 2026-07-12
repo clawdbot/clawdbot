@@ -325,7 +325,7 @@ export function renderChat(props: ChatProps) {
               class="chat-scroll-to-bottom"
               type="button"
               @click=${() => props.onScrollToBottom?.({ smooth: true })}
-              aria-label="Scroll to latest"
+              aria-label=${t("chat.actions.scrollToLatest")}
             >
               ${icons.arrowDown}
             </button>
@@ -378,12 +378,12 @@ export function renderChat(props: ChatProps) {
               <span class="callout__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
-                    <openclaw-tooltip content="Dismiss error">
+                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
                         class="callout__dismiss"
                         type="button"
                         @click=${props.onDismissError}
-                        aria-label="Dismiss error"
+                        aria-label=${t("chat.actions.dismissError")}
                       >
                         ${icons.x}
                       </button>
@@ -395,12 +395,12 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
-            <openclaw-tooltip content="Exit focus mode">
+            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
               <button
                 class="chat-focus-exit"
                 type="button"
                 @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
+                aria-label=${t("chat.actions.exitFocusMode")}
               >
                 ${icons.x}
               </button>

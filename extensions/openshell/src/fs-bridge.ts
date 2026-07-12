@@ -601,13 +601,10 @@ async function assertLocalPathSafety(params: {
   }
 
   const relative = path.relative(params.root, params.target.hostPath);
-  const segments = relative
-    .split(path.sep)
-    .filter(Boolean)
-    .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
+  const segments = relative.split(path.sep).filter(Boolean);
   let cursor = params.root;
-  for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]);
+  for (const [index, segment] of segments.entries()) {
+    cursor = path.join(cursor, segment);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {

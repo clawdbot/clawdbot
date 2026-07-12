@@ -1,4 +1,5 @@
 // Line plugin module implements reply payload transform behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -51,10 +52,21 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     }
     return base.join("&");
   };
+  const parseConfirmAction = (part: string): { label: string; data: string } => {
+    const colonIndex = part.indexOf(":");
+    if (colonIndex === -1) {
+      return { label: part, data: normalizeLowercaseStringOrEmpty(part) };
+    }
+    return {
+      label: part.slice(0, colonIndex).trim(),
+      data: part.slice(colonIndex + 1).trim(),
+    };
+  };
 
   const quickRepliesMatch = text.match(/\[\[quick_replies:\s*([^\]]+)\]\]/i);
   if (quickRepliesMatch) {
-    const options = normalizeStringEntries(quickRepliesMatch[1].split(","));
+    const body = expectDefined(quickRepliesMatch[1], "quick replies directive body");
+    const options = normalizeStringEntries(body.split(","));
     if (options.length > 0) {
       lineData.quickReplies = [...(lineData.quickReplies || []), ...options];
     }
@@ -63,9 +75,13 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const locationMatch = text.match(/\[\[location:\s*([^\]]+)\]\]/i);
   if (locationMatch && !lineData.location) {
-    const parts = locationMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(locationMatch[1], "location directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 4) {
-      const [title, address, latStr, lonStr] = parts;
+      const title = expectDefined(parts[0], "location title field");
+      const address = expectDefined(parts[1], "location address field");
+      const latStr = expectDefined(parts[2], "location latitude field");
+      const lonStr = expectDefined(parts[3], "location longitude field");
       const latitude = parseStrictFiniteNumber(latStr);
       const longitude = parseStrictFiniteNumber(lonStr);
       if (latitude !== undefined && longitude !== undefined) {
@@ -82,23 +98,22 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const confirmMatch = text.match(/\[\[confirm:\s*([^\]]+)\]\]/i);
   if (confirmMatch && !lineData.templateMessage) {
-    const parts = confirmMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(confirmMatch[1], "confirm directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 3) {
-      const [question, yesPart, noPart] = parts;
-      const [yesLabel, yesData] = yesPart.includes(":")
-        ? yesPart.split(":").map((s) => s.trim())
-        : [yesPart, normalizeLowercaseStringOrEmpty(yesPart)];
-      const [noLabel, noData] = noPart.includes(":")
-        ? noPart.split(":").map((s) => s.trim())
-        : [noPart, normalizeLowercaseStringOrEmpty(noPart)];
+      const question = expectDefined(parts[0], "confirm question field");
+      const yesPart = expectDefined(parts[1], "confirm yes field");
+      const noPart = expectDefined(parts[2], "confirm no field");
+      const yesAction = parseConfirmAction(yesPart);
+      const noAction = parseConfirmAction(noPart);
 
       lineData.templateMessage = {
         type: "confirm",
         text: question,
-        confirmLabel: yesLabel,
-        confirmData: yesData,
-        cancelLabel: noLabel,
-        cancelData: noData,
+        confirmLabel: yesAction.label,
+        confirmData: yesAction.data,
+        cancelLabel: noAction.label,
+        cancelData: noAction.data,
         altText: question,
       };
     }
@@ -107,9 +122,12 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const buttonsMatch = text.match(/\[\[buttons:\s*([^\]]+)\]\]/i);
   if (buttonsMatch && !lineData.templateMessage) {
-    const parts = buttonsMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(buttonsMatch[1], "buttons directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 3) {
-      const [title, bodyText, actionsStr] = parts;
+      const title = expectDefined(parts[0], "buttons title field");
+      const bodyText = expectDefined(parts[1], "buttons text field");
+      const actionsStr = expectDefined(parts[2], "buttons actions field");
 
       const actions = actionsStr.split(",").map((actionStr) => {
         const trimmed = actionStr.trim();
@@ -160,9 +178,11 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const mediaPlayerMatch = text.match(/\[\[media_player:\s*([^\]]+)\]\]/i);
   if (mediaPlayerMatch && !lineData.flexMessage) {
-    const parts = mediaPlayerMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(mediaPlayerMatch[1], "media player directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 1) {
-      const [title, artist, source, imageUrl, statusStr] = parts;
+      const title = expectDefined(parts[0], "media player title field");
+      const [, artist, source, imageUrl, statusStr] = parts;
       const isPlaying = normalizeLowercaseStringOrEmpty(statusStr) === "playing";
       const validImageUrl = imageUrl?.startsWith("https://") ? imageUrl : undefined;
       const deviceKey = toSlug(source || title || "media");
@@ -190,9 +210,14 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const eventMatch = text.match(/\[\[event:\s*([^\]]+)\]\]/i);
   if (eventMatch && !lineData.flexMessage) {
-    const parts = eventMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(eventMatch[1], "event directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 2) {
-      const [title, date, time, location, description] = parts;
+      const title = expectDefined(parts[0], "event title field");
+      const date = expectDefined(parts[1], "event date field");
+      const time = parts[2];
+      const location = parts[3];
+      const description = parts[4];
 
       const card = createEventCard({
         title: title || "Event",
@@ -212,9 +237,11 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const appleTvMatch = text.match(/\[\[appletv_remote:\s*([^\]]+)\]\]/i);
   if (appleTvMatch && !lineData.flexMessage) {
-    const parts = appleTvMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(appleTvMatch[1], "Apple TV directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 1) {
-      const [deviceName, status] = parts;
+      const deviceName = expectDefined(parts[0], "Apple TV device name field");
+      const [, status] = parts;
       const deviceKey = toSlug(deviceName || "apple_tv");
 
       const card = createAppleTvRemoteCard({
@@ -246,9 +273,11 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const agendaMatch = text.match(/\[\[agenda:\s*([^\]]+)\]\]/i);
   if (agendaMatch && !lineData.flexMessage) {
-    const parts = agendaMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(agendaMatch[1], "agenda directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 2) {
-      const [title, eventsStr] = parts;
+      const title = expectDefined(parts[0], "agenda title field");
+      const eventsStr = expectDefined(parts[1], "agenda events field");
       const events = eventsStr.split(",").map((eventStr) => {
         const trimmed = eventStr.trim();
         const colonIdx = trimmed.lastIndexOf(":");
@@ -276,13 +305,17 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const deviceMatch = text.match(/\[\[device:\s*([^\]]+)\]\]/i);
   if (deviceMatch && !lineData.flexMessage) {
-    const parts = deviceMatch[1].split("|").map((s) => s.trim());
+    const body = expectDefined(deviceMatch[1], "device directive body");
+    const parts = body.split("|").map((s) => s.trim());
     if (parts.length >= 1) {
-      const [deviceName, deviceType, status, controlsStr] = parts;
+      const deviceName = expectDefined(parts[0], "device name field");
+      const [, deviceType, status, controlsStr] = parts;
       const deviceKey = toSlug(deviceName || "device");
       const controls = controlsStr
         ? controlsStr.split(",").map((ctrlStr) => {
-            const [label, data] = ctrlStr.split(":").map((s) => s.trim());
+            const controlParts = ctrlStr.split(":").map((s) => s.trim());
+            const label = expectDefined(controlParts[0], "device control label");
+            const data = controlParts[1];
             const action = data || normalizeLowercaseStringOrEmpty(label).replace(/\s+/g, "_");
             return { label, data: lineActionData(action, { "line.device": deviceKey }) };
           })

@@ -11,6 +11,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
+import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
@@ -221,6 +222,7 @@ function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
   hasButtons: boolean;
+  hasLocation?: boolean;
   interactive?: unknown;
   presentation?: MessagePresentation;
 }) {
@@ -255,7 +257,7 @@ function readTelegramSendContent(params: {
       content = fallback;
     }
   }
-  if (content == null && !params.mediaUrl && !params.hasButtons) {
+  if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
     throw new Error("content required.");
   }
   return content ?? "";
@@ -290,6 +292,8 @@ function buildTelegramActionSendPayload(params: {
   content: string;
   mediaUrls: string[];
   asVoice?: boolean;
+  asVideoNote?: boolean;
+  location?: ReplyPayload["location"];
   pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
   buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
   quoteText?: string;
@@ -305,6 +309,8 @@ function buildTelegramActionSendPayload(params: {
     text: params.content,
     ...(params.mediaUrls.length > 0 ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.asVoice === true ? { audioAsVoice: true } : {}),
+    ...(params.asVideoNote === true ? { videoAsNote: true } : {}),
+    ...(params.location ? { location: params.location } : {}),
     ...(params.pin ? { delivery: { pin: params.pin } } : {}),
     ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
   };
@@ -451,15 +457,24 @@ export async function handleTelegramAction(
     const to = normalizeTelegramOutboundTarget(readStringParam(params, "to", { required: true }));
     const mediaUrls = readTelegramSendMediaUrls(params);
     const firstMediaUrl = mediaUrls[0];
+    const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
     const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      hasLocation: Boolean(location),
       interactive: params.interactive,
       presentation,
     });
+    const asVideoNote = readBooleanParam(params, "asVideoNote") ?? false;
+    if (location && (content.trim() || mediaUrls.length > 0 || asVideoNote)) {
+      throw new Error("Telegram location sends cannot be combined with message text or media.");
+    }
+    if (asVideoNote && mediaUrls.length !== 1) {
+      throw new Error("Telegram video notes require exactly one media attachment.");
+    }
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
@@ -505,6 +520,7 @@ export async function handleTelegramAction(
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
       asVoice: readBooleanParam(params, "asVoice"),
+      asVideoNote,
       silent: readBooleanParam(params, "silent"),
       forceDocument:
         readBooleanParam(params, "forceDocument") ??
@@ -515,6 +531,8 @@ export async function handleTelegramAction(
       content,
       mediaUrls,
       asVoice: sendOptions.asVoice,
+      asVideoNote: sendOptions.asVideoNote,
+      location,
       pin: normalizeTelegramDeliveryPin(params),
       buttons,
       quoteText,

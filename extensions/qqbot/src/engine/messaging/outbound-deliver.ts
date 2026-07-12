@@ -818,7 +818,7 @@ async function sendMarkdownReply(
   }
 
   // Handle public image URLs — format as markdown images with dimensions.
-  const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
+  const existingMdUrls = new Set(mdMatches.flatMap((m) => (m[2] === undefined ? [] : [m[2]])));
   const imagesToAppend: string[] = [];
 
   for (const url of httpImageUrls) {
@@ -841,6 +841,9 @@ async function sendMarkdownReply(
   for (const m of mdMatches) {
     const fullMatch = m[0];
     const imgUrl = m[2];
+    if (fullMatch === undefined || imgUrl === undefined) {
+      continue;
+    }
     const isRemoteHttpUrl = isHttpUrl(imgUrl);
     if (isRemoteHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {

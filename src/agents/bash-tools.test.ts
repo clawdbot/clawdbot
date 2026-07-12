@@ -709,29 +709,21 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
     );
-    expect(processWithCron.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable.",
-    );
-    expect(processWithCron.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
-    );
+    expect(processWithCron.description).toContain("completion without auto-wake");
+    expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
     expect(execWithCron.description).toContain(
-      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+      "No sleep/delay loops for reminders/follow-ups; use cron.",
     );
     expect(processWithCron.description).toContain(
-      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+      "No polling as timer/reminder; scheduled follow-up uses cron.",
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise use process to confirm completion");
-    expect(processTool.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable",
-    );
-    expect(processTool.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
-    );
+    expect(execTool.description).toContain("otherwise process confirms completion");
+    expect(processTool.description).toContain("completion without auto-wake");
+    expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
 });
 

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
@@ -594,7 +595,7 @@ async function resolveCodexCliNode(params: {
   if (usable.length > 1) {
     throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
   }
-  return usable[0];
+  return expectDefined(usable[0], "single usable Codex CLI node");
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {

@@ -158,6 +158,10 @@ for setup.
 
 ## Session memory search
 
+For exact full-text recall from session transcripts, use [`sessions_search`](/concepts/session-search)
+and then open a result with `sessions_history`. Session-memory search remains the semantic,
+experimental complement.
+
 Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).

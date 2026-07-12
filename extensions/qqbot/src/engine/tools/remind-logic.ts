@@ -138,8 +138,12 @@ export function parseRelativeTime(timeStr: string): number | null {
     }
     matched = true;
     consumed = regex.lastIndex;
-    const value = Number.parseFloat(match[1]);
+    const valueText = match[1];
     const unit = match[2];
+    if (valueText === undefined || unit === undefined) {
+      return null;
+    }
+    const value = Number.parseFloat(valueText);
     switch (unit) {
       case "d":
         totalMs += value * 86_400_000;

@@ -111,6 +111,12 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
+  if (!params.minimalTestGateway) {
+    await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
+      const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
+      ensureTaskRuntimeStateReady();
+    });
+  }
   const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
     startGatewayPluginDiscovery(params),
   );

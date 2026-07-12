@@ -30,6 +30,8 @@ export type ExecToolDefaults = {
   ask?: ExecAsk;
   trigger?: string;
   node?: string;
+  /** Default working directory for node-host execution only. */
+  nodeCwd?: string;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;

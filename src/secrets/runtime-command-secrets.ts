@@ -7,7 +7,6 @@ import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../plugins/web-provider-public-artifacts.explicit.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
-  collectCommandSecretAssignmentsFromSnapshot,
   type CommandSecretAssignment,
 } from "./command-config.js";
 import { getPath, setPathExistingStrict } from "./path-utils.js";
@@ -558,34 +557,11 @@ async function resolveCommandSecretsFromSnapshot(params: {
       ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     });
   }
-  const selectedProviderUnresolved = analyzed.unresolved.filter((entry) =>
-    isProviderOverridePath({
-      config: sourceConfig,
-      path: entry.path,
-      providerOverrides: params.providerOverrides,
-    }),
-  );
-  const forcedActiveUnresolved = analyzed.unresolved.filter((entry) =>
-    params.forcedActivePaths?.has(entry.path),
-  );
-  if (selectedProviderUnresolved.length > 0 || forcedActiveUnresolved.length > 0) {
-    return {
-      assignments: analyzed.assignments,
-      diagnostics: analyzed.diagnostics,
-      inactiveRefPaths,
-    };
-  }
-  const resolved = collectCommandSecretAssignmentsFromSnapshot({
-    sourceConfig,
-    resolvedConfig,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    inactiveRefPaths: new Set(inactiveRefPaths),
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-  });
   return {
-    assignments: resolved.assignments,
-    diagnostics: resolved.diagnostics,
+    // A runtime snapshot can be authoritative for only part of a command's target set.
+    // Preserve those values so the caller falls back locally only for unresolved paths.
+    assignments: analyzed.assignments,
+    diagnostics: analyzed.diagnostics,
     inactiveRefPaths,
   };
 }

@@ -250,13 +250,21 @@ function visibleApprovalBindingMatches(
   if (hintIndices.length !== 1) {
     return false;
   }
-  let cursor = hintIndices[0] + 1;
-  while (cursor < lines.length && !lines[cursor].trim()) {
+  const hintIndex = hintIndices[0];
+  if (hintIndex === undefined) {
+    return false;
+  }
+  let cursor = hintIndex + 1;
+  while (cursor < lines.length && !lines[cursor]?.trim()) {
     cursor += 1;
   }
   const decisionLines: string[] = [];
-  while (cursor < lines.length && lines[cursor].trim()) {
-    decisionLines.push(lines[cursor].trim());
+  while (cursor < lines.length) {
+    const decisionLine = lines[cursor]?.trim();
+    if (!decisionLine) {
+      break;
+    }
+    decisionLines.push(decisionLine);
     cursor += 1;
   }
   const knownBindings = listWhatsAppApprovalReactionBindings([

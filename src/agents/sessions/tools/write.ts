@@ -30,9 +30,9 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
   path: Type.String({
-    description: "Path to the file to write (relative or absolute)",
+    description: "File path; relative/absolute.",
   }),
-  content: Type.String({ description: "Content to write to the file" }),
+  content: Type.String({ description: "File content." }),
 });
 export type { WriteToolInput } from "./tool-contracts.js";
 
@@ -389,10 +389,9 @@ export function createWriteToolDefinition(
   return {
     name: "write",
     label: "write",
-    description:
-      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
-    promptSnippet: "Create or overwrite files",
-    promptGuidelines: ["Use write only for new files or complete rewrites."],
+    description: "Write/overwrite file; creates parent directories.",
+    promptSnippet: "Create/overwrite files",
+    promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     async execute(
       toolCallId,

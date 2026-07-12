@@ -94,6 +94,10 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
       console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
       return;
     }
+    if (/\b403\b/.test(message) && /model .+ is not available in your region/i.test(message)) {
+      console.warn(`[xai:live] skip ${label}: regional model availability: ${message}`);
+      return;
+    }
     if (message.includes("web_search is disabled or no provider is available")) {
       console.warn(`[xai:live] skip ${label}: web_search unavailable in this environment`);
       return;
@@ -103,12 +107,18 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
 }
 
 async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+  stream: AsyncIterable<{
+    type: string;
+    message?: AssistantLikeMessage;
+    error?: { errorMessage?: string };
+  }>,
 ): Promise<AssistantLikeMessage> {
   let doneMessage: AssistantLikeMessage | undefined;
   for await (const event of stream) {
     if (event.type === "done") {
       doneMessage = event.message;
+    } else if (event.type === "error") {
+      throw new Error(event.error?.errorMessage ?? "xAI stream failed without error details");
     }
   }
   return requireLiveValue(doneMessage, "done message");
@@ -132,7 +142,10 @@ describeLive("xai live", () => {
             },
           );
 
-          expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+          expect(
+            extractNonEmptyAssistantText(res.content).length,
+            res.errorMessage,
+          ).toBeGreaterThan(0);
         });
       },
       XAI_COMPLETE_LIVE_TIMEOUT_MS,
@@ -177,7 +190,11 @@ describeLive("xai live", () => {
         );
 
         const doneMessage = await collectDoneMessage(
-          stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+          stream as AsyncIterable<{
+            type: string;
+            message?: AssistantLikeMessage;
+            error?: { errorMessage?: string };
+          }>,
         );
         const content = requireLiveValue(doneMessage.content, "done message content");
         expect(Array.isArray(content)).toBe(true);

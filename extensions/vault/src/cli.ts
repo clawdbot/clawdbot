@@ -211,7 +211,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-function resolverScriptPathCandidates(baseUrl: string): string[] {
+function resolverScriptPathCandidates(baseUrl: string): [string, string] {
   return [
     fileURLToPath(new URL("../vault-secret-ref-resolver.js", baseUrl)),
     fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", baseUrl)),

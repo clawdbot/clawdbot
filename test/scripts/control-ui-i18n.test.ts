@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedProcessOutput,
+  buildBatchPrompt,
+  parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
@@ -50,6 +52,48 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change" }),
+        items,
+        "ar",
+      ),
+    ).toThrow("ar:configView.viewPendingChange expected {count} got {}");
+    expect(
+      parseTranslationBatchReply(
+        JSON.stringify({ "configView.viewPendingChange": "Pending change ({count})" }),
+        items,
+        "ar",
+      ),
+    ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("feeds the exact validation failure back into a retry prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
+
+    expect(buildBatchPrompt(items, validationError)).toContain(
+      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
+    );
+  });
+
   it("ships no recorded English fallbacks", () => {
     const metaDir = path.resolve("ui/src/i18n/.i18n");
     const fallbacks = readdirSync(metaDir)

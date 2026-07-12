@@ -4,6 +4,11 @@ import path from "node:path";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
+import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
@@ -464,31 +469,27 @@ function requestLinksPlannedToolOutput(
 
 function findPlannedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
-  return params.requests
-    .slice(params.requestCountBefore)
-    .find(
-      (request) =>
-        requestMatchesPrompt(request, params.promptSnippet) &&
-        (!params.excludedPromptSnippet ||
-          !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
-        request.plannedToolName === params.toolName,
-    );
+  return params.requests.find(
+    (request) =>
+      requestMatchesPrompt(request, params.promptSnippet) &&
+      (!params.excludedPromptSnippet ||
+        !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
+      request.plannedToolName === params.toolName,
+  );
 }
 
 function findExecutedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
   let plannedRequest: QaRuntimeToolFixtureRequest | undefined;
-  for (const request of params.requests.slice(params.requestCountBefore)) {
+  for (const request of params.requests) {
     if (!requestMatchesPrompt(request, params.promptSnippet)) {
       continue;
     }
@@ -667,9 +668,8 @@ export async function runRuntimeToolFixture(
     `failure target=${toolName}`,
   );
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
-  const requestCountBefore = env.mock
-    ? readQaRuntimeToolFixtureRequests(await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`))
-        .length
+  const requestCursorBefore = env.mock
+    ? readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(env.mock.baseUrl)))
     : 0;
 
   await deps.runAgentPrompt(env, {
@@ -744,31 +744,27 @@ export async function runRuntimeToolFixture(
   }
 
   const requests = readQaRuntimeToolFixtureRequests(
-    await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`),
+    await deps.fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
   );
   const happyPlannedRequest = findPlannedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   const happyRequest = findExecutedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   const failurePlannedRequest = findPlannedRequest({
     requests,
-    requestCountBefore,
     promptSnippet: failurePromptSnippet,
     toolName,
   });
   const failureRequest = findExecutedRequest({
     requests,
-    requestCountBefore,
     promptSnippet: failurePromptSnippet,
     toolName,
   });

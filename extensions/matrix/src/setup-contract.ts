@@ -78,7 +78,10 @@ export function resolveSingleAccountPromotionTarget(params: {
     ([accountId, value]) => accountId && typeof value === "object" && value,
   );
   if (namedAccounts.length === 1) {
-    return namedAccounts[0][0];
+    const onlyAccount = namedAccounts[0];
+    if (onlyAccount) {
+      return onlyAccount[0];
+    }
   }
   if (
     namedAccounts.length > 1 &&

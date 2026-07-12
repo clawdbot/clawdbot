@@ -195,10 +195,11 @@ function validateXaiVideo15Request(req: VideoGenerationRequest): void {
     throw new Error("xAI grok-imagine-video-1.5 does not support video inputs.");
   }
   const inputImages = req.inputImages ?? [];
-  if (inputImages.length !== 1) {
+  const [inputImage, ...additionalImages] = inputImages;
+  if (!inputImage || additionalImages.length > 0) {
     throw new Error("xAI grok-imagine-video-1.5 requires exactly one first-frame image.");
   }
-  if (!isFirstFrameImage(inputImages[0])) {
+  if (!isFirstFrameImage(inputImage)) {
     throw new Error("xAI grok-imagine-video-1.5 supports only an ordinary or first_frame image.");
   }
 }

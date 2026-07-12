@@ -522,7 +522,11 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
     return "";
   }
   if (mediaList.length === 1) {
-    const kind = mediaList[0].kind === "unknown" ? "document" : mediaList[0].kind;
+    const media = mediaList[0];
+    if (!media) {
+      return "";
+    }
+    const kind = media.kind === "unknown" ? "document" : media.kind;
     return `<media:${kind}>`;
   }
   const allImages = mediaList.every((media) => media.kind === "image");

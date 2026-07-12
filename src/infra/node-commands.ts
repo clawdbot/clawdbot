@@ -6,6 +6,7 @@ export const NODE_SYSTEM_RUN_COMMANDS = [
 ] as const;
 
 export const NODE_SYSTEM_NOTIFY_COMMAND = "system.notify";
+export const NODE_FS_LIST_DIR_COMMAND = "fs.listDir";
 export const NODE_BROWSER_PROXY_COMMAND = "browser.proxy";
 export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;

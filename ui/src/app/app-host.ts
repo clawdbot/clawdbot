@@ -918,6 +918,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
+    // The new-session draft shares the chat layout: full-height pane that owns
+    // its scrolling and pins the composer dock to the bottom.
+    const chatLikeRoute = activeRoute === "chat" || activeRoute === "new-session";
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -928,7 +931,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
       <div
-        class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
+        class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
           : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
@@ -940,7 +943,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         <button
           type="button"
           class="shell-nav-backdrop"
-          aria-label="Close navigation"
+          aria-label=${t("nav.close")}
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         <openclaw-app-topbar
@@ -1046,8 +1049,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             `
           : nothing}
         <main
-          class="content ${activeRoute === "chat" ? "content--chat" : ""} ${activeRoute ===
-          "workboard"
+          class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "workboard"
             ? "content--workboard"
             : ""}"
           tabindex="-1"

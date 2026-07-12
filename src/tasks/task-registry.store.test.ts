@@ -35,6 +35,7 @@ import {
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryForTests,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
@@ -179,24 +180,28 @@ describe("task-registry store runtime", () => {
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
-  it("logs restore parser failures and keeps the registry empty", async () => {
+  it("logs restore parser failures and keeps the failure sticky", async () => {
     const warnLogs = createWarnLogCapture("openclaw-task-registry-restore-test");
     const invalidValue = "not-requested";
+    const loadSnapshot = vi.fn(() => {
+      throw new Error(`Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`);
+    });
     try {
       configureTaskRegistryRuntime({
         store: {
-          loadSnapshot: () => {
-            throw new Error(
-              `Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`,
-            );
-          },
+          loadSnapshot,
           saveSnapshot: () => {},
         },
       });
 
-      expect(findTaskByRunId("run-restored")).toBeUndefined();
+      expect(() => findTaskByRunId("run-restored")).toThrow(
+        `Task registry restore failed: Invalid persisted task delivery status: "${invalidValue}"`,
+      );
       expect(await warnLogs.findText(invalidValue)).toContain(invalidValue);
-      expect(getTaskById("task-restored")).toBeUndefined();
+      expect(() => getTaskById("task-restored")).toThrow(
+        `Task registry restore failed: Invalid persisted task delivery status: "${invalidValue}"`,
+      );
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
     } finally {
       warnLogs.cleanup();
     }
@@ -223,11 +228,90 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toBeUndefined();
+    expect(() => findTaskByRunId("run-restored")).toThrow(
+      `Task registry restore failed: Invalid persisted task delivery status: "${invalidValue}"`,
+    );
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain(
       `Failed to restore task registry: Invalid persisted task delivery status: "${invalidValue}"`,
     );
+  });
+
+  it("blocks writes until an explicit reload recovers the registry", () => {
+    const storedTask = createStoredTask();
+    let restoreShouldFail = true;
+    const loadSnapshot = vi.fn(() => {
+      if (restoreShouldFail) {
+        throw new Error("SQLITE_CORRUPT: malformed task registry");
+      }
+      return {
+        tasks: new Map([[storedTask.taskId, storedTask]]),
+        deliveryStates: new Map(),
+      };
+    });
+    const upsertTaskWithDeliveryState = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot,
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState,
+      },
+    });
+
+    expect(() =>
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Must not overwrite hidden durable tasks",
+        status: "queued",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      }),
+    ).toThrow("Task registry restore failed: SQLITE_CORRUPT: malformed task registry");
+    expect(() => getTaskById(storedTask.taskId)).toThrow(
+      "Task registry restore failed: SQLITE_CORRUPT: malformed task registry",
+    );
+    expect(upsertTaskWithDeliveryState).not.toHaveBeenCalled();
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+    restoreShouldFail = false;
+    reloadTaskRegistryFromStore();
+
+    expect(getTaskById(storedTask.taskId)).toMatchObject({ taskId: storedTask.taskId });
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a sticky restore failure during the test reset boundary", () => {
+    const failedLoad = vi.fn(() => {
+      throw new Error("SQLITE_IOERR: failed to read task registry");
+    });
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: failedLoad,
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(() => getTaskById("task-restored")).toThrow(
+      "Task registry restore failed: SQLITE_IOERR: failed to read task registry",
+    );
+    resetTaskRegistryForTests({ persist: false });
+
+    const cleanLoad = vi.fn(() => ({
+      tasks: new Map<string, TaskRecord>(),
+      deliveryStates: new Map<string, TaskDeliveryState>(),
+    }));
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: cleanLoad,
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(getTaskById("task-restored")).toBeUndefined();
+    expect(failedLoad).toHaveBeenCalledTimes(1);
+    expect(cleanLoad).toHaveBeenCalledTimes(1);
   });
 
   it("uses scoped owner lookups for fresh owner task reads", () => {

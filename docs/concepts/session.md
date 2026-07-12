@@ -188,6 +188,7 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 
 ## Further reading
 
+- [Session search](/concepts/session-search) - full-text recall across past transcripts
 - [Session Pruning](/concepts/session-pruning) - trimming tool results
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Session Tools](/concepts/session-tool) - agent tools for cross-session work

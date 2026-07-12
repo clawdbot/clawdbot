@@ -7,7 +7,15 @@ export function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
+// Ed25519 public keys and signatures are fixed-size (<= ~86 base64url chars),
+// so a caller passing far larger input is almost certainly malformed or abusive.
+// Bound the decoded buffer to keep a single request from allocating arbitrary memory.
+const MAX_BASE64URL_DECODE_INPUT_LENGTH = 4096;
+
 export function base64UrlDecode(input: string): Buffer {
+  if (input.length > MAX_BASE64URL_DECODE_INPUT_LENGTH) {
+    throw new Error("base64url input exceeds the maximum allowed length");
+  }
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64");

@@ -149,10 +149,6 @@ enum CLIInstaller {
         return locations
     }
 
-    static func isInstalled() -> Bool {
-        self.installedLocation() != nil
-    }
-
     static func managedExecutableLocation() -> String {
         URL(fileURLWithPath: self.installPrefix())
             .appendingPathComponent("bin/openclaw")

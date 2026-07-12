@@ -214,6 +214,7 @@ export function assertCronJobMatches(params: {
   expectedName: string;
   expectedMessage: string;
   expectedSessionKey: string;
+  expectedSessionTarget?: string;
   expectedAgentId?: string;
 }) {
   if (params.job.name !== params.expectedName) {
@@ -232,7 +233,9 @@ export function assertCronJobMatches(params: {
   if (params.job.sessionKey !== params.expectedSessionKey) {
     throw new Error(`cron sessionKey mismatch: ${params.job.sessionKey ?? "<missing>"}`);
   }
-  if (params.job.sessionTarget !== `session:${params.expectedSessionKey}`) {
+  const expectedSessionTarget =
+    params.expectedSessionTarget ?? `session:${params.expectedSessionKey}`;
+  if (params.job.sessionTarget !== expectedSessionTarget) {
     throw new Error(`cron sessionTarget mismatch: ${params.job.sessionTarget ?? "<missing>"}`);
   }
 }

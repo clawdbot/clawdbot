@@ -59,7 +59,7 @@ describe("agent runtime identity token", () => {
     expect(persistedToken).not.toHaveLength(0);
 
     const secondProcess = await importRuntimeTokenModule();
-    expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).toEqual({
+    await expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
@@ -70,7 +70,9 @@ describe("agent runtime identity token", () => {
     const home = useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
 
-    expect(runtimeToken.verifyAgentRuntimeIdentityToken("not-a-valid-token")).toBeUndefined();
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken("not-a-valid-token"),
+    ).resolves.toBeUndefined();
     expect(fs.existsSync(execApprovalsPath(home))).toBe(false);
   });
 
@@ -91,7 +93,7 @@ describe("agent runtime identity token", () => {
     });
 
     expect(secondToken).not.toBe(token);
-    expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).toBeUndefined();
+    await expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
   });
 
   it("round-trips signed message action context and rejects it after expiry", async () => {
@@ -113,7 +115,7 @@ describe("agent runtime identity token", () => {
       },
     });
 
-    expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 4000)).toMatchObject({
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 4000)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
@@ -129,6 +131,61 @@ describe("agent runtime identity token", () => {
         },
       },
     });
-    expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 5000)).toBeUndefined();
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token, 5000),
+    ).resolves.toBeUndefined();
+  });
+
+  it("queues parallel verifications behind a same-process approvals update", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+    });
+    let verifications: Array<ReturnType<typeof runtimeToken.verifyAgentRuntimeIdentityToken>> = [];
+
+    await updateExecApprovals({
+      update: () => {
+        // Verification can begin while another parallel agent call still owns
+        // the process-local approvals lock. It must queue behind that owner.
+        verifications = Array.from({ length: 8 }, () =>
+          runtimeToken.verifyAgentRuntimeIdentityToken(token),
+        );
+        return null;
+      },
+    });
+
+    await expect(Promise.all(verifications)).resolves.toEqual(
+      Array.from({ length: 8 }, () => ({
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "session-1",
+      })),
+    );
+  });
+
+  it("rechecks message action expiry after waiting for an approvals update", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      messageActionContext: { expiresAtMs: 5000 },
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
+    let verification!: ReturnType<typeof runtimeToken.verifyAgentRuntimeIdentityToken>;
+
+    await updateExecApprovals({
+      update: () => {
+        verification = runtimeToken.verifyAgentRuntimeIdentityToken(token);
+        nowSpy.mockReturnValue(5000);
+        return null;
+      },
+    });
+
+    await expect(verification).resolves.toBeUndefined();
   });
 });

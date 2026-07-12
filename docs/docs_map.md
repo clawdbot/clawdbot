@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
@@ -1507,6 +1508,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Pinning by digest
   - H3: Disk limits
   - H3: Egress policy
   - H2: fleet list
@@ -2856,6 +2858,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pruning vs compaction
   - H2: Further reading
   - H2: Related
+
+## concepts/session-search.md
+
+- Route: /concepts/session-search
+- Headings:
+  - H1: Session search
+  - H2: Visibility and output
+  - H2: Index lifecycle
+  - H2: Session search vs. memory search
 
 ## concepts/session-tool.md
 

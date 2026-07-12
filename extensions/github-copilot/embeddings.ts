@@ -154,8 +154,9 @@ function pickBestModel(available: string[], userModel?: string): string {
       return preferred;
     }
   }
-  if (available.length > 0) {
-    return available[0];
+  const [firstAvailable] = available;
+  if (firstAvailable) {
+    return firstAvailable;
   }
   throw new Error("No embedding models available from GitHub Copilot");
 }

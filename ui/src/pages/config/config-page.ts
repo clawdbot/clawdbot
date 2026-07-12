@@ -97,12 +97,12 @@ const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...AI_AGENTS_SECTION_KEYS,
 ]);
 const KNOWN_CHANNELS = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "whatsapp", label: "WhatsApp" },
-  { id: "signal", label: "Signal" },
-  { id: "imessage", label: "iMessage" },
+  { id: "telegram", labelKey: "configPage.channels.telegram" },
+  { id: "discord", labelKey: "configPage.channels.discord" },
+  { id: "slack", labelKey: "configPage.channels.slack" },
+  { id: "whatsapp", labelKey: "configPage.channels.whatsapp" },
+  { id: "signal", labelKey: "configPage.channels.signal" },
+  { id: "imessage", labelKey: "configPage.channels.imessage" },
 ] as const;
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -205,7 +205,9 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
     configuredIds.length > 0
       ? configuredIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map<string, string>(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
+  const labels = new Map<string, string>(
+    KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
+  );
   return channelIds.map((id) => {
     const value = configured[id];
     const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
@@ -215,7 +217,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
         labels.get(id) ??
         id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
       connected,
-      detail: connected ? "Configured" : undefined,
+      detail: connected ? t("common.configured") : undefined,
     };
   });
 }
@@ -648,7 +650,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
-        text: `Imported ${customTheme.label}.`,
+        text: t("configPage.themeImported", { name: customTheme.label }),
       };
     } catch (error) {
       this.customThemeImportMessage = {
@@ -670,7 +672,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
     this.customThemeImportMessage = {
       kind: "success",
-      text: "Custom theme removed.",
+      text: t("configPage.themeRemoved"),
     };
   }
 
@@ -914,11 +916,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       return nothing;
     }
     const modes = [
-      ["quick", "Simple"],
-      ["advanced", "Advanced"],
+      ["quick", t("configPage.simple")],
+      ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+      <div
+        class="config-view-toggle qs-segmented"
+        role="tablist"
+        aria-label=${t("configPage.settingsView")}
+      >
         ${modes.map(
           ([mode, label]) => html`
             <button

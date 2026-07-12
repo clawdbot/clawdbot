@@ -78,6 +78,25 @@ describe("gradium speech provider", () => {
     expect(result.audioBuffer).toEqual(audioData);
   });
 
+  it("rejects untrusted Gradium baseUrl config before dispatching the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {} as never,
+        providerConfig: { apiKey: "gsk_test123", baseUrl: "https://example.com" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must target api.gradium.ai");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses opus and voiceCompatible for voice-note target", async () => {
     const audioData = Buffer.from("opus-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));

@@ -59,10 +59,6 @@ struct ConfigSchemaNode {
         self.raw["default"]
     }
 
-    var requiredKeys: Set<String> {
-        Set((self.raw["required"] as? [String]) ?? [])
-    }
-
     var typeList: [String] {
         if let type = self.raw["type"] as? String { return [type] }
         if let types = self.raw["type"] as? [String] { return types }

@@ -2259,10 +2259,14 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
     const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
     const match = heading ?? bullet;
-    if (match === null || slugify(match[1]).length === 0) {
+    const toolName = match?.[1];
+    if (!toolName) {
       continue;
     }
-    const id = slugify(match[1]);
+    const id = slugify(toolName);
+    if (!id) {
+      continue;
+    }
     const entry: {
       id: string;
       source: string;

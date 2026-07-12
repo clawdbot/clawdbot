@@ -1110,6 +1110,18 @@ export function loadExecApprovals(): ExecApprovalsFile {
   }
 }
 
+export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
+  try {
+    return await withExecApprovalsReadLock(resolveExecApprovalsPath(), async () =>
+      loadExecApprovalsUnlocked(),
+    );
+  } catch {
+    // Match the synchronous reader's fail-closed contract while allowing
+    // same-process async writers to finish instead of rejecting valid state.
+    return createFailClosedExecApprovalsFallback();
+  }
+}
+
 type ExecApprovalsSyncLock = {
   descriptor: number;
   lockPath: string;

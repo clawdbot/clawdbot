@@ -1,16 +1,26 @@
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assignNativeI18nIds,
   collectNativeI18nEntries,
+  extractNativeI18nCandidates,
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
   syncNativeLocale,
   type NativeI18nEntry,
+  validateNativeLocaleArtifact,
 } from "../../scripts/native-app-i18n.ts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+
+type NativeTranslationArtifact = {
+  entries: Array<{ id: string; source: string; translated: string }>;
+  glossaryHash: string;
+  locale: string;
+  version: 1;
+};
 
 describe("native app i18n inventory", () => {
   it("keeps IDs stable across extractor classification changes", () => {
@@ -149,6 +159,97 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
+  it("joins adjacent literals across supported Swift and Kotlin UI expressions", () => {
+    const swift = extractNativeI18nCandidates(
+      "apple",
+      "apps/ios/Fixture.swift",
+      `
+        struct Fixture: View {
+          var body: some View {
+            SettingsPageHeader(
+              title: "Settings",
+              subtitle: "Named " + "argument")
+              .help("Modifier " + "details")
+            Button("Swift first " + "argument") {}
+            Text(enabled ? "Enabled " + "now" : "Disabled " + "now")
+            Text(LocalizedStringKey("Localized key"))
+          }
+
+          var statusText: String {
+            switch state {
+            case .ready:
+              "Switch " + "ready"
+            default:
+              return "Switch " + "waiting"
+            }
+          }
+        }
+      `,
+      new Set(["Button", "SettingsPageHeader", "Text"]),
+    );
+    const kotlin = extractNativeI18nCandidates(
+      "android",
+      "apps/android/Fixture.kt",
+      `
+        @Composable
+        fun Fixture() {
+          Text("Kotlin first " + "argument")
+          Text(text = "Named " + "argument")
+          Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
+        }
+
+        fun statusText(state: State): String = when (state) {
+          State.Ready -> "When " + "ready"
+          else -> "When " + "waiting"
+        }
+
+        fun messageText(enabled: Boolean): String {
+          if (enabled) return "Return " + "enabled"
+          return "Return " + "disabled"
+        }
+
+        fun warningText(summary: Summary): String =
+          summary.warning ?: "Fallback warning"
+      `,
+    );
+    const sources = [...swift, ...kotlin].map((entry) => entry.source);
+
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        "Named argument",
+        "Modifier details",
+        "Swift first argument",
+        "Enabled now",
+        "Disabled now",
+        "Localized key",
+        "Switch ready",
+        "Switch waiting",
+        "Kotlin first argument",
+        "Open ${row.title}",
+        "When ready",
+        "When waiting",
+        "Return enabled",
+        "Return disabled",
+        "Fallback warning",
+      ]),
+    );
+    expect(
+      sources.some((source) =>
+        [
+          "Named ",
+          "Modifier ",
+          "Enabled ",
+          "Disabled ",
+          "Switch ",
+          "Swift first ",
+          "Kotlin first ",
+          "When ",
+          "Return ",
+        ].includes(source),
+      ),
+    ).toBe(false);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -177,7 +278,11 @@ describe("native app i18n inventory", () => {
         ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Request ID: \\(value)")).toBe(true);
+    expect(
+      entries.some((entry) =>
+        new Set(["Request ID: \\(value)", "Request ID: %@"]).has(entry.source),
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
     expect(entries.some((entry) => entry.source === "Preview · $domain")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
@@ -226,35 +331,23 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(
+      entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
+    ).toBe(true);
+    expect(
       entries.some(
         (entry) =>
-          entry.surface === "android" &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Search OpenClaw",
+          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Message actions",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Reply",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Message actions",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Reply",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") &&
-          entry.kind === "ui-chooser" &&
-          entry.source === "Share message",
+          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Share message",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
@@ -290,7 +383,6 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.kind === "ui-named-argument" &&
           entry.source === "Details",
       ),
     ).toBe(true);
@@ -298,17 +390,13 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.kind === "ui-named-argument" &&
           entry.source === "Open Settings",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
     expect(
       entries.some(
-        (entry) =>
-          entry.path.endsWith("/ChatSheets.swift") &&
-          entry.kind === "ui-named-argument" &&
-          entry.source === "Search sessions",
+        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search sessions",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
@@ -330,6 +418,52 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) => entry.source === "Some channel status checks did not complete."),
     ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some((entry) =>
+        [
+          "Your AI-powered setup helper. It can check status, fix config, ",
+          "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
+          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from ",
+          "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
+          "Paste the token configured on the gateway host. ",
+        ].includes(entry.source),
+      ),
+    ).toBe(false);
     expect(
       entries.some(
         (entry) =>
@@ -565,6 +699,190 @@ describe("native app i18n inventory", () => {
     } finally {
       cleanupTempDirs(tempDirs);
     }
+  });
+
+  it("rejects invalid locale artifact metadata, inventory, and translations", () => {
+    const inventory: NativeI18nEntry[] = [
+      {
+        id: "native.android.greeting",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/android/Greeting.kt",
+        source: "Hello ${name}\nNext",
+        surface: "android",
+      },
+      {
+        id: "native.apple.other",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/ios/Other.swift",
+        source: "Other",
+        surface: "apple",
+      },
+    ];
+    const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
+    const createArtifact = (): NativeTranslationArtifact => ({
+      version: 1,
+      locale: "sv",
+      glossaryHash: emptyGlossaryHash,
+      entries: [
+        {
+          id: inventory[0].id,
+          source: inventory[0].source,
+          translated: "Hej ${name}\nNästa",
+        },
+        {
+          id: inventory[1].id,
+          source: inventory[1].source,
+          translated: "Annat",
+        },
+      ],
+    });
+    const cases: Array<{
+      expected: string;
+      mutate: (artifact: NativeTranslationArtifact) => unknown;
+    }> = [
+      {
+        expected: "version must be 1",
+        mutate: (artifact) => ({ ...artifact, version: 2 }),
+      },
+      {
+        expected: 'locale must be "sv"',
+        mutate: (artifact) => ({ ...artifact, locale: "de" }),
+      },
+      {
+        expected: "glossaryHash must be",
+        mutate: (artifact) => ({ ...artifact, glossaryHash: "stale" }),
+      },
+      {
+        expected: "entry count must be 2, got 1",
+        mutate: (artifact) => ({ ...artifact, entries: artifact.entries.slice(0, 1) }),
+      },
+      {
+        expected: 'entries[0].id must be "native.android.greeting"',
+        mutate: (artifact) => ({ ...artifact, entries: artifact.entries.toReversed() }),
+      },
+      {
+        expected: "entries[0].source does not match inventory",
+        mutate: (artifact) => ({
+          ...artifact,
+          entries: [{ ...artifact.entries[0], source: "Changed" }, artifact.entries[1]],
+        }),
+      },
+      {
+        expected: 'duplicate id "native.android.greeting"',
+        mutate: (artifact) => ({
+          ...artifact,
+          entries: [artifact.entries[0], { ...artifact.entries[1], id: artifact.entries[0].id }],
+        }),
+      },
+      {
+        expected: "entries[1].translated must be nonempty",
+        mutate: (artifact) => ({
+          ...artifact,
+          entries: [artifact.entries[0], { ...artifact.entries[1], translated: "  " }],
+        }),
+      },
+      {
+        expected: "translation changed structural tokens or line breaks",
+        mutate: (artifact) => ({
+          ...artifact,
+          entries: [{ ...artifact.entries[0], translated: "Hej\nNästa" }, artifact.entries[1]],
+        }),
+      },
+      {
+        expected: "translation changed structural tokens or line breaks",
+        mutate: (artifact) => ({
+          ...artifact,
+          entries: [
+            { ...artifact.entries[0], translated: "Hej ${name} Nästa" },
+            artifact.entries[1],
+          ],
+        }),
+      },
+    ];
+
+    expect(validateNativeLocaleArtifact("sv", inventory, createArtifact())).toEqual([]);
+    for (const testCase of cases) {
+      expect(() =>
+        validateNativeLocaleArtifact("sv", inventory, testCase.mutate(createArtifact())),
+      ).toThrow(testCase.expected);
+    }
+  });
+
+  it("emits deterministic advisory translation-quality findings", () => {
+    const inventory: NativeI18nEntry[] = [
+      {
+        id: "native.android.language-picker",
+        kind: "conditional-branch",
+        line: 89,
+        path: "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
+        source: "OpenClaw translations · $languageTag",
+        surface: "android",
+      },
+      {
+        id: "native.android.inspect",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/android/Workshop.kt",
+        source: "Inspect",
+        surface: "android",
+      },
+      {
+        id: "native.apple.inspect",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/ios/Workshop.swift",
+        source: "Inspect",
+        surface: "apple",
+      },
+      {
+        id: "native.android.voice-note",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/android/Voice.kt",
+        source: "Record voice note",
+        surface: "android",
+      },
+    ];
+    const artifact: NativeTranslationArtifact = {
+      version: 1,
+      locale: "id",
+      glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
+      entries: [
+        {
+          id: inventory[0].id,
+          source: inventory[0].source,
+          translated: inventory[0].source,
+        },
+        {
+          id: inventory[1].id,
+          source: inventory[1].source,
+          translated: inventory[1].source,
+        },
+        {
+          id: inventory[2].id,
+          source: inventory[2].source,
+          translated: "Periksa",
+        },
+        {
+          id: inventory[3].id,
+          source: inventory[3].source,
+          translated: "Ghi ghi chú thoại",
+        },
+      ],
+    };
+
+    const findings = validateNativeLocaleArtifact("id", inventory, artifact);
+    expect(findings.map((finding) => `${finding.code}:${finding.id}`)).toEqual([
+      "adjacent-duplicate-word:native.android.voice-note",
+      "android-language-picker-source-equal:native.android.language-picker",
+      "same-source-contradiction:native.android.inspect",
+      "source-equal:native.android.inspect",
+      "source-equal:native.android.language-picker",
+    ]);
+    expect(findings[0]?.words).toEqual(["ghi"]);
+    expect(findings[2]?.relatedIds).toEqual(["native.apple.inspect"]);
   });
 
   it("validates locale refresh arguments before write paths run", () => {

@@ -18,6 +18,7 @@ vi.mock("../../providers/server-runtime.js", () => ({
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
 type GatewayOptions = {
+  forcedRuntime?: string;
   providerBaseUrl?: string;
   providerMode?: string;
   transportBaseUrl?: string;
@@ -102,6 +103,20 @@ describe("startQaLiveLaneGateway", () => {
     await harness.stop();
     expect(gatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards a scenario-selected agent runtime to the gateway child", async () => {
+    await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.4",
+      forcedRuntime: "codex",
+    });
+
+    expect(firstGatewayOptions()?.forcedRuntime).toBe("codex");
   });
 
   it("disables memory search for transport-only live lanes", async () => {

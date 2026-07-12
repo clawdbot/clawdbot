@@ -1170,6 +1170,32 @@ describe("gateway sessions patch", () => {
     expect(entry.groupActivation).toBe("always");
   });
 
+  test("clears a node cwd when changing or clearing the node binding", async () => {
+    const store = mainStoreEntry({
+      execHost: "node",
+      execNode: "worker-1",
+      execCwd: "/workspace/on-worker-1",
+    });
+    const changed = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, execNode: "worker-2" } }),
+    );
+    expect(changed.execNode).toBe("worker-2");
+    expect(changed.execCwd).toBeUndefined();
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          execHost: "node",
+          execNode: "worker-1",
+          execCwd: "/workspace/on-worker-1",
+        }),
+        patch: { key: MAIN_SESSION_KEY, execNode: null },
+      }),
+    );
+    expect(cleared.execNode).toBeUndefined();
+    expect(cleared.execCwd).toBeUndefined();
+  });
+
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, execHost: "edge" },

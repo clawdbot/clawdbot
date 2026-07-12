@@ -48,6 +48,7 @@ public struct DeviceIdentity: Codable, Sendable {
 
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+    @TaskLocal static var scopedStateDirURL: URL?
 
     /// Entitlements are baked into the code signature, so resolve the gate once per process.
     /// Every identity load and DeviceAuthStore read/write resolves the state dir through here;
@@ -84,6 +85,11 @@ enum DeviceIdentityPaths {
     }
 
     private static func stateDirOverrideURL() -> URL? {
+        // Test-scoped stores must win over the process environment. Parallel Swift tests
+        // otherwise race whenever another suite temporarily swaps OPENCLAW_STATE_DIR.
+        if let scopedStateDirURL = self.scopedStateDirURL {
+            return scopedStateDirURL
+        }
         for key in self.stateDirEnv {
             if let raw = getenv(key) {
                 let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,6 +194,17 @@ public enum DeviceIdentityStore {
 
     public static func loadOrCreate() -> DeviceIdentity {
         self.loadOrCreate(profile: .primary)
+    }
+
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation) async rethrows -> T
+    {
+        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
+            url,
+            operation: operation,
+            isolation: isolation)
     }
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {

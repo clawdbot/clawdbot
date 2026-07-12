@@ -497,7 +497,7 @@ describe("gateway tool defaults", () => {
           sessionId: "session-1",
         });
         expect(token).toEqual(expect.any(String));
-        expect(verifyAgentRuntimeIdentityToken(token)).toMatchObject({
+        await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
           messageActionContext: {
             sessionId: "session-1",
             requesterAccountId: "default",
@@ -704,7 +704,9 @@ describe("gateway tool defaults", () => {
       turnSourceAccountId: "work",
       turnSourceThreadId: 42,
     });
-    expect(verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken ?? "")).toMatchObject({
+    await expect(
+      verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken ?? ""),
+    ).resolves.toMatchObject({
       agentId: "ops",
       sessionKey: "agent:ops:telegram:direct:alice",
     });

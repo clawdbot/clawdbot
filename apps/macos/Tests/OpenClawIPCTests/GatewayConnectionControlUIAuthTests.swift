@@ -1,7 +1,7 @@
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private final class ControlUIEndpointSource: @unchecked Sendable {
     private let lock = NSLock()
@@ -91,7 +91,7 @@ struct GatewayConnectionControlUIAuthTests {
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(stateDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             _ = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,
@@ -151,7 +151,7 @@ struct GatewayConnectionControlUIAuthTests {
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(stateDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             _ = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,

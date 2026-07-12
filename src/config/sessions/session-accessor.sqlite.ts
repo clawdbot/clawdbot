@@ -92,6 +92,10 @@ import type {
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  deleteSessionTranscriptIndexInTransaction,
+  indexAppendedTranscriptEventInTransaction,
+} from "./session-transcript-index.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import {
   foldedSessionKeyAliasCandidates,
@@ -4353,6 +4357,9 @@ function deleteSqliteTranscriptEventsInTransaction(
     database.db,
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
+  // FTS rows have no FK onto transcript_events; the search index must drop
+  // inside the same transaction or deleted transcripts stay searchable.
+  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   return (result.numAffectedRows ?? 0n) > 0n;
 }
 
@@ -5068,6 +5075,13 @@ function appendTranscriptEventInTransaction(
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
+  indexAppendedTranscriptEventInTransaction(database.db, {
+    sessionId: scope.sessionId,
+    seq,
+    event,
+    eventId: identity?.eventId ?? null,
+    createdAt,
+  });
   if (!identity) {
     return true;
   }
@@ -5147,6 +5161,13 @@ function appendTranscriptEventRowInTransaction(
       created_at: createdAt,
     }),
   );
+  indexAppendedTranscriptEventInTransaction(database.db, {
+    sessionId: scope.sessionId,
+    seq,
+    event,
+    eventId: identity?.eventId ?? null,
+    createdAt,
+  });
   if (!identity) {
     return true;
   }

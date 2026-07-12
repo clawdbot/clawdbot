@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
@@ -36,6 +36,7 @@ import { readChatMessagesFromCache } from "./session-message-cache.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
+  applySettings: (next: UiSettings) => void;
   basePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
@@ -49,18 +50,9 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   settings?: Partial<UiSettings>;
 };
 
-const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() => ({
-  executeSlashCommandMock: vi.fn(),
-  setLastActiveSessionKeyMock: vi.fn(),
-}));
+const executeSlashCommandMock = vi.hoisted(() => vi.fn());
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
-vi.mock("../../app/settings.ts", () => ({
-  normalizeChatAutoScrollMode: (value: unknown) =>
-    value === "always" || value === "off" ? value : "near-bottom",
-  setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
-}));
 
 vi.mock("./chat-command-executor.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chat-command-executor.ts")>();
@@ -213,6 +205,7 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
 }
 
 function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
+  const settings = { lastActiveSessionKey: "", ...overrides?.settings };
   const renderLifecycle: RenderLifecycle = {
     invalidate: vi.fn(),
     afterCommit: (effect) => {
@@ -283,7 +276,19 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
+    applySettings: vi.fn((next: UiSettings) => {
+      // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
+      Object.assign(settings, {
+        chatShowThinking: next.chatShowThinking,
+        chatShowToolCalls: next.chatShowToolCalls,
+        chatPersistCommentary: next.chatPersistCommentary,
+        chatAutoScroll: next.chatAutoScroll,
+        chatSendShortcut: next.chatSendShortcut,
+        splitRatio: next.splitRatio,
+      });
+    }),
     ...overrides,
+    settings,
   };
   const sessions =
     overrides?.sessions ??
@@ -1231,7 +1236,6 @@ describe("handleSendChat", () => {
 
   beforeEach(() => {
     executeSlashCommandMock.mockReset();
-    setLastActiveSessionKeyMock.mockReset();
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
 
@@ -7135,7 +7139,7 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host.chatQueue).toEqual([]);
     expect(host.chatQueueByScope[originalScopeKey]).toBeUndefined();
-    expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
+    expect(host.applySettings).not.toHaveBeenCalled();
   });
 
   it.each(["terminal error", "ambiguous acknowledgement"] as const)(
@@ -7196,7 +7200,7 @@ describe("handleSendChat", () => {
       ]);
       expect(host.lastError).toBeNull();
       expect(host.chatError).toBeNull();
-      expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
+      expect(host.applySettings).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledTimes(1);
     },
   );
@@ -7328,7 +7332,10 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-1");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(setLastActiveSessionKeyMock).toHaveBeenCalledWith(expect.anything(), "agent:main:main");
+    expect(host.applySettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastActiveSessionKey: "agent:main:main" }),
+    );
+    expect(host.settings?.lastActiveSessionKey).toBe("");
   });
 
   it("restores queued steer items when chat.send returns terminal error", async () => {
@@ -7354,7 +7361,7 @@ describe("handleSendChat", () => {
     expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toStrictEqual([original]);
     expect(host.lastError).toBe("Steer failed before it reached the run; try again.");
-    expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
+    expect(host.applySettings).not.toHaveBeenCalled();
   });
 
   it("removes pending steer indicators when the run finishes", () => {
@@ -7619,9 +7626,4 @@ describe("handleAbortChat", () => {
     expect(host.pendingAbort).toBeUndefined();
     expect(host.chatMessage).toBe("draft");
   });
-});
-
-afterAll(() => {
-  vi.doUnmock("../../app/settings.ts");
-  vi.resetModules();
 });

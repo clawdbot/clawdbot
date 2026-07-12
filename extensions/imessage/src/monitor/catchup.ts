@@ -233,8 +233,7 @@ export function capFailureRetriesMap(
   // debugging).
   entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const capped: Record<string, number> = {};
-  for (let i = 0; i < entries.length && i < maxSize; i++) {
-    const [guid, count] = entries[i];
+  for (const [guid, count] of entries.slice(0, maxSize)) {
     capped[guid] = count;
     if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
       delete capped[guid];

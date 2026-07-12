@@ -126,6 +126,7 @@ function createReplyOperation(): ReplyOperation {
     markWaitingForDeferredMaintenance: vi.fn(),
     markDeferredMaintenanceWaitEnded: vi.fn(),
     updateSessionId: vi.fn(),
+    updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),

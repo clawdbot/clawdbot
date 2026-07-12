@@ -240,6 +240,25 @@ describe("buildQaGatewayConfig", () => {
     });
   });
 
+  it("keeps forced Codex cells free of OpenClaw request params", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      forcedRuntime: "codex",
+      fastMode: true,
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.4",
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({});
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({});
+    expect(cfg.agents?.list?.[0]?.fastModeDefault).toBe(true);
+  });
+
   it("does not force OpenAI when the frontier lane only needs Anthropic and Google", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

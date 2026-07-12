@@ -5,6 +5,19 @@ import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
+  resolveDefaultAgentId: vi.fn(() => "main"),
+  resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
+    sessionKey === "main" ? "agent:main:main" : sessionKey,
+  ),
+  resolveStoredSessionKeyForAgentStore: vi.fn(
+    ({ agentId, sessionKey }: { agentId: string; sessionKey: string }) =>
+      sessionKey === "global" || sessionKey === "unknown"
+        ? sessionKey
+        : sessionKey.startsWith("agent:")
+          ? sessionKey
+          : `agent:${agentId}:${sessionKey}`,
+  ),
+  searchSessionTranscripts: vi.fn(() => ({ hits: [], indexing: false, truncated: false })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
   loadSessionEntry: vi.fn(() => ({
@@ -59,6 +72,9 @@ describe("embedded gateway stub", () => {
     runtime.readSessionMessagesPageWithStatsAsync.mockClear();
     runtime.loadSessionEntry.mockClear();
     runtime.resolveSessionAgentId.mockClear();
+    runtime.resolveSessionStoreKey.mockClear();
+    runtime.resolveStoredSessionKeyForAgentStore.mockClear();
+    runtime.searchSessionTranscripts.mockClear();
     runtime.loadCombinedSessionStoreForGateway.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
   });
@@ -115,6 +131,57 @@ describe("embedded gateway stub", () => {
         params: { key: "missing" },
       }),
     ).rejects.toThrow("No session found: missing");
+  });
+
+  it("canonicalizes embedded session search filters", async () => {
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway({
+      method: "sessions.search",
+      params: {
+        agentId: "main",
+        query: "needle",
+        sessionKeys: ["main", "agent:main:other"],
+        limit: 3,
+      },
+    });
+
+    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(1, {
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(2, {
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      agentId: "main",
+      sessionKey: "agent:main:other",
+    });
+    expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
+      agentId: "main",
+      query: "needle",
+      limit: 3,
+      sessionKeys: ["agent:main:main", "agent:main:other"],
+    });
+  });
+
+  it("rejects empty session-key filters instead of widening the search", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({ method: "sessions.search", params: { query: "needle", sessionKeys: [] } }),
+    ).rejects.toThrow("sessionKeys must be a non-empty array of session keys");
+    await expect(
+      callGateway({ method: "sessions.search", params: { query: "needle", sessionKeys: [7] } }),
+    ).rejects.toThrow("sessionKeys must be a non-empty array of session keys");
+    expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized embedded session search queries", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({ method: "sessions.search", params: { query: "x".repeat(4097) } }),
+    ).rejects.toThrow("query must not exceed 4096 characters");
+    expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 
   it("projects embedded chat history through the shared display projector", async () => {

@@ -27,6 +27,7 @@ import {
   parseGatewayLogAudit,
   parseLaunchctlArguments,
   prepareGatewaySuspension,
+  replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
@@ -502,6 +503,29 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("replaces a wrapped LaunchAgent entrypoint without inserting another argument", () => {
+    const snapshot = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
+    const source = "/Users/test/openclaw/dist/index.js";
+    const original = [
+      "/bin/sh",
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh",
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env",
+      "/opt/homebrew/bin/node",
+      snapshot,
+      "gateway",
+      "--port",
+      "18789",
+    ];
+
+    expect(replaceLaunchAgentProgramArgument(original, 4, snapshot, source)).toEqual([
+      ...original.slice(0, 4),
+      source,
+      ...original.slice(5),
+    ]);
+    expect(original).toHaveLength(8);
+    expect(original[4]).toBe(snapshot);
+  });
+
   test("fails closed when Gateway service retargeting does not stick", () => {
     const checkout = "/Users/test/openclaw";
     const snapshot = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
@@ -790,26 +814,57 @@ describe("openclaw live updater", () => {
     expect(inspectBuildState(mirror, git(mirror, "rev-parse", "HEAD")).current).toBe(false);
   });
 
-  test("resumes a prepared suspension when the managed Gateway stop fails", () => {
+  test("accepts native stopped proof when the stop command reports an error", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+    const resumed: string[] = [];
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          if (command === process.execPath && args.includes("stop")) {
+            throw new Error("stop failed after stopping");
+          }
+          commands.runCommand(command, args);
+        },
+        resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+          resumed.push(suspensionId);
+        },
+      },
+    );
+
+    expect(output.ok).toBe(true);
+    expect(resumed).toEqual([]);
+  });
+
+  test("resumes a prepared suspension when stopped proof never converges", () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const resumed: string[] = [];
+    let proofAttempts = 0;
+    let sleepAttempts = 0;
 
     expect(() =>
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
-          runCommand(command: string, args: string[]) {
-            if (command === process.execPath && args.includes("stop")) {
-              throw new Error("stop failed");
-            }
+          proveGatewayStopped: () => {
+            proofAttempts += 1;
+            throw new Error("listener still present");
+          },
+          sleep: () => {
+            sleepAttempts += 1;
           },
           resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
             resumed.push(suspensionId);
           },
         },
       ),
-    ).toThrow("stop failed");
+    ).toThrow("native stopped proof did not converge");
+    expect(proofAttempts).toBe(100);
+    expect(sleepAttempts).toBe(99);
     expect(resumed).toEqual(["fixture-suspension"]);
   });
 
@@ -1138,7 +1193,7 @@ describe("openclaw live updater", () => {
         proveGatewayStopped: () => {
           stoppedProofAttempts += 1;
           commands.calls.push("prove gateway stopped");
-          if (stoppedProofAttempts === 1) {
+          if (stoppedProofAttempts <= 2) {
             throw new Error("snapshot still owns its listener");
           }
           return {
@@ -1147,6 +1202,9 @@ describe("openclaw live updater", () => {
             portStatus: "free",
             proofSource: "fixture",
           };
+        },
+        sleep: (ms: number) => {
+          commands.calls.push(`sleep ${ms}`);
         },
         repointGatewayDeployment: (
           _checkout: string,
@@ -1171,7 +1229,7 @@ describe("openclaw live updater", () => {
     );
 
     expect(controlEntrypoint).toBe(source);
-    expect(stoppedProofAttempts).toBe(2);
+    expect(stoppedProofAttempts).toBe(3);
     expect(output.gatewayDeployment).toMatchObject({
       changed: true,
       entrypoint: source,
@@ -1183,6 +1241,8 @@ describe("openclaw live updater", () => {
       "pnpm install --frozen-lockfile",
       "pnpm build",
       `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "sleep 100",
       "prove gateway stopped",
       `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,

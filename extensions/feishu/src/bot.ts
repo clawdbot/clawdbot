@@ -1736,10 +1736,14 @@ export async function handleFeishuMessage(params: {
         }
       } else {
         const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
-        for (let i = 0; i < results.length; i++) {
-          if (results[i].status === "rejected") {
+        for (const [i, result] of results.entries()) {
+          if (result.status === "rejected") {
+            const agentId = broadcastAgents.at(i);
+            if (agentId === undefined) {
+              continue;
+            }
             log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(result.reason)}`,
             );
           }
         }

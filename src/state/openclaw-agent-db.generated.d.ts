@@ -120,6 +120,52 @@ export interface SessionRoutes {
   updated_at: number;
 }
 
+export interface SessionTranscriptFts {
+  message_id: string | null;
+  role: string | null;
+  session_id: string | null;
+  text: string | null;
+  timestamp: string | null;
+}
+
+export interface SessionTranscriptFtsConfig {
+  k: string;
+  v: string | null;
+}
+
+export interface SessionTranscriptFtsContent {
+  c0: string | null;
+  c1: string | null;
+  c2: string | null;
+  c3: string | null;
+  c4: string | null;
+  id: Generated<number>;
+}
+
+export interface SessionTranscriptFtsData {
+  block: Uint8Array | null;
+  id: Generated<number>;
+}
+
+export interface SessionTranscriptFtsDocsize {
+  id: Generated<number>;
+  sz: Uint8Array | null;
+}
+
+export interface SessionTranscriptFtsIdx {
+  pgno: string | null;
+  segid: string;
+  term: string;
+}
+
+export interface SessionTranscriptIndexState {
+  indexed_seq: number;
+  leaf_event_id: string | null;
+  needs_rebuild: Generated<number>;
+  session_id: string;
+  updated_at: number;
+}
+
 export interface Sessions {
   account_id: string | null;
   agent_harness_id: string | null;
@@ -182,6 +228,13 @@ export interface DB {
   session_conversations: SessionConversations;
   session_entries: SessionEntries;
   session_routes: SessionRoutes;
+  session_transcript_fts: SessionTranscriptFts;
+  session_transcript_fts_config: SessionTranscriptFtsConfig;
+  session_transcript_fts_content: SessionTranscriptFtsContent;
+  session_transcript_fts_data: SessionTranscriptFtsData;
+  session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
+  session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;

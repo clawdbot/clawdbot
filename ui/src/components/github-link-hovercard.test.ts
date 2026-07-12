@@ -2,14 +2,23 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { i18n } from "../i18n/index.ts";
 import {
+  GitHubLinkHovercardProvider,
   parseGitHubIssueOrPullRequestLink,
-  type GitHubLinkHovercardProvider,
 } from "./github-link-hovercard.ts";
+
+const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
+
+// The non-isolated UI runner resets modules but not customElements. Register
+// the current class graph so locale updates reach the mounted test element.
+class TestGitHubLinkHovercardProvider extends GitHubLinkHovercardProvider {}
+
+customElements.define(GITHUB_LINK_HOVERCARD_ELEMENT_NAME, TestGitHubLinkHovercardProvider);
 
 function createLink(href: string, label = "GitHub item") {
   const provider = document.createElement(
-    "openclaw-github-link-hovercard-provider",
+    GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
   ) as GitHubLinkHovercardProvider;
   const anchor = document.createElement("a");
   anchor.href = href;
@@ -66,7 +75,8 @@ describe("openclaw-github-link-hovercard-provider", () => {
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -183,5 +193,55 @@ describe("openclaw-github-link-hovercard-provider", () => {
 
     expect(anchor.getAttribute("aria-describedby")).toBe("existing-description");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("rerenders an open preview when the locale changes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      closedAt: null,
+      comments: 1,
+      createdAt: "2026-07-05T08:00:00Z",
+      kind: "issue",
+      login: "octocat",
+      number: 99815,
+      owner: "openclaw",
+      repo: "openclaw",
+      state: "open",
+      stateReason: null,
+      title: "Keep hover previews compact",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/issues/99815",
+      "#99815",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    await hover(anchor);
+
+    i18n.registerTranslation("pt-BR", {
+      githubPreview: {
+        loading: "Carregando detalhes do GitHub…",
+        unavailable: "Prévia do GitHub indisponível",
+        states: {
+          merged: "Mesclado",
+          draft: "Rascunho",
+          open: "Aberto",
+          closed: "Fechado",
+          notPlanned: "Não planejado",
+        },
+        file: "{count} arquivo",
+        files: "{count} arquivos",
+        comment: "{count} comentário",
+        comments: "{count} comentários",
+        pullRequest: "pull request",
+        issue: "issue",
+        ariaLabel: "{state} {kind} {repo} #{number}: {title}, por {author}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const card = document.querySelector<HTMLElement>(".github-link-hovercard");
+    expect(card?.textContent).toContain("Aberto");
+    expect(card?.textContent).toContain("1 comentário");
+    expect(card?.getAttribute("aria-label")).toContain("por octocat");
   });
 });

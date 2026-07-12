@@ -143,13 +143,17 @@ export function normalizeClaudePermissionArgs(
   }
   const normalized: string[] = [];
   let hasPermissionMode = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
       continue;
     }
     if (arg === CLAUDE_PERMISSION_MODE_ARG) {
-      const maybeValue = args[i + 1];
+      const maybeValue = args.at(index + 1);
       if (
         typeof maybeValue === "string" &&
         maybeValue.trim().length > 0 &&
@@ -160,7 +164,7 @@ export function normalizeClaudePermissionArgs(
           normalized.push(arg);
           normalized.push(maybeValue);
         }
-        i += 1;
+        skipNext = true;
       }
       continue;
     }
@@ -189,10 +193,14 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   }
   const normalized: string[] = [];
   let hasSettingSources = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     if (arg === CLAUDE_SETTING_SOURCES_ARG) {
-      const maybeValue = args[i + 1];
+      const maybeValue = args.at(index + 1);
       if (
         typeof maybeValue === "string" &&
         maybeValue.trim().length > 0 &&
@@ -200,7 +208,7 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
       ) {
         hasSettingSources = true;
         normalized.push(arg, CLAUDE_SAFE_SETTING_SOURCES);
-        i += 1;
+        skipNext = true;
       }
       continue;
     }

@@ -2274,8 +2274,10 @@ async function deliverOutboundPayloadsCore(
             presentation: effectivePayload.presentation,
             interactive: effectivePayload.interactive,
             channelData: effectivePayload.channelData,
+            location: effectivePayload.location,
           }) ||
-          effectivePayload.audioAsVoice === true)
+          effectivePayload.audioAsVoice === true ||
+          effectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(

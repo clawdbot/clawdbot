@@ -793,6 +793,7 @@ final class MacNodeModeCoordinator: NSObject {
             OpenClawSystemCommand.run.rawValue,
             OpenClawSystemCommand.execApprovalsGet.rawValue,
             OpenClawSystemCommand.execApprovalsSet.rawValue,
+            OpenClawFileSystemCommand.listDir.rawValue,
         ]
 
         let capsSet = Set(caps)

@@ -2620,6 +2620,9 @@ async function waitForWhatsAppSutReactionSequenceToTrigger(
         continue;
       }
       const expectedEmoji = params.emojis[matched.length];
+      if (!expectedEmoji) {
+        return false;
+      }
       if (matchesWhatsAppSutReactionToTrigger(message, context, { emoji: expectedEmoji })) {
         matched.push(message);
         lastMatchedObservedAtMs = observedAtMs;
@@ -2706,24 +2709,25 @@ async function callWhatsAppGatewaySendConcurrently(
   // real Gateway overlap so this probe reaches the shared WhatsApp socket concurrently.
   const connection = resolveWhatsAppGatewayRpcConnection(context.gateway);
   const clients = await Promise.all(
-    sends.map(() =>
-      startQaGatewayRpcClient({
+    sends.map(async (send) => ({
+      send,
+      client: await startQaGatewayRpcClient({
         logs: connection.logs,
         token: connection.token,
         wsUrl: connection.wsUrl,
       }),
-    ),
+    })),
   );
   try {
     await Promise.all(
-      clients.map((client, index) =>
-        client.request("send", buildWhatsAppGatewaySendRequest(context, sends[index]), {
+      clients.map(({ client, send }) =>
+        client.request("send", buildWhatsAppGatewaySendRequest(context, send), {
           timeoutMs: 60_000,
         }),
       ),
     );
   } finally {
-    await Promise.all(clients.map((client) => client.stop()));
+    await Promise.all(clients.map(({ client }) => client.stop()));
   }
 }
 

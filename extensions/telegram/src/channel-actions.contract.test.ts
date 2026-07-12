@@ -58,6 +58,22 @@ describe("telegram actions contract", () => {
     expect(capabilities).toContain("inlineButtons");
   });
 
+  it("advertises rich send parameters without adding Telegram-only actions", () => {
+    const discovery = telegramPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: { telegram: { botToken: "test-token-placeholder" } },
+      } as OpenClawConfig,
+    });
+    const schema = discovery?.schema;
+    const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
+    const properties = Object.assign({}, ...contributions.map((entry) => entry.properties));
+
+    expect(discovery?.actions).not.toContain("sendVideoNote");
+    expect(discovery?.actions).not.toContain("sendLocation");
+    expect(properties).toHaveProperty("asVideoNote");
+    expect(properties).toHaveProperty("location");
+  });
+
   it("does not advertise inline buttons for non-empty legacy Telegram capabilities without inlineButtons", () => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {
@@ -214,5 +230,35 @@ describe("telegram actions contract", () => {
       presentation,
       channelData: { telegram: { quoteText: "snake case quote" } },
     });
+  });
+
+  it("routes video-note and location hints through durable core delivery", async () => {
+    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+
+    await expect(
+      prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { asVideoNote: true },
+        },
+        to: "123456",
+        payload: { mediaUrl: "file:///tmp/note.mp4", videoAsNote: true },
+      }),
+    ).resolves.toEqual({ mediaUrl: "file:///tmp/note.mp4", videoAsNote: true });
+    await expect(
+      prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { location },
+        },
+        to: "123456",
+        payload: { location },
+      }),
+    ).resolves.toEqual({ location });
   });
 });

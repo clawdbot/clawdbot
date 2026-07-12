@@ -1002,10 +1002,11 @@
   padding: 0 12px 10px 12px;
 }
 
-/* Reading indicator = working spark: pulsing brand mark where the reply will
+/* Reading indicator = working claw: the brand pincer where the reply will
    materialize while the agent works with nothing visibly streaming. Bubble
    chrome and sizing come from .chat-bubble.chat-reading-indicator
-   (components.css). Filled, not stroked: it reads as a solid star at 16px. */
+   (components.css). Filled silhouette; 18px because the claw is denser than
+   a star glyph. */
 .chat-reading-indicator {
   display: inline-flex;
   align-items: center;
@@ -1013,30 +1014,63 @@
 }
 
 .chat-reading-indicator svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   fill: currentColor;
   stroke: none;
-  animation: chatWorkingSparkPulse 1.6s ease-in-out infinite;
-  will-change: transform, opacity;
+  animation: chatWorkingClawBreath 2.8s ease-in-out infinite;
+  will-change: opacity;
 }
 
-@keyframes chatWorkingSparkPulse {
+/* The upper jaw hinges at the palm joint. Rest is slightly open — the open
+   notch is what reads "claw" at 18px — and the pinch is a brief blip late in
+   the cycle, mirroring the favicon mascot's snap timing (mostly still). */
+.chat-reading-indicator svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-8deg);
+  animation: chatWorkingClawSnap 2.8s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes chatWorkingClawBreath {
   0%,
   100% {
-    opacity: 0.4;
-    transform: scale(0.86);
+    opacity: 0.55;
   }
 
   50% {
     opacity: 1;
-    transform: scale(1);
+  }
+}
+
+@keyframes chatWorkingClawSnap {
+  0%,
+  70%,
+  100% {
+    transform: rotate(-8deg);
+  }
+
+  78% {
+    transform: rotate(3deg);
+  }
+
+  86% {
+    transform: rotate(-11deg);
+  }
+
+  94% {
+    transform: rotate(-8deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator svg {
+  .chat-reading-indicator svg,
+  .chat-reading-indicator svg .claw-icon__jaw {
     animation: none;
+  }
+
+  .chat-reading-indicator svg {
     opacity: 0.85;
   }
 }

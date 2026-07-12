@@ -7,14 +7,6 @@ import AppKit
 enum OpenClawChatTypography {
     static let bodySize: CGFloat = 17
 
-    static var title3: Font {
-        display(size: 22, weight: .bold, relativeTo: .title2)
-    }
-
-    static var title3SemiBold: Font {
-        display(size: 22, weight: .semibold, relativeTo: .title2)
-    }
-
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
     }

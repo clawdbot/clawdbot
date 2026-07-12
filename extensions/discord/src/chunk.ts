@@ -1,4 +1,5 @@
 // Discord plugin module implements chunk behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
@@ -93,7 +94,7 @@ function clampToCodePointBoundary(text: string, index: number) {
 
 function findWhitespaceBreak(window: string) {
   for (let i = window.length - 1; i >= 0; i--) {
-    if (/\s/.test(window[i])) {
+    if (/\s/.test(window.charAt(i))) {
       // Return the separator index so whitespace stays with the next segment.
       return i;
     }
@@ -244,7 +245,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
           currentLines += 1;
         }
       } else {
-        current = segment;
+        current = expectDefined(segment, "current Discord chunk segment");
         currentLines = 1;
       }
     }
@@ -305,7 +306,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   const adjusted = [...chunks];
   for (let i = 0; i < adjusted.length; i++) {
     const isLast = i === adjusted.length - 1;
-    const current = adjusted[i];
+    const current = expectDefined(adjusted[i], "Discord chunk adjustment index");
 
     // Ensure current chunk closes italics so Discord renders it italicized.
     const needsClosing = !current.trimEnd().endsWith("_");
@@ -318,7 +319,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     }
 
     // Re-open italics on the next chunk if needed.
-    const next = adjusted[i + 1];
+    const next = expectDefined(adjusted[i + 1], "non-final Discord chunk successor");
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
     const nextBody = next.slice(leadingWhitespaceLen);

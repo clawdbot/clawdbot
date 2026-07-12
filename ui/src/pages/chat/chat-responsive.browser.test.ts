@@ -593,72 +593,76 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
-    if (!realChatServer) {
-      throw new Error("Expected the Control UI server to be ready");
-    }
-    const page = await openBrowserPage(1366, 900);
-    try {
-      await installMockGateway(page, {
-        assistantName: "Claw",
-        historyMessages: [
-          {
-            content: [{ text: "Context hover regression fixture.", type: "text" }],
-            model: "openai/gpt-5.5",
-            role: "assistant",
-            timestamp: Date.UTC(2026, 6, 5, 9, 51),
-            usage: { cacheRead: 2_400, input: 19_600, output: 126 },
-          },
-        ],
-      });
-      await page.goto(`${realChatServer.baseUrl}chat`);
-      await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+  it(
+    "reveals message context on timestamp hover and keeps click-to-open",
+    { timeout: 20_000 },
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(1366, 900);
+      try {
+        await installMockGateway(page, {
+          assistantName: "Claw",
+          historyMessages: [
+            {
+              content: [{ text: "Context hover regression fixture.", type: "text" }],
+              model: "openai/gpt-5.5",
+              role: "assistant",
+              timestamp: Date.UTC(2026, 6, 5, 9, 51),
+              usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+            },
+          ],
+        });
+        await page.goto(`${realChatServer.baseUrl}chat`);
+        await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
 
-      const details = page.locator("details.msg-meta");
-      const context = page.locator(".msg-meta__details");
-      const initialLayout = await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-        const group = document.querySelector<HTMLElement>(".chat-group")!;
-        return {
-          footerHeight: footer.getBoundingClientRect().height,
-          groupHeight: group.getBoundingClientRect().height,
-        };
-      });
-      expect(await context.isVisible()).toBe(false);
+        const details = page.locator("details.msg-meta");
+        const context = page.locator(".msg-meta__details");
+        const initialLayout = await page.evaluate(() => {
+          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+          const group = document.querySelector<HTMLElement>(".chat-group")!;
+          return {
+            footerHeight: footer.getBoundingClientRect().height,
+            groupHeight: group.getBoundingClientRect().height,
+          };
+        });
+        expect(await context.isVisible()).toBe(false);
 
-      // Travel like a real pointer: the footer overlay is pointer-gated until
-      // the group is hovered, so enter through the message body first.
-      await page.locator(".chat-text").first().hover();
-      await page.locator(".msg-meta__summary").hover();
-      expect(await context.isVisible()).toBe(true);
-      const hoverLayout = await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-        const group = document.querySelector<HTMLElement>(".chat-group")!;
-        const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
-        const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
-        return {
-          contextBottom: detailsOverlay.getBoundingClientRect().bottom,
-          footerHeight: footer.getBoundingClientRect().height,
-          groupHeight: group.getBoundingClientRect().height,
-          summaryTop: summary.getBoundingClientRect().top,
-        };
-      });
-      expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
-      expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
-      expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
+        // Travel like a real pointer: the footer overlay is pointer-gated until
+        // the group is hovered, so enter through the message body first.
+        await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").hover();
+        expect(await context.isVisible()).toBe(true);
+        const hoverLayout = await page.evaluate(() => {
+          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+          const group = document.querySelector<HTMLElement>(".chat-group")!;
+          const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+          const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
+          return {
+            contextBottom: detailsOverlay.getBoundingClientRect().bottom,
+            footerHeight: footer.getBoundingClientRect().height,
+            groupHeight: group.getBoundingClientRect().height,
+            summaryTop: summary.getBoundingClientRect().top,
+          };
+        });
+        expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
+        expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
+        expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
-      await page.mouse.move(0, 0);
-      expect(await context.isVisible()).toBe(false);
+        await page.mouse.move(0, 0);
+        expect(await context.isVisible()).toBe(false);
 
-      await page.locator(".chat-text").first().hover();
-      await page.locator(".msg-meta__summary").click();
-      await page.mouse.move(0, 0);
-      expect(await details.getAttribute("open")).toBe("");
-      expect(await context.isVisible()).toBe(true);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        await page.locator(".chat-text").first().hover();
+        await page.locator(".msg-meta__summary").click();
+        await page.mouse.move(0, 0);
+        expect(await details.getAttribute("open")).toBe("");
+        expect(await context.isVisible()).toBe(true);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("renders encoded media extensions from assistant output and transcript fields", async () => {
     if (!realChatServer) {

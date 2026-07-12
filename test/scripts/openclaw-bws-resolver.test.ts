@@ -56,4 +56,42 @@ describe("openclaw-bws-resolver", () => {
       errors: {},
     });
   });
+
+  it("returns bounded error codes for missing and ambiguous keys", () => {
+    const dir = makeTempDir();
+    const fakeBwsPath = path.join(dir, "bws");
+    writeFileSync(
+      fakeBwsPath,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify([",
+        '  { key: "duplicate", value: "first" },',
+        '  { key: "duplicate", value: "second" },',
+        "]));",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    chmodSync(fakeBwsPath, 0o755);
+
+    const result = spawnSync(process.execPath, [resolverPath], {
+      encoding: "utf8",
+      env: {
+        BWS_ACCESS_TOKEN: "test-token",
+        BWS_BIN: fakeBwsPath,
+        PATH: process.env.PATH ?? "",
+      },
+      input: JSON.stringify({ protocolVersion: 1, ids: ["missing", "duplicate"] }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        missing: { code: "NOT_FOUND" },
+        duplicate: { code: "AMBIGUOUS_DUPLICATE_KEY" },
+      },
+    });
+  });
 });

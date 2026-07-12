@@ -56,9 +56,9 @@ flow:
         - set: startIndex
           value:
             expr: state.getSnapshot().messages.length
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -76,7 +76,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
+                      expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
                   - expr: liveTurnTimeoutMs(env, 60000)
                   - 500
               - call: waitForOutboundMessage
@@ -93,7 +93,7 @@ flow:
             catch:
               - set: directReplyDebugRequests
                 value:
-                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputText: String(request.allInputText ?? '').slice(0, 400), finalText: String(request.finalText ?? '').slice(0, 200), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 200) : null })) : []"
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputText: String(request.allInputText ?? '').slice(0, 400), finalText: String(request.finalText ?? '').slice(0, 200), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 200) : null })) : []"
               - throw:
                   expr: "`direct reply marker missing: ${directReplyError?.message ?? directReplyError}; transcript=${formatTransportTranscript(state, { conversationId })}; requests=${JSON.stringify(directReplyDebugRequests)}`"
         - call: waitForCondition

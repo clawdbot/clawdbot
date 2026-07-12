@@ -28,7 +28,11 @@ vi.mock("../tool-display.ts", () => ({
   },
 }));
 
-import { resolveMcpAppSandboxUrl } from "../../../components/mcp-app-view.ts";
+import {
+  buildMcpAppHostCapabilities,
+  resolveMcpAppSandboxUrl,
+} from "../../../components/mcp-app-view.ts";
+import { t } from "../../../i18n/index.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
@@ -65,6 +69,15 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it("advertises the CSP actually applied to MCP Apps", () => {
+    expect(
+      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
+    ).toMatchObject({
+      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
+    });
+    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
+
   it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
     expect(
       resolveMcpAppSandboxUrl(
@@ -774,6 +787,9 @@ describe("tool-cards", () => {
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
     expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
+    const tooltip = sidebarButton!.parentElement as HTMLElement & { content?: string };
+    expect(tooltip.content).toBe(t("chat.toolCards.openDetails"));
+    expect(sidebarButton!.getAttribute("aria-label")).toBe(t("chat.toolCards.openDetails"));
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");

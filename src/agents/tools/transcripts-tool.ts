@@ -417,7 +417,7 @@ export function createTranscriptsTool(options?: {
     name: "transcripts",
     label: "Transcripts",
     description:
-      "Start, stop, import, summarize, or inspect transcripts from Discord, Google Meet, Slack huddles, and other meeting sources.",
+      "Start/stop/import/summarize/status meeting transcripts: Discord, Google Meet, Slack huddles, others.",
     parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams) {
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);

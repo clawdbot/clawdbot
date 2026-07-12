@@ -339,16 +339,17 @@ async function mapLimit<T, R>(
   }
   const results: R[] = [];
   results.length = items.length;
-  let nextIndex = 0;
+  const pendingItems = items.entries();
   const workerCount = Math.max(1, Math.min(limit, items.length));
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (true) {
-        const idx = nextIndex++;
-        if (idx >= items.length) {
+        const next = pendingItems.next();
+        if (next.done) {
           return;
         }
-        results[idx] = await fn(items[idx]);
+        const [idx, item] = next.value;
+        results[idx] = await fn(item);
       }
     }),
   );

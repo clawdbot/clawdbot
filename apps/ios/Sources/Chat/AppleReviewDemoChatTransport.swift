@@ -33,7 +33,6 @@ struct LocalChatFixture {
     let sessionIDPrefix: String
     let displayName: String
     let subject: String
-    let workspace: String
     let modelProvider: String
     let modelID: String
     let modelName: String
@@ -46,7 +45,6 @@ struct LocalChatFixture {
         sessionIDPrefix: "apple-review-demo",
         displayName: "Apple Review Demo",
         subject: "Gateway review flow",
-        workspace: "Apple Review Demo",
         modelProvider: "demo",
         modelID: "local-demo",
         modelName: "Apple Review Demo",
@@ -76,7 +74,6 @@ struct LocalChatFixture {
         sessionIDPrefix: "screenshot-fixture",
         displayName: "Molty",
         subject: "Mobile command center",
-        workspace: "OpenClaw",
         modelProvider: "openai",
         modelID: "gpt-5.6-sol",
         modelName: "GPT-5.6 Sol",

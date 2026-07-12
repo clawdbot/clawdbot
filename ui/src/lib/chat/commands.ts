@@ -3,6 +3,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
@@ -15,6 +16,7 @@ export type SlashCommandDef = {
   name: string;
   aliases?: string[];
   description: string;
+  descriptionKey?: string;
   args?: string;
   icon?: ChatIconName;
   category?: SlashCommandCategory;
@@ -100,6 +102,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "clear",
     name: "clear",
     description: "Clear chat history",
+    descriptionKey: "chat.commands.clearDescription",
     icon: "trash",
     category: "session",
     executeLocal: true,
@@ -109,6 +112,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "redirect",
     name: "redirect",
     description: "Abort and restart with a new message",
+    descriptionKey: "chat.commands.redirectDescription",
     args: "<message>",
     icon: "refresh",
     category: "agents",
@@ -143,6 +147,10 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   reasoning: "model",
   elevated: "model",
   queue: "model",
+};
+
+const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
+  steer: "chat.commands.steerDescription",
 };
 
 const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
@@ -235,6 +243,7 @@ function toSlashCommand(
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
     description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
+    descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key],
     args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
@@ -428,12 +437,13 @@ export function resetSlashCommandsForTest(): void {
 
 const CATEGORY_ORDER: SlashCommandCategory[] = ["session", "model", "tools", "agents"];
 
-export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
-  session: "Session",
-  model: "Model",
-  agents: "Agents",
-  tools: "Tools",
-};
+export function getSlashCommandCategoryLabel(category: SlashCommandCategory): string {
+  return t(`chat.commands.categories.${category}`);
+}
+
+export function getSlashCommandDescription(command: SlashCommandDef): string {
+  return command.descriptionKey ? t(command.descriptionKey) : command.description;
+}
 
 const TIER_ORDER: Record<SlashCommandTier, number> = {
   essential: 0,
@@ -452,7 +462,7 @@ export function getSlashCommandCompletions(
         (cmd) =>
           cmd.name.startsWith(lower) ||
           cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
-          normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
+          normalizeLowercaseStringOrEmpty(getSlashCommandDescription(cmd)).includes(lower),
       )
     : SLASH_COMMANDS;
 

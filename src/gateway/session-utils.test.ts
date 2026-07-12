@@ -1089,6 +1089,7 @@ describe("gateway session utils", () => {
       spawnedCwd: "/state/worktrees/abc/wt-1234",
       worktree: { id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" },
       execNode: "macbook",
+      execCwd: "/Users/peter/Projects/openclaw",
     } as SessionEntry;
     const row = buildGatewaySessionRow({
       cfg,
@@ -1099,6 +1100,7 @@ describe("gateway session utils", () => {
     });
     expect(row.worktree).toEqual({ id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" });
     expect(row.execNode).toBe("macbook");
+    expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
   });
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {

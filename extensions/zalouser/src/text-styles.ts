@@ -1,4 +1,5 @@
 // Zalouser plugin module implements text styles behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { TextStyle, type Style } from "./zca-constants.js";
 
 const ESCAPE_SENTINEL_START = "\u0001";
@@ -55,50 +56,51 @@ const TAG_STYLE_MAP: Record<string, InlineStyle | null> = {
 const INLINE_MARKERS: InlineMarker[] = [
   {
     pattern: /`([^`\n]+)`/g,
-    extractText: (match) => match[0],
+    extractText: (match) => expectDefined(match[0], "inline code match"),
     literal: true,
   },
   {
     pattern: /\\([*_~#\\{}>+\-`])/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "escaped Markdown character capture"),
     literal: true,
   },
   {
     pattern: new RegExp(`\\{(${Object.keys(TAG_STYLE_MAP).join("|")})\\}(.+?)\\{/\\1\\}`, "g"),
-    extractText: (match) => match[2],
+    extractText: (match) => expectDefined(match[2], "tag body capture"),
     resolveStyles: (match) => {
-      const style = TAG_STYLE_MAP[match[1]];
+      const tag = expectDefined(match[1], "tag name capture");
+      const style = TAG_STYLE_MAP[tag];
       return style ? [style] : [];
     },
   },
   {
     pattern: /(?<!\*)\*\*\*(?=\S)([^\n]*?\S)(?<!\*)\*\*\*(?!\*)/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "bold italic body capture"),
     resolveStyles: () => [TextStyle.Bold, TextStyle.Italic],
   },
   {
     pattern: /(?<!\*)\*\*(?![\s*])([^\n]*?\S)(?<!\*)\*\*(?!\*)/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "bold body capture"),
     resolveStyles: () => [TextStyle.Bold],
   },
   {
     pattern: /(?<![\w_])__(?![\s_])([^\n]*?\S)(?<!_)__(?![\w_])/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "underscored bold body capture"),
     resolveStyles: () => [TextStyle.Bold],
   },
   {
     pattern: /(?<!~)~~(?=\S)([^\n]*?\S)(?<!~)~~(?!~)/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "strikethrough body capture"),
     resolveStyles: () => [TextStyle.StrikeThrough],
   },
   {
     pattern: /(?<!\*)\*(?![\s*])([^\n]*?\S)(?<!\*)\*(?!\*)/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "italic body capture"),
     resolveStyles: () => [TextStyle.Italic],
   },
   {
     pattern: /(?<![\w_])_(?![\s_])([^\n]*?\S)(?<!_)_(?![\w_])/g,
-    extractText: (match) => match[1],
+    extractText: (match) => expectDefined(match[1], "underscored italic body capture"),
     resolveStyles: () => [TextStyle.Italic],
   },
 ];
@@ -112,8 +114,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
   const processedLines: string[] = [];
   let activeFence: ActiveFence | null = null;
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const rawLine = lines[lineIndex];
+  for (const [lineIndex, rawLine] of lines.entries()) {
     const { text: unquotedLine, indent: baseIndent } = stripQuotePrefix(rawLine);
 
     if (activeFence) {
@@ -164,7 +165,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
 
     const headingMatch = markdownLine.match(/^(#{1,4})\s(.*)$/);
     if (headingMatch) {
-      const depth = headingMatch[1].length;
+      const depth = expectDefined(headingMatch[1], "heading marker capture").length;
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.Bold });
       if (depth === 1) {
         lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.Big });
@@ -176,7 +177,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
           indentSize: baseIndent,
         });
       }
-      processedLines.push(headingMatch[2]);
+      processedLines.push(expectDefined(headingMatch[2], "heading body capture"));
       continue;
     }
 
@@ -184,8 +185,8 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     let indentLevel = 0;
     let content = markdownLine;
     if (indentMatch) {
-      indentLevel = clampIndent(indentMatch[1].length);
-      content = indentMatch[2];
+      indentLevel = clampIndent(expectDefined(indentMatch[1], "indent capture").length);
+      content = expectDefined(indentMatch[2], "indented content capture");
     }
     const totalIndent = Math.min(5, baseIndent + indentLevel);
 
@@ -211,7 +212,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
         });
       }
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.OrderedList });
-      processedLines.push(orderedListMatch[2]);
+      processedLines.push(expectDefined(orderedListMatch[2], "ordered list body capture"));
       continue;
     }
 
@@ -225,7 +226,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
         });
       }
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.UnorderedList });
-      processedLines.push(unorderedListMatch[1]);
+      processedLines.push(expectDefined(unorderedListMatch[1], "unordered list body capture"));
       continue;
     }
 
@@ -271,8 +272,12 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     let cumulativeDelta = 0;
 
     for (const match of plainText.matchAll(escapeRegex)) {
-      const escapeIndex = Number.parseInt(match[1], 10);
-      cumulativeDelta += match[0].length - escapeMap[escapeIndex].length;
+      const escapeIndex = Number.parseInt(expectDefined(match[1], "escape sentinel index"), 10);
+      const escaped = escapeMap.at(escapeIndex);
+      if (escaped === undefined) {
+        continue;
+      }
+      cumulativeDelta += match[0].length - escaped.length;
       shifts.push({ pos: (match.index ?? 0) + match[0].length, delta: cumulativeDelta });
     }
 
@@ -294,14 +299,14 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
 
     plainText = plainText.replace(
       escapeRegex,
-      (_match, index) => escapeMap[Number.parseInt(index, 10)],
+      (match, index) => escapeMap.at(Number.parseInt(index, 10)) ?? match,
     );
   }
 
   const finalLines = plainText.split("\n");
   let offset = 0;
-  for (let lineIndex = 0; lineIndex < finalLines.length; lineIndex += 1) {
-    const lineLength = finalLines[lineIndex].length;
+  for (const [lineIndex, line] of finalLines.entries()) {
+    const lineLength = line.length;
     if (lineLength > 0) {
       for (const lineStyle of lineStyles) {
         if (lineStyle.lineIndex !== lineIndex) {
@@ -336,15 +341,15 @@ function stripOptionalMarkdownPadding(line: string): { text: string; size: numbe
     return { text: line, size: 0 };
   }
   return {
-    text: line.slice(match[1].length),
-    size: match[1].length,
+    text: line.slice(expectDefined(match[1], "Markdown padding capture").length),
+    size: expectDefined(match[1], "Markdown padding capture").length,
   };
 }
 
 function hasClosingFence(lines: string[], startIndex: number, fence: ActiveFence): boolean {
   for (let index = startIndex; index < lines.length; index += 1) {
-    const candidate =
-      fence.quoteIndent > 0 ? stripQuotePrefix(lines[index], fence.quoteIndent).text : lines[index];
+    const line = expectDefined(lines[index], "closing fence scan index is in bounds");
+    const candidate = fence.quoteIndent > 0 ? stripQuotePrefix(line, fence.quoteIndent).text : line;
     if (isClosingFence(candidate, fence)) {
       return true;
     }
@@ -409,8 +414,8 @@ function parseFenceMarker(line: string): FenceMarker | null {
     return null;
   }
 
-  const marker = match[2];
-  const char = marker[0];
+  const marker = expectDefined(match[2], "fence marker capture");
+  const char = marker.charAt(0);
   if (char !== "`" && char !== "~") {
     return null;
   }
@@ -418,7 +423,7 @@ function parseFenceMarker(line: string): FenceMarker | null {
   return {
     char,
     length: marker.length,
-    indent: match[1].length,
+    indent: expectDefined(match[1], "fence indent capture").length,
   };
 }
 
@@ -427,7 +432,8 @@ function isClosingFence(line: string, fence: FenceMarker): boolean {
   if (!match) {
     return false;
   }
-  return match[2][0] === fence.char && match[2].length >= fence.length;
+  const marker = expectDefined(match[2], "closing fence marker capture");
+  return marker.charAt(0) === fence.char && marker.length >= fence.length;
 }
 
 function escapeLiteralText(input: string, escapeMap: string[]): string {
@@ -515,7 +521,7 @@ function pushSegment(segments: Segment[], text: string, styles: InlineStyle[]): 
 }
 
 function sameStyles(left: InlineStyle[], right: InlineStyle[]): boolean {
-  return left.length === right.length && left.every((style, index) => style === right[index]);
+  return left.length === right.length && left.every((style, index) => style === right.at(index));
 }
 
 function normalizeCodeBlockLeadingWhitespace(line: string): string {

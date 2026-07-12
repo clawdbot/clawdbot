@@ -167,7 +167,7 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpd
       <div
         class="sw-mode-switch"
         role="tablist"
-        aria-label="Workshop view"
+        aria-label=${t("skillWorkshop.header.view")}
         data-mode=${state.skillWorkshopMode}
       >
         <button
@@ -182,7 +182,7 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpd
             <rect x="14" y="4" width="7" height="9" rx="1.5" />
             <rect x="14" y="15" width="7" height="5" rx="1.5" />
           </svg>
-          <span>Board</span>
+          <span>${t("skillWorkshop.header.board")}</span>
         </button>
         <button
           type="button"
@@ -197,7 +197,7 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpd
               d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
             />
           </svg>
-          <span>Today</span>
+          <span>${t("skillWorkshop.header.today")}</span>
         </button>
         <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
       </div>

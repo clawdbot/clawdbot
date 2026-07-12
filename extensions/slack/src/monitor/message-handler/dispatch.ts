@@ -614,7 +614,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await reactSlackMessage(message.channel, message.ts, typingReaction, {
             token: ctx.botToken,
             client: slackClient,
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
+          });
         }
       },
       stop: async () => {
@@ -632,7 +634,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await removeSlackReaction(message.channel, message.ts, typingReaction, {
             token: ctx.botToken,
             client: slackClient,
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            logVerbose(`slack send: typing reaction removal failed: ${formatSlackError(err)}`);
+          });
         }
       },
       onStartError: (err) => {

@@ -15,6 +15,7 @@
  * sees directly.
  */
 
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   buildMergedMessageContext,
   formatAttachmentTags,
@@ -45,7 +46,7 @@ export function buildUserMessage(input: BuildUserMessageInput): string {
   // ---- Merged group turn ----
   if (groupInfo?.isMerged && groupInfo.mergedMessages?.length) {
     const preceding = groupInfo.mergedMessages.slice(0, -1);
-    const lastMsg = groupInfo.mergedMessages[groupInfo.mergedMessages.length - 1];
+    const lastMsg = expectDefined(groupInfo.mergedMessages.at(-1), "non-empty merged group turn");
     const atYouTag = groupInfo.gate.effectiveWasMentioned ? " (@you)" : "";
 
     const envelopeParts = preceding.map((m) => `[${formatSenderLabel(m)}] ${formatSub(m)}`);

@@ -1,5 +1,6 @@
 // Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { uriAction } from "./actions.js";
@@ -42,9 +43,9 @@ export function extractMarkdownTables(text: string): {
   const matches: { fullMatch: string; table: MarkdownTable }[] = [];
 
   while ((match = MARKDOWN_TABLE_REGEX.exec(text)) !== null) {
-    const fullMatch = match[0];
-    const headerLine = match[1];
-    const bodyLines = match[2];
+    const fullMatch = expectDefined(match[0], "Markdown table match");
+    const headerLine = expectDefined(match[1], "Markdown table header capture");
+    const bodyLines = expectDefined(match[2], "Markdown table body capture");
 
     const headers = parseTableRow(headerLine);
     const rows = bodyLines
@@ -62,8 +63,7 @@ export function extractMarkdownTables(text: string): {
   }
 
   // Remove tables from text in reverse order to preserve indices
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const { fullMatch, table } = matches[i];
+  for (const { fullMatch, table } of matches.toReversed()) {
     tables.unshift(table);
     textWithoutTables = textWithoutTables.replace(fullMatch, "");
   }
@@ -203,9 +203,9 @@ export function extractCodeBlocks(text: string): {
   const matches: { fullMatch: string; block: CodeBlock }[] = [];
 
   while ((match = MARKDOWN_CODE_BLOCK_REGEX.exec(text)) !== null) {
-    const fullMatch = match[0];
+    const fullMatch = expectDefined(match[0], "Markdown code block match");
     const language = match[1] || undefined;
-    const code = match[2];
+    const code = expectDefined(match[2], "Markdown code body capture");
 
     matches.push({
       fullMatch,
@@ -214,8 +214,7 @@ export function extractCodeBlocks(text: string): {
   }
 
   // Remove code blocks in reverse order
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const { fullMatch, block } = matches[i];
+  for (const { fullMatch, block } of matches.toReversed()) {
     codeBlocks.unshift(block);
     textWithoutCode = textWithoutCode.replace(fullMatch, "");
   }
@@ -286,8 +285,8 @@ export function extractLinks(text: string): { links: MarkdownLink[]; textWithLin
   let match: RegExpExecArray | null;
   while ((match = MARKDOWN_LINK_REGEX.exec(text)) !== null) {
     links.push({
-      text: match[1],
-      url: match[2],
+      text: expectDefined(match[1], "Markdown link text capture"),
+      url: expectDefined(match[2], "Markdown link URL capture"),
     });
   }
 

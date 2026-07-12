@@ -337,8 +337,7 @@ function injectBedrockCachePoints(
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
   if (Array.isArray(messages) && messages.length > 0) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    for (const msg of messages.toReversed()) {
       if (msg.role === "user" && Array.isArray(msg.content)) {
         if (!hasCachePoint(msg.content)) {
           msg.content.push(point);

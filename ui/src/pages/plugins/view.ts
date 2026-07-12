@@ -158,7 +158,7 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
   if (!needle) {
     return true;
   }
-  return [connector.id, connector.name, connector.description].some((value) =>
+  return [connector.id, connector.name, t(connector.descriptionKey)].some((value) =>
     value.toLocaleLowerCase().includes(needle),
   );
 }
@@ -751,8 +751,10 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       <div class="plugins-row__copy">
         <div class="plugins-row__title">
           <h3>${server.name}</h3>
-          <span class="plugins-badge plugins-badge--mcp">MCP</span>
-          ${server.auth === "oauth" ? html`<span class="plugins-badge">OAuth</span>` : nothing}
+          <span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
+          ${server.auth === "oauth"
+            ? html`<span class="plugins-badge">${t("pluginsPage.oauth")}</span>`
+            : nothing}
         </div>
         <p class="plugins-row__target">${server.target}</p>
         <div class="plugins-row__meta"><span>${server.transport}</span></div>
@@ -921,10 +923,10 @@ function renderConnectorCard(
         <div class="plugins-card__title-row">
           <h3>${connector.name}</h3>
         </div>
-        <p>${connector.description}</p>
+        <p>${t(connector.descriptionKey)}</p>
         <div class="plugins-card__meta">
           ${isMcp
-            ? html`<span class="plugins-badge plugins-badge--mcp">MCP</span>
+            ? html`<span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
                 <span>${t("pluginsPage.connectorMcpNote")}</span>`
             : html`<span>${t("pluginsPage.connectorClawHubNote")}</span>`}
         </div>

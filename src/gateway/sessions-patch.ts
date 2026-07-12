@@ -598,10 +598,15 @@ export async function projectSessionsPatchEntry(params: {
     const raw = patch.execNode;
     if (raw === null) {
       delete next.execNode;
+      delete next.execCwd;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
+      }
+      if (trimmed !== next.execNode) {
+        // A cwd belongs to one node's filesystem; never carry it across node bindings.
+        delete next.execCwd;
       }
       next.execNode = trimmed;
     }

@@ -37,7 +37,11 @@ import {
 } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
-const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+const COPILOT_ENV_VARS: [string, string, string] = [
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+];
 const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
@@ -165,25 +169,30 @@ function applyGithubCopilotDomainToConfig(
 
   const models = config.models ?? {};
   const providers = models.providers ?? {};
-  const provider = providers[PROVIDER_ID] ?? {};
-  const params = { ...provider.params } as Record<string, unknown>;
+  const provider = providers[PROVIDER_ID];
+  const params: Record<string, unknown> = {};
+  if (provider?.params) {
+    Object.assign(params, provider.params);
+  }
   if (isEnterprise) {
     params.githubDomain = domain;
   } else {
     delete params.githubDomain;
+  }
+  const nextProviders = { ...providers };
+  if (provider) {
+    nextProviders[PROVIDER_ID] = { ...provider, params };
+  } else {
+    // Source config accepts partial provider inputs; catalog materialization
+    // supplies baseUrl/models before runtime consumption.
+    Object.assign(nextProviders, { [PROVIDER_ID]: { params } });
   }
 
   return {
     ...config,
     models: {
       ...models,
-      providers: {
-        ...providers,
-        [PROVIDER_ID]: {
-          ...provider,
-          params,
-        },
-      },
+      providers: nextProviders,
     },
   };
 }

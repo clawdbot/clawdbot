@@ -12,9 +12,7 @@ scenario:
       - runtime.delivery
   gatewayConfigPatch:
     tools:
-      allow:
-        - exec
-        - wait
+      alsoAllow:
         - qa_restart_wait
         - qa_restart_unsafe_probe
       codeMode:
@@ -66,13 +64,13 @@ flow:
             expr: "`restart-inflight-${randomUUID().slice(0, 8)}`"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
         - set: restartPatch
           value:
             expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } }, tools: { codeMode: { enabled: false } } })"
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: startAgentRun
           saveAs: started
           args:
@@ -91,7 +89,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "fetchJson(`${env.mock.baseUrl}/debug/requests`).then((requests) => requests.slice(requestCountBefore).find((request) => request.plannedToolName === 'wait' && String(request.allInputText ?? '').includes(config.interruptedMarker)))"
+                expr: "fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`).then((requests) => requests.find((request) => request.plannedToolName === 'wait' && String(request.allInputText ?? '').includes(config.interruptedMarker)))"
             - expr: liveTurnTimeoutMs(env, 120000)
             - 25
         - call: waitForCondition
@@ -154,7 +152,7 @@ flow:
               expr: "`automatic recovery emitted ${restartNotices.length} resend notice(s); outbound=${recentOutboundSummary(state)}`"
         - set: recoveryRequests
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore) : []"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)) : []"
         - assert:
             expr: "recoveryRequests.some((request) => String(request.allInputText ?? '').includes('Your previous turn was interrupted by a gateway restart'))"
             message: restart recovery prompt did not reach the provider

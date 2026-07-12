@@ -33,6 +33,7 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -111,7 +112,7 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const BROWSER_PROXY_REQUIRED_SCOPE = "operator.admin";
+const ADMIN_ONLY_NODE_INVOKE_COMMANDS = new Set(["browser.proxy", NODE_FS_LIST_DIR_COMMAND]);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -224,7 +225,7 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
 
 function clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(BROWSER_PROXY_REQUIRED_SCOPE);
+  return scopes.includes(ADMIN_SCOPE);
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
@@ -1322,11 +1323,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (command === "browser.proxy" && !clientHasOperatorAdminScope(client)) {
+    if (ADMIN_ONLY_NODE_INVOKE_COMMANDS.has(command) && !clientHasOperatorAdminScope(client)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${BROWSER_PROXY_REQUIRED_SCOPE}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
       );
       return;
     }

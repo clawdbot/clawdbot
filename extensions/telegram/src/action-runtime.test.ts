@@ -33,6 +33,14 @@ const sendDurableMessageBatch = vi.fn(
       mediaUrl?: string;
       mediaUrls?: string[];
       audioAsVoice?: boolean;
+      videoAsNote?: boolean;
+      location?: {
+        latitude: number;
+        longitude: number;
+        accuracy?: number;
+        name?: string;
+        address?: string;
+      };
       delivery?: {
         pin?: true | { enabled?: boolean; notify?: boolean; required?: boolean };
       };
@@ -85,6 +93,7 @@ const sendDurableMessageBatch = vi.fn(
         params.threadId == null ? undefined : Number.parseInt(String(params.threadId), 10),
       quoteText: telegramData?.quoteText,
       asVoice: payload.audioAsVoice,
+      asVideoNote: payload.videoAsNote,
       silent: params.silent,
       forceDocument: params.forceDocument,
       mediaLocalRoots: params.mediaAccess?.localRoots,
@@ -1398,6 +1407,76 @@ describe("handleTelegramAction", () => {
         telegramConfig(),
       ),
     ).rejects.toThrow(/content required/i);
+  });
+
+  it("maps video notes through the existing durable send action", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        mediaUrl: "https://example.com/note.mp4",
+        asVideoNote: true,
+      },
+      telegramConfig(),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable video note");
+    expect(requireRecord(durableCall[0], "durable video note params")).toMatchObject({
+      payloads: [
+        {
+          text: "",
+          mediaUrls: ["https://example.com/note.mp4"],
+          videoAsNote: true,
+        },
+      ],
+    });
+    const sendCall = mockCall(sendMessageTelegram, 0, "video note");
+    expect(requireRecord(sendCall[2], "video note options").asVideoNote).toBe(true);
+  });
+
+  it("accepts a standalone normalized location", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "  Eiffel Tower ",
+          address: " Champ de Mars ",
+        },
+      },
+      telegramConfig(),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable location");
+    expect(requireRecord(durableCall[0], "durable location params")).toMatchObject({
+      payloads: [
+        {
+          text: "",
+          location: {
+            latitude: 48.858844,
+            longitude: 2.294351,
+            name: "Eiffel Tower",
+            address: "Champ de Mars",
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects location sends mixed with text or media", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          content: "caption",
+          location: { latitude: 1, longitude: 2 },
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/cannot be combined/i);
   });
 
   it("renders presentation text when message content is omitted", async () => {

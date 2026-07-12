@@ -26,10 +26,10 @@ describe("buildBareSessionResetPrompt", () => {
 
     expect(prompt).toContain("while bootstrap is still pending for this workspace");
     expect(prompt).toContain("Please read BOOTSTRAP.md from the workspace now");
-    expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
-    expect(prompt).toContain("explain the blocker briefly");
-    expect(prompt).toContain("offer the simplest next step");
-    expect(prompt).toContain("Do not pretend bootstrap is complete when it is not.");
+    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
+    expect(prompt).toContain("brief blocker");
+    expect(prompt).toContain("simplest next step");
+    expect(prompt).toContain("Never claim completion early");
     expect(prompt).toContain("Your first user-visible reply must follow BOOTSTRAP.md");
     expect(prompt).not.toContain("Then greet the user in your configured persona");
   });
@@ -38,8 +38,8 @@ describe("buildBareSessionResetPrompt", () => {
     const prompt = buildBareSessionResetPrompt(undefined, undefined, "limited");
 
     expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
-    expect(prompt).toContain("Do not claim bootstrap is complete");
-    expect(prompt).toContain("do not use a generic first greeting");
+    expect(prompt).toContain("Never claim complete");
+    expect(prompt).toContain("no generic first greeting");
     expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
     expect(prompt).not.toContain("Please read BOOTSTRAP.md from the workspace now");
   });

@@ -13,6 +13,14 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  [
+    "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
+  ],
+  [
+    "extensions/codex/src/native-thread-coexistence.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_THREAD_COEXISTENCE"],
+  ],
   ["src/agents/agent-mcp-style.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/cli-runner/bundle-mcp.gemini.live.test.ts", ["OPENCLAW_LIVE_CLI_MCP_GEMINI"]],
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],

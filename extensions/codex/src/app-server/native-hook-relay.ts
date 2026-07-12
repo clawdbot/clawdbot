@@ -409,8 +409,10 @@ function sortJsonValue(value: JsonValue): JsonValue {
     return value.map(sortJsonValue);
   }
   const sorted: JsonObject = {};
-  for (const key of Object.keys(value).toSorted()) {
-    sorted[key] = sortJsonValue(value[key]);
+  for (const [key, entry] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    sorted[key] = sortJsonValue(entry);
   }
   return sorted;
 }

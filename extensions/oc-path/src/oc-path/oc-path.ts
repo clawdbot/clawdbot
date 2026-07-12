@@ -10,6 +10,7 @@
  * @module @openclaw/oc-path/oc-path
  */
 
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 
@@ -175,7 +176,7 @@ export function parseOcPath(input: string): OcPath {
       fail(`Empty segment in oc:// path: ${printable(input)}`, input, "OC_PATH_EMPTY_SEGMENT");
     }
   }
-  const fileSeg = rawSegments[0];
+  const fileSeg = expectDefined(rawSegments.at(0), "path split always returns a file segment");
   const file = isQuotedSeg(fileSeg) ? unquoteSeg(fileSeg) : fileSeg;
   validateFileSlot(file, input);
 
@@ -231,9 +232,14 @@ function normalizeDeepJsonPathSegments(
     );
   }
   const section = pathSegments.slice(0, -2).join(".");
-  const item = pathSegments[pathSegments.length - 2];
-  const field = pathSegments[pathSegments.length - 1];
-  return [segments[0], section, item, field];
+  const item = expectDefined(pathSegments.at(-2), "deep JSON path has an item segment");
+  const field = expectDefined(pathSegments.at(-1), "deep JSON path has a field segment");
+  return [
+    expectDefined(segments.at(0), "normalized path has a file segment"),
+    section,
+    item,
+    field,
+  ];
 }
 
 /** Format an `OcPath` struct into its canonical string form. */
@@ -587,7 +593,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   let depthBrace = 0;
   let inQuote = false;
   for (let i = 0; i < s.length; i++) {
-    const c = s[i];
+    const c = s.charAt(i);
     if (inQuote) {
       if (c === '"') {
         inQuote = false;

@@ -210,7 +210,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       expect(tool.name).toBe("pdf");
       expect(tool.label).toBe("PDF");
-      expect(tool.description).toContain("Analyze PDFs");
+      expect(tool.description).toContain("Analyze PDF(s)");
     });
   });
 

@@ -1916,7 +1916,7 @@ function renderProducerContextFile(params: {
 function formatMatrixLabel(id: string): string {
   return id
     .split("-")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
     .join(" ");
 }
 
@@ -2455,7 +2455,7 @@ function renderCaptureView(state: UiState): string {
         state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
       const rawIndex = spanMs <= 0 ? 0 : Math.floor(((event.ts - spanStart) / spanMs) * binCount);
       const index = Math.max(0, Math.min(binCount - 1, rawIndex));
-      bins[index] += 1;
+      bins[index] = (bins[index] ?? 0) + 1;
     }
     const maxBin = Math.max(...bins, 1);
     return `<div class="capture-timeline-sparkline">
@@ -2819,7 +2819,10 @@ function renderCaptureView(state: UiState): string {
     },
   ];
   if (!availableDetailViews.some((view) => view.recommended && view.available)) {
-    availableDetailViews[0].recommended = true;
+    const overviewView = availableDetailViews.find((view) => view.value === "overview");
+    if (overviewView) {
+      overviewView.recommended = true;
+    }
   }
   const preferredDetailView = state.capturePreferredDetailView;
   const effectiveDetailView = availableDetailViews.some(
@@ -3582,10 +3585,14 @@ function renderCaptureView(state: UiState): string {
                                     const leftPct = ((event.ts - minTs) / totalSpanMs) * 100;
                                     const leftPx = (leftPct / 100) * timelineTrackWidthPx;
                                     let rowIndex = 0;
-                                    while (
-                                      rowIndex < rowRightEdges.length &&
-                                      rowRightEdges[rowIndex] > leftPx - markerGapPx
-                                    ) {
+                                    while (rowIndex < rowRightEdges.length) {
+                                      const rowRightEdge = rowRightEdges[rowIndex];
+                                      if (
+                                        rowRightEdge === undefined ||
+                                        rowRightEdge <= leftPx - markerGapPx
+                                      ) {
+                                        break;
+                                      }
                                       rowIndex += 1;
                                     }
                                     rowRightEdges[rowIndex] = leftPx + markerGapPx;
@@ -3679,8 +3686,13 @@ function renderCaptureView(state: UiState): string {
                                           if (markers.length < 2) {
                                             return [];
                                           }
-                                          return markers.slice(1).map((marker, index) => {
-                                            const previous = markers[index];
+                                          const followingMarkers = markers.slice(1).values();
+                                          return markers.slice(0, -1).flatMap((previous) => {
+                                            const following = followingMarkers.next();
+                                            if (following.done) {
+                                              return [];
+                                            }
+                                            const marker = following.value;
                                             const dx = marker.leftPx - previous.leftPx;
                                             const dy = marker.topPx - previous.topPx;
                                             const length = Math.sqrt(dx * dx + dy * dy);
@@ -3694,10 +3706,12 @@ function renderCaptureView(state: UiState): string {
                                             const paired =
                                               pairedEventKey != null &&
                                               captureEventKey(marker.event) === pairedEventKey;
-                                            return `<div
+                                            return [
+                                              `<div
                                         class="capture-timeline-flow-link${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                         style="left:${previous.leftPct.toFixed(2)}%;top:${previous.topPx}px;width:${length.toFixed(2)}px;transform:translateY(-50%) rotate(${angle.toFixed(2)}deg)"
-                                      ></div>`;
+                                      ></div>`,
+                                            ];
                                           });
                                         })
                                         .join("");

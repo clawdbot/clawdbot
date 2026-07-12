@@ -7,9 +7,43 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.X509ExtendedTrustManager
 import kotlin.concurrent.thread
 
 class GatewayTlsTest {
+  @Test
+  fun buildGatewayTlsConfig_forwardsPlatformTrustWithSocketAndEngineContext() {
+    val defaultTrust = RecordingExtendedTrustManager()
+    val config =
+      buildGatewayTlsConfig(
+        params =
+          GatewayTlsParams(
+            required = true,
+            expectedFingerprint = null,
+            allowTOFU = false,
+            stableId = "gateway-1",
+          ),
+        defaultTrust = defaultTrust,
+      )
+    val extendedTrust = config.trustManager as X509ExtendedTrustManager
+
+    Socket().use { socket ->
+      extendedTrust.checkServerTrusted(emptyArray(), "RSA", socket)
+    }
+    extendedTrust.checkServerTrusted(
+      emptyArray(),
+      "RSA",
+      SSLContext.getDefault().createSSLEngine(),
+    )
+
+    assertEquals(1, defaultTrust.serverSocketCalls)
+    assertEquals(1, defaultTrust.serverEngineCalls)
+    assertEquals(0, defaultTrust.serverTwoArgumentCalls)
+  }
+
   @Test
   fun probeGatewayTlsFingerprint_reportsHandshakeTimeoutAfterTcpConnect() =
     runBlocking {
@@ -107,6 +141,54 @@ class GatewayTlsTest {
       runCatching { serverSocket.close() }
       worker.join(1_000)
     }
+  }
+
+  private class RecordingExtendedTrustManager : X509ExtendedTrustManager() {
+    var serverTwoArgumentCalls = 0
+    var serverSocketCalls = 0
+    var serverEngineCalls = 0
+
+    override fun checkClientTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+    ) = Unit
+
+    override fun checkClientTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+      socket: Socket,
+    ) = Unit
+
+    override fun checkClientTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+      engine: SSLEngine,
+    ) = Unit
+
+    override fun checkServerTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+    ) {
+      serverTwoArgumentCalls += 1
+    }
+
+    override fun checkServerTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+      socket: Socket,
+    ) {
+      serverSocketCalls += 1
+    }
+
+    override fun checkServerTrusted(
+      chain: Array<X509Certificate>,
+      authType: String,
+      engine: SSLEngine,
+    ) {
+      serverEngineCalls += 1
+    }
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
   }
 
   private companion object {

@@ -70,9 +70,9 @@ flow:
         - set: targetSessionKey
           value:
             expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: 'default', peer: { kind: 'group', id: `group:${config.conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: state.addInboundMessage
           args:
             - conversation:
@@ -91,7 +91,7 @@ flow:
             - lambda:
                 async: true
                 params: []
-                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'sessions_send' && request.plannedToolArgs?.sessionKey === targetSessionKey && request.plannedToolArgs?.timeoutSeconds === 0) : true"
+                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'sessions_send' && request.plannedToolArgs?.sessionKey === targetSessionKey && request.plannedToolArgs?.timeoutSeconds === 0) : true"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 500
         - call: waitForCondition
@@ -100,7 +100,7 @@ flow:
             - lambda:
                 async: true
                 params: []
-                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).find((request) => String(request.allInputText ?? '').includes(config.targetPromptSnippet) && request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker) : true"
+                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.targetPromptSnippet) && request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker) : true"
             - expr: liveTurnTimeoutMs(env, 90000)
             - 500
         - call: waitForOutboundMessage
@@ -128,7 +128,7 @@ flow:
               expr: "`expected exactly one requester-visible A2A marker after duplicate window, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: config.conversationId })}`"
         - set: scenarioRequests
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).map((request) => ({ prompt: String(request.prompt ?? '').slice(0, 220), plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 220) : null })) : []"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).map((request) => ({ prompt: String(request.prompt ?? '').slice(0, 220), plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 220) : null })) : []"
         - assert:
             expr: "!env.mock || scenarioRequests.filter((request) => request.plannedToolName === 'sessions_send' && request.plannedToolArgs?.sessionKey === targetSessionKey && request.plannedToolArgs?.timeoutSeconds === 0).length === 1"
             message:

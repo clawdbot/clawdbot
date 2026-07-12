@@ -1,5 +1,6 @@
 // Coordinates gateway startup migration version checkpoints in shared state.
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
@@ -17,6 +18,7 @@ type StartupMigrationCheckpointDatabase = Pick<
 >;
 
 const STARTUP_MIGRATION_META_KEY = "startup-migrations";
+const STARTUP_MIGRATION_BUILD_SEPARATOR = "\n";
 const STARTUP_MIGRATION_LEASE_SCOPE = "startup-migrations";
 const STARTUP_MIGRATION_LEASE_KEY = "global";
 const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
@@ -26,6 +28,36 @@ export type StartupMigrationLease = {
   release: () => void;
   readonly owner: string;
 };
+
+function formatStartupMigrationCheckpoint(version: string, buildIdentity: string): string {
+  return `${version}${STARTUP_MIGRATION_BUILD_SEPARATOR}${buildIdentity}`;
+}
+
+// Built-at provenance changes when mutable source is rebuilt even if package version and commit do
+// not. Missing provenance deliberately keeps migrations enabled instead of trusting stale code.
+function resolveStartupMigrationBuildIdentity(moduleUrl: string = import.meta.url): string | null {
+  try {
+    const require = createRequire(moduleUrl);
+    for (const candidate of [
+      "./build-info.json",
+      "../build-info.json",
+      "../../dist/build-info.json",
+    ]) {
+      try {
+        const info = require(candidate) as { builtAt?: unknown };
+        if (typeof info.builtAt !== "string" || !info.builtAt.trim()) {
+          continue;
+        }
+        return info.builtAt.trim();
+      } catch {
+        // Try the next packaged/source-build location.
+      }
+    }
+  } catch {
+    // Missing build provenance disables the fast path below.
+  }
+  return null;
+}
 
 function withStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
@@ -43,7 +75,7 @@ function writeStartupMigrationCheckpointDatabase<T>(
   );
 }
 
-export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env): string | null {
+function readStartupMigrationCheckpoint(env: NodeJS.ProcessEnv): string | null {
   return withStartupMigrationCheckpointDatabase(env, (db) => {
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     const row = executeSqliteQueryTakeFirstSync(
@@ -57,13 +89,31 @@ export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env
   });
 }
 
+export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env): string | null {
+  return (
+    readStartupMigrationCheckpoint(env)?.split(STARTUP_MIGRATION_BUILD_SEPARATOR, 1)[0] ?? null
+  );
+}
+
 export function needsStartupMigrationCheckpoint(
   params: {
+    buildIdentity?: string | null;
     env?: NodeJS.ProcessEnv;
     version?: string;
   } = {},
 ): boolean {
-  return readStartupMigrationVersion(params.env) !== (params.version ?? VERSION);
+  const env = params.env ?? process.env;
+  const buildIdentity =
+    params.buildIdentity === undefined
+      ? resolveStartupMigrationBuildIdentity()
+      : params.buildIdentity;
+  if (buildIdentity === null) {
+    return true;
+  }
+  return (
+    readStartupMigrationCheckpoint(env) !==
+    formatStartupMigrationCheckpoint(params.version ?? VERSION, buildIdentity)
+  );
 }
 
 export function acquireStartupMigrationLease(
@@ -162,6 +212,7 @@ export function acquireStartupMigrationLease(
 
 export function recordSuccessfulStartupMigrations(
   params: {
+    buildIdentity?: string | null;
     env?: NodeJS.ProcessEnv;
     lease?: StartupMigrationLease;
     version?: string;
@@ -170,7 +221,13 @@ export function recordSuccessfulStartupMigrations(
 ): void {
   const env = params.env ?? process.env;
   const version = params.version ?? VERSION;
+  const buildIdentity =
+    params.buildIdentity === undefined
+      ? resolveStartupMigrationBuildIdentity()
+      : params.buildIdentity;
   const nowMs = params.nowMs ?? Date.now();
+  const checkpoint =
+    buildIdentity === null ? version : formatStartupMigrationCheckpoint(version, buildIdentity);
   writeStartupMigrationCheckpointDatabase(env, (db) => {
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     if (params.lease) {
@@ -197,18 +254,18 @@ export function recordSuccessfulStartupMigrations(
         .values({
           meta_key: STARTUP_MIGRATION_META_KEY,
           role: "global",
-          schema_version: 1,
+          schema_version: buildIdentity === null ? 1 : 2,
           agent_id: null,
-          app_version: version,
+          app_version: checkpoint,
           created_at: nowMs,
           updated_at: nowMs,
         })
         .onConflict((conflict) =>
           conflict.column("meta_key").doUpdateSet({
             role: "global",
-            schema_version: 1,
+            schema_version: buildIdentity === null ? 1 : 2,
             agent_id: null,
-            app_version: version,
+            app_version: checkpoint,
             updated_at: nowMs,
           }),
         ),

@@ -1,8 +1,51 @@
 // Location tests cover channel location payload normalization and display helpers.
 import { describe, expect, it } from "vitest";
-import { formatLocationText, toLocationContext } from "./location.js";
+import { formatLocationText, normalizeOutboundLocation, toLocationContext } from "./location.js";
 
 describe("provider location helpers", () => {
+  it("normalizes bounded outbound coordinates and labels", () => {
+    expect(
+      normalizeOutboundLocation({
+        latitude: 48.858844,
+        longitude: 2.294351,
+        accuracy: 12,
+        name: "  Eiffel Tower ",
+        address: " Champ de Mars ",
+      }),
+    ).toEqual({
+      latitude: 48.858844,
+      longitude: 2.294351,
+      accuracy: 12,
+      name: "Eiffel Tower",
+      address: "Champ de Mars",
+    });
+  });
+
+  it.each([
+    [{ latitude: 91, longitude: 0 }, "latitude"],
+    [{ latitude: 0, longitude: -181 }, "longitude"],
+    [{ latitude: 0, longitude: 0, accuracy: 1501 }, "accuracy"],
+  ])("rejects invalid outbound location fields", (value, field) => {
+    expect(() => normalizeOutboundLocation(value)).toThrow(field);
+  });
+
+  it.each(["source", "isLive", "caption"])("rejects unsupported outbound %s semantics", (field) => {
+    expect(() =>
+      normalizeOutboundLocation({ latitude: 1, longitude: 2, [field]: "unsupported" }),
+    ).toThrow(`${field} is not supported`);
+  });
+
+  it.each([
+    ["name", 123],
+    ["name", "   "],
+    ["address", false],
+    ["address", ""],
+  ])("rejects malformed outbound %s text", (field, value) => {
+    expect(() => normalizeOutboundLocation({ latitude: 1, longitude: 2, [field]: value })).toThrow(
+      `${field} must be a non-empty string`,
+    );
+  });
+
   it("formats pin locations with accuracy", () => {
     const text = formatLocationText({
       latitude: 48.858844,

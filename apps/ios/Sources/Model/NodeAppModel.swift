@@ -10241,10 +10241,10 @@ extension NodeAppModel {
         gatewayStableID: String = "test-gateway",
         commandText: String,
         warningText: String? = nil,
-        allowedDecisions: [String],
-        host: String?,
-        nodeId: String?,
-        agentId: String?,
+        allowedDecisions: [String] = ["allow-once", "deny"],
+        host: String? = "gateway",
+        nodeId: String? = nil,
+        agentId: String? = "main",
         expiresAtMs: Int64?) -> ExecApprovalPrompt?
     {
         self.makeExecApprovalPrompt(ExecApprovalPrompt(

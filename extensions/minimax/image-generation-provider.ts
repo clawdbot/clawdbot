@@ -160,8 +160,8 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }
 
       // Map input images to subject_reference for image-to-image generation
-      if (req.inputImages && req.inputImages.length > 0) {
-        const ref = req.inputImages[0];
+      const ref = req.inputImages?.at(0);
+      if (ref) {
         const mime = ref.mimeType || "image/jpeg";
         const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
         body.subject_reference = [{ type: "character", image_file: dataUrl }];

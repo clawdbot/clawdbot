@@ -93,15 +93,11 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
 
 /** Creates the persistence callback that stores cron session metadata after a run. */
 export function createPersistCronSessionEntry(params: {
-  isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
-    if (params.isFastTestEnv) {
-      return;
-    }
     const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
@@ -168,7 +164,6 @@ export function createPersistCronSessionEntry(params: {
 
 /** Creates the hidden exact-run session owner used by detached media wakes. */
 export function createCronRunContinuationSession(params: {
-  isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   runSessionKey: string;
   thinkingLevel?: string;
@@ -193,9 +188,6 @@ export function createCronRunContinuationSession(params: {
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
   const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
-    if (params.isFastTestEnv) {
-      return;
-    }
     const source = structuredClone(params.cronSession.sessionEntry);
     let persisted = false;
     let alreadySealed = false;

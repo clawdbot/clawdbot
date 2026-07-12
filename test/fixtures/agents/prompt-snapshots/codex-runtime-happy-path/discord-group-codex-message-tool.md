@@ -79,6 +79,7 @@
     "gateway",
     "sessions_list",
     "sessions_history",
+    "sessions_search",
     "sessions_send",
     "subagents",
     "session_status",
@@ -207,20 +208,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54490,
-    "roughTokens": 13623
+    "chars": 52086,
+    "roughTokens": 13022
   },
   "openClawDeveloperInstructions": {
-    "chars": 3245,
-    "roughTokens": 812
+    "chars": 3262,
+    "roughTokens": 816
   },
   "totalTextOnly": {
-    "chars": 27770,
-    "roughTokens": 6943
+    "chars": 27787,
+    "roughTokens": 6947
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82262,
-    "roughTokens": 20566
+    "chars": 79875,
+    "roughTokens": 19969
   },
   "userInputText": {
     "chars": 1442,
@@ -407,7 +408,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -539,6 +540,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "gateway",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "subagents",
   "session_status",
@@ -552,7 +554,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 ```json
 [
   {
-    "description": "Send/delete/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -570,7 +572,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each entry uses media.",
+          "description": "Attachments; each uses media.",
           "items": {
             "properties": {
               "media": {
@@ -592,7 +594,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "array"
         },
         "buffer": {
-          "description": "Base64 attachment payload; data URL ok.",
+          "description": "Base64/data-URL attachment.",
           "type": "string"
         },
         "caption": {
@@ -612,14 +614,14 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "effectId": {
-          "description": "Effect id/name for sendWithEffect.",
+          "description": "sendWithEffect id/name.",
           "type": "string"
         },
         "filename": {
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document; avoids compression.",
+          "description": "Send media as document; no compression.",
           "type": "boolean"
         },
         "gatewayToken": {

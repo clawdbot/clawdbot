@@ -1,5 +1,5 @@
 // Covers managed task-flow audit summaries and stale-flow classification.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -96,20 +96,24 @@ describe("task-flow-registry audit", () => {
   afterEach(resetTaskFlowAuditTestState);
 
   it("surfaces restore failures as task-flow audit findings", () => {
+    const loadSnapshot = vi.fn(() => {
+      throw new Error("boom");
+    });
     configureTaskFlowRegistryRuntime({
       store: {
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
+        loadSnapshot,
         saveSnapshot: () => {},
       },
     });
 
-    const findings = listTaskFlowAuditFindings();
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("error");
-    expect(findings[0]?.code).toBe("restore_failed");
-    expect(findings[0]?.detail).toContain("boom");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const findings = listTaskFlowAuditFindings();
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe("error");
+      expect(findings[0]?.code).toBe("restore_failed");
+      expect(findings[0]?.detail).toContain("boom");
+    }
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("clears restore-failed findings after a clean reset and restore", () => {

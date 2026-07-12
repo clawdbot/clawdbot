@@ -161,7 +161,8 @@ function resolveLegacySanitizedSessionKey(
   const matches = knownSessionKeys.filter(
     (sessionKey) => legacySanitizeSessionKey(sessionKey) === fileStem,
   );
-  return matches.length === 1 ? matches[0] : null;
+  const [match] = matches;
+  return matches.length === 1 && match ? match : null;
 }
 
 function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {

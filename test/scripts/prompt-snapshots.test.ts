@@ -180,7 +180,7 @@ describe("happy path prompt snapshots", () => {
     const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
-    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+    const heartbeatPhrase = "Heartbeat = useful proactive progress";
     const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');

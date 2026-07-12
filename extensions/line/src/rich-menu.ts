@@ -13,7 +13,6 @@ type RichMenuRequest = messagingApi.RichMenuRequest;
 type RichMenuResponse = messagingApi.RichMenuResponse;
 type RichMenuArea = messagingApi.RichMenuArea;
 type Action = messagingApi.Action;
-const USER_BATCH_SIZE = 500;
 // LINE counts rich-menu names and chat-bar text in grapheme clusters, unlike most message fields.
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -70,14 +69,6 @@ function getBlobClient(opts: RichMenuOpts): messagingApi.MessagingApiBlobClient 
   return new messagingApi.MessagingApiBlobClient({
     channelAccessToken: token,
   });
-}
-
-function chunkUserIds(userIds: string[]): string[][] {
-  const batches: string[][] = [];
-  for (let i = 0; i < userIds.length; i += USER_BATCH_SIZE) {
-    batches.push(userIds.slice(i, i + USER_BATCH_SIZE));
-  }
-  return batches;
 }
 
 function truncateGraphemes(input: string, maxLength: number): string {
@@ -168,64 +159,6 @@ export async function getDefaultRichMenuId(opts: RichMenuOpts): Promise<string |
     return response.richMenuId ?? null;
   } catch {
     return null;
-  }
-}
-
-export async function linkRichMenuToUser(
-  userId: string,
-  richMenuId: string,
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-  await client.linkRichMenuIdToUser(userId, richMenuId);
-
-  if (opts.verbose) {
-    logVerbose(`line: linked rich menu ${richMenuId} to user ${userId}`);
-  }
-}
-
-export async function linkRichMenuToUsers(
-  userIds: string[],
-  richMenuId: string,
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-
-  for (const batch of chunkUserIds(userIds)) {
-    await client.linkRichMenuIdToUsers({
-      richMenuId,
-      userIds: batch,
-    });
-  }
-
-  if (opts.verbose) {
-    logVerbose(`line: linked rich menu ${richMenuId} to ${userIds.length} users`);
-  }
-}
-
-export async function unlinkRichMenuFromUser(userId: string, opts: RichMenuOpts): Promise<void> {
-  const client = getClient(opts);
-  await client.unlinkRichMenuIdFromUser(userId);
-
-  if (opts.verbose) {
-    logVerbose(`line: unlinked rich menu from user ${userId}`);
-  }
-}
-
-export async function unlinkRichMenuFromUsers(
-  userIds: string[],
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-
-  for (const batch of chunkUserIds(userIds)) {
-    await client.unlinkRichMenuIdFromUsers({
-      userIds: batch,
-    });
-  }
-
-  if (opts.verbose) {
-    logVerbose(`line: unlinked rich menu from ${userIds.length} users`);
   }
 }
 

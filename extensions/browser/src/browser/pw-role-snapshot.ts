@@ -4,6 +4,7 @@
  * Converts ARIA or AI snapshots into compact role/name text with stable refs
  * and duplicate disambiguation for agent actions.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -107,7 +108,8 @@ export function finalizeRoleSnapshot<T extends { role: string }>(params: {
 
 function getIndentLevel(line: string): number {
   const match = line.match(/^(\s*)/);
-  return match ? Math.floor(match[1].length / 2) : 0;
+  const indent = match?.[1];
+  return indent === undefined ? 0 : Math.floor(indent.length / 2);
 }
 
 function matchInteractiveSnapshotLine(
@@ -125,6 +127,9 @@ function matchInteractiveSnapshotLine(
   const roleRaw = match[2];
   const name = match[3];
   const suffix = match[4];
+  if (roleRaw === undefined || suffix === undefined) {
+    return null;
+  }
   if (roleRaw.startsWith("/")) {
     return null;
   }
@@ -201,13 +206,20 @@ function compactTree(tree: string) {
     }
     current.entry.keep ||= current.entry.hasRef;
     if (current.entry.hasRef && stack.length > 0) {
-      stack[stack.length - 1].entry.hasRef = true;
+      const parent = stack.at(-1);
+      if (parent !== undefined) {
+        parent.entry.hasRef = true;
+      }
     }
   };
 
   for (const line of lines) {
     const indent = getIndentLevel(line);
-    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+    while (stack.length > 0) {
+      const lastEntry = expectDefined(stack.at(-1), "non-empty role snapshot stack");
+      if (lastEntry.indent < indent) {
+        break;
+      }
       finishEntry();
     }
     const entry = {
@@ -246,7 +258,13 @@ function processLine(
     return options.interactive ? null : line;
   }
 
-  const [, prefix, roleRaw, name, suffix] = match;
+  const prefix = match[1];
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
+  if (prefix === undefined || roleRaw === undefined || suffix === undefined) {
+    return options.interactive ? null : line;
+  }
   if (roleRaw.startsWith("/")) {
     return options.interactive ? null : line;
   }
@@ -414,10 +432,10 @@ export function buildRoleSnapshotFromAriaSnapshot(
 function parseAiSnapshotRef(suffix: string): string | null {
   const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
   if (eMatch) {
-    return eMatch[1];
+    return eMatch[1] ?? null;
   }
   const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
-  return numMatch ? numMatch[1] : null;
+  return numMatch?.[1] ?? null;
 }
 
 /**
@@ -466,6 +484,10 @@ export function buildRoleSnapshotFromAiSnapshot(
     const roleRaw = match[2];
     const name = match[3];
     const suffix = match[4];
+    if (roleRaw === undefined || suffix === undefined) {
+      out.push(line);
+      continue;
+    }
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;

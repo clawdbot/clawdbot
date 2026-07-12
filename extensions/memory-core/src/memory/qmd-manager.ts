@@ -7,6 +7,7 @@ import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
@@ -1265,7 +1266,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const collectionLine = /^\s*([a-z0-9._-]+)\s+\(qmd:\/\/[^)]+\)\s*$/i.exec(line);
       if (collectionLine) {
-        currentName = collectionLine[1];
+        currentName = collectionLine[1] ?? null;
+        if (currentName === null) {
+          continue;
+        }
         if (!listed.has(currentName)) {
           listed.set(currentName, {});
         }
@@ -1276,7 +1280,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const bareNameLine = /^\s*([a-z0-9._-]+)\s*$/i.exec(line);
       if (bareNameLine && !line.includes(":")) {
-        currentName = bareNameLine[1];
+        currentName = bareNameLine[1] ?? null;
+        if (currentName === null) {
+          continue;
+        }
         if (!listed.has(currentName)) {
           listed.set(currentName, {});
         }
@@ -1287,15 +1294,23 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const patternLine = /^\s*(?:pattern|mask)\s*:\s*(.+?)\s*$/i.exec(line);
       if (patternLine) {
+        const pattern = patternLine[1];
+        if (pattern === undefined) {
+          continue;
+        }
         const existing = listed.get(currentName) ?? {};
-        existing.pattern = patternLine[1].trim();
+        existing.pattern = pattern.trim();
         listed.set(currentName, existing);
         continue;
       }
       const pathLine = /^\s*path\s*:\s*(.+?)\s*$/i.exec(line);
       if (pathLine) {
+        const listedPath = pathLine[1];
+        if (listedPath === undefined) {
+          continue;
+        }
         const existing = listed.get(currentName) ?? {};
-        existing.path = pathLine[1].trim();
+        existing.path = listedPath.trim();
         listed.set(currentName, existing);
       }
     }
@@ -1313,12 +1328,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const rawLine of output.split(/\r?\n/)) {
       const pathMatch = /^\s*Path\s*:\s*(.+?)\s*$/.exec(rawLine);
       if (pathMatch) {
-        result.path = pathMatch[1].trim();
+        const shownPath = pathMatch[1];
+        if (shownPath !== undefined) {
+          result.path = shownPath.trim();
+        }
         continue;
       }
       const patternMatch = /^\s*Pattern\s*:\s*(.+?)\s*$/.exec(rawLine);
       if (patternMatch) {
-        result.pattern = patternMatch[1].trim();
+        const shownPattern = patternMatch[1];
+        if (shownPattern !== undefined) {
+          result.pattern = shownPattern.trim();
+        }
       }
     }
     return result;
@@ -3094,7 +3115,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         .prepare("SELECT path FROM documents WHERE collection = ? AND path = ? AND active = 1")
         .all(trimmedCollection, exactPath) as Array<{ path: string }>;
       if (exactRows.length > 0) {
-        return this.toDocLocation(trimmedCollection, exactRows[0].path);
+        const exactRow = expectDefined(exactRows.at(0), "single exact QMD document row");
+        return this.toDocLocation(trimmedCollection, exactRow.path);
       }
       rows = db
         .prepare("SELECT path FROM documents WHERE collection = ? AND active = 1")
@@ -3113,7 +3135,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (matches.length !== 1) {
       return null;
     }
-    return this.toDocLocation(trimmedCollection, matches[0].path);
+    const match = expectDefined(matches.at(0), "single preferred QMD document match");
+    return this.toDocLocation(trimmedCollection, match.path);
   }
 
   private normalizeDocHints(hints?: { preferredCollection?: string; preferredFile?: string }): {

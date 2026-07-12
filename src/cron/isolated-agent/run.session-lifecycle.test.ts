@@ -21,6 +21,7 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const inMemoryStorePath = "/tmp/store.json";
 
 function createDeferred() {
   let resolve!: () => void;
@@ -55,7 +56,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const initialSessionEntry = makeCronSessionEntry({ sessionId: "session-before-setup" });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
-        storePath: "/tmp/cron-lifecycle-rotation.json",
+        storePath: inMemoryStorePath,
         store: { [sessionKey]: { ...initialSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
@@ -98,7 +99,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     };
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
-        storePath: "/tmp/cron-lifecycle-revision.json",
+        storePath: inMemoryStorePath,
         store: { [sessionKey]: { ...currentSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
@@ -123,7 +124,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("interrupts persistent cron work and waits for its lifecycle lease to release", async () => {
     const sessionKey = "agent:main:telegram:direct:42";
     const sessionId = "shared-session";
-    const storePath = "/tmp/cron-lifecycle-interrupt.json";
+    const storePath = inMemoryStorePath;
     const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
@@ -188,7 +189,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("releases an isolated run lease before delete-after-run cleanup", async () => {
     const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
-    const storePath = "/tmp/cron-lifecycle-self-delete.json";
+    const storePath = inMemoryStorePath;
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
@@ -227,7 +228,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("keeps a non-deleting isolated run admitted through delivery", async () => {
     const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
-    const storePath = "/tmp/cron-lifecycle-isolated-delivery.json";
+    const storePath = inMemoryStorePath;
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
@@ -271,7 +272,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";
-    const storePath = "/tmp/cron-lifecycle-custom-self-delete.json";
+    const storePath = inMemoryStorePath;
     const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({

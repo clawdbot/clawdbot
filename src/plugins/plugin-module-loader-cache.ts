@@ -179,7 +179,7 @@ export function resolvePluginModuleLoaderCacheEntry(
 function createLazySourceTransformLoader(params: {
   loaderFilename: string;
   aliasMap: Record<string, string>;
-  sourceTransformTryNative: boolean;
+  transformOpenClawDependencies: boolean;
   createLoader?: PluginModuleLoaderFactory;
 }): () => PluginModuleLoader {
   let loadWithSourceTransform: PluginModuleLoader | undefined;
@@ -187,13 +187,17 @@ function createLazySourceTransformLoader(params: {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
+    const jitiOptions = buildPluginLoaderJitiOptions(params.aliasMap, {
+      modulePath: params.loaderFilename,
+    });
     const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
       params.loaderFilename,
       {
-        ...buildPluginLoaderJitiOptions(params.aliasMap, {
-          modulePath: params.loaderFilename,
-        }),
-        tryNative: params.sourceTransformTryNative,
+        ...jitiOptions,
+        nativeModules: params.transformOpenClawDependencies
+          ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
+          : jitiOptions.nativeModules,
+        tryNative: false,
       },
     );
     loadWithSourceTransform = new Proxy(jitiLoader, {
@@ -218,9 +222,11 @@ function createPluginModuleLoader(params: {
   tryNative: boolean;
   createLoader?: PluginModuleLoaderFactory;
 }): PluginModuleLoader {
+  // A declined native require can leave an ESM dependency in flight. The
+  // fallback must transform both the entry and OpenClaw SDK dependencies.
   const getLoadWithSourceTransform = createLazySourceTransformLoader({
     ...params,
-    sourceTransformTryNative: params.tryNative,
+    transformOpenClawDependencies: params.tryNative,
   });
   const loadedTargetExports = new Map<string, unknown>();
   const loadCachedTarget = (target: string, rest: unknown[], load: () => unknown): unknown => {

@@ -2,9 +2,11 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class TalkSpeakClientTest {
@@ -127,5 +129,21 @@ class TalkSpeakClientTest {
 
       val result = client.synthesize(text = "Hello", directive = null)
       assertTrue(result is TalkSpeakResult.FallbackToLocal)
+    }
+
+  @Test
+  fun propagatesRequestCancellation() =
+    runTest {
+      val client =
+        TalkSpeakClient(
+          requestDetailed = { _, _, _ -> throw CancellationException("talk stopped") },
+        )
+
+      try {
+        client.synthesize(text = "Hello", directive = null)
+        fail("expected cancellation to propagate")
+      } catch (err: CancellationException) {
+        assertEquals("talk stopped", err.message)
+      }
     }
 }

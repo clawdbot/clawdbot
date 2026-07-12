@@ -618,6 +618,130 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it.each(["manual stop", "abort signal"] as const)(
+    "does not resume an in-flight restart after %s",
+    async (stopMode) => {
+      let releaseStop: (() => void) | undefined;
+      const stopGate = new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+      const abort = new AbortController();
+      const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, {
+        abortSignal: abort.signal,
+        checkIntervalMs: 100,
+        cooldownCycles: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(101);
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+      if (stopMode === "manual stop") {
+        monitor.shutdown();
+      } else {
+        abort.abort();
+      }
+      releaseStop?.();
+      await monitor.waitForIdle();
+
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    },
+  );
+
+  it("does not process later accounts after a retired monitor's stop rejects", async () => {
+    let rejectStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((_resolve, reject) => {
+      rejectStop = () => reject(new Error("stop failed"));
+    });
+    const staleAccount = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      { slack: { first: staleAccount, second: staleAccount } },
+      {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+    monitor.shutdown();
+    rejectStop?.();
+    await monitor.waitForIdle();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "replacement", shutdownAfterRetire: false, expectedStarts: 1 },
+    { label: "replacement followed by shutdown", shutdownAfterRetire: true, expectedStarts: 0 },
+  ])("coordinates the in-flight restart during $label", async (testCase) => {
+    let releaseStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const staleAccount = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      { slack: { first: staleAccount, second: staleAccount } },
+      {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
+    const idle = monitor.waitForIdle();
+    if (testCase.shutdownAfterRetire) {
+      monitor.shutdown();
+    }
+    releaseStop?.();
+    await idle;
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.resetRestartAttempts).toHaveBeenCalledTimes(testCase.expectedStarts);
+    expect(manager.startChannel).toHaveBeenCalledTimes(testCase.expectedStarts);
+  });
+
+  it("bounds replacement handoff and abandons a late restart", async () => {
+    let releaseStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        await stopGate;
+      }),
+    });
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    monitor.stop();
+    const handoff = monitor.waitForIdle();
+    await vi.advanceTimersByTimeAsync(5_001);
+    await handoff;
+
+    releaseStop?.();
+    await monitor.waitForIdle();
+
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+  });
+
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);

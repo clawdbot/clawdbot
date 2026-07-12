@@ -1087,7 +1087,61 @@ struct GatewayNodeSessionTests {
         await gateway._test_notifyConnectedIfNeeded(
             admissionGeneration: staleAdmissionGeneration)
 
+        try await waitUntil("disconnect callback completed") {
+            await lifecycle.values().contains("disconnected")
+        }
         #expect(await lifecycle.values() == ["connected", "disconnected"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `transport reconnect does not wait for blocked disconnect lifecycle`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invalidationGate = AsyncGate()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: { await lifecycle.record("connected") },
+            onDisconnected: { _ in await lifecycle.record("disconnected") },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: { await invalidationGate.wait() })
+        let firstTask = try #require(session.latestTask())
+        try await waitUntil("receive loop armed before disconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+
+        firstTask.emitReceiveFailure()
+        try await waitUntil("disconnect lifecycle blocked") {
+            await invalidationGate.hasStarted()
+        }
+        try await waitUntil("replacement transport connected") {
+            session.snapshotMakeCount() == 2
+        }
+        #expect(await lifecycle.values() == ["connected"])
+
+        await invalidationGate.release()
+        try await waitUntil("replacement lifecycle completed") {
+            await lifecycle.values() == ["connected", "disconnected", "connected"]
+        }
         await gateway.disconnect()
     }
 

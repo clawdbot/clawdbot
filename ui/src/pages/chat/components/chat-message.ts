@@ -94,8 +94,8 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
-      label: "Unknown date",
-      title: "Unknown date",
+      label: t("chat.messages.unknownDate"),
+      title: t("chat.messages.unknownDate"),
       dateTime: "",
     };
   }
@@ -133,7 +133,7 @@ const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
-    return "Unknown date";
+    return t("chat.messages.unknownDate");
   }
   const ageMs = nowMs - date.getTime();
   // Derive from ageMs so the injected clock stays the single time source.
@@ -580,10 +580,11 @@ type StreamGroupOptions = {
 };
 
 function renderReadingIndicatorBubble() {
-  // Working spark: pulsing brand mark where the reply will materialize.
-  // aria-hidden; the composer's sr-only run-status region announces phases.
+  // Working claw: the brand pincer rests slightly open where the reply will
+  // materialize and pinches once per cycle (same gesture as the favicon
+  // mascot snap). aria-hidden; the composer sr-only run-status announces.
   return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.spark}</div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
   `;
 }
 
@@ -815,7 +816,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           </div>
           <div class="chat-group-footer">
-            <span class="chat-sender-name">Activity</span>
+            <span class="chat-sender-name">${t("chat.messages.activity")}</span>
             ${renderChatTimestamp(group.timestamp)}
             ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
           </div>
@@ -1117,10 +1118,10 @@ function placeDeleteConfirmPopover(
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   return html`
     <span class="chat-delete-wrap">
-      <openclaw-tooltip content="Delete">
+      <openclaw-tooltip .content=${t("common.delete")}>
         <button
           class="chat-group-delete"
-          aria-label="Delete message"
+          aria-label=${t("chat.messages.deleteMessage")}
           @click=${(e: Event) => {
             if (shouldSkipDeleteConfirm()) {
               onDelete();
@@ -1751,7 +1752,9 @@ function renderAssistantAttachments(
                       >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
                     >`
                   : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    ? html`<span class="chat-assistant-attachment-badge"
+                        >${t("chat.messages.voiceNote")}</span
+                      >`
                     : nothing}
               </div>
               ${attachmentUrl
@@ -1917,11 +1920,11 @@ function renderExpandButton(
   },
 ) {
   return html`
-    <openclaw-tooltip content="Open in canvas">
+    <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
         class="btn btn--xs chat-expand-btn"
         type="button"
-        aria-label="Open in canvas"
+        aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>
           onOpenSidebar({
             kind: "markdown",
@@ -2147,10 +2150,10 @@ function renderGroupedMessage(
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
-    ? "Tool error"
+    ? t("chat.toolCards.toolError")
     : singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
-      : "Tool output";
+      : t("chat.toolCards.toolOutput");
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(

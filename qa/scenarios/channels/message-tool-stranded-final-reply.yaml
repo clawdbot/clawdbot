@@ -55,9 +55,9 @@ flow:
         - set: logCursor
           value:
             expr: markGatewayLogCursor()
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -78,7 +78,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 180000)
         - set: scenarioRequests
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
         - set: strandedRequests
           value:
             expr: "scenarioRequests.filter((request) => !String(request.allInputText ?? '').includes(config.retryPromptNeedle))"

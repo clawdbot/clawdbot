@@ -127,12 +127,12 @@ export class TwilioProvider implements VoiceCallProvider {
       return;
     }
 
-    const callIdMatch = webhookUrl.match(/callId=([^&]+)/);
-    if (!callIdMatch) {
+    const callId = webhookUrl.match(/callId=([^&]+)/)?.[1];
+    if (!callId) {
       return;
     }
 
-    this.deleteStoredTwiml(callIdMatch[1]);
+    this.deleteStoredTwiml(callId);
     this.streamAuthTokens.delete(providerCallId);
   }
 

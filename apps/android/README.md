@@ -12,6 +12,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
+- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)

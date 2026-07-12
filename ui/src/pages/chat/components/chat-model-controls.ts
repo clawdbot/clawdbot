@@ -484,7 +484,9 @@ function renderChatModelReasoningSelect(params: {
               <span class="chat-controls__model-option-title">
                 <span class="chat-controls__model-option-name">${modelLabel}</span>
                 ${entry.isDefault
-                  ? html`<span class="chat-controls__model-default-label">Default</span>`
+                  ? html`<span class="chat-controls__model-default-label"
+                      >${t("chat.modelControls.default")}</span
+                    >`
                   : ""}
               </span>
               <span class="chat-controls__model-option-provider">
@@ -605,7 +607,9 @@ function renderChatModelReasoningSelect(params: {
                 ${showReasoning
                   ? html`
                       <div class="chat-controls__reasoning-head">
-                        <span class="chat-controls__inline-select-section-label">Reasoning</span>
+                        <span class="chat-controls__inline-select-section-label"
+                          >${t("chat.modelControls.reasoning")}</span
+                        >
                         <span class="chat-controls__reasoning-state">
                           <span
                             class="chat-controls__reasoning-value ${hasThinkingOverride
@@ -718,7 +722,9 @@ function renderChatModelReasoningSelect(params: {
                     `
                   : ""}
                 <div class="chat-controls__speed-row">
-                  <span class="chat-controls__inline-select-section-label">Speed</span>
+                  <span class="chat-controls__inline-select-section-label"
+                    >${t("chat.modelControls.speed")}</span
+                  >
                   <openclaw-tooltip .content=${speedTooltip}>
                     <button
                       class="chat-controls__speed-toggle ${fastMode.active

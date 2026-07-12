@@ -8,6 +8,10 @@ public enum OpenClawSystemCommand: String, Codable, Sendable {
     case execApprovalsSet = "system.execApprovals.set"
 }
 
+public enum OpenClawFileSystemCommand: String, Codable, Sendable {
+    case listDir = "fs.listDir"
+}
+
 public enum OpenClawNotificationPriority: String, Codable, Sendable {
     case passive
     case active

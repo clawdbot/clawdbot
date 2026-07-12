@@ -2569,7 +2569,7 @@ async function runEmbeddedAgentInternal(
             runtimePlan,
           });
           const hostTrajectoryRecorder =
-            agentHarness.id === CODEX_HARNESS_ID
+            agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
               ? createTrajectoryRuntimeRecorder({
                   cfg: params.config,
                   env: process.env,
@@ -2839,6 +2839,7 @@ async function runEmbeddedAgentInternal(
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             modelRun: params.modelRun,
+            disableTrajectory: params.disableTrajectory,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

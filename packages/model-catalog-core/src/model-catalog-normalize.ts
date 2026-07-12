@@ -763,15 +763,3 @@ export function normalizeModelCatalogProviderRows(params: {
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
-
-/** Normalize all provider catalogs into sorted runtime rows. */
-export function normalizeModelCatalogRows(params: {
-  providers: Record<string, ModelCatalogProvider>;
-  source: ModelCatalogSource;
-}): NormalizedModelCatalogRow[] {
-  return Object.entries(params.providers)
-    .flatMap(([provider, providerCatalog]) =>
-      normalizeModelCatalogProviderRows({ provider, providerCatalog, source: params.source }),
-    )
-    .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
-}

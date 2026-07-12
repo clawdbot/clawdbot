@@ -183,6 +183,69 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `file system list directory returns only sorted directories`() async throws {
+        struct Entry: Decodable, Equatable {
+            var name: String
+            var path: String
+            var hidden: Bool?
+        }
+        struct Payload: Decodable {
+            var path: String
+            var parent: String?
+            var home: String
+            var entries: [Entry]
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacNodeRuntimeTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projects = root.appendingPathComponent("Projects", isDirectory: true)
+        let hidden = root.appendingPathComponent(".hidden", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: false)
+        try Data("not a directory".utf8).write(to: root.appendingPathComponent("notes.txt"))
+
+        let paramsJSON = try String(
+            decoding: JSONEncoder().encode(["path": root.path]),
+            as: UTF8.self)
+        let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+            id: "req-fs-list-dir",
+            command: OpenClawFileSystemCommand.listDir.rawValue,
+            paramsJSON: paramsJSON))
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
+
+        #expect(response.ok)
+        #expect(payload.path == root.path)
+        #expect(payload.parent == root.deletingLastPathComponent().path)
+        #expect(payload.home == FileManager.default.homeDirectoryForCurrentUser.path)
+        let listedRoot = URL(fileURLWithPath: payload.path, isDirectory: true)
+        #expect(payload.entries == [
+            Entry(
+                name: "Projects",
+                path: listedRoot.appendingPathComponent("Projects", isDirectory: true).path,
+                hidden: nil),
+            Entry(
+                name: ".hidden",
+                path: listedRoot.appendingPathComponent(".hidden", isDirectory: true).path,
+                hidden: true),
+        ])
+    }
+
+    @Test func `file system list directory rejects relative paths`() async throws {
+        let paramsJSON = try String(
+            decoding: JSONEncoder().encode(["path": "Projects"]),
+            as: UTF8.self)
+        let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+            id: "req-fs-list-dir-relative",
+            command: OpenClawFileSystemCommand.listDir.rawValue,
+            paramsJSON: paramsJSON))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+    }
+
     @Test func `handle invoke returns injected Codex thread catalog`() async {
         let payload = #"{"sessions":[]}"#
         let runtime = MacNodeRuntime(

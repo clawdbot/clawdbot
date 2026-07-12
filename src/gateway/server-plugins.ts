@@ -529,9 +529,11 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
+  const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
   return await dispatchGatewayMethod<T>(method, params, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
+    ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
 }

@@ -421,21 +421,25 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
   };
 
   const markResolved = (index: number) => {
-    ordered[index] = { ...ordered[index], _resolved: true };
+    const pending = ordered[index];
+    if (!pending) {
+      return;
+    }
+    ordered[index] = { ...pending, _resolved: true };
     const unresolvedIndex = unresolvedOrder.indexOf(index);
     if (unresolvedIndex >= 0) {
       unresolvedOrder.splice(unresolvedIndex, 1);
     }
-    const toolIndices = unresolvedByTool.get(ordered[index].tool);
+    const toolIndices = unresolvedByTool.get(pending.tool);
     if (!toolIndices) {
       return;
     }
     const nextIndices = toolIndices.filter((candidate) => candidate !== index);
     if (nextIndices.length > 0) {
-      unresolvedByTool.set(ordered[index].tool, nextIndices);
+      unresolvedByTool.set(pending.tool, nextIndices);
       return;
     }
-    unresolvedByTool.delete(ordered[index].tool);
+    unresolvedByTool.delete(pending.tool);
   };
 
   const matchPendingIndex = (result: { id?: string; tool?: string }) => {
@@ -509,7 +513,11 @@ function resolveToolCallOrderFromMockRequests(
   };
 
   const markResolved = (index: number) => {
-    ordered[index] = { ...ordered[index], _resolved: true };
+    const pending = ordered[index];
+    if (!pending) {
+      return;
+    }
+    ordered[index] = { ...pending, _resolved: true };
     const unresolvedIndex = unresolvedOrder.indexOf(index);
     if (unresolvedIndex >= 0) {
       unresolvedOrder.splice(unresolvedIndex, 1);

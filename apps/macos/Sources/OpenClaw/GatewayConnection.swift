@@ -154,7 +154,6 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
-        case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
@@ -1355,14 +1354,6 @@ extension GatewayConnection {
             idempotencyKey: idempotencyKey))
     }
 
-    func sendSystemEvent(_ params: [String: AnyCodable]) async {
-        do {
-            try await self.requestVoid(method: .systemEvent, params: params)
-        } catch {
-            // Best-effort only.
-        }
-    }
-
     // MARK: - Health
 
     func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
@@ -1547,18 +1538,6 @@ extension GatewayConnection {
             method: .chatSend,
             params: params,
             timeoutMs: Double(requestTimeoutMs))
-    }
-
-    func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        struct AbortResponse: Decodable {
-            let ok: Bool?
-            let aborted: Bool?
-        }
-        let res: AbortResponse = try await requestDecoded(
-            method: .chatAbort,
-            params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])
-        return res.aborted ?? false
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {

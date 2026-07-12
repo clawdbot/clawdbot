@@ -113,7 +113,7 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
         finish(true);
         return;
       }
-      const sizeKb = Number.parseInt(match[1], 10);
+      const sizeKb = Number.parseInt(match[0], 10);
       finish(sizeKb <= heuristicKb);
     });
     du.on("error", () => {

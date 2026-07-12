@@ -181,8 +181,6 @@ struct OpenClawMascotPose: Equatable {
     var effect: OpenClawMascotEffect = .none
     var effectPhase: CGFloat = 0
 
-    static let still = OpenClawMascotPose()
-
     /// Motionless expression per mood for Reduce Motion users.
     static func staticPose(for mood: OpenClawMascotMood) -> OpenClawMascotPose {
         var pose = OpenClawMascotPose()

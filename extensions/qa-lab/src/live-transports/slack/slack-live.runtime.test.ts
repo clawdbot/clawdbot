@@ -133,6 +133,10 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-table-invalid-blocks-fallback",
     );
+    expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
+      "codex",
+    );
+    expect(testing.findScenario(["slack-canary"])[0]?.forcedRuntime).toBeUndefined();
   });
 
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
@@ -267,7 +271,9 @@ describe("Slack live QA runtime helpers", () => {
     expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
   });
 
-  it("extracts Slack native approval button values from blocks", () => {
+  it("extracts typed Slack approval button values from blocks", () => {
+    const actionValue =
+      'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}';
     expect(
       testing.collectSlackActionValues([
         {
@@ -276,18 +282,21 @@ describe("Slack live QA runtime helpers", () => {
             {
               type: "button",
               text: { type: "plain_text", text: "Allow Once" },
-              value: "/approve plugin:abc allow-once",
+              value: actionValue,
             },
           ],
         },
       ]),
-    ).toEqual(["/approve plugin:abc allow-once"]);
+    ).toEqual([actionValue]);
   });
 
-  it("extracts plugin approval ids from native Slack approval action values", () => {
+  it("extracts plugin approval ids from typed Slack approval action values", () => {
     expect(
       testing.extractSlackNativeApprovalId({
-        actionValues: ["/approve plugin:abc123 allow-once", "/approve plugin:abc123 deny"],
+        actionValues: [
+          'openclaw:approval:v1:{"approvalId":"plugin:abc123","approvalKind":"plugin","decision":"allow-once"}',
+          'openclaw:approval:v1:{"approvalId":"plugin:abc123","approvalKind":"plugin","decision":"deny"}',
+        ],
         decision: "allow-once",
       }),
     ).toBe("plugin:abc123");
@@ -989,7 +998,9 @@ describe("Slack live QA runtime helpers", () => {
     ).toBe(true);
     expect(
       testing.matchesSlackApprovalResolvedUpdate({
-        actionValues: ["/approve plugin:abc allow-once"],
+        actionValues: [
+          'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
+        ],
         approvalKind: "plugin",
         decision: "allow-once",
         extraTextMatches: ["Codex app-server file approval"],
@@ -1033,7 +1044,8 @@ describe("Slack live QA runtime helpers", () => {
               {
                 type: "button",
                 text: { type: "plain_text", text: "Allow Once" },
-                value: "/approve plugin:abc allow-once",
+                value:
+                  'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
               },
             ],
           },
@@ -1191,7 +1203,9 @@ describe("Slack live QA runtime helpers", () => {
               approvalKind: "plugin",
               channelId: "C123456789",
               decision: "allow-once",
-              pendingActionValues: ["/approve plugin:abc allow-once"],
+              pendingActionValues: [
+                'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
+              ],
               pendingMessageTs: "1.000000",
               pendingText: "Plugin approval required",
               resolvedActionValues: [],
@@ -1245,7 +1259,9 @@ describe("Slack live QA runtime helpers", () => {
               decision: "allow-once",
               finalCodexTurnStatus: "ok",
               operationVerified: true,
-              pendingActionValues: ["/approve plugin:abc allow-once"],
+              pendingActionValues: [
+                'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
+              ],
               pendingMessageTs: "1.000000",
               pendingText: "Plugin approval required",
               resolvedActionValues: [],

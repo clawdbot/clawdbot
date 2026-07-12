@@ -73,15 +73,15 @@ function resolveProfileForTest(
   state: BrowserServerState,
   profileName: string,
 ): ResolvedBrowserProfile {
-  const rawProfile = state.resolved.profiles[profileName] ?? {};
+  const rawProfile = state.resolved.profiles[profileName];
   const cdpPort =
-    typeof rawProfile.cdpPort === "number"
+    typeof rawProfile?.cdpPort === "number"
       ? rawProfile.cdpPort
       : profileName === "remote"
         ? 9222
         : state.resolved.cdpPortRangeStart;
   const cdpUrl =
-    typeof rawProfile.cdpUrl === "string"
+    typeof rawProfile?.cdpUrl === "string"
       ? rawProfile.cdpUrl
       : `${state.resolved.cdpProtocol}://${state.resolved.cdpHost}:${cdpPort}`;
   const parsed = new URL(cdpUrl.replace(/^ws/i, "http"));
@@ -93,13 +93,13 @@ function resolveProfileForTest(
     cdpUrl,
     cdpHost,
     cdpIsLoopback,
-    color: rawProfile.color ?? state.resolved.color,
-    driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
-    headless: rawProfile.headless ?? state.resolved.headless,
+    color: rawProfile?.color ?? state.resolved.color,
+    driver: rawProfile?.driver === "existing-session" ? "existing-session" : "openclaw",
+    headless: rawProfile?.headless ?? state.resolved.headless,
     headlessSource:
-      typeof rawProfile.headless === "boolean" ? "profile" : state.resolved.headlessSource,
-    attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
-    userDataDir: rawProfile.userDataDir,
+      typeof rawProfile?.headless === "boolean" ? "profile" : state.resolved.headlessSource,
+    attachOnly: rawProfile?.attachOnly ?? state.resolved.attachOnly,
+    userDataDir: rawProfile?.userDataDir,
   };
 }
 

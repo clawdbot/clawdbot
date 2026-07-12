@@ -507,7 +507,11 @@ function isRetryableError(error: Error): boolean {
     if (!clientErrorMatch) {
       continue;
     }
-    const statusCode = Number.parseInt(clientErrorMatch[1], 10);
+    const statusCodeText = clientErrorMatch[1];
+    if (!statusCodeText) {
+      continue;
+    }
+    const statusCode = Number.parseInt(statusCodeText, 10);
     if (statusCode >= 400 && statusCode < 500) {
       return false;
     }

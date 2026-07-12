@@ -913,6 +913,7 @@ async function verifyCodexCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
+    expectedSessionTarget: "current",
   });
   if (createdJob.id) {
     await runOpenClawCliJson(

@@ -72,7 +72,6 @@ describe("createPersistCronSessionEntry", () => {
     const store: Record<string, SessionEntry> = {};
     const persistSessionEntry = makeGuardedPersistSessionEntry(store);
     const continuation = createCronRunContinuationSession({
-      isFastTestEnv: false,
       cronSession,
       runSessionKey,
       thinkingLevel: "high",
@@ -169,7 +168,6 @@ describe("createPersistCronSessionEntry", () => {
     const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:job",
       persistSessionEntry,
@@ -203,7 +201,6 @@ describe("createPersistCronSessionEntry", () => {
     const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:shell-only",
       persistSessionEntry,
@@ -241,7 +238,6 @@ describe("createPersistCronSessionEntry", () => {
     );
 
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:completed",
       persistSessionEntry: vi.fn(async () => {}),
@@ -263,7 +259,6 @@ describe("createPersistCronSessionEntry", () => {
     const persistSessionEntry = vi.fn(async () => {});
 
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:session",
       persistSessionEntry,
@@ -301,13 +296,11 @@ describe("createPersistCronSessionEntry", () => {
     const olderSession = makeConcurrentSession("older-revision");
     const newerSession = makeConcurrentSession("newer-revision");
     const persistOlder = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession: olderSession,
       agentSessionKey: sessionKey,
       persistSessionEntry,
     });
     const persistNewer = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession: newerSession,
       agentSessionKey: sessionKey,
       persistSessionEntry,
@@ -336,7 +329,6 @@ describe("createPersistCronSessionEntry", () => {
       storePath,
     } as MutableCronSession;
     const persistNext = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession: nextSession,
       agentSessionKey: sessionKey,
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
@@ -382,7 +374,6 @@ describe("createPersistCronSessionEntry", () => {
       },
     };
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: sessionKey,
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
@@ -430,7 +421,6 @@ describe("createPersistCronSessionEntry", () => {
       },
     };
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: sessionKey,
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
@@ -479,7 +469,6 @@ describe("createPersistCronSessionEntry", () => {
     delete currentEntry.inheritedToolAllow;
     const persistedStore: Record<string, SessionEntry> = { [sessionKey]: currentEntry };
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: sessionKey,
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
@@ -517,7 +506,6 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(changed).toBe(true);
     const persist = createPersistCronSessionEntry({
-      isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:telegram:direct:42",
       persistSessionEntry,

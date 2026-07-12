@@ -27,6 +27,10 @@ type ChatWelcomeProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  /** Hero hint override; defaults to the chat slash-command hint. */
+  hint?: unknown;
+  /** Rendered between the hero and the recents (the new-session draft composer). */
+  composer?: unknown;
   sessions?: SessionsListResult | null;
   sessionKey?: string;
   sessionHost?: UiSessionDefaultsHost | null;
@@ -67,7 +71,7 @@ export function resolveAssistantDisplayAvatar(
  * minus channel-originated sessions — those live in their channel sections and
  * are not something the user "starts" from here.
  */
-export function selectWelcomeRecentSessions(
+function selectWelcomeRecentSessions(
   props: Pick<ChatWelcomeProps, "sessions" | "sessionKey" | "sessionHost">,
 ): GatewaySessionRow[] {
   if (!props.sessions) {
@@ -110,7 +114,7 @@ function renderWelcomeClawd() {
   `;
 }
 
-export function renderWelcomeRecentSessions(
+function renderWelcomeRecentSessions(
   rows: GatewaySessionRow[],
   onOpenSession: ((sessionKey: string) => void) | undefined,
 ) {
@@ -133,9 +137,7 @@ export function renderWelcomeRecentSessions(
   `;
 }
 
-export function renderWelcomeSuggestions(
-  props: Pick<ChatWelcomeProps, "onDraftChange" | "onSend">,
-) {
+function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" | "onSend">) {
   return html`
     <div class="agent-chat__suggestions">
       ${WELCOME_SUGGESTION_KEYS.map((key) => {
@@ -157,8 +159,7 @@ export function renderWelcomeSuggestions(
   `;
 }
 
-/** Shared hero (avatar, name, hint) for the chat welcome and the new-session draft. */
-export function renderWelcomeHero(
+function renderWelcomeHero(
   props: Pick<ChatWelcomeProps, "assistantName" | "assistantAvatar" | "assistantAvatarUrl"> & {
     hint: unknown;
   },
@@ -179,6 +180,7 @@ export function renderWelcomeHero(
   `;
 }
 
+/** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function renderWelcomeState(props: ChatWelcomeProps) {
   const recentSessions = selectWelcomeRecentSessions(props);
 
@@ -188,10 +190,13 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
         assistantName: props.assistantName,
         assistantAvatar: props.assistantAvatar,
         assistantAvatarUrl: props.assistantAvatarUrl,
-        hint: html`${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd> ${t(
-            "chat.welcome.hintAfterShortcut",
-          )}`,
+        hint:
+          props.hint ??
+          html`${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd> ${t(
+              "chat.welcome.hintAfterShortcut",
+            )}`,
       })}
+      ${props.composer ?? nothing}
       ${recentSessions.length > 0
         ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
         : renderWelcomeSuggestions(props)}

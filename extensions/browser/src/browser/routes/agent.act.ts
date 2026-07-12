@@ -1,10 +1,11 @@
+import { setTimeout as sleep } from "node:timers/promises";
 /**
  * Browser agent action route registration and existing-session execution.
  *
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
-import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
@@ -216,7 +217,9 @@ function buildExistingSessionWaitPredicate(params: {
   if (checks.length === 0) {
     return null;
   }
-  return checks.length === 1 ? checks[0] : checks.map((check) => `(${check})`).join(" && ");
+  return checks.length === 1
+    ? expectDefined(checks.at(0), "single existing-session condition")
+    : checks.map((check) => `(${check})`).join(" && ");
 }
 
 async function waitForExistingSessionCondition(

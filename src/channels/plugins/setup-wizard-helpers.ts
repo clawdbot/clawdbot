@@ -922,36 +922,6 @@ export function patchChannelConfigForAccount(params: {
   });
 }
 
-export function applySingleTokenPromptResult(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId: string;
-  tokenPatchKey: string;
-  tokenResult: {
-    useEnv: boolean;
-    token: SecretInput | null;
-  };
-}): OpenClawConfig {
-  let next = params.cfg;
-  if (params.tokenResult.useEnv) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: {},
-    });
-  }
-  if (params.tokenResult.token) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: { [params.tokenPatchKey]: params.tokenResult.token },
-    });
-  }
-  return next;
-}
-
 export function buildSingleChannelSecretPromptState(params: {
   accountConfigured: boolean;
   hasConfigToken: boolean;

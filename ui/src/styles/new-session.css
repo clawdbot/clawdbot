@@ -1,52 +1,87 @@
-/* Full-page new-session draft: target chips above the shared chat composer
-   shell (.agent-chat__input). Corner radii stay on the composer's radius
-   tokens so the draft picker matches the chat picker. */
+/* Full-page new-session draft: the start-screen welcome centers in the pane
+   with the draft block (clean target row + composer) between the hero and the
+   recent chats, so the draft reads as the start screen plus "where to start"
+   controls. */
+openclaw-new-session-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .new-session-page {
   display: flex;
-  justify-content: center;
-  min-height: 100%;
-  padding: clamp(24px, 10vh, 96px) 20px 32px;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
-.new-session-page__inner {
+/* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
+   drag band (see the scroll container's mousedown handler). */
+.new-session-page__scroll {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  width: min(720px, 100%);
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
 }
 
-/* The draft page opens with the same hero as the chat welcome screen. The
-   shared .agent-chat__welcome sizing is built for a full-height chat pane,
-   so neutralize its stretch/centering inside this column. */
+/* The shared welcome stretches (flex: 1) and centers via justify-content,
+   which clips overflow above the scroll origin once the draft content is
+   taller than the pane (short window, open folder browser). Content-size it
+   here; its margin: auto still centers whenever there is spare room. */
 .new-session-page .agent-chat__welcome {
-  flex: initial;
-  width: 100%;
-  margin: 0;
-  padding: 0 0 8px;
+  flex: 0 0 auto;
   min-height: auto;
 }
 
-.new-session-page .agent-chat__recents,
-.new-session-page .agent-chat__suggestions {
-  align-self: center;
-  margin-top: 4px;
+/* Draft block inside the centered welcome column; the welcome centers text,
+   so reset alignment for the controls and composer. */
+.new-session-page__draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  text-align: left;
 }
 
+/* Cursor-style quiet target row: plain muted text controls with the native
+   select chevrons, no chip borders; hover/focus restores full contrast. */
 .new-session-page__targets {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 0 2px;
+}
+
+/* The worktree toggle and its branch/name fields wrap as one unit so the
+   dependent fields never land on a different line than their toggle. */
+.new-session-page__target-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: inherit;
 }
 
 .new-session-page__target {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
   font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__target:hover,
+.new-session-page__target:focus-within {
   color: var(--text);
 }
 
@@ -54,19 +89,32 @@
 .new-session-page__target input[type="text"] {
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: inherit;
   font-size: 12px;
   outline: none;
+  cursor: pointer;
 }
 
+.new-session-page__target input[type="text"] {
+  cursor: text;
+}
+
+.new-session-page__target input[type="text"]::placeholder {
+  color: inherit;
+}
+
+/* Compact by default so the browse button hugs the path; grows only as far
+   as a long path needs, then ellipsizes via the input's own scroll. */
 .new-session-page__target--folder {
-  flex: 1 1 220px;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
 .new-session-page__target--folder input {
-  flex: 1 1 auto;
+  width: 150px;
+  max-width: 40vw;
   min-width: 0;
+  field-sizing: content;
 }
 
 .new-session-page__target-icon {
@@ -165,6 +213,16 @@
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
+.new-session-page__browser-entry:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.new-session-page__browser-entry:disabled:hover {
+  background: transparent;
+}
+
 .new-session-page__browser-entry--hidden {
   color: var(--muted);
 }
@@ -187,13 +245,6 @@
   color: var(--danger);
 }
 
-/* Larger draft box than the chat composer default; wins over the shared
-   .agent-chat__composer-combobox > textarea sizing by specificity. */
-.new-session-page__composer textarea.new-session-page__message {
-  min-height: 112px;
-  max-height: 40vh;
-}
-
 .new-session-page__browser-use {
   padding: 6px 14px;
   border: 1px solid transparent;
@@ -208,4 +259,33 @@
 .new-session-page__browser-use:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Phones (and short landscape): match the chat thread's mobile inset and
+   condense the target rows in DOM order — the folder chip flexes next to
+   Where and the worktree group wraps below as a unit, so visual, reading,
+   and tab order stay aligned at every phone width. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__scroll {
+    padding: 12px 8px;
+  }
+
+  .new-session-page__targets {
+    gap: 4px 12px;
+  }
+
+  .new-session-page__target--folder {
+    flex: 1 1 140px;
+    min-width: 140px;
+  }
+
+  .new-session-page__target--folder input {
+    flex: 1 1 auto;
+    width: 0;
+    max-width: none;
+  }
+
+  .new-session-page__branch {
+    width: 110px;
+  }
 }

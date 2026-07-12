@@ -311,6 +311,25 @@ describe("runDaemonRestart health checks", () => {
     expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "started" });
   });
 
+  it("preserves an install-time port override when config does not own the port", async () => {
+    await runDaemonStart({ json: true });
+    await runDaemonRestart({ json: true });
+
+    expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBeUndefined();
+    expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBeUndefined();
+  });
+
+  it("repairs toward an explicitly configured gateway port", async () => {
+    loadConfig.mockReturnValue({ gateway: { port: 19_001 } });
+    resolveGatewayPort.mockReturnValue(19_001);
+
+    await runDaemonStart({ json: true });
+    await runDaemonRestart({ json: true });
+
+    expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBe(19_001);
+    expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBe(19_001);
+  });
+
   it("requests a safe gateway restart over RPC without touching the service manager", async () => {
     await runDaemonRestart({ json: true, safe: true });
 

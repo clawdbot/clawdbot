@@ -14,6 +14,11 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -371,7 +376,9 @@ export async function runToolSearchGatewayLane(params: {
     stateDir,
     targetTool: params.fixture.targetTool,
   });
-  const beforeRequests = (await fetchJson(`${providerBaseUrl}/debug/requests`)) as unknown[];
+  const requestCursorBefore = readQaMockRequestCursor(
+    await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
+  );
   const response = await fetchJson(
     `${params.env.gateway.baseUrl}/v1/responses`,
     {
@@ -403,7 +410,9 @@ export async function runToolSearchGatewayLane(params: {
     },
     { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
   );
-  const requests = (await fetchJson(`${providerBaseUrl}/debug/requests`)) as Array<{
+  const laneRequests = (await fetchJson(
+    qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
+  )) as Array<{
     raw?: string;
     body?: { tools?: unknown[] };
     instructions?: string;
@@ -412,7 +421,6 @@ export async function runToolSearchGatewayLane(params: {
     toolOutput?: string;
     plannedToolName?: string;
   }>;
-  const laneRequests = requests.slice(beforeRequests.length);
   const lastRequest = laneRequests.at(-1) ?? {};
   const responseStatus = (response as { status?: unknown }).status;
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
@@ -475,14 +483,14 @@ export function assertToolSearchLaneResults(params: {
     normal.providerPlannedTools.includes(targetTool) &&
       normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       normal.gatewayOutputText.includes(targetTool) &&
-      normal.sessionLogToolMentions[targetTool] > 0,
+      (normal.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `normal lane did not call ${targetTool}: ${laneDebug()}`,
   );
   assert(
     code.providerPlannedTools.includes("tool_search_code") &&
       code.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       code.gatewayOutputText.includes(targetTool) &&
-      code.sessionLogToolMentions[targetTool] > 0,
+      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `code lane did not bridge-call ${targetTool}: ${laneDebug()}`,
   );
   assert(
@@ -498,7 +506,8 @@ export function assertToolSearchLaneResults(params: {
     `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
   );
   assert(
-    code.sessionLogToolMentions.tool_search_code > 0 && code.sessionLogToolMentions[targetTool] > 0,
+    (code.sessionLogToolMentions.tool_search_code ?? 0) > 0 &&
+      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
     "code lane session log did not record bridge and target tool mentions",
   );
   assert(

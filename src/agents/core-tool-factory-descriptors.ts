@@ -35,6 +35,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "session_status", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },
+  { name: "sessions_search", family: "openclaw" },
   { name: "sessions_send", family: "openclaw" },
   { name: "sessions_spawn", family: "openclaw" },
   { name: "sessions_yield", family: "openclaw" },

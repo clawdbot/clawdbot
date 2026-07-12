@@ -67,6 +67,7 @@
   "delivery-queue-runtime",
   "file-access-runtime",
   "heartbeat-runtime",
+  "expect-runtime",
   "number-runtime",
   "secure-random-runtime",
   "system-event-runtime",

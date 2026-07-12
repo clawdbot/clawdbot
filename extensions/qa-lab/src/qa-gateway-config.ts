@@ -12,6 +12,7 @@ import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
@@ -62,6 +63,7 @@ export function buildQaGatewayConfig(params: {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
@@ -120,12 +122,20 @@ export function buildQaGatewayConfig(params: {
       ...transportPluginIds,
     ]),
   ];
-  const resolveModelParams = (modelRef: string) =>
-    provider.resolveModelParams({
-      modelRef,
-      fastMode: params.fastMode,
-      thinkingDefault: params.thinkingDefault,
-    });
+  const resolveModelEntry = (modelRef: string) => {
+    // Codex owns its app-server transport. OpenClaw provider params would make
+    // the forced parity cell an authored route that Codex correctly rejects.
+    if (params.forcedRuntime === "codex") {
+      return {};
+    }
+    return {
+      params: provider.resolveModelParams({
+        modelRef,
+        fastMode: params.fastMode,
+        thinkingDefault: params.thinkingDefault,
+      }),
+    };
+  };
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
   const gatewayModels = provider.buildGatewayModels({
     providerBaseUrl,
@@ -177,12 +187,8 @@ export function buildQaGatewayConfig(params: {
           },
         },
         models: {
-          [primaryModel]: {
-            params: resolveModelParams(primaryModel),
-          },
-          [alternateModel]: {
-            params: resolveModelParams(alternateModel),
-          },
+          [primaryModel]: resolveModelEntry(primaryModel),
+          [alternateModel]: resolveModelEntry(alternateModel),
         },
         subagents: {
           allowAgents: ["*"],
@@ -194,6 +200,9 @@ export function buildQaGatewayConfig(params: {
           id: "qa",
           default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
+          ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
+            ? { fastModeDefault: params.fastMode }
+            : {}),
           identity: {
             name: "C-3PO QA",
             theme: "Flustered Protocol Droid",

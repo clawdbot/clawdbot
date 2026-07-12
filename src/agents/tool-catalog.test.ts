@@ -39,6 +39,7 @@ describe("tool-catalog", () => {
       "memory_get",
       "sessions_list",
       "sessions_history",
+      "sessions_search",
       "sessions_send",
       "sessions_spawn",
       "sessions_yield",
@@ -65,6 +66,7 @@ describe("tool-catalog", () => {
     expect(requirePolicyAllow("messaging")).toEqual([
       "sessions_list",
       "sessions_history",
+      "sessions_search",
       "sessions_send",
       "session_status",
       "message",

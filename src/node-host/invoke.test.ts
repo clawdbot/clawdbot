@@ -152,6 +152,30 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.updateParams = undefined;
   });
 
+  it("lists node-host directories for the folder browser", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+    fs.mkdirSync(path.join(root, "Projects"));
+    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    await handleInvoke(
+      {
+        id: "invoke-fs-listdir",
+        nodeId: "node-1",
+        command: "fs.listDir",
+        paramsJSON: JSON.stringify({ path: root }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toMatchObject({
+      path: root,
+      entries: [{ name: "Projects", path: path.join(root, "Projects") }],
+    });
+  });
+
   it("returns a redacted exec approvals snapshot", async () => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();

@@ -1,5 +1,5 @@
 ---
-summary: "Inbound channel location parsing (Telegram, WhatsApp, Matrix, LINE) and context fields"
+summary: "Channel location parsing and portable outbound location payloads"
 read_when:
   - Adding or modifying channel location parsing
   - Using location context fields in agent prompts or tools
@@ -62,6 +62,12 @@ When a location is present, these fields are added to `ctx`:
 When the channel does not set an explicit source, OpenClaw infers it: live shares become `live`, locations with a name or address become `place`, everything else is `pin`.
 
 The prompt renderer treats `LocationName`, `LocationAddress`, and `LocationCaption` as untrusted metadata and serializes them through the same bounded JSON path used for other channel context.
+
+## Outbound payloads
+
+The message tool and Plugin SDK use the same `NormalizedLocation` shape for portable outbound locations. A coordinate-only payload represents a pin. Channels with native venue support may map `name` plus `address` to a venue card.
+
+Telegram currently exposes this through `message(action="send")`. Its first implementation is deliberately standalone: location payloads cannot be mixed with text or media, and incomplete venue pairs fail instead of silently dropping a name or address. Unsupported channels do not advertise the location parameter.
 
 ## Channel notes
 

@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements tool coverage report behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isRecord,
   normalizeOptionalString as readString,
@@ -203,7 +204,11 @@ function buildRow(params: {
   const metadata = params.group.scenarios
     .map(readScenarioRuntimeToolCoverageMetadata)
     .find((entry) => entry.required);
-  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
+  const firstScenario = expectDefined(
+    params.group.scenarios[0],
+    `QA tool fixture group ${params.group.tool} scenario`,
+  );
+  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(firstScenario);
   const rowMetadata = metadata ?? fallbackMetadata;
   const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   return {

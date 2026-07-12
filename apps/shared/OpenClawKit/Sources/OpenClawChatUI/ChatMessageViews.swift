@@ -324,8 +324,7 @@ private struct ChatMessageBody: View {
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
-                        content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        content: self.toolCalls[idx])
                 }
             }
 
@@ -536,7 +535,6 @@ private struct AttachmentRow: View {
 
 private struct ToolCallCard: View {
     let content: OpenClawChatMessageContent
-    let isUser: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

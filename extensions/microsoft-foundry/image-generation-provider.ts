@@ -1,6 +1,7 @@
-// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
+// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   ImageGenerationProvider,
   ImageGenerationRequest,
@@ -351,7 +352,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
               })(),
               body: buildEditFormData({
                 req,
-                image: inputImages[0],
+                image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
                 model,
               }),
               timeoutMs,

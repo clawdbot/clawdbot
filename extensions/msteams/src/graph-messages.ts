@@ -102,8 +102,10 @@ export function resolveConversationPath(to: string): {
   channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
-  if (cleaned.includes("/")) {
-    const [teamId, channelId] = cleaned.split("/", 2);
+  const separatorIndex = cleaned.indexOf("/");
+  if (separatorIndex !== -1) {
+    const teamId = cleaned.slice(0, separatorIndex);
+    const channelId = cleaned.slice(separatorIndex + 1).replace(/\/.*$/, "");
     return {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,

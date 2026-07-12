@@ -1483,6 +1483,10 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const inputs: RawAnnotationInput[] = [];
   let bboxFailures = 0;
   for (const ref of refKeys) {
+    const refInfo = opts.refs[ref];
+    if (refInfo === undefined) {
+      continue;
+    }
     const box = await refLocator(page, ref)
       .boundingBox()
       .catch(() => null);
@@ -1492,8 +1496,8 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
     }
     inputs.push({
       ref,
-      role: opts.refs[ref].role,
-      name: opts.refs[ref].name,
+      role: refInfo.role,
+      name: refInfo.name,
       doc: {
         x: box.x + scroll.x,
         y: box.y + scroll.y,

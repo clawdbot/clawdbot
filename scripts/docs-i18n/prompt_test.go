@@ -46,6 +46,8 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
 				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
+				"When they name the documented product, provider, protocol, or integration, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box",
+				"Translate the same words normally when the source clearly uses them as ordinary prose instead of a name",
 				"Locale rules:",
 			} {
 				if !strings.Contains(prompt, want) {

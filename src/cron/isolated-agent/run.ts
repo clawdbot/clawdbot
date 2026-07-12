@@ -723,7 +723,6 @@ async function prepareCronRunContext(params: {
     );
   };
   const persistSessionEntry = createPersistCronSessionEntry({
-    isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
     persistSessionEntry: persistCronSessionRow,
@@ -1074,7 +1073,6 @@ async function prepareCronRunContext(params: {
     };
     const runContinuationSession = baseSessionKey.startsWith("cron:")
       ? createCronRunContinuationSession({
-          isFastTestEnv: params.isFastTestEnv,
           cronSession,
           runSessionKey,
           thinkingLevel: requestedThinkLevel,

@@ -257,6 +257,12 @@ describe("method scope resolution", () => {
         execNode: "macbook",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        execNode: "macbook",
+        cwd: "/Users/peter/Projects/openclaw",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
   it.each([

@@ -81,8 +81,8 @@ export function setCachedFileInfo(
     }
     if (cache.size >= MAX_CACHE_SIZE) {
       const keys = Array.from(cache.keys());
-      for (let i = 0; i < keys.length / 2; i++) {
-        cache.delete(keys[i]);
+      for (const key of keys.slice(0, Math.ceil(keys.length / 2))) {
+        cache.delete(key);
       }
     }
   }

@@ -2,6 +2,7 @@
  * Codex provider plugin and live app-server model catalog discovery.
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -33,7 +34,9 @@ const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
 const MODEL_DISCOVERY_PAGE_LIMIT = 100;
 const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
-const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
+const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${
+  expectDefined(FALLBACK_CODEX_MODELS[0], "Codex fallback model catalog must not be empty").id
+}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
 const CODEX_REASONING_EFFORTS = [
   "minimal",

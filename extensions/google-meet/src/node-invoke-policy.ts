@@ -4,7 +4,7 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { GoogleMeetConfig } from "./config.js";
-import { normalizeMeetUrl } from "./runtime.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 
 export const GOOGLE_MEET_CHROME_NODE_COMMAND = "googlemeet.chrome";
 

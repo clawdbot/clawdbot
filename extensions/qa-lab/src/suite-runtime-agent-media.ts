@@ -93,8 +93,7 @@ async function resolveGeneratedImagePath(params: {
         const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
           `${params.env.mock.baseUrl}/debug/requests`,
         );
-        for (let index = requests.length - 1; index >= 0; index -= 1) {
-          const request = requests[index];
+        for (const request of requests.toReversed()) {
           if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
             continue;
           }

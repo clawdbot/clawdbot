@@ -12,13 +12,22 @@ import type {
   GoogleMeetModeInput,
   GoogleMeetTransport,
 } from "./config.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
-import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
+import {
+  isSameMeetUrlForReuse,
+  normalizeMeetUrlForReuse,
+  resolveChromeNodeInfo,
+} from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
 import {
   assertBlackHole2chAvailable,
   launchChromeMeet,
   launchChromeMeetOnNode,
+  leaveChromeMeet,
+  leaveChromeMeetOnNode,
+  readChromeMeetTranscript,
+  readChromeMeetTranscriptOnNode,
   recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
@@ -27,11 +36,15 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./transports/twilio.js";
+import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./transports/types.js";
 import type {
+  GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
   GoogleMeetJoinResult,
   GoogleMeetSession,
+  GoogleMeetTranscriptLine,
+  GoogleMeetTranscriptSnapshot,
 } from "./transports/types.js";
 import {
   createVoiceCallGateway,
@@ -43,10 +56,34 @@ import {
   type VoiceCallGateway,
 } from "./voice-call-gateway.js";
 
+export { normalizeMeetUrl } from "./meet-url.js";
+
 type ChromeAudioBridgeResult = NonNullable<
   | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
 >;
+
+type ChromeLaunchResult =
+  | Awaited<ReturnType<typeof launchChromeMeet>>
+  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
+
+type GoogleMeetLeaveResult = {
+  found: boolean;
+  session?: GoogleMeetSession;
+  browserLeft?: boolean;
+};
+
+type RetainedBrowserTab = {
+  session: GoogleMeetSession;
+  tab: GoogleMeetBrowserTab;
+};
+
+type RetainedTranscriptSnapshot = GoogleMeetTranscriptSnapshot & {
+  pageEpoch?: string;
+  pageNextIndex: number;
+};
+
+const GOOGLE_MEET_ENDED_TRANSCRIPTS_MAX = 4;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -54,26 +91,6 @@ function nowIso(): string {
 
 function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
   return `voice:google-meet:${meetingSessionId}`;
-}
-
-export function normalizeMeetUrl(input: unknown): string {
-  const raw = normalizeOptionalString(input);
-  if (!raw) {
-    throw new Error("url required");
-  }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("url must be a valid Google Meet URL");
-  }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "meet.google.com") {
-    throw new Error("url must be an explicit https://meet.google.com/... URL");
-  }
-  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
-    throw new Error("url must include a Google Meet meeting code");
-  }
-  return url.toString();
 }
 
 function resolveTransport(input: GoogleMeetTransport | undefined, config: GoogleMeetConfig) {
@@ -259,9 +276,16 @@ async function commandExists(runtime: PluginRuntime, command: string): Promise<b
 
 export class GoogleMeetRuntime {
   readonly #sessions = new Map<string, GoogleMeetSession>();
+  readonly #sessionLeaves = new Map<string, Promise<GoogleMeetLeaveResult>>();
+  readonly #browserMeetingLocks = new Map<string, Promise<void>>();
+  readonly #createdBrowserTabs = new Map<string, string>();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
+  readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
+  readonly #transcriptCaptures = new Map<string, Promise<void>>();
+  readonly #transcriptFinalizing = new Set<string>();
+  readonly #retiredTranscripts = new Set<string>();
   readonly #voiceCallGateway: VoiceCallGateway;
 
   constructor(
@@ -298,6 +322,45 @@ export class GoogleMeetRuntime {
       await this.#refreshStatusHealthForSession(session);
     }
     return session ? { found: true, session } : { found: false };
+  }
+
+  async transcript(
+    sessionId: string,
+    options: { sinceIndex?: number } = {},
+  ): Promise<{
+    found: boolean;
+    sessionId?: string;
+    startIndex?: number;
+    nextIndex?: number;
+    droppedLines?: number;
+    evicted?: boolean;
+    lines?: GoogleMeetTranscriptLine[];
+  }> {
+    const session = this.#sessions.get(sessionId);
+    if (!session) {
+      return { found: false };
+    }
+    if (session.mode !== "transcribe") {
+      throw new Error("transcript is only available for transcribe-mode sessions");
+    }
+    const sinceIndex = options.sinceIndex ?? 0;
+    if (!Number.isSafeInteger(sinceIndex) || sinceIndex < 0) {
+      throw new Error("sinceIndex must be a non-negative safe integer");
+    }
+    if (session.state === "active" && !this.#transcriptFinalizing.has(session.id)) {
+      await this.#captureTranscriptSnapshot(session);
+    }
+    const snapshot = this.#transcripts.get(sessionId) ?? { droppedLines: 0, lines: [] };
+    const startIndex = Math.max(sinceIndex, snapshot.droppedLines);
+    return {
+      found: true,
+      sessionId,
+      startIndex,
+      nextIndex: snapshot.droppedLines + snapshot.lines.length,
+      droppedLines: snapshot.droppedLines,
+      ...(session.transcriptEvicted ? { evicted: true } : {}),
+      lines: snapshot.lines.slice(startIndex - snapshot.droppedLines),
+    };
   }
 
   async setupStatus(
@@ -385,10 +448,14 @@ export class GoogleMeetRuntime {
   }
 
   async createViaBrowser() {
-    return createMeetWithBrowserProxyOnNode({
+    const result = await createMeetWithBrowserProxyOnNode({
       runtime: this.params.runtime,
       config: this.params.config,
     });
+    if (result.openedByPlugin && result.targetId) {
+      this.#createdBrowserTabs.set(`${result.nodeId}:${result.targetId}`, result.meetingUri);
+    }
+    return result;
   }
 
   async recoverCurrentTab(request: { url?: string; transport?: GoogleMeetTransport } = {}) {
@@ -405,6 +472,7 @@ export class GoogleMeetRuntime {
       });
     }
     return recoverCurrentMeetTab({
+      runtime: this.params.runtime,
       config: this.params.config,
       url,
     });
@@ -415,20 +483,63 @@ export class GoogleMeetRuntime {
     const transport = resolveTransport(request.transport, this.params.config);
     const mode = resolveMode(request.mode, this.params.config);
     const agentId = resolveSessionAgentId(request, this.params.config);
+    if (!isBrowserTransport(transport)) {
+      return await this.#joinUnlocked(request, { url, transport, mode, agentId });
+    }
+    return await this.#withBrowserMeetingLock(
+      transport,
+      url,
+      async () => await this.#joinUnlocked(request, { url, transport, mode, agentId }),
+    );
+  }
+
+  async #joinUnlocked(
+    request: GoogleMeetJoinRequest,
+    resolved: {
+      url: string;
+      transport: GoogleMeetTransport;
+      mode: GoogleMeetMode;
+      agentId: string;
+    },
+  ): Promise<GoogleMeetJoinResult> {
+    const { url, transport, mode, agentId } = resolved;
     const activeSessions = this.list().filter(
       (session) =>
         session.state === "active" &&
         isSameMeetUrlForReuse(session.url, url) &&
         session.transport === transport,
     );
+    const retainedBrowserTabs: RetainedBrowserTab[] = [];
     if (isBrowserTransport(transport) && isGoogleMeetTalkBackMode(mode)) {
       for (const session of activeSessions) {
-        if (session.agentId === agentId || !isGoogleMeetTalkBackMode(session.mode)) {
+        if (
+          !isGoogleMeetTalkBackMode(session.mode) ||
+          isReusableMeetSession(session, { url, transport, mode, agentId })
+        ) {
           continue;
         }
         // A reused browser tab can only host one live talk-back bridge safely.
         // End the previous owner before the tab is reused for another agent.
-        await this.leave(session.id);
+        // Keep the tab: the new session takes it over without re-admission.
+        const tab = this.params.config.chrome.reuseExistingTab
+          ? session.chrome?.browserTab
+          : undefined;
+        const keepBrowserParticipant = Boolean(tab) || session.chrome?.launched === false;
+        if (tab) {
+          retainedBrowserTabs.push({ session, tab });
+        }
+        try {
+          const left = await this.#leaveUnlocked(
+            session.id,
+            keepBrowserParticipant ? { keepBrowserTab: true } : undefined,
+          );
+          if (left.browserLeft === false) {
+            throw new Error("Could not leave the previous Meet browser tab before reassignment.");
+          }
+        } catch (error) {
+          await this.#settleRetainedBrowserTabs(retainedBrowserTabs);
+          throw error;
+        }
         noteSession(session, "Ended before the same Meet tab was reassigned to another agent.");
       }
     }
@@ -493,36 +604,64 @@ export class GoogleMeetRuntime {
         // Session ownership must outlive the original request so later bridge
         // startup and reuse stay on the same workspace and tool policy.
         const chromeConfig = withSessionAgentConfig(this.params.config, agentId);
-        const result =
-          transport === "chrome-node"
-            ? await launchChromeMeetOnNode({
-                runtime: this.params.runtime,
-                config: chromeConfig,
-                fullConfig: this.params.fullConfig,
-                meetingSessionId: session.id,
-                requesterSessionKey: request.requesterSessionKey,
-                mode,
-                url,
-                logger: this.params.logger,
-              })
-            : await launchChromeMeet({
-                runtime: this.params.runtime,
-                config: chromeConfig,
-                fullConfig: this.params.fullConfig,
-                meetingSessionId: session.id,
-                requesterSessionKey: request.requesterSessionKey,
-                mode,
-                url,
-                logger: this.params.logger,
-              });
+        let result: ChromeLaunchResult;
+        try {
+          result =
+            transport === "chrome-node"
+              ? await launchChromeMeetOnNode({
+                  runtime: this.params.runtime,
+                  config: chromeConfig,
+                  fullConfig: this.params.fullConfig,
+                  meetingSessionId: session.id,
+                  requesterSessionKey: request.requesterSessionKey,
+                  mode,
+                  url,
+                  logger: this.params.logger,
+                })
+              : await launchChromeMeet({
+                  runtime: this.params.runtime,
+                  config: chromeConfig,
+                  fullConfig: this.params.fullConfig,
+                  meetingSessionId: session.id,
+                  requesterSessionKey: request.requesterSessionKey,
+                  mode,
+                  url,
+                  logger: this.params.logger,
+                });
+        } catch (error) {
+          await this.#settleRetainedBrowserTabs(retainedBrowserTabs);
+          throw error;
+        }
+        const resultNodeId = "nodeId" in result ? result.nodeId : undefined;
+        const browserTab = this.#inheritBrowserTabOwnership({
+          transport,
+          nodeId: resultNodeId,
+          meetingUrl: url,
+          tab: result.tab,
+        });
         session.chrome = {
           audioBackend: this.params.config.chrome.audioBackend,
           launched: result.launched,
-          nodeId: "nodeId" in result ? result.nodeId : undefined,
+          nodeId: resultNodeId,
           browserProfile: this.params.config.chrome.browserProfile,
+          browserTab,
           health: "browser" in result ? result.browser : undefined,
         };
         this.#attachChromeAudioBridge(session, result.audioBridge);
+        const retainedTabsSettled = await this.#settleRetainedBrowserTabs(
+          retainedBrowserTabs,
+          browserTab ? { transport, nodeId: resultNodeId, tab: browserTab } : undefined,
+        );
+        if (!retainedTabsSettled) {
+          try {
+            await this.#leaveSession(session);
+          } catch (error) {
+            this.params.logger.warn(
+              `[google-meet] replacement cleanup failed: ${formatErrorMessage(error)}`,
+            );
+          }
+          throw new Error("Could not leave the previous Meet browser tab before reassignment.");
+        }
         session.notes.push(
           result.audioBridge
             ? transport === "chrome-node"
@@ -616,26 +755,362 @@ export class GoogleMeetRuntime {
     return { session, spoken };
   }
 
-  async leave(sessionId: string): Promise<{ found: boolean; session?: GoogleMeetSession }> {
+  async leave(
+    sessionId: string,
+    opts?: { keepBrowserTab?: boolean },
+  ): Promise<GoogleMeetLeaveResult> {
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false };
     }
-    const stop = this.#sessionStops.get(sessionId);
-    if (stop) {
-      this.#sessionStops.delete(sessionId);
-      this.#sessionSpeakers.delete(sessionId);
-      this.#sessionHealth.delete(sessionId);
-      try {
-        await stop();
-      } finally {
-        session.state = "ended";
-        session.updatedAt = nowIso();
+    if (!isBrowserTransport(session.transport)) {
+      return await this.#leaveUnlocked(sessionId, opts);
+    }
+    return await this.#withBrowserMeetingLock(
+      session.transport,
+      session.url,
+      async () => await this.#leaveUnlocked(sessionId, opts),
+    );
+  }
+
+  async #leaveUnlocked(
+    sessionId: string,
+    opts?: { keepBrowserTab?: boolean },
+  ): Promise<GoogleMeetLeaveResult> {
+    const inFlight = this.#sessionLeaves.get(sessionId);
+    if (inFlight) {
+      return await inFlight;
+    }
+    const session = this.#sessions.get(sessionId);
+    if (!session) {
+      return { found: false };
+    }
+    // Mark terminal before awaiting teardown so retries and concurrent callers
+    // cannot act on the same browser tab twice.
+    if (session.state === "ended") {
+      return {
+        found: true,
+        session,
+        ...(session.browserLeft === undefined ? {} : { browserLeft: session.browserLeft }),
+      };
+    }
+    const leave = this.#leaveSession(session, opts);
+    this.#sessionLeaves.set(sessionId, leave);
+    try {
+      return await leave;
+    } finally {
+      if (this.#sessionLeaves.get(sessionId) === leave) {
+        this.#sessionLeaves.delete(sessionId);
       }
+    }
+  }
+
+  async #withBrowserMeetingLock<T>(
+    transport: GoogleMeetTransport,
+    url: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    // Logical sessions may share one physical tab. Serialize adoption and
+    // departure for the canonical meeting so neither can invalidate the other.
+    const meeting = normalizeMeetUrlForReuse(url) ?? url;
+    const key = `${transport}:${meeting}`;
+    const previous = this.#browserMeetingLocks.get(key) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.#browserMeetingLocks.set(key, tail);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+      if (this.#browserMeetingLocks.get(key) === tail) {
+        this.#browserMeetingLocks.delete(key);
+      }
+    }
+  }
+
+  async #leaveSession(
+    session: GoogleMeetSession,
+    opts?: { keepBrowserTab?: boolean },
+  ): Promise<GoogleMeetLeaveResult> {
+    // #leaveUnlocked publishes this promise in #sessionLeaves before another
+    // event can re-enter, so the final snapshot remains inside one teardown.
+    if (session.mode === "transcribe") {
+      this.#transcriptFinalizing.add(session.id);
+      await this.#captureTranscriptSnapshot(session, { finalize: true }).catch((error: unknown) => {
+        this.params.logger.debug?.(
+          `[google-meet] final transcript snapshot ignored: ${formatErrorMessage(error)}`,
+        );
+      });
     }
     session.state = "ended";
     session.updatedAt = nowIso();
-    return { found: true, session };
+    const stop = this.#sessionStops.get(session.id);
+    this.#sessionStops.delete(session.id);
+    this.#sessionSpeakers.delete(session.id);
+    this.#sessionHealth.delete(session.id);
+    let browserLeft: boolean | undefined;
+    try {
+      await stop?.();
+    } finally {
+      try {
+        // A bridge teardown failure must not leave the browser participant behind.
+        if (!opts?.keepBrowserTab) {
+          browserLeft = await this.#releaseBrowserTab(session);
+        }
+      } finally {
+        this.#retireTranscript(session.id);
+        this.#transcriptFinalizing.delete(session.id);
+      }
+    }
+    return { found: true, session, ...(browserLeft === undefined ? {} : { browserLeft }) };
+  }
+
+  async #captureTranscriptSnapshot(
+    session: GoogleMeetSession,
+    options: { finalize?: boolean } = {},
+  ): Promise<void> {
+    // Preserve browser-read order so an older response cannot regress the cursor
+    // or overwrite the final snapshot queued by leave.
+    const previous = this.#transcriptCaptures.get(session.id) ?? Promise.resolve();
+    const capture = previous
+      .catch(() => {})
+      .then(async () => {
+        if (!isBrowserTransport(session.transport) || session.mode !== "transcribe") {
+          return;
+        }
+        const tab = session.chrome?.browserTab;
+        if (!tab) {
+          return;
+        }
+        const snapshot =
+          session.transport === "chrome-node"
+            ? await readChromeMeetTranscriptOnNode({
+                runtime: this.params.runtime,
+                nodeId: session.chrome?.nodeId,
+                config: this.params.config,
+                ...(options.finalize === undefined ? {} : { finalize: options.finalize }),
+                meetingUrl: session.url,
+                meetingSessionId: session.id,
+                tab,
+              })
+            : await readChromeMeetTranscript({
+                runtime: this.params.runtime,
+                config: this.params.config,
+                ...(options.finalize === undefined ? {} : { finalize: options.finalize }),
+                meetingUrl: session.url,
+                meetingSessionId: session.id,
+                tab,
+              });
+        this.#mergeTranscriptSnapshot(session.id, snapshot);
+      });
+    this.#transcriptCaptures.set(session.id, capture);
+    try {
+      await capture;
+    } finally {
+      if (this.#transcriptCaptures.get(session.id) === capture) {
+        this.#transcriptCaptures.delete(session.id);
+      }
+    }
+  }
+
+  #mergeTranscriptSnapshot(sessionId: string, snapshot: GoogleMeetTranscriptSnapshot): void {
+    const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
+    const retained = this.#transcripts.get(sessionId);
+    if (!retained) {
+      this.#transcripts.set(sessionId, {
+        droppedLines: snapshot.droppedLines,
+        lines: snapshot.lines,
+        pageEpoch: snapshot.epoch,
+        pageNextIndex,
+      });
+      return;
+    }
+
+    // A page reload starts a new epoch, but the runtime cursor stays absolute
+    // so already delivered captions remain addressable.
+    if (retained.pageEpoch !== snapshot.epoch) {
+      retained.droppedLines += snapshot.droppedLines;
+      retained.lines.push(...snapshot.lines);
+      retained.pageEpoch = snapshot.epoch;
+      retained.pageNextIndex = pageNextIndex;
+    } else if (pageNextIndex > retained.pageNextIndex) {
+      const appendFrom = Math.max(retained.pageNextIndex, snapshot.droppedLines);
+      retained.droppedLines += Math.max(0, snapshot.droppedLines - retained.pageNextIndex);
+      retained.lines.push(...snapshot.lines.slice(appendFrom - snapshot.droppedLines));
+      retained.pageNextIndex = pageNextIndex;
+    }
+
+    const excess = retained.lines.length - GOOGLE_MEET_TRANSCRIPT_MAX_LINES;
+    if (excess > 0) {
+      retained.lines.splice(0, excess);
+      retained.droppedLines += excess;
+    }
+  }
+
+  #retireTranscript(sessionId: string): void {
+    const snapshot = this.#transcripts.get(sessionId);
+    if (snapshot) {
+      this.#transcripts.delete(sessionId);
+      this.#transcripts.set(sessionId, snapshot);
+      this.#retiredTranscripts.delete(sessionId);
+      this.#retiredTranscripts.add(sessionId);
+    }
+    const retainedIds = [...this.#retiredTranscripts]
+      .filter((id) => this.#transcripts.has(id))
+      .toSorted((a, b) =>
+        (this.#sessions.get(a)?.updatedAt ?? "").localeCompare(
+          this.#sessions.get(b)?.updatedAt ?? "",
+        ),
+      );
+    for (const id of retainedIds.slice(0, -GOOGLE_MEET_ENDED_TRANSCRIPTS_MAX)) {
+      this.#transcripts.delete(id);
+      this.#retiredTranscripts.delete(id);
+      const session = this.#sessions.get(id);
+      if (session) {
+        session.transcriptEvicted = true;
+      }
+    }
+  }
+
+  #inheritBrowserTabOwnership(params: {
+    transport: GoogleMeetTransport;
+    nodeId?: string;
+    meetingUrl: string;
+    tab?: GoogleMeetBrowserTab;
+  }): GoogleMeetBrowserTab | undefined {
+    if (!params.tab) {
+      return undefined;
+    }
+    const tab = params.tab;
+    const createdTabKey =
+      params.transport === "chrome-node" && params.nodeId
+        ? `${params.nodeId}:${tab.targetId}`
+        : undefined;
+    const createdMeetingUrl = createdTabKey
+      ? this.#createdBrowserTabs.get(createdTabKey)
+      : undefined;
+    const inheritedFromCreate = isSameMeetUrlForReuse(createdMeetingUrl, params.meetingUrl);
+    if (createdMeetingUrl && createdTabKey) {
+      this.#createdBrowserTabs.delete(createdTabKey);
+    }
+    const inheritedFromSession = [...this.#sessions.values()].some((session) => {
+      const trackedTab = session.chrome?.browserTab;
+      if (!trackedTab) {
+        return false;
+      }
+      return (
+        session.transport === params.transport &&
+        isSameMeetUrlForReuse(session.url, params.meetingUrl) &&
+        session.chrome?.nodeId === params.nodeId &&
+        trackedTab.targetId === tab.targetId &&
+        trackedTab.openedByPlugin
+      );
+    });
+    return inheritedFromCreate || inheritedFromSession ? { ...tab, openedByPlugin: true } : tab;
+  }
+
+  async #settleRetainedBrowserTabs(
+    retained: RetainedBrowserTab[],
+    adopted?: {
+      transport: GoogleMeetTransport;
+      nodeId?: string;
+      tab: GoogleMeetBrowserTab;
+    },
+  ): Promise<boolean> {
+    let settled = true;
+    for (const { session, tab } of retained.splice(0)) {
+      const adoptedThisTab =
+        adopted?.transport === session.transport &&
+        adopted.nodeId === session.chrome?.nodeId &&
+        adopted.tab.targetId === tab.targetId;
+      if (adoptedThisTab) {
+        if (session.chrome) {
+          session.chrome.browserTab = undefined;
+        }
+        continue;
+      }
+      if ((await this.#releaseBrowserTab(session)) === false) {
+        settled = false;
+      }
+    }
+    return settled;
+  }
+
+  async #releaseBrowserTab(session: GoogleMeetSession): Promise<boolean | undefined> {
+    let browserLeft: boolean | undefined;
+    try {
+      browserLeft = await this.#leaveBrowserMeetTab(session);
+    } catch (error) {
+      noteSession(
+        session,
+        `Browser control could not leave the Meet tab: ${formatErrorMessage(error)}`,
+      );
+      browserLeft = false;
+    }
+    session.browserLeft = browserLeft;
+    if (session.chrome && browserLeft !== false) {
+      // Ownership has either been consumed, transferred to an active session,
+      // or released to the user. Never let a stale session act on it again.
+      session.chrome.browserTab = undefined;
+    }
+    return browserLeft;
+  }
+
+  // Chrome transports have no stop hook that touches the meeting itself, so
+  // without this the browser participant stays in the call after `leave`
+  // reports success (#103386). Twilio ends the real call via its stop hook.
+  // Acts only on the exact tab identity persisted at join; URL rediscovery
+  // could hit a different tab in another browser context.
+  // Returns undefined when no browser departure applies (non-browser transport,
+  // tab intentionally kept for another session), else whether the participant
+  // actually left. Callers must not report plain success on false.
+  async #leaveBrowserMeetTab(session: GoogleMeetSession): Promise<boolean | undefined> {
+    if (!isBrowserTransport(session.transport)) {
+      return undefined;
+    }
+    const tab = session.chrome?.browserTab;
+    if (!tab) {
+      noteSession(
+        session,
+        "No tracked Meet browser tab for this session; close the Meet tab manually if it is still in the call.",
+      );
+      return false;
+    }
+    // Same URL is not the same tab: only sessions on the same target in the
+    // same browser context (local vs a specific node) truly share it.
+    const sharedWithActiveSession = this.list().some(
+      (other) =>
+        other.id !== session.id &&
+        other.state === "active" &&
+        isBrowserTransport(other.transport) &&
+        other.chrome?.browserTab?.targetId === tab.targetId &&
+        other.chrome?.nodeId === session.chrome?.nodeId,
+    );
+    if (sharedWithActiveSession) {
+      noteSession(session, "Kept the shared Meet tab open because another active session uses it.");
+      return undefined;
+    }
+    const result =
+      session.transport === "chrome-node"
+        ? await leaveChromeMeetOnNode({
+            runtime: this.params.runtime,
+            nodeId: session.chrome?.nodeId,
+            config: this.params.config,
+            meetingUrl: session.url,
+            tab,
+          })
+        : await leaveChromeMeet({
+            runtime: this.params.runtime,
+            config: this.params.config,
+            meetingUrl: session.url,
+            tab,
+          });
+    noteSession(session, result.note);
+    return result.left;
   }
 
   async speak(
@@ -967,6 +1442,7 @@ export class GoogleMeetRuntime {
               url: session.url,
             })
           : await recoverCurrentMeetTab({
+              runtime: this.params.runtime,
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,

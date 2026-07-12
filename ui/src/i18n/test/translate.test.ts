@@ -227,13 +227,4 @@ describe("i18n", () => {
       }
     }
   });
-
-  it("keeps shipped locales structurally aligned with English", () => {
-    const englishKeys = flatten(en);
-    for (const [locale, value] of Object.entries(shippedLocales)) {
-      expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
-        englishKeys,
-      );
-    }
-  });
 });

@@ -114,8 +114,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
-      // Nothing is pinned by default; sessions are the sidebar's core content.
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -201,7 +202,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Infrastructure", "Worktrees", "Debug", "Logs", "About"]);
+        .toEqual(["Infrastructure", "Worktrees", "Debug", "Logs", "Activity", "About"]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
       await holdUiProof(page);
       await settingsSearch.fill("does-not-exist");
@@ -271,20 +272,22 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sessionsItem = menu.getByRole("menuitemcheckbox", { name: "Sessions" });
       await expect.poll(() => sessionsItem.getAttribute("aria-checked")).toBe("false");
       const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
-      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => sessionsItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
       await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       await sessionsItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage", "Sessions"]);
-      await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Plugins", "Sessions"]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Plugins", "Sessions"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -297,7 +300,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await customizeButton.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Automations", "Plugins"]);
 
       // The sidebar search field is the command palette entry point.
       const searchButton = sidebar.locator(".sidebar-search");
@@ -432,6 +437,31 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           ),
         )
         .toContain("Workboard");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens the start screen from the sidebar brand without carrying the active session", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New session" });
+      await expect.poll(() => brand.getAttribute("href")).toBe("/new");
+
+      await brand.click();
+
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect.poll(() => new URL(page.url()).search).toBe("");
+      await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
+      await captureUiProof(page, "07-brand-start-screen.png");
     } finally {
       await context.close();
     }

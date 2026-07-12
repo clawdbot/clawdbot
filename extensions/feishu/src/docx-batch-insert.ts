@@ -197,8 +197,7 @@ export async function insertBlocksInBatches(
   // When startIndex == -1 (append to end), each batch appends after the previous.
   // When startIndex >= 0, each batch starts at startIndex + count of first-level IDs already inserted.
   let currentIndex = startIndex;
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
+  for (const [i, batch] of batches.entries()) {
     logger?.info?.(
       `feishu_doc: Inserting batch ${i + 1}/${batches.length} (${batch.blocks.length} blocks)...`,
     );

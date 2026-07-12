@@ -1339,7 +1339,8 @@ async function runTelegramQaRttChecks(params: {
       sutUsername: params.sutUsername,
     });
     const steps = resolveTelegramQaScenarioSteps(run);
-    if (steps.length !== 1) {
+    const step = steps[0];
+    if (steps.length !== 1 || !step) {
       throw new Error(`Telegram QA RTT check ${params.scenario.id} must have one step.`);
     }
     try {
@@ -1353,7 +1354,7 @@ async function runTelegramQaRttChecks(params: {
         observedMessages: params.observedMessages,
         replyTimeoutMs: params.rttOptions.timeoutMs,
         scenario: params.scenario,
-        step: steps[0],
+        step,
         sutBotId: params.sutBotId,
       });
       if (!stepResult.matched) {

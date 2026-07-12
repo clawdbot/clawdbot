@@ -157,6 +157,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",
+    run.execOverrides?.nodeCwd ?? "",
     run.bashElevated?.enabled === true,
     run.bashElevated?.allowed === true,
     run.bashElevated?.defaultLevel ?? "",

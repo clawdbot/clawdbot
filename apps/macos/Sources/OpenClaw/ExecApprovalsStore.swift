@@ -743,10 +743,6 @@ enum ExecApprovalsStore {
             file: file)
     }
 
-    static func resolveDefaultsResult() -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError> {
-        self.resolveResult(agentId: nil).map(\.defaults)
-    }
-
     static func resolveDefaultsAsyncResult() async
         -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
     {

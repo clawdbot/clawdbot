@@ -12,6 +12,7 @@ import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   flattenTranslations,
+  resolveLocaleMetaProvenance,
   type GlossaryEntry,
   type LocaleEntry,
   type LocaleMeta,
@@ -489,14 +490,21 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   return lines.join("\n");
 }
 
-function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
+export function buildBatchPrompt(
+  items: readonly TranslationBatchItem[],
+  validationError?: string,
+): string {
   const payload = Object.fromEntries(items.map((item) => [item.key, item.text]));
-  return [
-    "Translate this JSON object.",
-    "Return ONLY a JSON object with the same keys.",
-    "",
-    JSON.stringify(payload, null, 2),
-  ].join("\n");
+  const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
+  if (validationError) {
+    lines.push(
+      "",
+      "Your previous response failed validation. Correct that exact failure in the new response:",
+      validationError,
+    );
+  }
+  lines.push("", JSON.stringify(payload, null, 2));
+  return lines.join("\n");
 }
 
 function formatDuration(ms: number): string {
@@ -1317,6 +1325,24 @@ function parseTranslationReply(raw: string): Record<string, unknown> {
   return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
 }
 
+export function parseTranslationBatchReply(
+  raw: string,
+  items: readonly TranslationBatchItem[],
+  locale: string,
+): Map<string, string> {
+  const parsed = parseTranslationReply(raw);
+  const translated = new Map<string, string>();
+  for (const item of items) {
+    const value = parsed[item.key];
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`missing translation for ${item.key}`);
+    }
+    translated.set(item.key, value);
+  }
+  assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
+  return translated;
+}
+
 async function translateBatch(
   clientAccess: ClientAccess,
   items: readonly TranslationBatchItem[],
@@ -1325,28 +1351,26 @@ async function translateBatch(
   const batchLabel = formatBatchLabel(context);
   const splitDepth = context.splitDepth ?? 0;
   let lastError: Error | null = null;
+  let validationError: string | undefined;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
     const attemptNumber = attempt + 1;
     const attemptLabel = `${batchLabel} attempt ${attemptNumber}/${TRANSLATE_MAX_ATTEMPTS}`;
     const startedAt = Date.now();
     logProgress(`${attemptLabel}: start keys=${items.length}`);
+    let promptCompleted = false;
     try {
       const raw = await (
         await clientAccess.getClient()
-      ).prompt(buildBatchPrompt(items), attemptLabel);
-      const parsed = parseTranslationReply(raw);
-      const translated = new Map<string, string>();
-      for (const item of items) {
-        const value = parsed[item.key];
-        if (typeof value !== "string" || !value.trim()) {
-          throw new Error(`missing translation for ${item.key}`);
-        }
-        translated.set(item.key, value);
-      }
+      ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
+      promptCompleted = true;
+      const translated = parseTranslationBatchReply(raw, items, context.locale);
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      if (promptCompleted) {
+        validationError = lastError.message;
+      }
       await clientAccess.resetClient();
       logProgress(
         `${attemptLabel}: failed after ${formatDuration(Date.now() - startedAt)}: ${lastError.message}`,
@@ -1528,16 +1552,18 @@ async function syncLocale(
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  const nextProvider = allowTranslate
-    ? resolveConfiguredProvider()
-    : (previousMeta?.provider ?? "");
-  const nextModel = allowTranslate ? resolveConfiguredModel() : (previousMeta?.model ?? "");
+  const provenance = resolveLocaleMetaProvenance({
+    didTranslate: allowTranslate && plan.pending.length > 0,
+    model: allowTranslate ? resolveConfiguredModel() : "",
+    previousMeta,
+    provider: allowTranslate ? resolveConfiguredProvider() : "",
+  });
   const artifacts = plan.render({
     defaultGlossary: DEFAULT_GLOSSARY,
     generatedAt: new Date().toISOString(),
     glossary,
-    model: nextModel,
-    provider: nextProvider,
+    model: provenance.model,
+    provider: provenance.provider,
     workflow: CONTROL_UI_I18N_WORKFLOW,
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);

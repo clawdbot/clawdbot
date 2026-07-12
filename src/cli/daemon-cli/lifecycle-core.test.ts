@@ -221,6 +221,52 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+  it("repairs managed port drift before restarting", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    type RepairLoadedService = NonNullable<
+      Parameters<typeof runServiceRestart>[0]["repairLoadedService"]
+    >;
+    const repairLoadedService = vi.fn<RepairLoadedService>(async () => ({
+      result: "restarted" as const,
+      message: "Gateway service definition repaired and restarted.",
+      loaded: true,
+    }));
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true, restartIntent: { waitMs: 2_500 } },
+      expectedPort: 19_001,
+      repairLoadedService,
+    });
+
+    expect(repairLoadedService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issues: [
+          {
+            code: "port-mismatch",
+            message: "service port 18789 does not match current gateway config port 19001",
+          },
+        ],
+      }),
+    );
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+      intent: { waitMs: 2_500 },
+    });
+    expect(readJsonLog<{ result?: string; message?: string }>()).toMatchObject({
+      result: "restarted",
+      message: "Gateway service definition repaired and restarted.",
+    });
+  });
+
   it("emits drift warning when enabled", async () => {
     await runServiceRestart(createServiceRunArgs(true));
 

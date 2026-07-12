@@ -120,6 +120,7 @@ describe("security audit trust model findings", () => {
             'channels.discord.groupPolicy="allowlist" with configured group targets',
           );
           expect(finding.detail).toContain("personal-assistant");
+          expect(finding.detail).toContain("https://docs.openclaw.ai/gateway/multi-tenant-hosting");
           expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
         },
       },

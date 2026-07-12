@@ -803,6 +803,35 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("prints cursor-based transcripts from the gateway-owned runtime", async () => {
+    const callGatewayFromCli = vi.fn(async () => ({
+      found: true,
+      sessionId: "meet_gateway",
+      startIndex: 3,
+      nextIndex: 4,
+      droppedLines: 2,
+      lines: [{ at: "2026-07-12T06:00:00.000Z", speaker: "Alice", text: "fourth line" }],
+    }));
+    const stdout = captureStdout();
+    try {
+      await setupCli({ callGatewayFromCli }).parseAsync(
+        ["googlemeet", "transcript", "meet_gateway", "--since", "3"],
+        { from: "user" },
+      );
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "googlemeet.transcript",
+        { json: true, timeout: "5000" },
+        { sessionId: "meet_gateway", sinceIndex: 3 },
+        { progress: false },
+      );
+      expect(stdout.output()).toContain("# 2 earlier lines dropped by the transcript cap");
+      expect(stdout.output()).toContain("Alice: fourth line");
+      expect(stdout.output()).toContain("# nextIndex: 4");
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("delegates join to the gateway-owned runtime when available", async () => {
     const callGatewayFromCli = vi.fn(async () => ({
       session: {

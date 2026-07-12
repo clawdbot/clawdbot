@@ -91,8 +91,7 @@ import {
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-const MESSAGE_TOOL_THREAD_READ_HINT =
-  ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
+const MESSAGE_TOOL_THREAD_READ_HINT = ' Missing thread context: action="read" + threadId.';
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
@@ -634,8 +633,7 @@ const presentationMessageSchema = Type.Object(
     blocks: Type.Array(presentationBlockSchema),
   },
   {
-    description:
-      "Rich message payload: text, charts, tables, buttons, selects, and context. Unsupported blocks degrade to text.",
+    description: "Rich text/chart/table/button/select/context; unsupported degrades to text.",
   },
 );
 
@@ -648,7 +646,7 @@ function buildSendSchema(options: {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
       Type.String({
-        description: "Effect id/name for sendWithEffect.",
+        description: "sendWithEffect id/name.",
       }),
     ),
     effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
@@ -660,7 +658,7 @@ function buildSendSchema(options: {
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
-        description: "Base64 attachment payload; data URL ok.",
+        description: "Base64/data-URL attachment.",
       }),
     ),
     contentType: Type.Optional(Type.String()),
@@ -675,7 +673,7 @@ function buildSendSchema(options: {
           mimeType: Type.Optional(Type.String()),
         }),
         {
-          description: "Structured attachments; each entry uses media.",
+          description: "Attachments; each uses media.",
         },
       ),
     ),
@@ -687,7 +685,7 @@ function buildSendSchema(options: {
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF/video as document; avoids compression.",
+        description: "Send media as document; no compression.",
       }),
     ),
     asDocument: Type.Optional(
@@ -702,8 +700,7 @@ function buildSendSchema(options: {
   if (options.includeBestEffort) {
     props.bestEffort = Type.Optional(
       Type.Boolean({
-        description:
-          "Optional delivery mode. Omit or set true for ordinary replies. Set false only when required durable delivery is necessary.",
+        description: "Ordinary reply omit/true; false only requiring durable delivery.",
       }),
     );
   }
@@ -723,7 +720,7 @@ function buildSendSchema(options: {
           ),
         },
         {
-          description: "Delivery prefs. pin requests pin when channel supports it.",
+          description: "Delivery prefs; pin when supported.",
         },
       ),
     );
@@ -736,7 +733,7 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+          "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
       }),
     ),
     message_id: Type.Optional(
@@ -749,8 +746,7 @@ function buildReactionSchema() {
     remove: Type.Optional(Type.Boolean()),
     trackToolCalls: Type.Optional(
       Type.Boolean({
-        description:
-          "For current-message reaction, make reacted message the tool-progress reaction target.",
+        description: "Use reacted current message for tool-progress reactions.",
       }),
     ),
     track_tool_calls: Type.Optional(
@@ -841,7 +837,7 @@ function buildChannelTargetSchema() {
     userId: Type.Optional(
       Type.String({
         description:
-          "User id for member-info and channel-specific moderation or participant actions. For member-info, pass userId directly; the action does not accept target.",
+          "member-info/moderation/participant user id; member-info uses userId, not target.",
       }),
     ),
     openId: Type.Optional(Type.String()),
@@ -937,7 +933,7 @@ function buildChannelManagementSchema() {
     channelType: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
+        description: "Numeric channel type; avoids schema type collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
@@ -1299,7 +1295,7 @@ function buildMessageToolDescription(options?: {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
-  const baseDescription = "Send/delete/manage channel messages.";
+  const baseDescription = "Send/manage channel messages.";
   const resolvedOptions = options ?? {};
   const messageToolDiscoveryParams = resolvedOptions.config
     ? {
@@ -1348,9 +1344,9 @@ function appendMessageToolVisibleReplyHint(
     return description;
   }
   const targetGuidance = requireExplicitTarget
-    ? "Include target when sending."
-    : "target defaults to the current source conversation; omit unless sending elsewhere.";
-  return `${description} This turn: use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
+    ? "send needs target."
+    : "target defaults current source; set only elsewhere.";
+  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Final answer private.`;
 }
 
 function appendMessageToolReadHint(

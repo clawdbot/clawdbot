@@ -4,6 +4,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -39,6 +40,8 @@ import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
+  /** Invalidates cached display copy when the active UI language changes. */
+  locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -1149,12 +1152,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+        label: t("chat.compaction.label"),
+        description: t("chat.compaction.description"),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: t("chat.compaction.openCheckpoints"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1371,6 +1373,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&

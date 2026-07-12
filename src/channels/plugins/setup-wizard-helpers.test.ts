@@ -12,7 +12,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  applySingleTokenPromptResult,
   buildSingleChannelSecretPromptState,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -595,35 +594,6 @@ describe("promptSingleChannelSecretInput", () => {
 
     expect(result).toEqual({ action: "keep" });
     expect(prompter.text).not.toHaveBeenCalled();
-  });
-});
-
-describe("applySingleTokenPromptResult", () => {
-  it("writes env selection as an empty patch on target account", () => {
-    const next = applySingleTokenPromptResult({
-      cfg: {},
-      channel: "discord",
-      accountId: "work",
-      tokenPatchKey: "token",
-      tokenResult: { useEnv: true, token: null },
-    });
-
-    expect(next.channels?.discord?.enabled).toBe(true);
-    expect(next.channels?.discord?.accounts?.work?.enabled).toBe(true);
-    expect(next.channels?.discord?.accounts?.work?.token).toBeUndefined();
-  });
-
-  it("writes provided token under requested key", () => {
-    const next = applySingleTokenPromptResult({
-      cfg: {},
-      channel: "telegram",
-      accountId: DEFAULT_ACCOUNT_ID,
-      tokenPatchKey: "botToken",
-      tokenResult: { useEnv: false, token: "abc" },
-    });
-
-    expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.botToken).toBe("abc");
   });
 });
 

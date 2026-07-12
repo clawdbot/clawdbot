@@ -2,8 +2,8 @@
 export function listPublishablePluginPackageDirs(params?: Record<string, unknown>): string[];
 /** List package-local runtime output files expected from a runtime build plan. */
 export function listPluginNpmRuntimeBuildOutputs(plan: unknown): string[];
-/** Resolve the package-local runtime build plan for one publishable plugin package. */
-export function resolvePluginNpmRuntimeBuildPlan(params: unknown): {
+export type PluginNpmRuntimeBuildFormat = "esm" | "cjs";
+export type PluginNpmRuntimeBuildPlan = {
   runtimeBuildOutputs: string[];
   packageFiles: string[];
   packagePeerMetadata: {
@@ -27,34 +27,20 @@ export function resolvePluginNpmRuntimeBuildPlan(params: unknown): {
     [k: string]: string;
   };
   outDir: string;
+  runtimeFormat: PluginNpmRuntimeBuildFormat;
   runtimeExtensions: string[];
   runtimeSetupEntry: string | undefined;
-} | null;
+};
+/** Resolve the package-local runtime build plan for one publishable plugin package. */
+export function resolvePluginNpmRuntimeBuildPlan(params: unknown): PluginNpmRuntimeBuildPlan | null;
 /** Build package-local runtime files and static assets for one plugin package. */
-export function buildPluginNpmRuntime(params: unknown): Promise<{
-  assetBuildCommand: string | null;
-  copiedStaticAssets: string[];
-  runtimeBuildOutputs: string[];
-  packageFiles: unknown[];
-  packagePeerMetadata: {
-    peerDependencies: {
-      openclaw: string;
-    };
-    peerDependenciesMeta: unknown;
-  };
-  repoRoot: string;
-  packageDir: unknown;
-  pluginDir: string;
-  packageJson: unknown;
-  rootPackageJson: unknown;
-  sourceEntries: unknown[];
-  entry: {
-    [k: string]: string;
-  };
-  outDir: string;
-  runtimeExtensions: unknown;
-  runtimeSetupEntry: string | undefined;
-} | null>;
+export function buildPluginNpmRuntime(params: unknown): Promise<
+  | (PluginNpmRuntimeBuildPlan & {
+      assetBuildCommand: string | null;
+      copiedStaticAssets: string[];
+    })
+  | null
+>;
 export function parseArgs(argv: unknown):
   | {
       help: boolean;

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import { updateWorkspaceFile } from "./workspace-fs.js";
@@ -498,6 +499,49 @@ describe("sessions.files RPC handlers", () => {
           type: "session_file_not_found",
         });
       }
+    } finally {
+      fs.rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it("omits transcript paths outside the workspace without hiding missing workspace files", async () => {
+    const outsidePath = path.join(os.tmpdir(), `openclaw-outside-list-${Date.now()}.txt`);
+    fs.writeFileSync(outsidePath, "outside\n", "utf8");
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      [
+        outsidePath,
+        "../outside.txt",
+        "~/.openclaw-external.txt",
+        pathToFileURL(outsidePath).href,
+        `@${outsidePath}`,
+        "..cache/missing.txt",
+        "missing.txt",
+        "src/readme.md",
+      ].forEach((filePath, index) =>
+        visit(assistantToolCall("read", { path: filePath }), index + 1),
+      );
+      return 8;
+    });
+
+    try {
+      const payload = expectOkPayload(
+        await invokeSessionFilesHandler("sessions.files.list", {
+          sessionKey: "agent:main:main",
+        }),
+      );
+
+      expect(payload.files).toHaveLength(3);
+      expect(payload.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "..cache/missing.txt", missing: true }),
+          expect.objectContaining({ path: "missing.txt", missing: true }),
+          expect.objectContaining({
+            path: "src/readme.md",
+            missing: false,
+            workspacePath: "src/readme.md",
+          }),
+        ]),
+      );
     } finally {
       fs.rmSync(outsidePath, { force: true });
     }

@@ -10,7 +10,7 @@ describe("subagents tool", () => {
     const tool = createSubagentsTool();
 
     expect(tool.description).toBe(
-      "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
+      "List requester-session active/recent subagents. If available, wait via sessions_yield; never poll-loop.",
     );
   });
 

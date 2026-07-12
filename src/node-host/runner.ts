@@ -19,6 +19,7 @@ import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -370,6 +371,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FS_LIST_DIR_COMMAND,
       NODE_MCP_TOOLS_CALL_COMMAND,
       ...pluginNodeHost.commands,
     ],
@@ -430,9 +432,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const stopped = new Promise<void>((resolve) => {
     resolveStopped = resolve;
   });
+  // A pending Promise alone does not keep Node alive. Pairing pauses can close
+  // the last socket, so retain a handle until a signal finishes the foreground host.
+  const lifetimeInterval = setInterval(() => {}, 1_000_000);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
+  };
+  const stopClientAndMcp = async () => {
+    client.stop();
+    try {
+      await closeMcpRuntime();
+    } finally {
+      clearInterval(lifetimeInterval);
+    }
   };
   const finish = async (exitCode: number) => {
     if (stopping) {
@@ -440,10 +453,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     }
     stopping = true;
     removeSignalHandlers();
-    client.stop();
-    await closeMcpRuntime();
-    process.exitCode = exitCode;
-    resolveStopped?.();
+    try {
+      await stopClientAndMcp();
+    } finally {
+      process.exitCode = exitCode;
+      resolveStopped?.();
+    }
   };
   const onSigint = () => void finish(130);
   const onSigterm = () => void finish(143);
@@ -461,15 +476,25 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       return manager;
     },
   );
-  const readiness = await readinessPromise;
+  let readiness;
+  try {
+    readiness = await readinessPromise;
+  } catch (error) {
+    if (stopping) {
+      await stopped;
+      return;
+    }
+    removeSignalHandlers();
+    await stopClientAndMcp();
+    throw error;
+  }
   if (!readiness.ready) {
     if (stopping) {
       await stopped;
       return;
     }
     removeSignalHandlers();
-    client.stop();
-    await closeMcpRuntime();
+    await stopClientAndMcp();
     throw new Error("node host gateway event loop readiness timeout");
   }
   await stopped;

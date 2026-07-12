@@ -79,6 +79,7 @@
     "gateway",
     "sessions_list",
     "sessions_history",
+    "sessions_search",
     "sessions_send",
     "subagents",
     "session_status",
@@ -207,20 +208,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54179,
-    "roughTokens": 13545
+    "chars": 51813,
+    "roughTokens": 12954
   },
   "openClawDeveloperInstructions": {
-    "chars": 2136,
-    "roughTokens": 534
+    "chars": 2153,
+    "roughTokens": 539
   },
   "totalTextOnly": {
-    "chars": 26252,
-    "roughTokens": 6563
+    "chars": 26269,
+    "roughTokens": 6568
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80433,
-    "roughTokens": 20109
+    "chars": 78084,
+    "roughTokens": 19521
   },
   "userInputText": {
     "chars": 1033,
@@ -407,7 +408,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -526,6 +527,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "gateway",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "subagents",
   "session_status",
@@ -539,7 +541,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/delete/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -557,7 +559,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each entry uses media.",
+          "description": "Attachments; each uses media.",
           "items": {
             "properties": {
               "media": {
@@ -579,7 +581,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "array"
         },
         "buffer": {
-          "description": "Base64 attachment payload; data URL ok.",
+          "description": "Base64/data-URL attachment.",
           "type": "string"
         },
         "caption": {
@@ -599,14 +601,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "effectId": {
-          "description": "Effect id/name for sendWithEffect.",
+          "description": "sendWithEffect id/name.",
           "type": "string"
         },
         "filename": {
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document; avoids compression.",
+          "description": "Send media as document; no compression.",
           "type": "boolean"
         },
         "gatewayToken": {

@@ -2234,7 +2234,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
         let trustedAgentRuntimeIdentity:
-          | ReturnType<typeof verifyAgentRuntimeIdentityToken>
+          | Awaited<ReturnType<typeof verifyAgentRuntimeIdentityToken>>
           | undefined;
         if (typeof agentRuntimeIdentityToken === "string") {
           if (!canAcceptAgentRuntimeIdentity) {
@@ -2249,7 +2249,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             close(1008, truncateCloseReason(message));
             return;
           }
-          trustedAgentRuntimeIdentity = verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
+          trustedAgentRuntimeIdentity =
+            await verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
           if (!trustedAgentRuntimeIdentity) {
             const message = "invalid agent runtime identity token";
             markHandshakeFailure("agent-runtime-identity-invalid", {

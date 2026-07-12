@@ -27,11 +27,11 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
-  90: "Small",
-  100: "Default",
-  110: "Large",
-  125: "XL",
-  140: "XXL",
+  90: "configView.textSizes.small",
+  100: "configView.textSizes.default",
+  110: "configView.textSizes.large",
+  125: "configView.textSizes.xl",
+  140: "configView.textSizes.xxl",
 };
 
 type WebPushUiState = {
@@ -442,85 +442,50 @@ type SectionCategory = {
   sections: Array<{ key: string; label: string }>;
 };
 
-const SECTION_CATEGORIES: SectionCategory[] = [
+type SectionCategoryDefinition = {
+  id: string;
+  sections: string[];
+};
+
+const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   {
     id: "core",
-    label: "Core",
-    sections: [
-      { key: "env", label: "Environment" },
-      { key: "auth", label: "Authentication" },
-      { key: "update", label: "Updates" },
-      { key: "meta", label: "Meta" },
-      { key: "logging", label: "Logging" },
-      { key: "diagnostics", label: "Diagnostics" },
-      { key: "cli", label: "Cli" },
-      { key: "secrets", label: "Secrets" },
-    ],
+    sections: ["env", "auth", "update", "meta", "logging", "diagnostics", "cli", "secrets"],
   },
   {
     id: "ai",
-    label: "AI & Agents",
-    sections: [
-      { key: "agents", label: "Agents" },
-      { key: "models", label: "Models" },
-      { key: "skills", label: "Skills" },
-      { key: "tools", label: "Tools" },
-      { key: "memory", label: "Memory" },
-      { key: "session", label: "Session" },
-    ],
+    sections: ["agents", "models", "skills", "tools", "memory", "session"],
   },
   {
     id: "communication",
-    label: "Communication",
-    sections: [
-      { key: "channels", label: "Channels" },
-      { key: "messages", label: "Messages" },
-      { key: "broadcast", label: "Broadcast" },
-      { key: "__notifications__", label: "Notifications" },
-      { key: "talk", label: "Talk" },
-      { key: "audio", label: "Audio" },
-    ],
+    sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
   },
   {
     id: "automation",
-    label: "Automation",
-    sections: [
-      { key: "commands", label: "Commands" },
-      { key: "hooks", label: "Hooks" },
-      { key: "bindings", label: "Bindings" },
-      { key: "cron", label: "Cron" },
-      { key: "approvals", label: "Approvals" },
-      { key: "plugins", label: "Plugins" },
-    ],
+    sections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
   },
   {
     id: "infrastructure",
-    label: "Infrastructure",
     sections: [
-      { key: "gateway", label: "Gateway" },
-      { key: "web", label: "Web" },
-      { key: "browser", label: "Browser" },
-      { key: "nodeHost", label: "NodeHost" },
-      { key: "canvasHost", label: "CanvasHost" },
-      { key: "discovery", label: "Discovery" },
-      { key: "media", label: "Media" },
-      { key: "acp", label: "Acp" },
-      { key: "mcp", label: "Mcp" },
+      "gateway",
+      "web",
+      "browser",
+      "nodeHost",
+      "canvasHost",
+      "discovery",
+      "media",
+      "acp",
+      "mcp",
     ],
   },
   {
     id: "appearance",
-    label: t("tabs.appearance"),
-    sections: [
-      { key: "__appearance__", label: "Theme" },
-      { key: "ui", label: "UI" },
-      { key: "wizard", label: "Setup Wizard" },
-    ],
+    sections: ["__appearance__", "ui", "wizard"],
   },
 ];
 
 // Flat lookup: all categorised keys
-const CATEGORISED_KEYS = new Set(SECTION_CATEGORIES.flatMap((c) => c.sections.map((s) => s.key)));
+const CATEGORISED_KEYS = new Set(SECTION_CATEGORIES.flatMap((category) => category.sections));
 
 function getSectionIcon(key: string) {
   return sidebarIcons[key as keyof typeof sidebarIcons] ?? sidebarIcons.default;
@@ -611,7 +576,7 @@ const MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS = 2_000;
 const MAX_RAW_DIFF_CHARS = 200_000;
 
 function formatConfigDiffPath(path: ConfigDiffPath): string {
-  return path.length > 0 ? path.join(".") : "<root>";
+  return path.length > 0 ? path.join(".") : t("configView.root");
 }
 
 function computeDiff(
@@ -771,7 +736,9 @@ function computeRawDiff(
 
 function truncateValue(value: unknown, maxLen = 40): string {
   if (Array.isArray(value)) {
-    return `[${value.length} item${value.length === 1 ? "" : "s"}]`;
+    return t(value.length === 1 ? "configView.itemCount" : "configView.itemCountPlural", {
+      count: String(value.length),
+    });
   }
   let str: string;
   try {
@@ -841,18 +808,35 @@ function renderRawDiffValue(
 
 type ThemeOption = {
   id: ThemeName;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
   icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
+  {
+    id: "claw",
+    labelKey: "configView.themes.claw.label",
+    descriptionKey: "configView.themes.claw.description",
+    icon: icons.zap,
+  },
+  {
+    id: "knot",
+    labelKey: "configView.themes.knot.label",
+    descriptionKey: "configView.themes.knot.description",
+    icon: icons.link,
+  },
+  {
+    id: "dash",
+    labelKey: "configView.themes.dash.label",
+    descriptionKey: "configView.themes.dash.description",
+    icon: icons.barChart,
+  },
 ];
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
-  return props.hasCustomTheme && props.customThemeLabel ? props.customThemeLabel : "Imported theme";
+  return props.hasCustomTheme && props.customThemeLabel
+    ? props.customThemeLabel
+    : t("configView.appearance.importedTheme");
 }
 
 function focusCustomThemeImportInput() {
@@ -884,11 +868,13 @@ function renderNotificationsSection(props: ConfigProps) {
           <div class="settings-notifications__header">
             <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
             <div class="settings-notifications__copy">
-              <h3 class="settings-notifications__title">Push notifications</h3>
-              <p class="settings-notifications__hint">Not available in this browser.</p>
+              <h3 class="settings-notifications__title">${t("configView.notifications.title")}</h3>
+              <p class="settings-notifications__hint">
+                ${t("configView.notifications.unavailableHint")}
+              </p>
             </div>
             <span class="settings-notifications__badge settings-notifications__badge--muted">
-              Unavailable
+              ${t("configView.notifications.unavailable")}
             </span>
           </div>
         </section>
@@ -898,20 +884,22 @@ function renderNotificationsSection(props: ConfigProps) {
 
   const permissionLabel =
     push.permission === "granted"
-      ? "Granted"
+      ? t("configView.notifications.granted")
       : push.permission === "denied"
-        ? "Denied"
+        ? t("configView.notifications.denied")
         : push.permission === "default"
-          ? "Not requested"
-          : "Unsupported";
-  const subscriptionLabel = push.subscribed ? "Subscribed" : "Not subscribed";
+          ? t("configView.notifications.notRequested")
+          : t("configView.notifications.unsupported");
+  const subscriptionLabel = push.subscribed
+    ? t("configView.notifications.subscribed")
+    : t("configView.notifications.notSubscribed");
   const badgeLabel = !push.supported
-    ? "Unsupported"
+    ? t("configView.notifications.unsupported")
     : push.permission === "denied"
-      ? "Blocked"
+      ? t("configView.notifications.blocked")
       : push.subscribed
-        ? "Subscribed"
-        : "Ready";
+        ? t("configView.notifications.subscribed")
+        : t("configView.notifications.ready");
   const badgeTone = !push.supported
     ? "settings-notifications__badge--muted"
     : push.permission === "denied"
@@ -926,10 +914,8 @@ function renderNotificationsSection(props: ConfigProps) {
         <div class="settings-notifications__header">
           <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
           <div class="settings-notifications__copy">
-            <h3 class="settings-notifications__title">Push notifications</h3>
-            <p class="settings-notifications__hint">
-              Receive browser push notifications from your gateway.
-            </p>
+            <h3 class="settings-notifications__title">${t("configView.notifications.title")}</h3>
+            <p class="settings-notifications__hint">${t("configView.notifications.hint")}</p>
           </div>
           <span class="settings-notifications__badge ${badgeTone}">${badgeLabel}</span>
         </div>
@@ -937,17 +923,25 @@ function renderNotificationsSection(props: ConfigProps) {
         <div class="settings-notifications__body">
           <div class="settings-notifications__details">
             <div class="settings-notifications__detail">
-              <span class="settings-notifications__label">Browser support</span>
+              <span class="settings-notifications__label"
+                >${t("configView.notifications.browserSupport")}</span
+              >
               <span class="settings-notifications__value">
-                ${push.supported ? "Available" : "Not supported"}
+                ${push.supported
+                  ? t("configView.notifications.available")
+                  : t("configView.notifications.notSupported")}
               </span>
             </div>
             <div class="settings-notifications__detail">
-              <span class="settings-notifications__label">Permission</span>
+              <span class="settings-notifications__label"
+                >${t("configView.notifications.permission")}</span
+              >
               <span class="settings-notifications__value">${permissionLabel}</span>
             </div>
             <div class="settings-notifications__detail">
-              <span class="settings-notifications__label">Status</span>
+              <span class="settings-notifications__label"
+                >${t("configView.notifications.status")}</span
+              >
               <span class="settings-notifications__value settings-notifications__value--status">
                 <span
                   class="settings-notifications__dot ${push.subscribed
@@ -968,14 +962,14 @@ function renderNotificationsSection(props: ConfigProps) {
                       ?disabled=${push.loading || !props.connected}
                       @click=${() => props.onWebPushUnsubscribe?.()}
                     >
-                      ${icons.x} Unsubscribe
+                      ${icons.x} ${t("configView.notifications.unsubscribe")}
                     </button>
                     <button
                       class="btn primary"
                       ?disabled=${push.loading || !props.connected}
                       @click=${() => props.onWebPushTest?.()}
                     >
-                      ${icons.send} Send test
+                      ${icons.send} ${t("configView.notifications.sendTest")}
                     </button>
                   `
                 : html`
@@ -985,14 +979,15 @@ function renderNotificationsSection(props: ConfigProps) {
                       @click=${() => props.onWebPushSubscribe?.()}
                     >
                       ${push.loading ? icons.loader : getSectionIcon("__notifications__")}
-                      ${push.loading ? "Subscribing..." : "Enable notifications"}
+                      ${push.loading
+                        ? t("configView.notifications.subscribing")
+                        : t("configView.notifications.enable")}
                     </button>
                   `
               : push.permission === "denied"
                 ? html`
                     <div class="settings-notifications__callout">
-                      Notifications are blocked. Update your browser site permissions to allow
-                      notifications.
+                      ${t("configView.notifications.blockedHint")}
                     </div>
                   `
                 : nothing}
@@ -1016,22 +1011,32 @@ function renderAppearanceSection(props: ConfigProps) {
     focusCustomThemeImportInput();
   }
   const importedName = importedThemeName(props);
-  const themeOptions: ThemeOption[] = [
-    ...BUILTIN_THEME_OPTIONS,
+  const themeOptions: Array<{
+    id: ThemeName;
+    label: string;
+    description: string;
+    icon: TemplateResult;
+  }> = [
+    ...BUILTIN_THEME_OPTIONS.map((option) => ({
+      id: option.id,
+      label: t(option.labelKey),
+      description: t(option.descriptionKey),
+      icon: option.icon,
+    })),
     {
       id: "custom",
-      label: props.hasCustomTheme ? importedName : "Import",
+      label: props.hasCustomTheme ? importedName : t("configView.appearance.import"),
       description: props.hasCustomTheme
-        ? `Imported from tweakcn: ${importedName}`
-        : "Import a tweakcn theme into this browser-local slot",
+        ? t("configView.appearance.importedFrom", { name: importedName })
+        : t("configView.appearance.importHint"),
       icon: icons.spark,
     },
   ];
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Theme</h3>
-        <p class="settings-appearance__hint">Choose a theme family.</p>
+        <h3 class="settings-appearance__heading">${t("configView.appearance.theme")}</h3>
+        <p class="settings-appearance__hint">${t("configView.appearance.chooseTheme")}</p>
         <div class="settings-theme-grid">
           ${themeOptions.map(
             (opt) => html`
@@ -1068,11 +1073,11 @@ function renderAppearanceSection(props: ConfigProps) {
           ? html`
               <div class="settings-theme-import">
                 <div class="settings-theme-import__copy">
-                  <div class="settings-theme-import__title">Import from tweakcn</div>
+                  <div class="settings-theme-import__title">
+                    ${t("configView.appearance.importFromTweakcn")}
+                  </div>
                   <p class="settings-theme-import__hint">
-                    Open tweakcn.com, choose or create a theme, click Share, then paste the copied
-                    theme link here. Share links, editor URLs, registry URLs, theme IDs, and default
-                    theme names like amethyst-haze are accepted.
+                    ${t("configView.appearance.tweakcnInstructions")}
                   </p>
                 </div>
                 <a
@@ -1081,10 +1086,12 @@ function renderAppearanceSection(props: ConfigProps) {
                   target="_blank"
                   rel="noreferrer noopener"
                 >
-                  Browse tweakcn themes ${icons.externalLink}
+                  ${t("configView.appearance.browseTweakcn")} ${icons.externalLink}
                 </a>
                 <label class="settings-theme-import__field">
-                  <span class="settings-theme-import__label">Theme link or ID</span>
+                  <span class="settings-theme-import__label"
+                    >${t("configView.appearance.themeLink")}</span
+                  >
                   <input
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
@@ -1106,15 +1113,15 @@ function renderAppearanceSection(props: ConfigProps) {
                     @click=${props.onImportCustomTheme}
                   >
                     ${props.customThemeImportBusy
-                      ? "Importing…"
+                      ? t("common.importing")
                       : props.hasCustomTheme
-                        ? `Replace ${importedName}`
-                        : "Import theme"}
+                        ? t("configView.appearance.replace", { name: importedName })
+                        : t("configView.appearance.importTheme")}
                   </button>
                   ${props.hasCustomTheme
                     ? html`
                         <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
-                          Clear ${importedName}
+                          ${t("configView.appearance.clear", { name: importedName })}
                         </button>
                       `
                     : nothing}
@@ -1122,7 +1129,9 @@ function renderAppearanceSection(props: ConfigProps) {
                 ${props.hasCustomTheme
                   ? html`
                       <div class="settings-theme-import__meta">
-                        <span class="settings-theme-import__meta-label">Loaded</span>
+                        <span class="settings-theme-import__meta-label"
+                          >${t("configView.appearance.loaded")}</span
+                        >
                         <span class="settings-theme-import__meta-value"
                           >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
                         >
@@ -1143,14 +1152,15 @@ function renderAppearanceSection(props: ConfigProps) {
             `
           : html`
               <p class="settings-theme-import__inline-hint">
-                Click <strong>Import</strong> to add one browser-local tweakcn theme. In tweakcn,
-                use Share and paste the copied link here.
+                ${t("configView.appearance.inlineHintBefore")}
+                <strong>${t("configView.appearance.import")}</strong>
+                ${t("configView.appearance.inlineHintAfter")}
               </p>
             `}
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Text size</h3>
+        <h3 class="settings-appearance__heading">${t("configView.appearance.textSize")}</h3>
         <div class="settings-text-scale">
           <div class="settings-text-scale__options">
             ${TEXT_SCALE_STOPS.map(
@@ -1160,7 +1170,7 @@ function renderAppearanceSection(props: ConfigProps) {
                   class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
                   @click=${() => props.setTextScale(stop)}
                 >
-                  <span class="settings-text-scale__sample">${TEXT_SCALE_LABELS[stop]}</span>
+                  <span class="settings-text-scale__sample">${t(TEXT_SCALE_LABELS[stop])}</span>
                   <span class="settings-text-scale__label">${stop}%</span>
                 </button>
               `,
@@ -1170,14 +1180,14 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Connection</h3>
+        <h3 class="settings-appearance__heading">${t("configView.connection.title")}</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Gateway</span>
+            <span class="settings-info-row__label">${t("configView.connection.gateway")}</span>
             <span class="settings-info-row__value mono">${props.gatewayUrl || "-"}</span>
           </div>
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__label">${t("configView.connection.status")}</span>
             <span class="settings-info-row__value">
               <span
                 class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"
@@ -1188,7 +1198,9 @@ function renderAppearanceSection(props: ConfigProps) {
           ${props.assistantName
             ? html`
                 <div class="settings-info-row">
-                  <span class="settings-info-row__label">Assistant</span>
+                  <span class="settings-info-row__label"
+                    >${t("configView.connection.assistant")}</span
+                  >
                   <span class="settings-info-row__value">${props.assistantName}</span>
                 </div>
               `
@@ -1301,16 +1313,23 @@ export function renderConfig(props: ConfigProps) {
     includeVirtualSections &&
     VIRTUAL_SECTIONS.has(key) &&
     (key === "__appearance__" || include?.has(key) === true);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
-    Object.assign({}, cat, {
-      sections: cat.sections.filter(
-        (s) =>
-          (isVisibleVirtualSection(s.key) || s.key in schemaProps) &&
-          (!include || include.has(s.key)) &&
-          (!exclude || !exclude.has(s.key)),
-      ),
-    }),
-  ).filter((cat) => cat.sections.length > 0);
+  const resolveNavSectionLabel = (key: string) => {
+    const sectionKey =
+      key === "__appearance__" ? "theme" : key === "__notifications__" ? "notifications" : key;
+    return t(`configView.sections.${sectionKey}`);
+  };
+  const visibleCategories: SectionCategory[] = SECTION_CATEGORIES.map((category) => ({
+    id: category.id,
+    label: t(`configView.categories.${category.id}`),
+    sections: category.sections
+      .filter(
+        (key) =>
+          (isVisibleVirtualSection(key) || key in schemaProps) &&
+          (!include || include.has(key)) &&
+          (!exclude || !exclude.has(key)),
+      )
+      .map((key) => ({ key, label: resolveNavSectionLabel(key) })),
+  })).filter((category) => category.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
@@ -1318,7 +1337,9 @@ export function renderConfig(props: ConfigProps) {
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
   const otherCategory: SectionCategory | null =
-    extraSections.length > 0 ? { id: "other", label: "Other", sections: extraSections } : null;
+    extraSections.length > 0
+      ? { id: "other", label: t("configView.categories.other"), sections: extraSections }
+      : null;
 
   const isVirtualSection =
     includeVirtualSections &&
@@ -1340,7 +1361,7 @@ export function renderConfig(props: ConfigProps) {
 
   const topTabs = [
     ...(showRootTab
-      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
       : []),
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
@@ -1471,20 +1492,20 @@ export function renderConfig(props: ConfigProps) {
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
                       ?disabled=${props.schemaLoading || !props.schema}
-                      title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                      title=${formUnsafe ? t("configView.formUnsafeTitle") : ""}
                       @click=${() => props.onFormModeChange("form")}
                     >
-                      Form
+                      ${t("configView.form")}
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
                       ?disabled=${!rawAvailable}
                       title=${rawAvailable
-                        ? "Edit raw JSON/JSON5 config"
-                        : "Raw mode unavailable for this snapshot"}
+                        ? t("configView.rawTitle")
+                        : t("configView.rawUnavailableTitle")}
                       @click=${() => props.onFormModeChange("raw")}
                     >
-                      Raw
+                      ${t("configView.raw")}
                     </button>
                   </div>
                 `
@@ -1493,17 +1514,22 @@ export function renderConfig(props: ConfigProps) {
               ? html`
                   <span class="config-changes-badge"
                     >${formMode === "raw"
-                      ? "Unsaved changes"
-                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                      ? t("common.unsavedChanges")
+                      : t(
+                          diff.length === 1
+                            ? "configView.unsavedChange"
+                            : "configView.unsavedChanges",
+                          { count: String(diff.length) },
+                        )}</span
                   >
                 `
-              : html` <span class="config-status muted">No changes</span> `}
+              : html` <span class="config-status muted">${t("configView.noChanges")}</span> `}
           </div>
           <div class="config-actions__right">
             ${!rawAvailable
               ? html`
                   <span class="config-status muted config-actions__notice"
-                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                    >${t("configView.rawDisabled")}</span
                   >
                 `
               : nothing}
@@ -1511,7 +1537,7 @@ export function renderConfig(props: ConfigProps) {
               ${props.onOpenFile
                 ? html`
                     <button class="btn btn--sm" @click=${props.onOpenFile}>
-                      ${icons.fileText} Open
+                      ${icons.fileText} ${t("configView.open")}
                     </button>
                   `
                 : nothing}
@@ -1519,7 +1545,7 @@ export function renderConfig(props: ConfigProps) {
                 ${props.loading ? t("common.loading") : t("common.reload")}
               </button>
               <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
-                Clear
+                ${t("configView.clear")}
               </button>
               <button
                 class="btn btn--sm primary"
@@ -1527,7 +1553,7 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.saving ? "true" : "false"}
                 @click=${props.onSave}
               >
-                ${renderActionButtonContent(props.saving, "Save", "Saving…")}
+                ${renderActionButtonContent(props.saving, t("common.save"), t("common.saving"))}
               </button>
               <button
                 class="btn btn--sm"
@@ -1535,7 +1561,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.applying ? "true" : "false"}
                 @click=${props.onApply}
               >
-                ${renderActionButtonContent(props.applying, "Apply", "Applying…")}
+                ${renderActionButtonContent(
+                  props.applying,
+                  t("configView.apply"),
+                  t("configView.applying"),
+                )}
               </button>
               <button
                 class="btn btn--sm"
@@ -1543,7 +1573,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.updating ? "true" : "false"}
                 @click=${props.onUpdate}
               >
-                ${renderActionButtonContent(props.updating, "Update", "Updating…")}
+                ${renderActionButtonContent(
+                  props.updating,
+                  t("configView.update"),
+                  t("configView.updating"),
+                )}
               </button>
             </div>
           </div>
@@ -1570,8 +1604,8 @@ export function renderConfig(props: ConfigProps) {
                           <input
                             type="text"
                             class="config-search__input"
-                            placeholder="Search settings..."
-                            aria-label="Search settings"
+                            placeholder=${t("configView.searchPlaceholder")}
+                            aria-label=${t("configView.search")}
                             .value=${props.searchQuery}
                             @input=${(e: Event) =>
                               props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -1580,7 +1614,7 @@ export function renderConfig(props: ConfigProps) {
                             ? html`
                                 <button
                                   class="config-search__clear"
-                                  aria-label="Clear search"
+                                  aria-label=${t("configView.clearSearch")}
                                   @click=${() => props.onSearchChange("")}
                                 >
                                   ×
@@ -1638,9 +1672,7 @@ export function renderConfig(props: ConfigProps) {
                   <line x1="12" y1="9" x2="12" y2="13"></line>
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
-                <span class="config-validity-warning__text"
-                  >Your configuration is invalid. Some settings may not work as expected.</span
-                >
+                <span class="config-validity-warning__text">${t("configView.invalidConfig")}</span>
                 <button
                   class="btn btn--sm"
                   @click=${() => {
@@ -1648,7 +1680,7 @@ export function renderConfig(props: ConfigProps) {
                     requestUpdate();
                   }}
                 >
-                  Don't remind again
+                  ${t("configView.dismissWarning")}
                 </button>
               </div>
             `
@@ -1659,7 +1691,14 @@ export function renderConfig(props: ConfigProps) {
           ? html`
               <details class="config-diff">
                 <summary class="config-diff__summary">
-                  <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
+                  <span
+                    >${t(
+                      diff.length === 1
+                        ? "configView.viewPendingChange"
+                        : "configView.viewPendingChanges",
+                      { count: String(diff.length) },
+                    )}</span
+                  >
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -1709,7 +1748,7 @@ export function renderConfig(props: ConfigProps) {
                 }}
               >
                 <summary class="config-diff__summary">
-                  <span>View pending changes</span>
+                  <span>${t("configView.viewPendingChangesRaw")}</span>
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -1751,9 +1790,7 @@ export function renderConfig(props: ConfigProps) {
                         `,
                       )
                     : html`
-                        <div class="config-diff__item">
-                          Changes detected (JSON diff not available)
-                        </div>
+                        <div class="config-diff__item">${t("configView.rawDiffUnavailable")}</div>
                       `}
                 </div>
               </details>
@@ -1779,7 +1816,9 @@ export function renderConfig(props: ConfigProps) {
                         class="config-env-peek-btn ${envSensitiveVisible
                           ? "config-env-peek-btn--active"
                           : ""}"
-                        title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
+                        title=${envSensitiveVisible
+                          ? t("configView.hideEnvValues")
+                          : t("configView.revealEnvValues")}
                         @click=${() => {
                           viewState.envRevealed = !viewState.envRevealed;
                           requestUpdate();
@@ -1798,7 +1837,7 @@ export function renderConfig(props: ConfigProps) {
                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                           <circle cx="12" cy="12" r="3"></circle>
                         </svg>
-                        Peek
+                        ${t("configView.peek")}
                       </button>
                     `
                   : nothing}
@@ -1822,7 +1861,7 @@ export function renderConfig(props: ConfigProps) {
                       ? html`
                           <div class="config-loading">
                             <div class="config-loading__spinner"></div>
-                            <span>Loading schema…</span>
+                            <span>${t("configView.loadingSchema")}</span>
                           </div>
                         `
                       : renderConfigForm({
@@ -1857,30 +1896,36 @@ export function renderConfig(props: ConfigProps) {
                       ${formUnsafe
                         ? html`
                             <div class="callout info" style="margin-bottom: 12px">
-                              Your config contains fields the form editor can't safely represent.
-                              Use Raw mode to edit those entries.
+                              ${t("configView.formUnsafe")}
                             </div>
                           `
                         : nothing}
                       <div class="field config-raw-field">
                         <span style="display:flex;align-items:center;gap:8px;">
-                          Raw config (JSON/JSON5)
+                          ${t("configView.rawConfig")}
                           ${sensitiveCount > 0
                             ? html`
                                 <span class="pill pill--sm"
-                                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
-                                  ${blurred ? "redacted" : "visible"}</span
+                                  >${t(
+                                    sensitiveCount === 1
+                                      ? "configView.secretCount"
+                                      : "configView.secretCountPlural",
+                                    { count: String(sensitiveCount) },
+                                  )}
+                                  ${blurred
+                                    ? t("configView.redacted")
+                                    : t("configView.visible")}</span
                                 >
                                 <openclaw-tooltip
                                   .content=${blurred
-                                    ? "Reveal sensitive values"
-                                    : "Hide sensitive values"}
+                                    ? t("configView.revealSensitive")
+                                    : t("configView.hideSensitive")}
                                 >
                                   <button
                                     class="btn btn--icon config-raw-toggle ${blurred
                                       ? ""
                                       : "active"}"
-                                    aria-label="Toggle raw config redaction"
+                                    aria-label=${t("configView.toggleRawRedaction")}
                                     aria-pressed=${!blurred}
                                     @click=${() => {
                                       viewState.rawRevealed = !viewState.rawRevealed;
@@ -1896,13 +1941,17 @@ export function renderConfig(props: ConfigProps) {
                         ${blurred
                           ? html`
                               <div class="callout info" style="margin-top: 12px">
-                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
-                                hidden. Use the reveal button above to edit the raw config.
+                                ${t(
+                                  sensitiveCount === 1
+                                    ? "configView.sensitiveHidden"
+                                    : "configView.sensitiveHiddenPlural",
+                                  { count: String(sensitiveCount) },
+                                )}
                               </div>
                             `
                           : html`
                               <textarea
-                                placeholder="Raw config (JSON/JSON5)"
+                                placeholder=${t("configView.rawConfig")}
                                 .value=${props.raw}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);

@@ -49,10 +49,6 @@
         "type": "number",
         "minimum": 0
       },
-      "probeAgent": {
-        "type": "string",
-        "minLength": 1
-      },
       "mcpServers": {
         "type": "object",
         "additionalProperties": {

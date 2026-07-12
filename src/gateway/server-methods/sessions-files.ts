@@ -16,6 +16,7 @@ import {
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
@@ -189,7 +190,10 @@ function toDisplayPath(root: string, resolved: string): string {
 
 function isInsideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveTouchedFilePath(params: {
@@ -201,9 +205,7 @@ function resolveTouchedFilePath(params: {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
-  const resolved = path.isAbsolute(params.filePath)
-    ? path.resolve(params.filePath)
-    : path.resolve(base, params.filePath);
+  const resolved = resolveSessionToolPathToCwd(params.filePath, base);
   if (!isInsideRoot(params.root, resolved)) {
     return undefined;
   }
@@ -547,18 +549,24 @@ async function buildListResult(params: {
   search?: string;
 }): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
   const loaded = await loadSessionFiles(params);
+  const root = loaded.root;
+  const workspaceFiles = root
+    ? loaded.files.filter((file) =>
+        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
+      )
+    : loaded.files;
   const files = await Promise.all(
-    loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    workspaceFiles.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
   );
   const browser = await buildBrowserResult({
-    root: loaded.root,
+    root,
     fileRoot: loaded.fileRoot,
     path: params.path,
     search: params.search,
-    files: loaded.files,
+    files: workspaceFiles,
   });
   return {
-    ...(loaded.root ? { root: loaded.root } : {}),
+    ...(root ? { root } : {}),
     files,
     ...(browser ? { browser } : {}),
   };

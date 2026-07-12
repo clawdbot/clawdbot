@@ -22,7 +22,10 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
+import {
+  createTelegramPollExtraToolSchemas,
+  createTelegramRichSendExtraToolSchemas,
+} from "./message-tool-schema.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
@@ -72,7 +75,10 @@ function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
-  if (ctx.action !== "send" || !payload.presentation) {
+  if (
+    ctx.action !== "send" ||
+    (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+  ) {
     return null;
   }
   const quoteText = readStringParam(ctx.params, "quoteText");
@@ -191,6 +197,12 @@ function describeTelegramMessageTool({
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
+  if (discovery.isEnabled("sendMessage")) {
+    schema.push({
+      properties: createTelegramRichSendExtraToolSchemas(),
       visibility: "all-configured",
     });
   }

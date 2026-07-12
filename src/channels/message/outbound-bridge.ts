@@ -162,6 +162,9 @@ function resolvePayloadReceiptKind(
   if (ctx.payload.interactive) {
     return "card";
   }
+  if (ctx.payload.location) {
+    return "card";
+  }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {
     return "text";
   }

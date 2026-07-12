@@ -941,7 +941,10 @@ export function renderSessions(props: SessionsProps) {
         : nothing}
 
       <div class="data-table-wrapper">
-        <div class="sessions-toolbar sessions-filter-bar" aria-label="Session filters">
+        <div
+          class="sessions-toolbar sessions-filter-bar"
+          aria-label=${t("sessionsView.filterControls")}
+        >
           <div class="data-table-search sessions-toolbar__search">
             ${icons.search}
             <input
@@ -1176,8 +1179,11 @@ export function renderSessions(props: SessionsProps) {
           ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
-                  ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${t("sessionsView.pagination", {
+                    start: String(page * props.pageSize + 1),
+                    end: String(Math.min((page + 1) * props.pageSize, totalRows)),
+                    total: String(totalRows),
+                  })}
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
@@ -1186,10 +1192,15 @@ export function renderSessions(props: SessionsProps) {
                     @change=${(e: Event) =>
                       props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
                   >
-                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                    ${PAGE_SIZES.map(
+                      (s) =>
+                        html`<option value=${s}>
+                          ${t("sessionsView.rowsPerPage", { count: String(s) })}
+                        </option>`,
+                    )}
                   </select>
                   <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                    Previous
+                    ${t("common.previous")}
                   </button>
                   <button
                     ?disabled=${page >= totalPages - 1}

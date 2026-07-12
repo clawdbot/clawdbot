@@ -209,6 +209,7 @@ describe("qa suite runtime agent session helpers", () => {
         sessionKey,
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "",
       hasDirectReplySelfMessage: false,
       lastAssistantContentTypes: ["tool_use"],
@@ -232,6 +233,7 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:webchat",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
       lastMessageRole: "assistant",
@@ -283,6 +285,7 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:stream",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
       lastAssistantErrorMessage: "Request was aborted",

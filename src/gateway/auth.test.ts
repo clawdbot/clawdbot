@@ -288,6 +288,109 @@ describe("gateway auth", () => {
     expect(res.method).toBe("none");
   });
 
+  it("rejects HTTP requests with disallowed Origin under auth mode none", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: { mode: "none", allowTailscale: false },
+        connectAuth: null,
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "origin_not_allowed",
+    });
+  });
+
+  it("accepts HTTP requests with allowed Origin under auth mode none", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.example.com",
+          origin: "https://control.example.com",
+        },
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "gateway.example.com",
+        origin: "https://control.example.com",
+        allowedOrigins: ["https://control.example.com"],
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("keeps origin-less HTTP requests working under auth mode none", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "localhost" },
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "localhost",
+        allowedOrigins: ["https://control.example.com"],
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("accepts HTTP requests with local loopback Origin under localDirect auth mode none", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1",
+          origin: "http://localhost:5173",
+        },
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "127.0.0.1",
+        origin: "http://localhost:5173",
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("does not apply the none-mode Origin policy to authenticated HTTP clients", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.example.com",
+          origin: "https://app.example",
+        },
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "gateway.example.com",
+        origin: "https://app.example",
+        allowedOrigins: ["https://control.example.com"],
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+  });
+
   it("keeps none mode authoritative even when token is present", async () => {
     const auth = resolveGatewayAuth({
       authConfig: { mode: "none", token: "configured-token" },

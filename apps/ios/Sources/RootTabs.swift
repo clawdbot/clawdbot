@@ -512,7 +512,6 @@ struct RootTabs: View {
                 .id(self.selectedSidebarDestination.id)
         case .terminal:
             TerminalHubScreen(
-                headerLeadingAction: self.sidebarHeaderLeadingAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(

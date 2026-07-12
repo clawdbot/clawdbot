@@ -30,7 +30,7 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
     return null;
   }
   const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
@@ -48,7 +48,7 @@ function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "gro
   if (raw === "direct") {
     return "dm";
   }
-  return raw as "channel" | "group" | "dm";
+  return raw === "channel" || raw === "group" || raw === "dm" ? raw : null;
 }
 
 function normalizeDiscordOriginChannelId(value?: string | null): string | null {
@@ -61,7 +61,7 @@ function normalizeDiscordOriginChannelId(value?: string | null): string | null {
   }
   const prefixed = trimmed.match(/^(?:channel|group):(\d+)$/i);
   if (prefixed) {
-    return prefixed[1];
+    return prefixed[1] ?? null;
   }
   return /^\d+$/.test(trimmed) ? trimmed : null;
 }

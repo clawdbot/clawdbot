@@ -26,6 +26,7 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
   AssistantMessageEventStream,
@@ -50,7 +51,6 @@ import {
   type ThinkingLevel,
   type Tool,
   type ToolCall,
-  type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import {
   resolveClaudeFable5ModelIdentity,
@@ -504,7 +504,7 @@ function handleContentBlockDelta(
       const newBlock: Block = { type: "text", text: "", index: contentBlockIndex };
       output.content.push(newBlock);
       index = blocks.length - 1;
-      block = blocks[index];
+      block = newBlock;
       stream.push({ type: "text_start", contentIndex: index, partial: output });
     }
     if (block.type === "text") {
@@ -794,7 +794,7 @@ function convertMessages(
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
   for (let i = 0; i < transformedMessages.length; i++) {
-    const m = transformedMessages[i];
+    const m = expectDefined(transformedMessages[i], "message conversion index is in bounds");
 
     switch (m.role) {
       case "user": {
@@ -917,8 +917,11 @@ function convertMessages(
 
         // Look ahead for consecutive toolResult messages
         let j = i + 1;
-        while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-          const nextMsg = transformedMessages[j] as ToolResultMessage;
+        while (true) {
+          const nextMsg = transformedMessages.at(j);
+          if (nextMsg?.role !== "toolResult") {
+            break;
+          }
           toolResults.push({
             toolResult: {
               toolUseId: nextMsg.toolCallId,
@@ -949,7 +952,7 @@ function convertMessages(
 
   // Add cache point to the last user message for supported Claude models when caching is enabled
   if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
-    const lastMessage = result[result.length - 1];
+    const lastMessage = expectDefined(result.at(-1), "non-empty converted message list");
     if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
       lastMessage.content.push({
         cachePoint: {
