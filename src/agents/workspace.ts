@@ -1454,8 +1454,10 @@ function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]):
       // Pattern exhausted but directory segments remain — no descendant matches.
       return false;
     }
-    const segment = dirSegments[dirIndex];
-    const patternSegment = patternSegments[patternIndex];
+    // dirIndex < dirLength and patternIndex < patternLength are guaranteed by the
+    // equality guards above, so both indexed reads are in-bounds.
+    const segment = dirSegments[dirIndex]!;
+    const patternSegment = patternSegments[patternIndex]!;
     if (patternSegment === "**") {
       if (match(dirIndex, patternIndex + 1)) {
         return true;
@@ -1487,7 +1489,8 @@ function patternSegmentIsLiteralAtDepth(depth: number, patternSegments: string[]
       return false;
     }
   }
-  return !hasGlobPattern(patternSegments[depth]);
+  // depth is within [0, patternSegments.length) after the guard above.
+  return !hasGlobPattern(patternSegments[depth]!);
 }
 
 // Ancestor chain node for the active descent path. Only symlinks can create
