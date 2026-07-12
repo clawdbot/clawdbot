@@ -80,12 +80,13 @@ import {
   clearRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions.js";
 import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  resolveStorePath,
-  saveSessionStore,
-} from "../config/sessions.js";
+  listSessionEntries,
+  removeSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEventEntries } from "../infra/system-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import * as subagentSpawn from "./subagent-spawn.js";
@@ -97,10 +98,22 @@ import * as subagentSpawn from "./subagent-spawn.js";
  */
 async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveStorePath(undefined, { agentId: "main" });
-  await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
-    skipMaintenance: true,
-  });
-  clearSessionStoreCacheForTest();
+  for (const { sessionKey } of listSessionEntries({ agentId: "main", storePath })) {
+    await removeSessionEntry({ agentId: "main", sessionKey, storePath });
+  }
+  for (const [sessionKey, entry] of Object.entries(data)) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, {
+      ...record,
+      sessionId:
+        typeof record.sessionId === "string" && record.sessionId.trim()
+          ? record.sessionId
+          : `session-${sessionKey}`,
+    } as SessionEntry);
+  }
 }
 
 function makeBaseConfig(overrides?: {
@@ -163,7 +176,6 @@ describe("subagent announce continuation chaining", () => {
   afterEach(() => {
     spawnSpy.mockRestore();
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
   });
 
   async function runContinuationAnnounce(params: {
@@ -178,15 +190,15 @@ describe("subagent announce continuation chaining", () => {
   }) {
     // Write the child entry into the session store
     const storePath = resolveStorePath(undefined, { agentId: "main" });
-    const currentStore = loadSessionStore(storePath, { skipCache: true });
-    currentStore[params.childSessionKey] = {
-      sessionId: `${params.childSessionKey}-session`,
-      updatedAt: Date.now(),
-      inputTokens: 0,
-      outputTokens: 0,
-    };
-    await saveSessionStore(storePath, currentStore, { skipMaintenance: true });
-    clearSessionStoreCacheForTest();
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: params.childSessionKey, storePath },
+      {
+        sessionId: `${params.childSessionKey}-session`,
+        updatedAt: Date.now(),
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    );
 
     // Update config if needed
     if (

@@ -23,11 +23,8 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../auto-reply/tokens.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-  updateSessionStore,
-} from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { generateChainId } from "../infra/secure-random.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -273,13 +270,13 @@ type ContinuationStateModule = {
 };
 
 type SessionStoreUpdateModule = {
-  updateSessionStore: <T>(
-    storePath: string,
-    mutator: (
-      store: Record<string, ContinuationChainSource & Record<string, unknown>>,
-    ) => Promise<T> | T,
+  updateSessionEntry: (
+    scope: { agentId?: string; sessionKey: string; storePath?: string },
+    update: (
+      entry: ContinuationChainSource & Record<string, unknown>,
+    ) => Partial<ContinuationChainSource> | null,
     options?: { requireWriteSuccess?: boolean },
-  ) => Promise<T>;
+  ) => Promise<(ContinuationChainSource & Record<string, unknown>) | null>;
   resolveStorePath: (store: unknown, options: { agentId: string }) => string;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
 };
@@ -415,7 +412,7 @@ async function drainChildContinuationQueue(params: {
     const { dispatchToolDelegates } = dispatchModule;
     const { loadContinuationChainState, persistContinuationChainState } = stateModule;
     const {
-      updateSessionStore: updateSessionStoreLazy,
+      updateSessionEntry: updateSessionEntryLazy,
       resolveStorePath: resolveStorePathLazy,
       resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyLazy,
     } = sessionStoreModule;
@@ -472,26 +469,19 @@ async function drainChildContinuationQueue(params: {
       try {
         const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
         const storePath = resolveStorePathLazy(cfg.session?.store, { agentId });
-        await updateSessionStoreLazy(
-          storePath,
-          (store) => {
-            const existing = store[params.childSessionKey];
-            if (!existing) {
-              return;
-            }
-            wroteDurableEntry = true;
-            store[params.childSessionKey] = {
-              ...existing,
-              continuationChainCount: advanced.currentChainCount,
-              continuationChainStartedAt: advanced.chainStartedAt,
-              continuationChainTokens: advanced.accumulatedChainTokens,
-              // Persist the chain id to disk too so it survives gateway restart /
-              // cache eviction and the next drain does not re-mint a fresh id.
-              ...(advanced.chainId ? { continuationChainId: advanced.chainId } : {}),
-            };
-          },
+        const persisted = await updateSessionEntryLazy(
+          { agentId, sessionKey: params.childSessionKey, storePath },
+          () => ({
+            continuationChainCount: advanced.currentChainCount,
+            continuationChainStartedAt: advanced.chainStartedAt,
+            continuationChainTokens: advanced.accumulatedChainTokens,
+            // Persist the chain id to disk too so it survives gateway restart /
+            // cache eviction and the next drain does not re-mint a fresh id.
+            ...(advanced.chainId ? { continuationChainId: advanced.chainId } : {}),
+          }),
           { requireWriteSuccess: true },
         );
+        wroteDurableEntry = persisted !== null;
       } catch (writeErr) {
         defaultRuntime.error?.(
           `[continuation:drain-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
@@ -606,7 +596,7 @@ async function scheduleSubagentSelfContinuationWork(params: {
     }
     const { loadContinuationChainState, persistContinuationChainState } = stateModule;
     const {
-      updateSessionStore: updateSessionStoreLazy,
+      updateSessionEntry: updateSessionEntryLazy,
       resolveStorePath: resolveStorePathLazy,
       resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyLazy,
     } = sessionStoreModule;
@@ -643,19 +633,19 @@ async function scheduleSubagentSelfContinuationWork(params: {
     try {
       const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
       const storePath = resolveStorePathLazy(params.cfg.session?.store, { agentId });
-      await updateSessionStoreLazy(storePath, (store) => {
-        const existing = store[params.childSessionKey];
-        if (!existing) {
-          return;
-        }
-        store[params.childSessionKey] = {
-          ...existing,
+      const persisted = await updateSessionEntryLazy(
+        { agentId, sessionKey: params.childSessionKey, storePath },
+        () => ({
           continuationChainCount: result.chainState.currentChainCount,
           continuationChainStartedAt: result.chainState.chainStartedAt,
           continuationChainTokens: result.chainState.accumulatedChainTokens,
           ...(result.chainState.chainId ? { continuationChainId: result.chainState.chainId } : {}),
-        };
-      });
+        }),
+        { requireWriteSuccess: true },
+      );
+      if (!persisted) {
+        throw new Error(`child entry not found: ${params.childSessionKey}`);
+      }
     } catch (writeErr) {
       defaultRuntime.error?.(
         `[continuation:self-continuation-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
@@ -1187,23 +1177,21 @@ export async function runSubagentAnnounceFlow(params: {
           agentId: parentAgentId,
         });
         try {
-          let parentTokensPersisted = false;
-          await updateSessionStore(
-            parentStorePath,
-            (store) => {
-              const parentEntry = store[targetRequesterSessionKey];
-              if (parentEntry) {
-                const prev =
-                  typeof parentEntry.continuationChainTokens === "number"
-                    ? parentEntry.continuationChainTokens
-                    : 0;
-                parentEntry.continuationChainTokens = prev + accumulatedChildTokens;
-                parentTokensPersisted = true;
-              }
+          const parentEntry = await updateSessionEntry(
+            {
+              agentId: parentAgentId,
+              sessionKey: targetRequesterSessionKey,
+              storePath: parentStorePath,
             },
+            (entry) => ({
+              continuationChainTokens:
+                (typeof entry.continuationChainTokens === "number"
+                  ? entry.continuationChainTokens
+                  : 0) + accumulatedChildTokens,
+            }),
             { requireWriteSuccess: true },
           );
-          if (!parentTokensPersisted) {
+          if (!parentEntry) {
             throw new Error(`requester entry not found: ${targetRequesterSessionKey}`);
           }
           defaultRuntime.log(
@@ -1233,23 +1221,21 @@ export async function runSubagentAnnounceFlow(params: {
           agentId: childAgentId,
         });
         try {
-          let childTokensPersisted = false;
-          await updateSessionStore(
-            childStorePath,
-            (store) => {
-              const childStoreEntry = store[params.childSessionKey];
-              if (childStoreEntry) {
-                const prev =
-                  typeof childStoreEntry.continuationChainTokens === "number"
-                    ? childStoreEntry.continuationChainTokens
-                    : 0;
-                childStoreEntry.continuationChainTokens = prev + accumulatedChildTokens;
-                childTokensPersisted = true;
-              }
+          const childStoreEntry = await updateSessionEntry(
+            {
+              agentId: childAgentId,
+              sessionKey: params.childSessionKey,
+              storePath: childStorePath,
             },
+            (entry) => ({
+              continuationChainTokens:
+                (typeof entry.continuationChainTokens === "number"
+                  ? entry.continuationChainTokens
+                  : 0) + accumulatedChildTokens,
+            }),
             { requireWriteSuccess: true },
           );
-          if (!childTokensPersisted) {
+          if (!childStoreEntry) {
             throw new Error(`child entry not found: ${params.childSessionKey}`);
           }
           invalidateSessionEntry(params.childSessionKey);

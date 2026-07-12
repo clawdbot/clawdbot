@@ -7,6 +7,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 
 const resetContinueDelegateTurnBudgetMock = vi.hoisted(() => vi.fn());
@@ -40,6 +41,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
     resetContinueDelegateTurnBudgetMock.mockReset();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);

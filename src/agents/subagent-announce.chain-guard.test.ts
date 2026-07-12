@@ -65,11 +65,13 @@ import {
   stagePostCompactionDelegate,
 } from "../auto-reply/continuation-delegate-store.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions.js";
 import {
-  clearSessionStoreCacheForTest,
-  resolveStorePath,
-  saveSessionStore,
-} from "../config/sessions.js";
+  listSessionEntries,
+  removeSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEventEntries } from "../infra/system-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import * as subagentSpawn from "./subagent-spawn.js";
@@ -109,10 +111,22 @@ function makeConfig(
  */
 async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveStorePath(undefined, { agentId: "main" });
-  await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
-    skipMaintenance: true,
-  });
-  clearSessionStoreCacheForTest();
+  for (const { sessionKey } of listSessionEntries({ agentId: "main", storePath })) {
+    await removeSessionEntry({ agentId: "main", sessionKey, storePath });
+  }
+  for (const [sessionKey, entry] of Object.entries(data)) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, {
+      ...record,
+      sessionId:
+        typeof record.sessionId === "string" && record.sessionId.trim()
+          ? record.sessionId
+          : `session-${sessionKey}`,
+    } as SessionEntry);
+  }
 }
 
 function buildChainShardParams(hopIndex: number): AnnounceFlowParams {
@@ -149,7 +163,6 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
   afterEach(() => {
     spawnSpy.mockRestore();
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
   });
 
   it("allows chain hop when nextChainHop <= maxChainLength", async () => {
@@ -349,7 +362,6 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     mockedConsumePendingDelegates.mockReturnValue([]);
     mockedMarkPendingDelegateFailed.mockClear();
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
   });
 
   it("allows tool delegate at maxChainLength-1 (next hop = maxChainLength)", async () => {
@@ -565,7 +577,6 @@ describe("announce-path post-compaction routing (stage at seam, skip spawn)", ()
     spawnSpy.mockRestore();
     mockedStagePostCompactionDelegate.mockClear();
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
   });
 
   it("stages a post-compaction bracket delegate and skips the normal chain-spawn", async () => {

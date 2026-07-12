@@ -16,15 +16,26 @@ const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", s
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
 // #1144: controllable so a test can force the child chain-cost persist to fail
-// and exercise the in-memory fallback fold. Default routes the mutator through
-// the same in-memory store the drain reads.
-const updateSessionStoreMock = vi.fn(
-  async (
-    storePath: string,
-    mutator: (store: Record<string, unknown>) => unknown,
-    _options?: { requireWriteSuccess?: boolean },
-  ) => await mutator(loadSessionStoreMock(storePath)),
-);
+// and exercise the in-memory fallback fold. Default routes the entry patch
+// through the same in-memory store the drain reads.
+const updateSessionEntryInStore = async (
+  scope: { sessionKey: string; storePath?: string },
+  update: (entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null,
+  _options?: { requireWriteSuccess?: boolean },
+) => {
+  const store = loadSessionStoreMock(scope.storePath ?? "/tmp/sessions.json");
+  const existing = store[scope.sessionKey];
+  if (!existing || typeof existing !== "object") {
+    return null;
+  }
+  const patch = await update(existing as Record<string, unknown>);
+  if (!patch) {
+    return null;
+  }
+  Object.assign(existing, patch);
+  return existing;
+};
+const updateSessionEntryMock = vi.fn(updateSessionEntryInStore);
 const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
   return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
 });
@@ -269,28 +280,13 @@ vi.mock("../config/sessions/store-load.js", () => ({
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
 }));
 
-// #1144: the settle-time chain-token accumulation persists the child's own run
-// cost into the child entry's durable `continuationChainTokens` via
-// `updateSessionStore` (from the `../config/sessions.js` barrel). Route it
-// through the same in-memory store the drain reads so the persisted post-run
-// cost basis is observable end-to-end. Only the accumulation block calls this,
-// and only when the child spent tokens, so tests without child token data are
-// unaffected.
-vi.mock("../config/sessions.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions.js")>()),
-  updateSessionStore: (
-    storePath: string,
-    mutator: (store: Record<string, unknown>) => unknown,
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  updateSessionEntry: (
+    scope: { sessionKey: string; storePath?: string },
+    update: (entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null,
     options?: { requireWriteSuccess?: boolean },
-  ) => updateSessionStoreMock(storePath, mutator, options),
-}));
-
-vi.mock("../config/sessions/store.js", () => ({
-  updateSessionStore: (
-    storePath: string,
-    mutator: (store: Record<string, unknown>) => unknown,
-    options?: { requireWriteSuccess?: boolean },
-  ) => updateSessionStoreMock(storePath, mutator, options),
+  ) => updateSessionEntryMock(scope, update, options),
 }));
 
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
@@ -311,15 +307,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       contextPressureThreshold: undefined,
     }));
     loadSessionStoreMock.mockReset().mockImplementation(() => ({}));
-    updateSessionStoreMock
-      .mockReset()
-      .mockImplementation(
-        async (
-          storePath: string,
-          mutator: (store: Record<string, unknown>) => unknown,
-          _options?: { requireWriteSuccess?: boolean },
-        ) => await mutator(loadSessionStoreMock(storePath)),
-      );
+    updateSessionEntryMock.mockReset().mockImplementation(updateSessionEntryInStore);
     resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
@@ -550,7 +538,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       currentChainCount: 2,
       accumulatedChainTokens: 4_000,
     });
-    updateSessionStoreMock.mockRejectedValueOnce(new Error("session store write failed"));
+    updateSessionEntryMock.mockRejectedValueOnce(new Error("session store write failed"));
     await expect(
       call?.persistChainState?.({
         currentChainCount: 3,
@@ -637,7 +625,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
     };
     loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-    updateSessionStoreMock.mockRejectedValueOnce(new Error("session store write failed"));
+    updateSessionEntryMock.mockRejectedValueOnce(new Error("session store write failed"));
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:override-persist-fail",
@@ -1275,10 +1263,10 @@ describe("subagent-announce continuation drain (F7)", () => {
     // The live drain reads that same persisted basis (no separate in-memory
     // fold), so the dispatcher sees 555_000 — over costCapTokens (500_000) — and
     // the real dispatcher would reject the hop.
-    expect(updateSessionStoreMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
-    expect(updateSessionStoreMock.mock.calls[1]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[1]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
     expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
@@ -1309,7 +1297,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     };
     loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
     // Force every chain-cost persist (parent + child) to fail.
-    updateSessionStoreMock.mockRejectedValue(new Error("session store write failed"));
+    updateSessionEntryMock.mockRejectedValue(new Error("session store write failed"));
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:cost-fail",
@@ -1328,10 +1316,10 @@ describe("subagent-announce continuation drain (F7)", () => {
 
     // Persist failed, so the durable child entry is unchanged (stale pre-run).
     expect(childEntry.continuationChainTokens).toBe(5_000);
-    expect(updateSessionStoreMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
-    expect(updateSessionStoreMock.mock.calls[1]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[1]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
     // But the live drain still enforces against the post-run total via the
@@ -1363,21 +1351,9 @@ describe("subagent-announce continuation drain (F7)", () => {
       "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
     };
     loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-    updateSessionStoreMock
-      .mockImplementationOnce(
-        async (
-          storePath: string,
-          mutator: (store: Record<string, unknown>) => unknown,
-          _options?: { requireWriteSuccess?: boolean },
-        ) => await mutator(loadSessionStoreMock(storePath)),
-      )
-      .mockImplementationOnce(
-        async (
-          _storePath: string,
-          mutator: (store: Record<string, unknown>) => unknown,
-          _options?: { requireWriteSuccess?: boolean },
-        ) => await mutator({}),
-      );
+    updateSessionEntryMock
+      .mockImplementationOnce(updateSessionEntryInStore)
+      .mockResolvedValueOnce(null);
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:cost-child-noop",
@@ -1395,7 +1371,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
 
     expect(childEntry.continuationChainTokens).toBe(5_000);
-    expect(updateSessionStoreMock.mock.calls[1]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[1]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
     expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
@@ -1570,7 +1546,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
     // The child chain-cost persist throws, so the run-cost fallback lives only in
     // memory for this drain and cannot survive a restart.
-    updateSessionStoreMock.mockRejectedValue(new Error("session store write failed"));
+    updateSessionEntryMock.mockRejectedValue(new Error("session store write failed"));
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:bracket-fail",
@@ -1615,7 +1591,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     };
     loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
     // Parent-entry persist throws, so the guard's requester basis stays stale.
-    updateSessionStoreMock.mockRejectedValue(new Error("session store write failed"));
+    updateSessionEntryMock.mockRejectedValue(new Error("session store write failed"));
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:bracket-guard",
@@ -1637,7 +1613,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     // NOT spawn (immediate) or enqueue (durable) on the stale pre-run basis.
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
   });
@@ -1663,13 +1639,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     // The requester entry is readable for budget checks, but the write mutator
     // touches no entry (legacy/normalized-key mismatch shape). It returns
     // normally, so production must detect "no row mutated" and fold the run cost.
-    updateSessionStoreMock.mockImplementationOnce(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, unknown>) => unknown,
-        _options?: { requireWriteSuccess?: boolean },
-      ) => await mutator({}),
-    );
+    updateSessionEntryMock.mockResolvedValueOnce(null);
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:bracket-parent-missing",
@@ -1688,7 +1658,7 @@ describe("subagent-announce continuation drain (F7)", () => {
 
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
-    expect(updateSessionStoreMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
   });

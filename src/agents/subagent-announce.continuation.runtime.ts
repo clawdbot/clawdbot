@@ -28,5 +28,5 @@ export {
 // path could not (#952), guarded by the liveness check to avoid double-arming.
 export { scheduleContinuationWorkBatch } from "../auto-reply/continuation/work-dispatch.js";
 export { hasLiveOrRecentlyDispatchedContinuationWork } from "../auto-reply/continuation/work-store.js";
-export { updateSessionStore } from "../config/sessions/store.js";
+export { updateSessionEntry } from "../config/sessions/session-accessor.js";
 export { resolveStorePath, resolveAgentIdFromSessionKey } from "../config/sessions.js";

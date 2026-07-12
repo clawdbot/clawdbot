@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 // Regression coverage for the canonical-primitives fix in
@@ -52,7 +53,7 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
     };
 
     // Sanity: store path must not yet exist — this IS the first-turn case.
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toBeUndefined();
 
     const result = await incrementCompactionCount({
       sessionStore,
@@ -71,10 +72,10 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
     // call was a no-op here because the existing-entry check returned null;
     // count was silently dropped on disk. The canonical-primitives fix
     // merge-or-creates from the active in-memory entry.)
-    const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted[sessionKey]).toBeDefined();
-    expect(persisted[sessionKey]?.compactionCount).toBe(1);
-    expect(persisted[sessionKey]?.sessionId).toBe("session-A");
+    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+    expect(persisted).toBeDefined();
+    expect(persisted?.compactionCount).toBe(1);
+    expect(persisted?.sessionId).toBe("session-A");
   });
 
   it("rolls sessionStartedAt to new-session epoch when sessionId changes during compaction", async () => {
@@ -118,11 +119,11 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
     // resolved updatedAt may differ from in-memory by milliseconds, so assert
     // disk-side rollover invariants independently rather than equating the
     // two timestamps.
-    const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted[sessionKey]?.sessionId).toBe("session-new");
-    expect(persisted[sessionKey]?.sessionStartedAt).toBeGreaterThanOrEqual(compactionMoment);
-    expect(persisted[sessionKey]?.sessionStartedAt).not.toBe(oldSessionStartedAt);
-    expect(persisted[sessionKey]?.sessionStartedAt).toBe(persisted[sessionKey]?.updatedAt);
+    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+    expect(persisted?.sessionId).toBe("session-new");
+    expect(persisted?.sessionStartedAt).toBeGreaterThanOrEqual(compactionMoment);
+    expect(persisted?.sessionStartedAt).not.toBe(oldSessionStartedAt);
+    expect(persisted?.sessionStartedAt).toBe(persisted?.updatedAt);
   });
 
   it("merges count across multiple compactions when on-disk entry already exists", async () => {
@@ -150,9 +151,9 @@ describe("incrementCompactionCount canonical-primitives fix", () => {
     });
 
     expect(sessionStore[sessionKey]?.compactionCount).toBe(2);
-    const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted[sessionKey]?.compactionCount).toBe(2);
+    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+    expect(persisted?.compactionCount).toBe(2);
     // sessionStartedAt should remain the same (sessionId did not change).
-    expect(persisted[sessionKey]?.sessionStartedAt).toBe(1_000_000);
+    expect(persisted?.sessionStartedAt).toBe(1_000_000);
   });
 });

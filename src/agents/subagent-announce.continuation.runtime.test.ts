@@ -70,8 +70,8 @@ describe("subagent-announce continuation runtime entry", () => {
     expect(typeof continuationRuntime.persistContinuationChainState).toBe("function");
   });
 
-  it("exports updateSessionStore from the continuation runtime", () => {
-    expect(typeof continuationRuntime.updateSessionStore).toBe("function");
+  it("exports updateSessionEntry from the continuation runtime", () => {
+    expect(typeof continuationRuntime.updateSessionEntry).toBe("function");
   });
 
   it("exports resolveStorePath from the continuation runtime", () => {
@@ -98,7 +98,7 @@ describe("subagent-announce continuation runtime entry", () => {
       "loadContinuationChainState",
       "persistContinuationChainState",
       // SessionStoreUpdateModule
-      "updateSessionStore",
+      "updateSessionEntry",
       "resolveStorePath",
       "resolveAgentIdFromSessionKey",
     ] as const;
