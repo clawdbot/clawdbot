@@ -9,6 +9,7 @@ export function resolveAcpSessionsSendRoute(params: {
   entry: SessionsSendRouteEntry | null | undefined;
   acpMeta: SessionAcpMeta | undefined;
   requesterSessionKey: string | null | undefined;
+  activeAcpTurn: boolean;
 }): { skipA2AFlow: boolean; rejection?: string } {
   const entry =
     params.acpMeta && params.entry ? { ...params.entry, acp: params.acpMeta } : params.entry;
@@ -21,7 +22,7 @@ export function resolveAcpSessionsSendRoute(params: {
     normalizeOptionalString(identity?.agentSessionId) ??
     normalizeOptionalString(identity?.acpxSessionId),
   );
-  if (params.acpMeta.state !== "running" && hasStableIdentity) {
+  if (!params.activeAcpTurn && hasStableIdentity) {
     return { skipA2AFlow };
   }
   return {

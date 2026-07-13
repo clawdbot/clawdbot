@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { isAcpTurnActive } from "../../acp/control-plane/active-turns.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -985,6 +986,7 @@ export function createSessionsSendTool(opts?: {
             entry: targetSessionEntry,
             acpMeta: targetAcpMeta,
             requesterSessionKey: effectiveRequesterKey,
+            activeAcpTurn: isAcpTurnActive(resolvedKey),
           });
           if (acpRoute.rejection) {
             return jsonResult({
