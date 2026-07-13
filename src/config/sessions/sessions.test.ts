@@ -982,3 +982,47 @@ describe("resolveAndPersistSessionFile", () => {
     expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
   });
 });
+
+describe("session reset: the daily wipe that ate the agent memory", () => {
+  // THE BUG (VC Trader AI staging, found 2026-07-13): the deployment ships NO
+  // `session` block, so the reset policy falls through to its default --
+  // DEFAULT_RESET_MODE = "daily" at DEFAULT_RESET_AT_HOUR = 4. Every session
+  // started before today at 04:00 is therefore declared STALE, a fresh sessionId
+  // is minted, a fresh transcript file is opened, and the agent wakes up with no
+  // memory of anything before 4am. Every single day.
+  //
+  // It looked like "the agent forgets when the gateway restarts". It is not the
+  // restart. It is the clock.
+  //
+  // The fix is config, not code: mode "idle" with idleMinutes 0 disables BOTH
+  // staleness predicates, so a session stays fresh until something explicitly
+  // resets it (the "Clean chat" affordance).
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  it("daily mode (the DEFAULT) declares yesterday's session stale", () => {
+    const now = Date.parse("2026-07-13T10:00:00Z");
+    const freshness = evaluateSessionFreshness({
+      now,
+      updatedAt: now - 60_000,
+      sessionStartedAt: now - DAY_MS, // started yesterday
+      policy: { mode: "daily", atHour: 4 },
+    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.staleReason).toBe("daily");
+  });
+
+  it("idle mode with idleMinutes 0 keeps a session fresh indefinitely", () => {
+    const now = Date.parse("2026-07-13T10:00:00Z");
+    const freshness = evaluateSessionFreshness({
+      now,
+      updatedAt: now - 60_000,
+      sessionStartedAt: now - 30 * DAY_MS, // started a MONTH ago
+      lastInteractionAt: now - 7 * DAY_MS,
+      policy: { mode: "idle", idleMinutes: 0 },
+    });
+    expect(freshness.fresh, "the session must survive across days").toBe(true);
+    expect(freshness.staleReason).toBeUndefined();
+    expect(freshness.dailyResetAt).toBeUndefined();
+    expect(freshness.idleExpiresAt).toBeUndefined();
+  });
+});

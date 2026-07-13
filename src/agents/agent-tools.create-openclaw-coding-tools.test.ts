@@ -1290,6 +1290,75 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("keeps the memory-flush writer even when tools.deny strips write", async () => {
+    // A deployment can legitimately deny `write` outright so the agent has NO
+    // general filesystem access (VC Trader AI does exactly this, after the agent
+    // once wrote a bad config and crash-looped its own gateway).
+    //
+    // That must NOT also kill the memory flush. The flush writer keeps the name
+    // `write`, and the policy pipeline is name-matched and deny-wins, so it was
+    // being stripped along with the general writer -- silently. The memory plugin
+    // ran, the SQLite store filled up, the flush fired... and memory/YYYY-MM-DD.md
+    // was never written, with nothing to warn you. Denying the agent the filesystem
+    // should not stop it keeping a diary.
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-deny-"));
+    const memoryRelativePath = "memory/2026-07-13.md";
+    const memoryFile = path.join(workspaceDir, memoryRelativePath);
+    try {
+      await fs.mkdir(path.dirname(memoryFile), { recursive: true });
+      await fs.writeFile(memoryFile, "seed", "utf8");
+
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        trigger: "memory",
+        memoryFlushWritePath: memoryRelativePath,
+        config: { tools: { deny: ["write", "edit", "apply_patch"] } },
+      });
+
+      const names = new Set(tools.map((tool) => tool.name));
+      expect(names.has("write"), "the scoped memory-flush writer must survive").toBe(true);
+      expect(names.has("edit")).toBe(false);
+      expect(names.has("apply_patch")).toBe(false);
+
+      // And the survivor is still the APPEND-ONLY, single-path writer -- not a
+      // general one that slipped through the deny list.
+      const writeExecute = requireToolExecute(requireTool(tools, "write"));
+      await writeExecute("tool-memory-flush-deny", {
+        path: memoryRelativePath,
+        content: "durable note",
+      });
+      await expect(fs.readFile(memoryFile, "utf8")).resolves.toBe("seed\ndurable note");
+
+      await expect(
+        writeExecute("tool-memory-flush-escape", {
+          path: "SOUL.md",
+          content: "pwned",
+        }),
+      ).rejects.toThrow(/restricted to/);
+      await expect(fs.stat(path.join(workspaceDir, "SOUL.md"))).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still denies write on an ordinary (non-memory-flush) run", async () => {
+    // The exemption is scoped to memory-flush runs ONLY. An ordinary turn under
+    // the same deny list must have no writer at all -- otherwise the re-insert
+    // would have quietly handed the agent back the filesystem.
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-ordinary-"));
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        config: { tools: { deny: ["write", "edit", "apply_patch"] } },
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+      expect(names.has("write"), "an ordinary turn must have NO writer").toBe(false);
+      expect(names.has("read")).toBe(true);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
     try {

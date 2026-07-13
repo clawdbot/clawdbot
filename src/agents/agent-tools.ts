@@ -981,23 +981,28 @@ export function createOpenClawCodingTools(options?: {
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
   const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
+  /**
+   * The append-only memory-flush writer, if we built one. Held so it can survive
+   * a deployment whose `tools.deny` strips `write` wholesale -- see the re-insert
+   * below the policy pipeline.
+   */
+  let memoryFlushWriteTool: AnyAgentTool | undefined;
   if (isMemoryFlushRun && memoryFlushWritePath) {
     for (const tool of tools) {
       if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
         continue;
       }
       if (tool.name === "write") {
-        toolsForMemoryFlush.push(
-          wrapToolMemoryFlushAppendOnlyWrite(tool, {
-            root: memoryFlushWriteRoot,
-            relativePath: memoryFlushWritePath,
-            containerWorkdir: sandbox?.containerWorkdir,
-            sandbox:
-              sandboxRoot && sandboxFsBridge
-                ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                : undefined,
-          }),
-        );
+        memoryFlushWriteTool = wrapToolMemoryFlushAppendOnlyWrite(tool, {
+          root: memoryFlushWriteRoot,
+          relativePath: memoryFlushWritePath,
+          containerWorkdir: sandbox?.containerWorkdir,
+          sandbox:
+            sandboxRoot && sandboxFsBridge
+              ? { root: sandboxRoot, bridge: sandboxFsBridge }
+              : undefined,
+        });
+        toolsForMemoryFlush.push(memoryFlushWriteTool);
         continue;
       }
       toolsForMemoryFlush.push(tool);
@@ -1060,6 +1065,23 @@ export function createOpenClawCodingTools(options?: {
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
   });
+  // A deployment that denies `write` outright (VC Trader AI does: the agent must
+  // have NO general write access, after it once wrote a bad config and crash-looped
+  // its own gateway) also silently kills the MEMORY FLUSH, because the append-only
+  // writer above keeps the name `write` and the deny pipeline is name-matched and
+  // deny-wins. The symptom is a memory system that appears to work -- the plugin,
+  // the SQLite store, the flush trigger all run -- while `memory/YYYY-MM-DD.md` is
+  // never written and nothing warns.
+  //
+  // Re-insert ONLY that tool, and only on a memory-flush run. It is not a general
+  // writer and `tools.deny` cannot express anything this narrow: it can ONLY append
+  // to path.resolve(memoryFlushWriteRoot, memoryFlushWritePath) (agent-tools.read
+  // throws on any other resolved path), it exists ONLY when trigger === "memory",
+  // and it is workspace-root-guarded on top. Denying `write` to keep the agent out
+  // of the filesystem should not also stop it from keeping a diary.
+  if (memoryFlushWriteTool && !subagentFiltered.some((tool) => tool === memoryFlushWriteTool)) {
+    subagentFiltered.push(memoryFlushWriteTool);
+  }
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
   }
