@@ -878,6 +878,7 @@ describe("AcpSessionManager runtime handles", () => {
             state: "resolved",
             source: "status",
             acpxSessionId: "acpx-sid-oneshot",
+            sessionResumeSupported: true,
             lastUpdatedAt: Date.now(),
           },
         },
@@ -904,6 +905,59 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
+  it("does not resume one-shot identity without confirmed agent support", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:binding:demo-binding:default:oneshot-unconfirmed",
+      backend: "acpx",
+      runtimeSessionName: "fresh-oneshot-runtime",
+      acpxRecordId: "fresh-record",
+      backendSessionId: "fresh-acpx-session",
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:oneshot-unconfirmed";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: key,
+          mode: "oneshot",
+          identity: {
+            state: "resolved",
+            source: "status",
+            acpxSessionId: "acpx-sid-unconfirmed",
+            agentSessionId: "agent-sid-unconfirmed",
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "safe fresh retry",
+      mode: "prompt",
+      requestId: "r-binding-oneshot-unconfirmed",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(runtimeState.ensureSession).resumeSessionId).toBeUndefined();
+    const turnHandle = mockCallArg(runtimeState.runTurn).handle;
+    expectRecordFields(turnHandle, {
+      backendSessionId: "fresh-acpx-session",
+    });
+    expect(turnHandle.agentSessionId).toBeUndefined();
+  });
+
   it("fails closed when a persisted one-shot session cannot be resumed", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValue(
@@ -927,6 +981,7 @@ describe("AcpSessionManager runtime handles", () => {
             state: "resolved",
             source: "status",
             agentSessionId: "agent-session-stale",
+            sessionResumeSupported: true,
             lastUpdatedAt: Date.now(),
           },
         },

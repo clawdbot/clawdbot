@@ -695,6 +695,17 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+function withResumeSafeAcpxSessionMode(
+  input: OpenClawRuntimeEnsureInput,
+): OpenClawRuntimeEnsureInput {
+  if (input.mode !== "oneshot" || !input.resumeSessionId?.trim()) {
+    return input;
+  }
+  // ACPX permits a one-shot reconnect to create a fresh backend session. Keep an explicitly
+  // resumed follow-up connected until OpenClaw closes it after the turn instead.
+  return { ...input, mode: "persistent" };
+}
+
 function isAcpModelCapabilityMissingError(error: unknown): boolean {
   return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
 }
@@ -1525,6 +1536,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<OpenClawRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
+    const resumeSafeInput = withResumeSafeAcpxSessionMode(input);
     const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
@@ -1557,17 +1569,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           : { kind: "dropped" }
         : undefined;
     const ensureInput = isCodexAcp
-      ? withCodexSessionModel(input, codexModelOverride)
+      ? withCodexSessionModel(resumeSafeInput, codexModelOverride)
       : claudeModelOverride
-        ? { ...input, model: claudeModelOverride }
-        : input;
+        ? { ...resumeSafeInput, model: claudeModelOverride }
+        : resumeSafeInput;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
     const reusableCommand = await this.readReusablePersistentSessionCommand({
       sessionKey: input.sessionKey,
-      mode: input.mode,
+      mode: ensureInput.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,

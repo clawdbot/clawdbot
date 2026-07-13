@@ -4030,6 +4030,35 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(result.sessionResumeSupported).toBe(expected);
   });
 
+  it("keeps resumed one-shot turns on the resumed backend session", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "oneshot",
+      resumeSessionId: "claude-session-1",
+    });
+
+    expect(ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "persistent",
+        resumeSessionId: "claude-session-1",
+      }),
+    );
+  });
+
   it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

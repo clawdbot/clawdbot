@@ -95,7 +95,23 @@ export async function ensureManagerRuntimeHandle(params: {
   const backendOwnsPreviousIdentity = previousMeta.backend === backend.id;
   const previousIdentity = backendOwnsPreviousIdentity ? persistedIdentity : undefined;
   let identityForEnsure = previousIdentity;
-  const persistedResumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
+  const persistedResumeSessionId =
+    mode === "persistent" || previousIdentity?.sessionResumeSupported === true
+      ? resolveRuntimeResumeSessionId(previousIdentity)
+      : undefined;
+  if (
+    mode === "oneshot" &&
+    !persistedResumeSessionId &&
+    identityHasStableSessionId(identityForEnsure)
+  ) {
+    const {
+      acpxRecordId: _staleAcpxRecordId,
+      acpxSessionId: _staleAcpxSessionId,
+      agentSessionId: _staleAgentSessionId,
+      ...freshIdentity
+    } = identityForEnsure!;
+    identityForEnsure = { ...freshIdentity, state: "pending" };
+  }
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
