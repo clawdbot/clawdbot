@@ -267,7 +267,9 @@ function readStreamingSandboxHttpResponse(params: {
     // for the full process lifetime.  The outer no-op listener on the same
     // stream prevents the EventEmitter from throwing before this listener fires.
     const streamErrorToFail = (error: Error) => {
-      if (failed) return;
+      if (failed) {
+        return;
+      }
       failed = true;
       streamFailure = `sandbox http/request output stream error: ${error.message}`;
       if (headerResolved) {
