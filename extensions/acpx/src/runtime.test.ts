@@ -4059,6 +4059,55 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
+  it("opens a new process lease when resuming a closed one-shot record", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:resumed-oneshot",
+        acpSessionId: "codex-session-1",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        cwd: "/tmp",
+        closed: true,
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    const launchCommands: string[] = [];
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      launchCommands.push(
+        (
+          runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+        ).scopedAgentRegistry.resolve("codex"),
+      );
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:resumed-oneshot",
+      agent: "codex",
+      mode: "oneshot",
+      resumeSessionId: "codex-session-1",
+    });
+
+    expect(leaseStore.store.save).toHaveBeenCalledOnce();
+    expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
+    expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+  });
+
   it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

@@ -1202,4 +1202,99 @@ describe("AcpSessionManager runtime handles", () => {
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
+
+  it("preserves one-shot resume support until status resolves the session id", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession
+      .mockResolvedValueOnce({
+        sessionKey: "agent:claude:acp:session-capability-first",
+        backend: "acpx",
+        runtimeSessionName: "agent:claude:acp:session-capability-first:oneshot:runtime",
+        sessionResumeSupported: true,
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:claude:acp:session-capability-first",
+        backend: "acpx",
+        runtimeSessionName: "agent:claude:acp:session-capability-first:oneshot:runtime",
+        backendSessionId: "acpx-session-capability-first",
+      });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      backendSessionId: "acpx-session-capability-first",
+      details: { status: "alive" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:claude:acp:session-capability-first";
+    let currentMeta: SessionAcpMeta | undefined;
+    const sessionEntry = {
+      sessionId: "session-capability-first",
+      updatedAt: Date.now(),
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      ...sessionEntry,
+      ...(currentMeta ? { acp: currentMeta } : {}),
+    }));
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta; sessionId: string; updatedAt: number } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const entry = currentMeta ? { ...sessionEntry, acp: currentMeta } : sessionEntry;
+      const next = params.mutate(currentMeta, entry);
+      if (next === null) {
+        currentMeta = undefined;
+        return { ...sessionEntry };
+      }
+      if (next !== undefined) {
+        currentMeta = next;
+      }
+      return {
+        ...sessionEntry,
+        ...(currentMeta ? { acp: currentMeta } : {}),
+      };
+    });
+
+    const managerA = new AcpSessionManager();
+    await managerA.initializeSession({
+      cfg: baseCfg,
+      sessionKey,
+      agent: "claude",
+      mode: "oneshot",
+    });
+    await managerA.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "initial one-shot",
+      mode: "prompt",
+      requestId: "r-capability-first-initial",
+      provenance: "system",
+    });
+
+    expect(currentMeta?.identity).toMatchObject({
+      acpxSessionId: "acpx-session-capability-first",
+      sessionResumeSupported: true,
+    });
+
+    const managerB = new AcpSessionManager();
+    await managerB.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "follow-up",
+      mode: "prompt",
+      requestId: "r-capability-first-follow-up",
+      provenance: "system",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession, 1), {
+      mode: "oneshot",
+      resumeSessionId: "acpx-session-capability-first",
+    });
+  });
 });

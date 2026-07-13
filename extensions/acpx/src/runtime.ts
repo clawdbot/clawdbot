@@ -222,6 +222,13 @@ function readRecordResetOnNextEnsure(record: unknown): boolean {
   return (acpx as { reset_on_next_ensure?: unknown }).reset_on_next_ensure === true;
 }
 
+function readRecordClosed(record: unknown): boolean {
+  if (typeof record !== "object" || record === null) {
+    return false;
+  }
+  return (record as { closed?: unknown }).closed === true;
+}
+
 function readRecordAgentPid(record: unknown): number | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
@@ -1016,7 +1023,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return undefined;
     }
     const existing = await this.sessionStore.load(params.sessionKey);
-    if (!existing || readRecordResetOnNextEnsure(existing)) {
+    if (!existing || readRecordResetOnNextEnsure(existing) || readRecordClosed(existing)) {
       return undefined;
     }
     const recordCwd = readRecordCwd(existing);

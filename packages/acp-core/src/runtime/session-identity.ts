@@ -210,6 +210,14 @@ export function createIdentityFromEnsure(params: {
     source: "ensure",
     now: params.now,
   });
+  if (!identity && params.handle.sessionResumeSupported !== undefined) {
+    return {
+      state: "pending",
+      sessionResumeSupported: params.handle.sessionResumeSupported,
+      source: "ensure",
+      lastUpdatedAt: params.now,
+    };
+  }
   if (!identity || params.handle.sessionResumeSupported === undefined) {
     return identity;
   }
