@@ -1,7 +1,8 @@
 /**
  * Upload an image from a URL to Tlon storage.
  */
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 import { uploadFile } from "../tlon-api.js";
 
 /**
@@ -23,9 +24,10 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
     const { response, release } = await fetchWithSsrFGuard({
       url: imageUrl,
-      init: { method: "GET" },
-      policy: undefined,
-      auditContext: "tlon-upload-image",
+      maxBytes: MAX_IMAGE_BYTES,
+      ...TLON_MEDIA_FETCH_TIMEOUTS,
+      ssrfPolicy: undefined,
+      requestInit: { method: "GET" },
     });
 
     try {
