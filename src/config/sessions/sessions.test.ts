@@ -1011,18 +1011,36 @@ describe("session reset: the daily wipe that ate the agent memory", () => {
     expect(freshness.staleReason).toBe("daily");
   });
 
-  it("idle mode with idleMinutes 0 keeps a session fresh indefinitely", () => {
+  it("the SHIPPED config -- reset.mode idle, no idleMinutes -- never expires a session", () => {
+    // This is the exact config VC Trader AI deploys:
+    //     session = { reset = { mode = "idle" } }
+    //
+    // Resolve it through the REAL resolver rather than hand-building a policy, so
+    // this test would catch a resolver change that reintroduces an expiry.
+    //
+    // Do NOT be tempted to write idleMinutes: 0 in the deployed config: the config
+    // SCHEMA rejects it ("must be greater than 0") and the gateway refuses to boot.
+    // Omitting it is both valid AND correct -- mode "idle" falls back to
+    // DEFAULT_IDLE_MINUTES = 0, and 0 means "no idle expiry".
+    const policy = resolveSessionResetPolicy({
+      // `sessionCfg` IS the deployed `session` block.
+      sessionCfg: { reset: { mode: "idle" } } as SessionConfig,
+      resetType: "direct",
+    });
+    expect(policy.mode).toBe("idle");
+    expect(policy.idleMinutes).toBe(0);
+
     const now = Date.parse("2026-07-13T10:00:00Z");
     const freshness = evaluateSessionFreshness({
       now,
       updatedAt: now - 60_000,
       sessionStartedAt: now - 30 * DAY_MS, // started a MONTH ago
-      lastInteractionAt: now - 7 * DAY_MS,
-      policy: { mode: "idle", idleMinutes: 0 },
+      lastInteractionAt: now - 7 * DAY_MS, // untouched for a WEEK
+      policy,
     });
     expect(freshness.fresh, "the session must survive across days").toBe(true);
     expect(freshness.staleReason).toBeUndefined();
-    expect(freshness.dailyResetAt).toBeUndefined();
-    expect(freshness.idleExpiresAt).toBeUndefined();
+    expect(freshness.dailyResetAt, "no daily wipe").toBeUndefined();
+    expect(freshness.idleExpiresAt, "no idle expiry").toBeUndefined();
   });
 });
