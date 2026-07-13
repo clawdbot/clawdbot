@@ -358,6 +358,12 @@ export async function runManagerTurn(params: {
               "ACP turn ended without a terminal done event.",
             );
           }
+          // Terminal task delivery can wake the parent before one-shot cleanup finishes. The
+          // prompt is already over, so allow the queued follow-up to target this session now.
+          if (acpTurnMarkedActive) {
+            clearAcpTurnActive(sessionKey);
+            acpTurnMarkedActive = false;
+          }
           params.recordTurnCompletion({
             startedAt: turnStartedAt,
           });

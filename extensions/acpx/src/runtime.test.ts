@@ -4059,14 +4059,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("opens a new process lease when resuming a closed one-shot record", async () => {
+  it("opens a new process lease when resuming a stale one-shot record", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         name: "agent:codex:acp:resumed-oneshot",
         acpSessionId: "codex-session-1",
         agentCommand: CODEX_ACP_WRAPPER_COMMAND,
         cwd: "/tmp",
-        closed: true,
+        closed: false,
         agentCapabilities: { sessionCapabilities: { resume: {} } },
       })),
       save: vi.fn(async () => {}),

@@ -475,6 +475,67 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("clears prompt liveness before a completed one-shot task is delivered", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const releaseClose = createDeferred();
+      runtimeState.close.mockImplementation(async () => {
+        await releaseClose.promise;
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:claude:acp:child-terminal-cleanup";
+      const parentSessionKey = "agent:main:cron:job-terminal-cleanup";
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === childSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-terminal-cleanup",
+              updatedAt: Date.now(),
+              spawnedBy: parentSessionKey,
+            },
+            acp: readySessionMeta({ mode: "oneshot" }),
+          };
+        }
+        if (sessionKey === parentSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-terminal-cleanup", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      const turn = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "complete before cleanup",
+        mode: "prompt",
+        requestId: "terminal-cleanup-acp-turn",
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(requireTaskByRunId("terminal-cleanup-acp-turn").status).toBe("succeeded");
+          expect(runtimeState.close).toHaveBeenCalledTimes(1);
+        },
+        { interval: 1 },
+      );
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+
+      releaseClose.resolve();
+      await turn;
+    });
+  }, 300_000);
+
   it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
