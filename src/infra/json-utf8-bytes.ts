@@ -28,7 +28,7 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  if (value.length + 2 > remainingBytes) {
+  if (Buffer.byteLength(value, "utf8") + 2 > remainingBytes) {
     return remainingBytes + 1;
   }
   return jsonUtf8BytesOrInfinity(value);

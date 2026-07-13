@@ -94,6 +94,25 @@ describe("boundedJsonUtf8Bytes", () => {
     });
   });
 
+  it("uses actual UTF-8 byte length for fast-path bailout on CJK strings", () => {
+    // "中".repeat(3_000) = 3,000 UTF-16 code units but 9,000 UTF-8 bytes.
+    // The old estimate (value.length + 2 = 3,002) would incorrectly pass the
+    // guard and fall through to the expensive JSON.stringify path.
+    // The fixed estimate (Buffer.byteLength + 2 = 9,002) correctly bails early.
+    const cjkPayload = { value: "中".repeat(3_000) };
+    const result = boundedJsonUtf8Bytes(cjkPayload, 8_192);
+    expect(result.complete).toBe(false);
+    expect(result.bytes).toBeGreaterThan(8_192);
+  });
+
+  it("completes accurately for unicode strings under the byte limit", () => {
+    // A short emoji string: "😀" is 2 UTF-16 code units but 4 UTF-8 bytes.
+    const emojiPayload = { value: "😀".repeat(10) };
+    const expectedBytes = Buffer.byteLength(JSON.stringify(emojiPayload), "utf8");
+    const result = boundedJsonUtf8Bytes(emojiPayload, 1_000);
+    expect(result).toEqual({ bytes: expectedBytes, complete: true });
+  });
+
   it.each([
     { name: "circular objects", value: createCircularValue() },
     { name: "BigInt", value: { value: 12n } },
