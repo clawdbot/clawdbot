@@ -22,7 +22,7 @@ import {
   reserveQueuedCronRun,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronRunOrigin, CronServiceState } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
@@ -60,6 +60,10 @@ type PreparedManualRun =
       streamScheduleKey?: string;
       streamSourceIdentity?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+      // Invocation origin decided at reservation time. finishPreparedManualRun
+      // consumes it so scheduler-state ownership and deleteAfterRun follow the
+      // caller rather than run mode + trigger outcome (#83933).
+      origin: CronRunOrigin;
     }
   | { ok: false };
 
@@ -80,6 +84,7 @@ export type ManualRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+  origin?: CronRunOrigin;
 };
 
 export type ManualRunTerminalTracker = { emitted: boolean };
@@ -164,7 +169,10 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
+    // Invalid-spec skips only ever reach here from the manual run path, so the
+    // outcome is recorded without consuming deleteAfterRun or perturbing
+    // scheduler-owned state (#83933).
+    { origin: "operator" },
   );
 
   emitCronRunFinished(
@@ -381,6 +389,10 @@ export async function prepareManualRun(
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
+      // Default to operator: only the in-process gateway watcher passes
+      // watcher-terminal; external RPC/CLI callers cannot inject a consuming
+      // origin (#83933).
+      origin: opts?.origin ?? "operator",
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
       ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
       ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),

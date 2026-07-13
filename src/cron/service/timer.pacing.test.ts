@@ -84,7 +84,7 @@ describe("applyJobResult dynamic cadence", () => {
         endedAt: ENDED_AT,
         ...(delayMs !== undefined ? { nextCheck: { delayMs } } : {}),
       },
-      { scheduleMode: "preserve" },
+      { origin: "operator" },
     );
 
     expect(job.state.nextRunAtMs).toBe(pendingSlot);

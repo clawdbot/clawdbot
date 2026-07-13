@@ -318,6 +318,18 @@ export function emit(state: CronServiceState, evt: CronEvent) {
 /** Direct-run mode: respect due time or force execution. */
 export type CronRunMode = "due" | "force";
 
+/**
+ * Invocation origin of a cron run. Distinguishes the three callers that funnel
+ * through applyJobResult but must behave differently. `timer` is the scheduler
+ * poll and `watcher-terminal` is the gateway on-exit watcher — both consume
+ * one-shot/deleteAfterRun jobs and own scheduler state (counters, backoff,
+ * nextRunAtMs). `operator` is a manual `cron run` (RPC/CLI/queued): it records
+ * the run outcome but never deletes the job or perturbs scheduler state, so the
+ * scheduled fire is preserved (#83538). Both scheduled callers use mode=force
+ * for on-exit jobs, so mode cannot distinguish them — origin must (#83933).
+ */
+export type CronRunOrigin = "timer" | "watcher-terminal" | "operator";
+
 /** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
 

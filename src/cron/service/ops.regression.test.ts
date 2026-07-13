@@ -750,7 +750,10 @@ describe("cron service ops regressions", () => {
       await waitForActiveTasks(5_000);
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(events.map((event) => event.action)).toEqual(["started", "scheduled", "finished"]);
+      // An operator due-check leaves scheduler-owned state untouched, so a quiet
+      // trigger tick no longer advances the schedule and emits no `scheduled`
+      // event — only the single terminal event for the accepted run (#83538).
+      expect(events.map((event) => event.action)).toEqual(["started", "finished"]);
       expect(events.filter((event) => event.action === "finished")).toEqual([
         expect.objectContaining({
           jobId: job.id,
@@ -1043,7 +1046,10 @@ describe("cron service ops regressions", () => {
           : vi.fn().mockResolvedValue({ status: "error", error: "boom" }),
       onEvent: (event) => events.push(event),
     });
-    await expect(run(state, params.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    await expect(run(state, params.id, "force", { origin: "watcher-terminal" })).resolves.toEqual({
+      ok: true,
+      ran: true,
+    });
 
     const memoryJob = state.store?.jobs.find((entry) => entry.id === params.id);
     const durableJob = (await loadCronStore(store.storePath)).jobs.find(
@@ -1061,5 +1067,123 @@ describe("cron service ops regressions", () => {
       expect(durableJob).toBeUndefined();
     }
     expect(events.map((event) => event.action)).toEqual(params.expectedActions);
+  });
+
+  it("#83933: operator force on an on-exit deleteAfterRun job preserves it (not consumed)", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.now();
+    const job = createIsolatedRegressionJob({
+      id: "operator-force-onexit-keep",
+      name: "operator-force-onexit-keep",
+      scheduledAt: nowMs,
+      schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
+      payload: { kind: "agentTurn", message: "post-exit payload" },
+      state: {},
+    });
+    job.deleteAfterRun = true;
+    job.enabled = false;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+      onEvent: (event) => events.push(event),
+    });
+
+    // Default origin is operator: unlike the watcher-terminal force run above, a
+    // manual force must not consume a deleteAfterRun on-exit job (#83933).
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+
+    const memoryJob = state.store?.jobs.find((entry) => entry.id === job.id);
+    const durableJob = (await loadCronStore(store.storePath)).jobs.find(
+      (entry) => entry.id === job.id,
+    );
+    expect(memoryJob).toBeDefined();
+    expect(durableJob).toBeDefined();
+    expect(memoryJob?.state.lastRunStatus).toBe("ok");
+    expect(memoryJob?.state.lastRunWasManual).toBe(true);
+    expect(events.some((event) => event.action === "removed")).toBe(false);
+    expect(events.map((event) => event.action)).toEqual(["started", "finished"]);
+  });
+
+  it("#83933 P1-A: operator due run on a fired trigger job that errors stays non-consuming", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "operator-due-trigger-error",
+      name: "operator-due-trigger-error",
+      scheduledAt: nowMs,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "run payload" },
+      state: { nextRunAtMs: nowMs, consecutiveErrors: 3 },
+    });
+    job.trigger = { script: "return true;" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "error", error: "boom" });
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      evaluateCronTrigger: vi.fn().mockResolvedValue({ kind: "evaluated", fire: true }),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+
+    const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(updated?.state.lastRunStatus).toBe("error");
+    // The bug misclassified an operator run as scheduled, bumping the error
+    // counter and disabling/backing off the job. Operator must record the
+    // outcome without perturbing scheduler-owned state (#83933).
+    expect(updated?.state.lastRunWasManual).toBe(true);
+    expect(updated?.state.consecutiveErrors).toBe(3);
+    expect(updated?.enabled).toBe(true);
+  });
+
+  it("#83933 P1-A sibling: operator due quiet trigger tick does not reset error counters", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "operator-due-trigger-quiet",
+      name: "operator-due-trigger-quiet",
+      scheduledAt: nowMs,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "run payload" },
+      state: { nextRunAtMs: nowMs, consecutiveErrors: 2, scheduleErrorCount: 1 },
+    });
+    job.trigger = { script: "return false;" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "unused" });
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      evaluateCronTrigger: vi.fn().mockResolvedValue({ kind: "evaluated", fire: false }),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+
+    const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+    // A non-firing evaluation runs no payload; the timer quiet-tick would reset
+    // the error/schedule counters, but an operator due-check must leave the
+    // scheduler-owned counters intact so the scheduled fire still happens (#83538).
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(updated?.state.consecutiveErrors).toBe(2);
+    expect(updated?.state.scheduleErrorCount).toBe(1);
   });
 });

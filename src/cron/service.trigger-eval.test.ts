@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
-import type { CronServiceDeps } from "./service/state.js";
+import type { CronServiceDeps, CronServiceState } from "./service/state.js";
+import { onTimer } from "./service/timer.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
@@ -51,13 +53,21 @@ async function createHarness(params: {
   return { cron, enqueueSystemEvent, events, runIsolatedAgentJob, storePath };
 }
 
+// Trigger evaluation is scheduler-polling work. Drive it through the timer
+// entry (origin=timer) rather than cron.run (origin=operator): an operator
+// due-check is intentionally non-consuming (#83538) and would neither persist
+// triggerState nor advance the schedule, so the scheduled contract must be
+// exercised via the scheduler tick.
 async function runWhenDue(cron: CronService, jobId: string) {
   const nextRunAtMs = cron.getJob(jobId)?.state.nextRunAtMs;
   if (nextRunAtMs === undefined) {
     throw new Error("test job has no next run");
   }
   vi.setSystemTime(nextRunAtMs);
-  return cron.run(jobId, "due");
+  resetGatewayWorkAdmission();
+  const state = (cron as unknown as { state: CronServiceState }).state;
+  await onTimer(state);
+  return { ok: true, ran: true } as const;
 }
 
 describe("cron trigger evaluation", () => {

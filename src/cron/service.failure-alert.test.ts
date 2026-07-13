@@ -81,7 +81,7 @@ function simulateScheduledRun(
     throw new Error(`job ${jobId} not found`);
   }
   const now = Date.now();
-  applyJobResult(state, job, { ...result, startedAt: now, endedAt: now });
+  applyJobResult(state, job, { ...result, startedAt: now, endedAt: now }, { origin: "timer" });
 }
 
 function expectAlertTextContaining(

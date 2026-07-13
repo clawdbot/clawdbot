@@ -15,9 +15,9 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   baseTimeIso: "2026-07-10T12:00:00.000Z",
 });
 
-type RemovalPath = "manual" | "timer" | "startup catch-up";
+type RemovalPath = "watcher-terminal" | "timer" | "startup catch-up";
 
-const removalPaths: RemovalPath[] = ["manual", "timer", "startup catch-up"];
+const removalPaths: RemovalPath[] = ["watcher-terminal", "timer", "startup catch-up"];
 
 function createDueOneShot(id: string, nowMs: number): CronJob {
   const runAtMs = nowMs - 60_000;
@@ -58,8 +58,11 @@ async function executeRemovalPath(
   state: CronServiceState,
   jobId: string,
 ): Promise<void> {
-  if (path === "manual") {
-    await run(state, jobId, "force");
+  if (path === "watcher-terminal") {
+    // The gateway on-exit watcher force-runs pre-disabled jobs and, unlike an
+    // operator `cron run`, still consumes deleteAfterRun one-shots (#83538,
+    // #83933). Operator manual runs are covered as non-consuming elsewhere.
+    await run(state, jobId, "force", { origin: "watcher-terminal" });
     return;
   }
   if (path === "timer") {

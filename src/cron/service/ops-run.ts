@@ -151,7 +151,8 @@ async function finishPreparedManualRun(
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
-        // evaluation but create no finished event or run-history entry.
+        // evaluation but create no finished event or run-history entry. Origin
+        // keeps an operator due-check from perturbing scheduler-owned state.
         applyTriggerNoFireResult(
           state,
           job,
@@ -160,9 +161,14 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          prepared.origin,
         );
       } else {
+        // A fired trigger or a stripped-trigger force run executed the payload,
+        // so run attribution follows the invocation origin: operator runs record
+        // the outcome without consuming deleteAfterRun or perturbing scheduler
+        // state, while a watcher-terminal force still consumes it (#83538,
+        // #83933).
         shouldDelete = applyJobResult(
           state,
           job,
@@ -171,7 +177,7 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { origin: prepared.origin },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,

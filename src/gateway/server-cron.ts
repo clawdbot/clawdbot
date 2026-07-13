@@ -1121,7 +1121,14 @@ export function buildGatewayCronService(params: {
     fireOnExit: async (job, exit) => {
       await runWithGatewayIndependentRootWorkAdmission(async () =>
         fireOnExitJob(job, exit, {
-          run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+          // The watcher already disabled the job; a watcher-terminal force run
+          // still consumes deleteAfterRun/on-exit jobs (unlike an operator run),
+          // preserving the #104550/#104518 delete-on-success contract (#83933).
+          run: (jobId, payload) =>
+            cron.run(jobId, "force", {
+              origin: "watcher-terminal",
+              ...(payload ? { payload } : {}),
+            }),
         }),
       );
     },
