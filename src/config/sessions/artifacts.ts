@@ -187,3 +187,17 @@ export function parseSessionArchiveTimestamp(
   const timestamp = Date.parse(restoreSessionArchiveTimestamp(raw));
   return Number.isNaN(timestamp) ? null : timestamp;
 }
+
+/** Returns the source filename for a valid archived session artifact. */
+export function parseSessionArchiveSourceFileName(
+  fileName: string,
+  reason: SessionArchiveReason,
+): string | null {
+  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  if (parseSessionArchiveTimestamp(normalized, reason) == null) {
+    return null;
+  }
+  const marker = `.${reason}.`;
+  const markerIndex = normalized.lastIndexOf(marker);
+  return markerIndex > 0 ? normalized.slice(0, markerIndex) : null;
+}

@@ -9,6 +9,8 @@ import {
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseCompactionCheckpointTranscriptFileName,
+  parseSessionArchiveSourceFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
 } from "./artifacts.js";
@@ -132,6 +134,19 @@ describe("session artifact helpers", () => {
     expect(parseSessionArchiveTimestamp(file, "deleted")).toBe(now);
     expect(parseSessionArchiveTimestamp(file, "reset")).toBeNull();
     expect(parseSessionArchiveTimestamp("keep.deleted.keep.jsonl", "deleted")).toBeNull();
+  });
+
+  it("resolves source filenames from valid session archives", () => {
+    const stamp = "2026-01-01T00-00-00.000Z";
+
+    expect(parseSessionArchiveSourceFileName(`abc.jsonl.reset.${stamp}`, "reset")).toBe(
+      "abc.jsonl",
+    );
+    expect(parseSessionArchiveSourceFileName(`abc.jsonl.deleted.${stamp}.zst`, "deleted")).toBe(
+      "abc.jsonl",
+    );
+    expect(parseSessionArchiveSourceFileName(`abc.jsonl.reset.${stamp}`, "deleted")).toBeNull();
+    expect(parseSessionArchiveSourceFileName("keep.deleted.keep.jsonl", "deleted")).toBeNull();
   });
 
   it("falls back instead of throwing for out-of-range archive timestamps", () => {
