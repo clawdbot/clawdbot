@@ -37,6 +37,10 @@ const loadSessionEntryByKeyMock = vi.fn();
 vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
 }));
+const readAcpSessionMetaMock = vi.fn();
+vi.mock("../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
+}));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -297,6 +301,8 @@ describe("sessions tools", () => {
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
+    readAcpSessionMetaMock.mockReset();
+    readAcpSessionMetaMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
@@ -2432,6 +2438,122 @@ describe("sessions tools", () => {
     );
     expect(replyPromptAgentCalls).toStrictEqual([]);
     expect(calls.some((call) => call.method === "send")).toBe(false);
+  });
+
+  it("sessions_send rejects parent follow-ups to running ACP run-mode oneshot sessions", async () => {
+    const requesterKey = "agent:main:cron:job-1";
+    const targetKey = "agent:claude:acp:child-1";
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "acp-child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+          }
+        : undefined,
+    );
+    readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === targetKey
+        ? {
+            backend: "acpx",
+            agent: "claude",
+            runtimeSessionName: "claude",
+            mode: "oneshot",
+            state: "running",
+            lastActivityAt: 1000,
+          }
+        : undefined;
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-acp-oneshot-followup", {
+      sessionKey: targetKey,
+      message: "status?",
+      timeoutSeconds: 1,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(targetKey);
+    expect(details.error).toContain('ACP mode="run"');
+    expect(details.error).toContain("one-shot");
+    expect(details.error).toContain('mode="session"');
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
+  it("sessions_send resumes idle ACP run-mode oneshot sessions with recorded identity", async () => {
+    const requesterKey = "agent:main:cron:job-1";
+    const targetKey = "agent:claude:acp:child-1";
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "acp-child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+          }
+        : undefined,
+    );
+    readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === targetKey
+        ? {
+            backend: "acpx",
+            agent: "claude",
+            runtimeSessionName: "claude",
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: 1000,
+            identity: {
+              state: "resolved",
+              source: "status",
+              agentSessionId: "claude-inner-session",
+              lastUpdatedAt: 1000,
+            },
+          }
+        : undefined;
+    });
+    callGatewayMock.mockImplementation(async (call: GatewayCall) => {
+      if (call.method === "agent") {
+        return { ok: true, runId: "run-1" };
+      }
+      if (call.method === "sessions.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-acp-oneshot-followup", {
+      sessionKey: targetKey,
+      message: "The answer is yes; please continue.",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(targetKey);
+    expect(
+      callGatewayMock.mock.calls.filter((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toHaveLength(1);
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {

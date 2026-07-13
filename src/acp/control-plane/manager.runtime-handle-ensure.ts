@@ -95,8 +95,7 @@ export async function ensureManagerRuntimeHandle(params: {
   const backendOwnsPreviousIdentity = previousMeta.backend === backend.id;
   const previousIdentity = backendOwnsPreviousIdentity ? persistedIdentity : undefined;
   let identityForEnsure = previousIdentity;
-  const persistedResumeSessionId =
-    mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+  const persistedResumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
