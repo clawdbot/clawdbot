@@ -871,6 +871,7 @@ async function createGoogleRealtimeBrowserSession(
     apiKey,
     httpOptions: {
       apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION,
+      timeout: 30_000,
     },
   });
   const token = await ai.authTokens.create({
