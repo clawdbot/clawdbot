@@ -90,9 +90,16 @@ export function testboxLeaseStaleReasons(saved, current) {
   if (!saved || saved.version !== STATE_VERSION) {
     return ["state schema"];
   }
-  return ["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"].filter(
-    (key) => saved[key] !== current[key],
-  );
+  return [
+    "baseSha",
+    "headSha",
+    "workingTreeClean",
+    "dependencyDigest",
+    "environmentDigest",
+    "workflow",
+    "job",
+    "ref",
+  ].filter((key) => saved[key] !== current[key]);
 }
 
 export function prepareTestboxLeaseFreshness({ args, env, provider, repoRoot }) {
