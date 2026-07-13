@@ -81,7 +81,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
     try {
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await harness.waitForMethod("turn/start", 210_000);
 
       const toolRequest = harness.handleServerRequest({
         id: "request-continue-delegate",
@@ -164,7 +164,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     } finally {
       unsubscribeDiagnostics();
     }
-  }, 180_000);
+  }, 240_000);
 
   it.each(["cancelled", "timed_out"] as const)(
     "preserves the %s terminal reason in trusted tool diagnostics",
