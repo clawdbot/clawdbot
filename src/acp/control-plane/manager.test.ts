@@ -536,6 +536,91 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("persists a post-turn resume id before a completed one-shot task is delivered", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const postTurnStatusStarted = createDeferred();
+      const releasePostTurnStatus = createDeferred();
+      let turnFinished = false;
+      runtimeState.ensureSession.mockImplementation(async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        sessionResumeSupported: true,
+      }));
+      runtimeState.runTurn.mockImplementation(async function* () {
+        turnFinished = true;
+        yield { type: "done" as const };
+      });
+      runtimeState.getStatus.mockImplementation(async () => {
+        if (!turnFinished) {
+          return { summary: "status=alive", details: { status: "alive" } };
+        }
+        postTurnStatusStarted.resolve();
+        await releasePostTurnStatus.promise;
+        return {
+          summary: "status=alive",
+          details: { status: "alive" },
+          backendSessionId: "acpx-session-after-turn",
+        };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:claude:acp:child-post-turn-resume-id";
+      const parentSessionKey = "agent:main:cron:job-post-turn-resume-id";
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === childSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-post-turn-resume-id",
+              updatedAt: Date.now(),
+              spawnedBy: parentSessionKey,
+            },
+            acp: readySessionMeta({ mode: "oneshot" }),
+          };
+        }
+        if (sessionKey === parentSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-post-turn-resume-id", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      const turn = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "publish the resume id after completion",
+        mode: "prompt",
+        requestId: "post-turn-resume-id-acp-turn",
+      });
+
+      await postTurnStatusStarted.promise;
+      try {
+        expect(requireTaskByRunId("post-turn-resume-id-acp-turn").status).toBe("running");
+        expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      } finally {
+        releasePostTurnStatus.resolve();
+        await turn;
+      }
+
+      expect(requireTaskByRunId("post-turn-resume-id-acp-turn").status).toBe("succeeded");
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expectRecordFields(mockCallArg(runtimeState.close), {
+        handle: expect.objectContaining({ backendSessionId: "acpx-session-after-turn" }),
+      });
+    });
+  }, 300_000);
+
   it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

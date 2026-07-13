@@ -209,6 +209,7 @@ export async function runManagerTurn(params: {
         let completionEvidenceText = "";
         let completionEvidenceBytes = 0;
         let completionEvidenceOverflowed = false;
+        let runtimeIdentifiersReconciled = false;
         try {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
@@ -358,8 +359,17 @@ export async function runManagerTurn(params: {
               "ACP turn ended without a terminal done event.",
             );
           }
-          // Terminal task delivery can wake the parent before one-shot cleanup finishes. The
-          // prompt is already over, so allow the queued follow-up to target this session now.
+          // Some adapters only publish their stable resume id after the turn. Persist it before
+          // terminal delivery wakes the parent and exposes the one-shot for a follow-up.
+          ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
+            cfg: input.cfg,
+            sessionKey,
+            runtime,
+            handle,
+            meta,
+            failOnStatusError: false,
+          }));
+          runtimeIdentifiersReconciled = true;
           if (acpTurnMarkedActive) {
             clearAcpTurnActive(sessionKey);
             acpTurnMarkedActive = false;
@@ -453,7 +463,14 @@ export async function runManagerTurn(params: {
           if (activeTurn && params.activeTurnBySession.get(actorKey) === activeTurn) {
             params.activeTurnBySession.delete(actorKey);
           }
-          if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            !runtimeIdentifiersReconciled &&
+            runtime &&
+            handle &&
+            meta
+          ) {
             ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
               cfg: input.cfg,
               sessionKey,
