@@ -9,7 +9,6 @@ import {
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  parseCompactionCheckpointTranscriptFileName,
   parseSessionArchiveSourceFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,

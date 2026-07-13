@@ -2,21 +2,23 @@
 // Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
 
 import fs from "node:fs";
-import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  applySessionArchiveCleanup,
+  collectSessionEntryArtifactPaths,
+  SessionArchiveCleanupPreviewCoordinator,
+} from "./cleanup-archive.js";
+import {
   pruneUnreferencedSessionArtifacts,
-  resolveSessionArtifactCanonicalPathsForEntry,
   type SessionDiskBudgetSweepResult,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
-  cleanupSessionArchivedTranscriptFiles,
   listSessionEntriesCore,
   loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
@@ -26,14 +28,10 @@ import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
-import {
-  resolveSessionTranscriptArchiveDirectoryFromStorePath,
-  resolveSqliteTargetFromSessionStorePath,
-} from "./session-sqlite-target.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import {
   EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
-  resolveSessionArchiveCleanupRules,
   type SessionArchiveCleanupReport,
 } from "./store-maintenance-operations.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
@@ -136,31 +134,6 @@ function loadCleanupSessionStore(
       storePath: target.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-}
-
-async function cleanupArchivedTranscriptsForSummary(params: {
-  agentId?: string;
-  storePath: string;
-  maintenance: ResolvedSessionMaintenanceConfig;
-  dryRun: boolean;
-  excludeCanonicalPaths?: ReadonlySet<string>;
-  onRemoveFile?: (canonicalPath: string) => void;
-}): Promise<SessionArchiveCleanupReport> {
-  const result = await cleanupSessionArchivedTranscriptFiles({
-    directories: [
-      resolveSessionTranscriptArchiveDirectoryFromStorePath(params.storePath, {
-        agentId: params.agentId,
-      }),
-    ],
-    rules: resolveSessionArchiveCleanupRules(params.maintenance),
-    dryRun: params.dryRun,
-    excludeCanonicalPaths: params.excludeCanonicalPaths,
-    onRemoveFile: params.onRemoveFile,
-  });
-  return {
-    scannedFiles: result.scanned,
-    removedFiles: result.removed,
-  };
 }
 
 function isTranscriptMessageRole(role: unknown): boolean {
@@ -361,35 +334,13 @@ function pruneMissingTranscriptEntries(params: {
   return removed;
 }
 
-function addEntryArtifactPathsToSet(params: {
-  paths: Set<string>;
-  store: Record<string, SessionEntry>;
-  storePath: string;
-  keys: ReadonlySet<string>;
-}): void {
-  const sessionsDir = path.dirname(params.storePath);
-  for (const key of params.keys) {
-    const entry = params.store[key];
-    if (!entry) {
-      continue;
-    }
-    for (const artifactPath of resolveSessionArtifactCanonicalPathsForEntry({
-      sessionsDir,
-      entry,
-    })) {
-      params.paths.add(artifactPath);
-    }
-  }
-}
-
 async function previewStoreCleanup(params: {
   cfg: OpenClawConfig;
   target: SessionStoreTarget;
   maintenance: ResolvedSessionMaintenanceConfig;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
-  archiveCleanupFilePaths: Set<string>;
-  previewArchiveCleanup: boolean;
+  archiveCleanupCoordinator: SessionArchiveCleanupPreviewCoordinator;
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
@@ -461,42 +412,16 @@ async function previewStoreCleanup(params: {
       cappedKeys.add(key);
     },
   });
-  const entryCleanupArtifactPaths = new Set<string>();
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
+  const entryCleanupArtifactPaths = collectSessionEntryArtifactPaths({
     store: beforeStore,
     storePath: params.target.storePath,
-    keys: modelRunPrunedKeys,
+    keySets: [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys],
   });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: staleKeys,
+  const archiveCleanupPreview = await params.archiveCleanupCoordinator.preview({
+    target: params.target,
+    maintenance: params.maintenance,
   });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: cappedKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: dmScopeRetiredKeys,
-  });
-  const archiveCleanup = params.previewArchiveCleanup
-    ? await cleanupArchivedTranscriptsForSummary({
-        agentId: params.target.agentId,
-        storePath: params.target.storePath,
-        maintenance: params.maintenance,
-        dryRun: true,
-        onRemoveFile: (canonicalPath) => {
-          params.archiveCleanupFilePaths.add(canonicalPath);
-        },
-      })
-    : { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
+  const archiveCleanup = archiveCleanupPreview.report;
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -512,7 +437,7 @@ async function previewStoreCleanup(params: {
     olderThanMs: params.maintenance.pruneAfterMs,
     dryRun: true,
     excludeCanonicalPaths: new Set([
-      ...params.archiveCleanupFilePaths,
+      ...archiveCleanupPreview.excludeCanonicalPaths,
       ...entryCleanupArtifactPaths,
     ]),
   });
@@ -579,27 +504,15 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
-  const archiveCleanupFilePathsByDirectory = new Map<string, Set<string>>();
+  const archiveCleanupCoordinator = new SessionArchiveCleanupPreviewCoordinator();
   for (const target of targets) {
-    const archiveDirectory = path.resolve(
-      resolveSessionTranscriptArchiveDirectoryFromStorePath(target.storePath, {
-        agentId: target.agentId,
-      }),
-    );
-    const existingArchiveCleanupFilePaths =
-      archiveCleanupFilePathsByDirectory.get(archiveDirectory);
-    const archiveCleanupFilePaths = existingArchiveCleanupFilePaths ?? new Set<string>();
-    if (!existingArchiveCleanupFilePaths) {
-      archiveCleanupFilePathsByDirectory.set(archiveDirectory, archiveCleanupFilePaths);
-    }
     const result = await previewStoreCleanup({
       cfg,
       target,
       maintenance,
       mode,
       dryRun: Boolean(opts.dryRun),
-      archiveCleanupFilePaths,
-      previewArchiveCleanup: !existingArchiveCleanupFilePaths,
+      archiveCleanupCoordinator,
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
@@ -659,11 +572,9 @@ export async function runSessionsCleanup(params: {
         mode === "warn"
           ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
           : (appliedReport?.archiveCleanup ??
-            (await cleanupArchivedTranscriptsForSummary({
-              agentId: target.agentId,
-              storePath: target.storePath,
+            (await applySessionArchiveCleanup({
+              target,
               maintenance,
-              dryRun: false,
             })));
       const appliedUnreferencedArtifacts =
         mode === "warn"
