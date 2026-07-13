@@ -388,6 +388,8 @@ async function previewStoreCleanup(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
+  archiveCleanupFilePaths: Set<string>;
+  previewArchiveCleanup: boolean;
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
@@ -484,16 +486,17 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
-  const archiveCleanupFilePaths = new Set<string>();
-  const archiveCleanup = await cleanupArchivedTranscriptsForSummary({
-    agentId: params.target.agentId,
-    storePath: params.target.storePath,
-    maintenance: params.maintenance,
-    dryRun: true,
-    onRemoveFile: (canonicalPath) => {
-      archiveCleanupFilePaths.add(canonicalPath);
-    },
-  });
+  const archiveCleanup = params.previewArchiveCleanup
+    ? await cleanupArchivedTranscriptsForSummary({
+        agentId: params.target.agentId,
+        storePath: params.target.storePath,
+        maintenance: params.maintenance,
+        dryRun: true,
+        onRemoveFile: (canonicalPath) => {
+          params.archiveCleanupFilePaths.add(canonicalPath);
+        },
+      })
+    : { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -508,7 +511,10 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     olderThanMs: params.maintenance.pruneAfterMs,
     dryRun: true,
-    excludeCanonicalPaths: new Set([...archiveCleanupFilePaths, ...entryCleanupArtifactPaths]),
+    excludeCanonicalPaths: new Set([
+      ...params.archiveCleanupFilePaths,
+      ...entryCleanupArtifactPaths,
+    ]),
   });
   const budgetEvictedKeys = new Set<string>();
   const beforeCount = Object.keys(beforeStore).length;
@@ -573,13 +579,27 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
+  const archiveCleanupFilePathsByDirectory = new Map<string, Set<string>>();
   for (const target of targets) {
+    const archiveDirectory = path.resolve(
+      resolveSessionTranscriptArchiveDirectoryFromStorePath(target.storePath, {
+        agentId: target.agentId,
+      }),
+    );
+    const existingArchiveCleanupFilePaths =
+      archiveCleanupFilePathsByDirectory.get(archiveDirectory);
+    const archiveCleanupFilePaths = existingArchiveCleanupFilePaths ?? new Set<string>();
+    if (!existingArchiveCleanupFilePaths) {
+      archiveCleanupFilePathsByDirectory.set(archiveDirectory, archiveCleanupFilePaths);
+    }
     const result = await previewStoreCleanup({
       cfg,
       target,
       maintenance,
       mode,
       dryRun: Boolean(opts.dryRun),
+      archiveCleanupFilePaths,
+      previewArchiveCleanup: !existingArchiveCleanupFilePaths,
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
