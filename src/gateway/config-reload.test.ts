@@ -3893,7 +3893,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     vi.restoreAllMocks();
   });
 
-  function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
+  function startReloaderWithWatchers(
+    watchers: ReturnType<typeof createWatcherMock>[],
+    { readSnapshot: customReadSnapshot }: { readSnapshot?: () => Promise<ConfigFileSnapshot> } = {},
+  ) {
     const watchSpy = vi.spyOn(chokidar, "watch");
     let watcherIndex = 0;
     watchSpy.mockImplementation((_path, options) => {
@@ -3905,9 +3908,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       return watcher as unknown as never;
     });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const readSnapshot = customReadSnapshot ?? vi.fn(async () => makeSnapshot());
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot: vi.fn(async () => makeSnapshot()),
+      readSnapshot,
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: vi.fn(async () => {}),
@@ -3916,7 +3920,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       log,
       watchPath: "/tmp/openclaw.json",
     });
-    return { watchSpy, log, reloader };
+    return { watchSpy, log, reloader, readSnapshot };
   }
 
   it("re-creates the watcher with backoff after a transient error", async () => {
@@ -4157,6 +4161,63 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       }
       await reloader?.stop();
     }
+  });
+
+  it("reconciles on-disk edits that landed during the recreate down window", async () => {
+    const first = createWatcherMock();
+    const second = createWatcherMock();
+    const matchingSnapshot = makeSnapshot({
+      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
+      runtimeConfig: { gateway: { reload: { debounceMs: 0 } } },
+      config: { gateway: { reload: { debounceMs: 0 } } },
+      hash: "after-edit",
+    });
+    const { reloader, readSnapshot } = startReloaderWithWatchers([first, second], {
+      readSnapshot: vi.fn(async () => matchingSnapshot),
+    });
+
+    // Startup does not read the config; the initial watcher is created with
+    // ignoreInitial and startup has already applied the initial config.
+    expect(readSnapshot).toHaveBeenCalledTimes(0);
+
+    // An edit while the watcher is up triggers one reload read.
+    first.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    // The watcher errors out and enters the recreate backoff window. During
+    // this down window an external edit (manual edit or `openclaw doctor --fix`)
+    // is not observed because no watcher is alive.
+    first.emit("error");
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    // Backoff elapses; the re-created watcher calls schedule() to reconcile
+    // against current on-disk state, picking up the edit that landed during
+    // the down window.
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    await reloader.stop();
+  });
+
+  it("does not schedule a reconcile read on the initial watcher", async () => {
+    const watcher = createWatcherMock();
+    const { reloader, readSnapshot } = startReloaderWithWatchers([watcher]);
+
+    // The initial watcher is created without reconcile; startup has already
+    // applied the config, so no extra reload read is scheduled.
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(0);
+
+    // A real watcher event still triggers a reload read normally.
+    watcher.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    await reloader.stop();
   });
 });
 

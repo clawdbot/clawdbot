@@ -930,7 +930,7 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = () => {
+  const createWatcher = (reconcile = false) => {
     if (stopped) {
       return;
     }
@@ -949,6 +949,14 @@ export function startGatewayConfigReloader(opts: {
     watcher = next;
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
+    // On recreation after an error, the down window may have absorbed an
+    // external edit (manual edit or a separate `openclaw doctor --fix` run)
+    // that `ignoreInitial: true` will never emit as an event. Schedule one
+    // reload read so the new watcher reconciles against current on-disk state
+    // instead of silently adopting it as a baseline.
+    if (reconcile) {
+      schedule();
+    }
   };
 
   const handleWatcherError = (source: typeof watcher, err: unknown) => {
@@ -972,7 +980,7 @@ export function startGatewayConfigReloader(opts: {
         );
         watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          createWatcher();
+          createWatcher(true);
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -993,7 +1001,7 @@ export function startGatewayConfigReloader(opts: {
     );
     watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      createWatcher();
+      createWatcher(true);
     }, backoff);
   };
 
