@@ -10,9 +10,9 @@ import {
   saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
-const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 interface ExtractedImage {
   url: string;
@@ -70,7 +70,7 @@ export async function downloadMedia(
     const fetchOptions = {
       url,
       maxBytes: MAX_IMAGE_BYTES,
-      readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
+      ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     };
