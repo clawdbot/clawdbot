@@ -105,14 +105,14 @@ export function identityHasStableSessionId(identity: SessionAcpIdentity | undefi
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
 
-/** Resolve the runtime resume id, preferring agent session id over ACP backend id. */
+/** Resolve the ACP protocol session id used by session/resume, with legacy fallback. */
 export function resolveRuntimeResumeSessionId(
   identity: SessionAcpIdentity | undefined,
 ): string | undefined {
   if (!identity) {
     return undefined;
   }
-  return normalizeText(identity.agentSessionId) ?? normalizeText(identity.acpxSessionId);
+  return normalizeText(identity.acpxSessionId) ?? normalizeText(identity.agentSessionId);
 }
 
 /** Return true when identity is absent or still pending. */
