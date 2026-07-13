@@ -31,6 +31,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+import type { CodexAppServerClient } from "./client.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
@@ -84,7 +85,10 @@ describe("sandbox exec-server pipe survival", () => {
       }),
     });
     const client = createClient();
-    const env = await ensureCodexSandboxExecServerEnvironment({ client: client as any, sandbox });
+    const env = await ensureCodexSandboxExecServerEnvironment({
+      client: client as unknown as CodexAppServerClient,
+      sandbox,
+    });
     expect(env).toBeDefined();
     const socket = await openSocket(execServerUrlFromClient(client));
     collectNotifications(socket);
@@ -146,7 +150,10 @@ describe("sandbox exec-server pipe survival", () => {
       }),
     });
     const client = createClient();
-    const env = await ensureCodexSandboxExecServerEnvironment({ client: client as any, sandbox });
+    const env = await ensureCodexSandboxExecServerEnvironment({
+      client: client as unknown as CodexAppServerClient,
+      sandbox,
+    });
     expect(env).toBeDefined();
     const socket = await openSocket(execServerUrlFromClient(client));
     collectNotifications(socket);
@@ -186,7 +193,10 @@ describe("sandbox exec-server pipe survival", () => {
       finalizeExec,
     });
     const client = createClient();
-    const env = await ensureCodexSandboxExecServerEnvironment({ client: client as any, sandbox });
+    const env = await ensureCodexSandboxExecServerEnvironment({
+      client: client as unknown as CodexAppServerClient,
+      sandbox,
+    });
     expect(env).toBeDefined();
     const socket = await openSocket(execServerUrlFromClient(client));
     collectNotifications(socket);
