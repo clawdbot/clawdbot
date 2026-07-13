@@ -229,7 +229,8 @@ export async function repairIMessageConversationAnchor(
     }
   }
 
-  if (matchedProjections.length === 0) {
+  const [projection] = matchedProjections;
+  if (!projection) {
     runtime?.error?.(`imessage: dropping anchorless message GUID=${guid}; no recent chat matched`);
     return null;
   }
@@ -242,7 +243,6 @@ export async function repairIMessageConversationAnchor(
     return null;
   }
 
-  const projection = matchedProjections[0];
   if (projection.is_from_me) {
     runtime?.error?.(
       `imessage: dropping anchorless message GUID=${guid}; recovered authoritative row is from-me`,
