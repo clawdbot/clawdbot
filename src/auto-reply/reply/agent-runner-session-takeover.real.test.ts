@@ -268,6 +268,7 @@ function createMockReplyOperation(): {
       recordActivity: vi.fn(),
       setPhase: vi.fn(),
       updateSessionId: vi.fn(),
+      updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       retainFailureUntilComplete: vi.fn(),
@@ -281,6 +282,8 @@ function createMockReplyOperation(): {
       terminalRecovery: false,
       markTerminalRecovery: vi.fn(),
       markAcceptedSteeredInboundAudio: vi.fn(),
+      markWaitingForDeferredMaintenance: vi.fn(),
+      markDeferredMaintenanceWaitEnded: vi.fn(),
     },
   };
 }

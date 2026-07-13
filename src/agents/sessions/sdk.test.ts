@@ -24,12 +24,9 @@ const streamMocks = vi.hoisted(() => {
   const streamSimpleCalls: Array<Record<string, unknown>> = [];
   return {
     streamSimpleCalls,
-    streamSimple: vi.fn(
-      (_model: Model, _context: Context, options?: SimpleStreamOptions) => {
-        streamSimpleCalls.push((options ?? {}) as Record<string, unknown>);
-        return "stream";
-      },
-    ),
+    streamSimple: vi.fn((_model: Model, _context: Context, options?: SimpleStreamOptions) => {
+      streamSimpleCalls.push((options ?? {}) as Record<string, unknown>);
+    }),
   };
 });
 const { streamSimpleCalls } = streamMocks;
