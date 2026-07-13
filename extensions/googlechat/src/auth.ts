@@ -16,6 +16,10 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
+// Cert fetch shares the same deadline as outbound API calls. Without a timeout,
+// a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
+// cold-start and every 10-minute cache refresh.
+const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
   return readProviderJsonResponse<Record<string, string>>(
@@ -126,6 +130,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: CHAT_CERTS_URL,
     auditContext: "googlechat.auth.certs",
+    timeoutMs: GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

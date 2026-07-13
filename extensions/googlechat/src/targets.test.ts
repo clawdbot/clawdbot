@@ -616,6 +616,7 @@ describe("verifyGoogleChatRequest", () => {
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
       auditContext: "googlechat.auth.certs",
+      timeoutMs: 30_000,
     });
     expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
       "token",
