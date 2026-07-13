@@ -181,6 +181,7 @@ function readStreamingSandboxHttpResponse(params: {
     let headerResolved = false;
     let failed = false;
     let childFailure: string | null = null;
+    let streamFailure: string | null = null;
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
@@ -260,11 +261,26 @@ function readStreamingSandboxHttpResponse(params: {
       stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
     });
     // A stream error before headers would leave the request unsettled if the
-    // child stays alive; route it through fail() so the response lifecycle
-    // settles exactly once.  The outer no-op listener on the same stream
-    // prevents the EventEmitter from throwing before this listener fires.
+    // child stays alive.  Settle the request immediately but do NOT finalize
+    // the backend lease yet: the child process may still be running, and
+    // finalizeExec must stay owned by the close handler so the lease is held
+    // for the full process lifetime.  The outer no-op listener on the same
+    // stream prevents the EventEmitter from throwing before this listener fires.
     const streamErrorToFail = (error: Error) => {
-      fail(`sandbox http/request output stream error: ${error.message}`, null);
+      if (failed) return;
+      failed = true;
+      streamFailure = `sandbox http/request output stream error: ${error.message}`;
+      if (headerResolved) {
+        sendHttpBodyDelta(params.socket, {
+          requestId: params.requestId,
+          seq: lastBodySeq + 1,
+          deltaBase64: "",
+          done: true,
+          error: streamFailure,
+        });
+        return;
+      }
+      reject(new Error(streamFailure));
     };
     params.child.stdout.on("error", streamErrorToFail);
     params.child.stderr.on("error", streamErrorToFail);
@@ -275,6 +291,14 @@ function readStreamingSandboxHttpResponse(params: {
     });
     params.child.once("close", (code) => {
       const exitCode = code ?? 1;
+      // Stream failures settle the request early but keep the lease until close.
+      // Finalize now that the child has actually exited.
+      if (streamFailure) {
+        void finalize("failed", exitCode).catch((error: unknown) => {
+          embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+        });
+        return;
+      }
       if (failed) {
         return;
       }

@@ -172,13 +172,16 @@ describe("sandbox exec-server pipe survival", () => {
 
   it("streaming HTTP request settles on pre-header stdout error while child stays alive", async () => {
     // Child stays alive forever without emitting headers so the only way the
-    // request settles is through the stream-error → fail path.
+    // request settles is through the stream-error path.  finalizeExec must NOT
+    // be called before close, only after the child has actually exited.
+    const finalizeExec = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
         argv: [process.execPath, "-e", "setTimeout(function(){},300000)"],
         env: { PATH: process.env.PATH, TMPDIR },
         stdinMode: "pipe-closed" as const,
       }),
+      finalizeExec,
     });
     const client = createClient();
     const env = await ensureCodexSandboxExecServerEnvironment({ client: client as any, sandbox });
@@ -205,8 +208,21 @@ describe("sandbox exec-server pipe survival", () => {
 
     await expect(requestPromise).rejects.toThrow("sandbox http/request output stream error");
 
+    // finalizeExec must NOT have been called yet: the child is still alive and
+    // close owns backend finalization.
+    expect(finalizeExec).not.toHaveBeenCalled();
+
     // The WebSocket bridge must survive the settled failure.
     expect(socket.readyState).toBe(WS_OPEN);
+
+    // Kill the child so close fires; finalizeExec must be called exactly once
+    // now that the child has actually exited.
+    child!.kill("SIGKILL");
+    await vi.waitFor(() => {
+      expect(finalizeExec).toHaveBeenCalledTimes(1);
+    });
+    expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+
     socket.close();
   });
 });
