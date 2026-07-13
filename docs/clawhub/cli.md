@@ -10,6 +10,13 @@ title: "ClawHub CLI"
 
 # ClawHub CLI
 
+[ClawHub](/clawhub) is OpenClaw's registry for sharing skills and plugins:
+publishers push versioned packages, and any OpenClaw agent or Gateway can
+discover, install, and update them with one command. It exists so a capability
+built for one setup can be reused across others without copying files by hand,
+with trust metadata (scan and moderation state) that keeps installs safe by
+default.
+
 Two command-line surfaces talk to ClawHub:
 
 - `openclaw skills` / `openclaw plugins` - discover, install, and update
