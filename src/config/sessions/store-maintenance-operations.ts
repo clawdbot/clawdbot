@@ -117,12 +117,12 @@ function rememberRemovedSessionFile(
 export function resolveSessionArchiveCleanupRules(
   maintenance: ResolvedSessionMaintenanceConfig,
 ): SessionArchiveCleanupRule[] {
-  return maintenance.resetArchiveRetentionMs != null
-    ? [
-        { reason: "deleted", olderThanMs: maintenance.pruneAfterMs },
+  return maintenance.resetArchiveRetentionMs == null
+    ? []
+    : [
+        { reason: "deleted", olderThanMs: maintenance.resetArchiveRetentionMs },
         { reason: "reset", olderThanMs: maintenance.resetArchiveRetentionMs },
-      ]
-    : [{ reason: "deleted", olderThanMs: maintenance.pruneAfterMs }];
+      ];
 }
 
 function normalizeArchiveCleanupReport(
@@ -186,7 +186,6 @@ async function cleanupRemovedSessionArtifacts(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   removedSessionFiles: RemovedSessionFiles;
   referencedSessionIds: ReadonlySet<string>;
-  forceMaintenance: boolean;
 }): Promise<SessionArchiveCleanupReport> {
   // SQLite should commit entry-retention rows before this named artifact cleanup.
   // The cleanup needs the final referenced-session set so shared transcripts and
@@ -206,7 +205,7 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  if (params.maintenance.resetArchiveRetentionMs == null && !params.forceMaintenance) {
+  if (params.maintenance.resetArchiveRetentionMs == null) {
     return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
   }
   const targetDirs =
@@ -282,7 +281,6 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     removedSessionFiles,
     referencedSessionIds,
-    forceMaintenance: params.forceMaintenance,
   });
 
   // Disk-budget eviction is its own transaction-sized boundary: it may delete
