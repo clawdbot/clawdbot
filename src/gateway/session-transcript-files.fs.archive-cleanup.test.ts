@@ -5,6 +5,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { cleanupArchivedSessionTranscripts } from "./session-transcript-files.fs.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -79,6 +80,37 @@ describe("cleanupArchivedSessionTranscripts", () => {
       `a.jsonl.deleted.${OLD_STAMP}`,
       `b.jsonl.reset.${OLD_STAMP}`,
     ]);
+  });
+
+  it("notifies transcript subscribers only when retention deletes an archive", async () => {
+    const archiveName = `a.jsonl.reset.${OLD_STAMP}`;
+    const archivePath = path.join(dir, archiveName);
+    await seed([archiveName]);
+    const updates: string[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+      if (update.sessionFile) {
+        updates.push(update.sessionFile);
+      }
+    });
+
+    try {
+      await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+        nowMs: NOW_MS,
+        dryRun: true,
+      });
+      expect(updates).toEqual([]);
+
+      await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+        nowMs: NOW_MS,
+      });
+      expect(updates).toEqual([archivePath]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("reports only archives deleted successfully when one disappears during cleanup", async () => {

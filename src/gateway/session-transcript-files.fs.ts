@@ -300,7 +300,6 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -310,8 +309,13 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // chat inject, command execution) already emit here; archive was the sole
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
+  emitSessionTranscriptArchiveMutation(archived);
   return archived;
+}
+
+function emitSessionTranscriptArchiveMutation(sessionFile: string): void {
+  clearSessionTranscriptResetArchiveDiscoveryCache();
+  emitSessionTranscriptUpdate({ sessionFile });
 }
 
 export function archiveSessionTranscriptPaths(opts: {
@@ -500,6 +504,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
                 return true;
               }, false);
               if (removedFile) {
+                emitSessionTranscriptArchiveMutation(fullPath);
                 opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
                 removed += 1;
               }
