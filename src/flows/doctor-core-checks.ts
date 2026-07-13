@@ -1049,46 +1049,89 @@ function createSkillsReadinessCheck(
   };
 }
 
-const orphanModelRefsCheck: HealthCheck = {
+async function buildOrphanModelRefPruneOptions(ctx: HealthCheckContext) {
+  const { pruneOrphanModelRefs } =
+    await import("@openclaw/model-catalog-core/configured-model-refs");
+  const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+  const { modelKey } = await import("../agents/model-ref-shared.js");
+  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+  if (catalog.length === 0) {
+    return { pruneOrphanModelRefs, options: null };
+  }
+  const knownProviderIds = new Set<string>();
+  const knownModelRefs = new Set<string>();
+  for (const entry of catalog) {
+    knownProviderIds.add(entry.provider);
+    knownModelRefs.add(modelKey(entry.provider, entry.id));
+  }
+  const fallbackEntry =
+    catalog.find((entry) => !entry.input || entry.input.includes("text")) ?? catalog[0];
+  return {
+    pruneOrphanModelRefs,
+    options: {
+      knownProviderIds,
+      knownModelRefs,
+      fallbackModelRef: fallbackEntry ? modelKey(fallbackEntry.provider, fallbackEntry.id) : null,
+    },
+  };
+}
+
+export const orphanModelRefsCheck = {
   id: "core/doctor/orphan-model-refs",
   kind: "core",
-  description: "Agent model references point to providers that exist in models.providers.",
+  description: "Configured model references point to runtime catalog provider/model rows.",
   source: "doctor",
   async detect(ctx) {
-    const { pruneOrphanModelRefs } =
-      await import("@openclaw/model-catalog-core/configured-model-refs");
-    const knownProviders = new Set(Object.keys(ctx.cfg.models?.providers ?? {}));
-    const { pruned } = pruneOrphanModelRefs(ctx.cfg, knownProviders);
+    const { pruneOrphanModelRefs, options } = await buildOrphanModelRefPruneOptions(ctx);
+    if (!options) {
+      return [];
+    }
+    const { pruned } = pruneOrphanModelRefs(ctx.cfg, options);
     return pruned.map(
       (ref): HealthFinding => ({
         checkId: "core/doctor/orphan-model-refs",
         severity: "warning",
-        message: `Model reference "${ref.value}" points to provider "${ref.value.split("/")[0]}" which is not in models.providers.`,
+        message:
+          ref.reason === "missing-provider"
+            ? `Model reference "${ref.value}" points to provider "${ref.value.split("/")[0]}" which is not in the runtime model catalog.`
+            : `Model reference "${ref.value}" is not present in the runtime model catalog.`,
         path: ref.path,
-        fixHint: "Run `openclaw doctor --fix` to remove orphan model references from config.",
+        fixHint: "Run `openclaw doctor --fix` to remove or rewrite stale model references.",
       }),
     );
   },
   async repair(ctx) {
-    const { pruneOrphanModelRefs } =
-      await import("@openclaw/model-catalog-core/configured-model-refs");
-    const knownProviders = new Set(Object.keys(ctx.cfg.models?.providers ?? {}));
-    const { config: nextConfig, pruned } = pruneOrphanModelRefs(ctx.cfg, knownProviders);
+    const { pruneOrphanModelRefs, options } = await buildOrphanModelRefPruneOptions(ctx);
+    if (!options) {
+      return { changes: [] };
+    }
+    const { config: nextConfig, pruned } = pruneOrphanModelRefs(ctx.cfg, options);
     if (pruned.length === 0) {
       return { changes: [] };
     }
     return {
       config: nextConfig as OpenClawConfig,
-      changes: pruned.map((ref) => `Removed orphan model reference ${ref.value} at ${ref.path}.`),
+      changes: pruned.map((ref) =>
+        ref.replacement
+          ? `Replaced stale model reference ${ref.value} at ${ref.path} with ${ref.replacement}.`
+          : `Removed stale model reference ${ref.value} at ${ref.path}.`,
+      ),
       effects: pruned.map((ref) => ({
         kind: "config" as const,
-        action: ctx.dryRun === true ? "would-remove-orphan-model-ref" : "remove-orphan-model-ref",
+        action:
+          ctx.dryRun === true
+            ? ref.replacement
+              ? "would-replace-stale-model-ref"
+              : "would-remove-stale-model-ref"
+            : ref.replacement
+              ? "replace-stale-model-ref"
+              : "remove-stale-model-ref",
         target: ref.path,
         dryRunSafe: true,
       })),
     };
   },
-};
+} satisfies HealthCheck;
 
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {

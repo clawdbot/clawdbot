@@ -1,5 +1,6 @@
+import { normalizeLowercaseStringOrEmpty, normalizeProviderId } from "./provider-id.js";
+
 // Collects configured model references from OpenClaw config-shaped objects.
-import { normalizeProviderId } from "./provider-id.js";
 
 /** Narrow unknown values to plain records. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -152,6 +153,7 @@ export function collectConfiguredModelRefValues(
 ): string[] {
   return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
 }
+
 /** Extract a normalized provider id from a provider/model reference. */
 export function extractProviderFromModelRef(value: string): string | null {
   const trimmed = value.trim();
@@ -166,24 +168,113 @@ export function extractProviderFromModelRef(value: string): string | null {
 export type PrunedModelRef = {
   path: string;
   value: string;
-  reason: "missing-provider" | "rewritten";
+  reason: "missing-provider" | "missing-model";
+  replacement?: string;
 };
 
-/** Prune orphan model refs whose provider is not in the known provider set. Returns immutable config clone. */
+export type PruneOrphanModelRefsOptions = {
+  knownProviderIds: ReadonlySet<string>;
+  knownModelRefs?: ReadonlySet<string>;
+  fallbackModelRef?: string | null;
+};
+
+const DELETE_FIELD = Symbol("delete-field");
+
+function extractModelFromModelRef(value: string): string | null {
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return null;
+  }
+  return trimmed.slice(slash + 1).trim() || null;
+}
+
+function normalizeModelRefForLookup(value: string): string | null {
+  const provider = extractProviderFromModelRef(value);
+  const model = extractModelFromModelRef(value);
+  if (provider === null || model === null) {
+    return null;
+  }
+  return `${provider}/${normalizeLowercaseStringOrEmpty(model)}`;
+}
+
+function normalizeKnownProviderIds(providerIds: ReadonlySet<string>): Set<string> {
+  const normalized = new Set<string>();
+  for (const providerId of providerIds) {
+    const provider = normalizeProviderId(providerId);
+    if (provider) {
+      normalized.add(provider);
+    }
+  }
+  return normalized;
+}
+
+function normalizeKnownModelRefs(modelRefs: ReadonlySet<string> | undefined): Set<string> | null {
+  if (!modelRefs) {
+    return null;
+  }
+  const normalized = new Set<string>();
+  for (const modelRef of modelRefs) {
+    const lookup = normalizeModelRefForLookup(modelRef);
+    if (lookup) {
+      normalized.add(lookup);
+    }
+  }
+  return normalized.size > 0 ? normalized : null;
+}
+
+/** Prune configured model refs that are absent from the runtime provider/model catalog. */
 export function pruneOrphanModelRefs(
   config: unknown,
-  knownProviderIds: ReadonlySet<string>,
+  options: PruneOrphanModelRefsOptions,
 ): { config: unknown; pruned: PrunedModelRef[] } {
   const pruned: PrunedModelRef[] = [];
+  const knownProviderIds = normalizeKnownProviderIds(options.knownProviderIds);
+  const knownModelRefs = normalizeKnownModelRefs(options.knownModelRefs);
   const root = isRecord(config) ? { ...config } : {};
-  const agents = isRecord(root.agents) ? { ...root.agents } : {};
+  const sourceAgents = isRecord(root.agents) ? root.agents : null;
+  const agents: Record<string, unknown> = sourceAgents ? { ...sourceAgents } : {};
 
-  const shouldPruneRef = (ref: string): boolean => {
+  const refIssue = (ref: string): PrunedModelRef["reason"] | null => {
     const provider = extractProviderFromModelRef(ref);
-    return provider !== null && !knownProviderIds.has(provider);
+    if (provider === null) {
+      return null;
+    }
+    if (!knownProviderIds.has(provider)) {
+      return "missing-provider";
+    }
+    const model = extractModelFromModelRef(ref);
+    if (model === "*") {
+      return null;
+    }
+    const lookup = normalizeModelRefForLookup(ref);
+    if (knownModelRefs && lookup && !knownModelRefs.has(lookup)) {
+      return "missing-model";
+    }
+    return null;
   };
 
-  // Compute fallback primary ref: agents.defaults.model.primary or first available provider
+  const validRef = (ref: string): string | null => {
+    const trimmed = ref.trim();
+    return trimmed && refIssue(trimmed) === null ? trimmed : null;
+  };
+
+  const configuredFallbackModelRef =
+    typeof options.fallbackModelRef === "string" ? validRef(options.fallbackModelRef) : null;
+
+  const recordPruned = (path: string, value: string, replacement?: string): void => {
+    const reason = refIssue(value);
+    if (!reason) {
+      return;
+    }
+    pruned.push({
+      path,
+      value,
+      reason,
+      ...(replacement ? { replacement } : {}),
+    });
+  };
+
   const computeFallbackPrimary = (): string | null => {
     const defaultsModel = isRecord(agents.defaults) ? agents.defaults.model : undefined;
     const defaultPrimary =
@@ -192,20 +283,22 @@ export function pruneOrphanModelRefs(
         : isRecord(defaultsModel)
           ? defaultsModel.primary
           : undefined;
-    if (typeof defaultPrimary === "string" && !shouldPruneRef(defaultPrimary)) {
-      return defaultPrimary;
+    if (typeof defaultPrimary === "string") {
+      const validDefault = validRef(defaultPrimary);
+      if (validDefault) {
+        return validDefault;
+      }
     }
-    const firstProvider = Array.from(knownProviderIds)[0];
-    return firstProvider ? `${firstProvider}/default` : null;
+    return configuredFallbackModelRef;
   };
 
   const fallbackPrimary = computeFallbackPrimary();
 
   const pruneModelConfig = (path: string, value: unknown): unknown => {
     if (typeof value === "string") {
-      if (shouldPruneRef(value)) {
-        pruned.push({ path, value, reason: "missing-provider" });
-        return fallbackPrimary ?? value;
+      if (refIssue(value)) {
+        recordPruned(path, value, fallbackPrimary ?? undefined);
+        return fallbackPrimary ?? DELETE_FIELD;
       }
       return value;
     }
@@ -213,18 +306,18 @@ export function pruneOrphanModelRefs(
       return value;
     }
     const next: Record<string, unknown> = { ...value };
-    if (typeof value.primary === "string" && shouldPruneRef(value.primary)) {
-      pruned.push({ path: `${path}.primary`, value: value.primary, reason: "rewritten" });
-      next.primary = fallbackPrimary ?? value.primary;
+    if (typeof value.primary === "string" && refIssue(value.primary)) {
+      recordPruned(`${path}.primary`, value.primary, fallbackPrimary ?? undefined);
+      if (fallbackPrimary) {
+        next.primary = fallbackPrimary;
+      } else {
+        delete next.primary;
+      }
     }
     if (Array.isArray(value.fallbacks)) {
       next.fallbacks = value.fallbacks.filter((entry, index) => {
-        if (typeof entry === "string" && shouldPruneRef(entry)) {
-          pruned.push({
-            path: `${path}.fallbacks.${index}`,
-            value: entry,
-            reason: "missing-provider",
-          });
+        if (typeof entry === "string" && refIssue(entry)) {
+          recordPruned(`${path}.fallbacks.${index}`, entry);
           return false;
         }
         return true;
@@ -240,69 +333,100 @@ export function pruneOrphanModelRefs(
     const next: Record<string, unknown> = { ...agent };
     for (const key of AGENT_MODEL_CONFIG_KEYS) {
       if (agent[key] !== undefined) {
-        next[key] = pruneModelConfig(`${path}.${key}`, agent[key]);
+        const prunedValue = pruneModelConfig(`${path}.${key}`, agent[key]);
+        if (prunedValue === DELETE_FIELD) {
+          delete next[key];
+        } else {
+          next[key] = prunedValue;
+        }
       }
     }
+    if (isRecord(agent.mediaModels)) {
+      const mediaModels: Record<string, unknown> = { ...agent.mediaModels };
+      for (const capability of ["image", "video", "music"] as const) {
+        if (agent.mediaModels[capability] === undefined) {
+          continue;
+        }
+        const prunedValue = pruneModelConfig(
+          `${path}.mediaModels.${capability}`,
+          agent.mediaModels[capability],
+        );
+        if (prunedValue === DELETE_FIELD) {
+          delete mediaModels[capability];
+        } else {
+          mediaModels[capability] = prunedValue;
+        }
+      }
+      next.mediaModels = mediaModels;
+    }
     if (isRecord(agent.heartbeat) && typeof agent.heartbeat.model === "string") {
-      if (shouldPruneRef(agent.heartbeat.model)) {
-        pruned.push({
-          path: `${path}.heartbeat.model`,
-          value: agent.heartbeat.model,
-          reason: "rewritten",
-        });
-        const heartbeat: Record<string, unknown> = {
-          ...agent.heartbeat,
-          model: fallbackPrimary ?? agent.heartbeat.model,
-        };
+      if (refIssue(agent.heartbeat.model)) {
+        recordPruned(
+          `${path}.heartbeat.model`,
+          agent.heartbeat.model,
+          fallbackPrimary ?? undefined,
+        );
+        const heartbeat: Record<string, unknown> = { ...agent.heartbeat };
+        if (fallbackPrimary) {
+          heartbeat.model = fallbackPrimary;
+        } else {
+          delete heartbeat.model;
+        }
         next.heartbeat = heartbeat;
       }
     }
-    if (agent.subagents !== undefined) {
-      const subagents = isRecord(agent.subagents) ? agent.subagents : {};
-      next.subagents = { ...subagents };
-      if (isRecord(next.subagents)) {
-        next.subagents.model = pruneModelConfig(`${path}.subagents.model`, subagents.model);
+    if (isRecord(agent.subagents)) {
+      const subagents: Record<string, unknown> = { ...agent.subagents };
+      const prunedValue = pruneModelConfig(`${path}.subagents.model`, agent.subagents.model);
+      if (prunedValue === DELETE_FIELD) {
+        delete subagents.model;
+      } else {
+        subagents.model = prunedValue;
       }
+      next.subagents = subagents;
     }
     if (isRecord(agent.compaction)) {
       const compaction: Record<string, unknown> = { ...agent.compaction };
       next.compaction = compaction;
-      if (typeof agent.compaction.model === "string" && shouldPruneRef(agent.compaction.model)) {
-        pruned.push({
-          path: `${path}.compaction.model`,
-          value: agent.compaction.model,
-          reason: "rewritten",
-        });
-        compaction.model = fallbackPrimary ?? agent.compaction.model;
+      if (typeof agent.compaction.model === "string" && refIssue(agent.compaction.model)) {
+        recordPruned(
+          `${path}.compaction.model`,
+          agent.compaction.model,
+          fallbackPrimary ?? undefined,
+        );
+        if (fallbackPrimary) {
+          compaction.model = fallbackPrimary;
+        } else {
+          delete compaction.model;
+        }
       }
       if (
         isRecord(agent.compaction.memoryFlush) &&
         typeof agent.compaction.memoryFlush.model === "string"
       ) {
-        if (shouldPruneRef(agent.compaction.memoryFlush.model)) {
-          pruned.push({
-            path: `${path}.compaction.memoryFlush.model`,
-            value: agent.compaction.memoryFlush.model,
-            reason: "rewritten",
-          });
-          compaction.memoryFlush = {
-            ...agent.compaction.memoryFlush,
-            model: fallbackPrimary ?? agent.compaction.memoryFlush.model,
-          };
+        if (refIssue(agent.compaction.memoryFlush.model)) {
+          recordPruned(
+            `${path}.compaction.memoryFlush.model`,
+            agent.compaction.memoryFlush.model,
+            fallbackPrimary ?? undefined,
+          );
+          const memoryFlush: Record<string, unknown> = { ...agent.compaction.memoryFlush };
+          if (fallbackPrimary) {
+            memoryFlush.model = fallbackPrimary;
+          } else {
+            delete memoryFlush.model;
+          }
+          compaction.memoryFlush = memoryFlush;
         }
       }
     }
     if (isRecord(agent.models)) {
       const nextModels: Record<string, unknown> = {};
       for (const [modelRef, entry] of Object.entries(agent.models)) {
-        if (!shouldPruneRef(modelRef)) {
+        if (!refIssue(modelRef)) {
           nextModels[modelRef] = entry;
         } else {
-          pruned.push({
-            path: `${path}.models.${modelRef}`,
-            value: modelRef,
-            reason: "missing-provider",
-          });
+          recordPruned(`${path}.models.${modelRef}`, modelRef);
         }
       }
       next.models = nextModels;
@@ -311,58 +435,69 @@ export function pruneOrphanModelRefs(
   };
 
   agents.defaults = pruneFromAgent("agents.defaults", agents.defaults);
-  if (Array.isArray(agents.list)) {
+  if (isRecord(agents.entries)) {
+    const entries: Record<string, unknown> = {};
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      entries[agentId] = pruneFromAgent(`agents.entries.${agentId}`, entry);
+    }
+    agents.entries = entries;
+  } else if (Array.isArray(agents.list)) {
     agents.list = agents.list.map((entry, index) => pruneFromAgent(`agents.list.${index}`, entry));
   }
 
-  root.agents = agents;
+  if (sourceAgents) {
+    root.agents = agents;
+  }
 
   // Prune hooks
   if (isRecord(root.hooks)) {
     const hooks: Record<string, unknown> = { ...root.hooks };
     if (Array.isArray(hooks.mappings)) {
       hooks.mappings = hooks.mappings.map((mapping, index) => {
-        if (
-          isRecord(mapping) &&
-          typeof mapping.model === "string" &&
-          shouldPruneRef(mapping.model)
-        ) {
-          pruned.push({
-            path: `hooks.mappings.${index}.model`,
-            value: mapping.model,
-            reason: "rewritten",
-          });
-          return { ...mapping, model: fallbackPrimary ?? mapping.model };
+        if (isRecord(mapping) && typeof mapping.model === "string" && refIssue(mapping.model)) {
+          recordPruned(
+            `hooks.mappings.${index}.model`,
+            mapping.model,
+            fallbackPrimary ?? undefined,
+          );
+          const nextMapping = { ...mapping };
+          if (fallbackPrimary) {
+            nextMapping.model = fallbackPrimary;
+          } else {
+            delete nextMapping.model;
+          }
+          return nextMapping;
         }
         return mapping;
       });
     }
     if (isRecord(hooks.gmail) && typeof hooks.gmail.model === "string") {
-      if (shouldPruneRef(hooks.gmail.model)) {
-        pruned.push({ path: "hooks.gmail.model", value: hooks.gmail.model, reason: "rewritten" });
-        hooks.gmail = { ...hooks.gmail, model: fallbackPrimary ?? hooks.gmail.model };
+      if (refIssue(hooks.gmail.model)) {
+        recordPruned("hooks.gmail.model", hooks.gmail.model, fallbackPrimary ?? undefined);
+        const gmail = { ...hooks.gmail };
+        if (fallbackPrimary) {
+          gmail.model = fallbackPrimary;
+        } else {
+          delete gmail.model;
+        }
+        hooks.gmail = gmail;
       }
     }
     root.hooks = hooks;
   }
 
-  // Prune messages
-  if (isRecord(root.messages)) {
-    const messages: Record<string, unknown> = { ...root.messages };
-    if (isRecord(messages.tts) && typeof messages.tts.summaryModel === "string") {
-      if (shouldPruneRef(messages.tts.summaryModel)) {
-        pruned.push({
-          path: "messages.tts.summaryModel",
-          value: messages.tts.summaryModel,
-          reason: "rewritten",
-        });
-        messages.tts = {
-          ...messages.tts,
-          summaryModel: fallbackPrimary ?? messages.tts.summaryModel,
-        };
+  // Prune TTS summary model.
+  if (isRecord(root.tts) && typeof root.tts.summaryModel === "string") {
+    if (refIssue(root.tts.summaryModel)) {
+      recordPruned("tts.summaryModel", root.tts.summaryModel, fallbackPrimary ?? undefined);
+      const tts = { ...root.tts };
+      if (fallbackPrimary) {
+        tts.summaryModel = fallbackPrimary;
+      } else {
+        delete tts.summaryModel;
       }
+      root.tts = tts;
     }
-    root.messages = messages;
   }
 
   // Prune channels
@@ -377,13 +512,15 @@ export function pruneOrphanModelRefs(
         }
         const nextChannelMap: Record<string, unknown> = {};
         for (const [targetId, modelRef] of Object.entries(channelMap)) {
-          if (typeof modelRef === "string" && shouldPruneRef(modelRef)) {
-            pruned.push({
-              path: `channels.modelByChannel.${channelId}.${targetId}`,
-              value: modelRef,
-              reason: "rewritten",
-            });
-            nextChannelMap[targetId] = fallbackPrimary ?? modelRef;
+          if (typeof modelRef === "string" && refIssue(modelRef)) {
+            recordPruned(
+              `channels.modelByChannel.${channelId}.${targetId}`,
+              modelRef,
+              fallbackPrimary ?? undefined,
+            );
+            if (fallbackPrimary) {
+              nextChannelMap[targetId] = fallbackPrimary;
+            }
           } else {
             nextChannelMap[targetId] = modelRef;
           }
@@ -397,18 +534,21 @@ export function pruneOrphanModelRefs(
       isRecord(channels.discord.voice) &&
       typeof channels.discord.voice.model === "string"
     ) {
-      if (shouldPruneRef(channels.discord.voice.model)) {
-        pruned.push({
-          path: "channels.discord.voice.model",
-          value: channels.discord.voice.model,
-          reason: "rewritten",
-        });
+      if (refIssue(channels.discord.voice.model)) {
+        recordPruned(
+          "channels.discord.voice.model",
+          channels.discord.voice.model,
+          fallbackPrimary ?? undefined,
+        );
+        const voice = { ...channels.discord.voice };
+        if (fallbackPrimary) {
+          voice.model = fallbackPrimary;
+        } else {
+          delete voice.model;
+        }
         channels.discord = {
           ...channels.discord,
-          voice: {
-            ...channels.discord.voice,
-            model: fallbackPrimary ?? channels.discord.voice.model,
-          },
+          voice,
         };
       }
     }
