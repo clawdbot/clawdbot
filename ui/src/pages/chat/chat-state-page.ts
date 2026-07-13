@@ -202,7 +202,6 @@ export function createPageState(
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
-    chatModelCatalogMode: undefined,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
     sessionsResult: null,

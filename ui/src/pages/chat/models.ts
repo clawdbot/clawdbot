@@ -4,7 +4,7 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
 
-export type ModelCatalogResult = {
+type ModelCatalogResult = {
   models: ModelCatalogEntry[];
   catalogMode?: "replace";
 };

@@ -70,19 +70,14 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
-type ModelsListResult = {
-  models: ModelsListEntryWithCapabilities[];
-  catalogMode?: "replace";
-};
 type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  catalogMode?: "replace";
 };
-
 let loggedSlowModelsListCatalog = false;
-
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
@@ -480,7 +475,6 @@ function apiKeyProviderCapabilities(params: {
     resolveProvider,
   };
 }
-
 type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;

@@ -645,14 +645,22 @@ describe("models.list", () => {
     }
   });
 
-  it("reports replace mode for configured model views", async () => {
+  it("reports replace mode while retaining discovered models", async () => {
     const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
       models: {
         mode: "replace",
         providers: {
-          openai: {
-            baseUrl: "https://openai.example.com",
-            models: [{ id: "gpt-test", name: "GPT Test" }],
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [{ id: "llama-configured", name: "Llama Configured" }],
           },
         },
       },
@@ -660,7 +668,24 @@ describe("models.list", () => {
     const { request, respond } = requestModelsList({
       view: "configured",
       runtimeConfig,
-      loadGatewayModelCatalog: vi.fn(() => Promise.resolve([])),
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "llama-configured",
+            name: "Llama Configured",
+            provider: "vllm",
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+          {
+            id: "llama-discovered",
+            name: "Llama Discovered",
+            provider: "vllm",
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+        ]),
+      ),
       reqId: "req-models-list-replace-mode",
     });
 
@@ -672,10 +697,16 @@ describe("models.list", () => {
         catalogMode: "replace",
         models: [
           {
-            id: "gpt-test",
-            name: "GPT Test",
-            provider: "openai",
-            available: false,
+            id: "llama-configured",
+            name: "Llama Configured",
+            provider: "vllm",
+            available: true,
+          },
+          {
+            id: "llama-discovered",
+            name: "Llama Discovered",
+            provider: "vllm",
+            available: true,
           },
         ],
       },

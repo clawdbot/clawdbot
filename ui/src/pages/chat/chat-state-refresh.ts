@@ -7,6 +7,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
+import * as chatModelCatalog from "./chat-model-catalog.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -151,9 +152,8 @@ function applyChatMetadataResult(
 ): ChatMetadataApplyResult {
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
-    host.chatModelCatalog = models;
+    chatModelCatalog.applyChatModelCatalog(host, models, result.catalogMode);
     host.chatModelCatalogError = null;
-    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
   }
   const commandsApplied =
     fields.commands === false
@@ -189,9 +189,8 @@ async function refreshCompatibilityModelCatalog(
     includeMetadata: true,
   });
   if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = result.models;
+    chatModelCatalog.applyChatModelCatalog(request.host, result.models, result.catalogMode);
     request.host.chatModelCatalogError = null;
-    request.host.chatModelCatalogMode = result.catalogMode;
   }
 }
 
@@ -232,9 +231,8 @@ export async function refreshChatMetadata(
   const requestVersion = opts?.requestVersion ?? ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
+    chatModelCatalog.clearChatModelCatalog(host);
     host.chatModelCatalogError = null;
-    host.chatModelCatalogMode = undefined;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {
@@ -318,9 +316,8 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
       includeMetadata: true,
     });
     if (ownsRequest()) {
-      host.chatModelCatalog = result.models;
+      chatModelCatalog.applyChatModelCatalog(host, result.models, result.catalogMode);
       host.chatModelCatalogError = null;
-      host.chatModelCatalogMode = result.catalogMode;
     }
   } catch (error) {
     if (ownsRequest()) {
