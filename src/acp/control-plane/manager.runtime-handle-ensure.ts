@@ -130,7 +130,7 @@ export async function ensureManagerRuntimeHandle(params: {
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
       });
-      if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
+      if (acpError.code !== "ACP_SESSION_INIT_FAILED" || mode === "oneshot") {
         throw acpError;
       }
       logVerbose(

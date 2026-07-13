@@ -903,6 +903,59 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
+  it("fails closed when a persisted one-shot session cannot be resumed", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockRejectedValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "failed to resume one-shot ACP session"),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:claude:acp:binding:demo-binding:default:oneshot-stale";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: key,
+          mode: "oneshot",
+          identity: {
+            state: "resolved",
+            source: "status",
+            agentSessionId: "agent-session-stale",
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "follow-up after restart",
+        mode: "prompt",
+        requestId: "r-binding-oneshot-stale",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: "failed to resume one-shot ACP session",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey,
+      mode: "oneshot",
+      resumeSessionId: "agent-session-stale",
+    });
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
+
   it("falls back to a fresh ensure without reusing stale agent session ids", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
