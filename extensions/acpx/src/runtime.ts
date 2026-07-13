@@ -1023,7 +1023,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return undefined;
     }
     const existing = await this.sessionStore.load(params.sessionKey);
-    if (!existing || readRecordResetOnNextEnsure(existing) || readRecordClosed(existing)) {
+    if (!existing || readRecordResetOnNextEnsure(existing)) {
       return undefined;
     }
     const recordCwd = readRecordCwd(existing);
@@ -1544,6 +1544,14 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   ): Promise<OpenClawRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
     const resumeSafeInput = withResumeSafeAcpxSessionMode(input);
+    if (resumeSafeInput.mode !== input.mode) {
+      const existing = await this.sessionStore.load(input.sessionKey);
+      if (readRecordClosed(existing)) {
+        // ACPX otherwise reuses the closed record without reconnecting inside this ensure call.
+        // Hide it once so the explicit resume creates its client under a fresh process lease.
+        this.sessionStore.markFresh(input.sessionKey);
+      }
+    }
     const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,

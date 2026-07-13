@@ -4072,7 +4072,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
       openclawGatewayInstanceId: "gateway-test",
       openclawProcessLeaseStore: leaseStore.store,
       openclawWrapperRoot: "/tmp/openclaw/acpx",
@@ -4084,11 +4084,20 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const launchCommands: string[] = [];
     vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
-      launchCommands.push(
-        (
-          runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
-        ).scopedAgentRegistry.resolve("codex"),
-      );
+      expect(await wrappedStore.load(input.sessionKey)).toBeUndefined();
+      const launchCommand = (
+        runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+      ).scopedAgentRegistry.resolve("codex");
+      launchCommands.push(launchCommand);
+      await wrappedStore.save({
+        name: input.sessionKey,
+        acpSessionId: "codex-session-1",
+        agentCommand: launchCommand,
+        cwd: "/tmp",
+        closed: false,
+        pid: 777,
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      });
       return {
         sessionKey: input.sessionKey,
         backend: "acpx",
@@ -4103,9 +4112,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       resumeSessionId: "codex-session-1",
     });
 
-    expect(leaseStore.store.save).toHaveBeenCalledOnce();
+    expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
     expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
     expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(baseStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawGatewayInstanceId: "gateway-test",
+        openclawLeaseId: expect.any(String),
+      }),
+    );
   });
 
   it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
