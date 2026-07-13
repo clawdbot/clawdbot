@@ -87,6 +87,8 @@ export type SessionAcpMeta = {
   runtimeSessionName: string;
   /** Canonical backend/agent ids used for resume hints and thread/status details. */
   identity?: SessionAcpIdentity;
+  /** Whether the runtime confirmed that this agent can resume a closed session. */
+  sessionResumeSupported?: boolean;
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;
   cwd?: string;

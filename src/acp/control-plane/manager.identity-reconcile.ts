@@ -122,6 +122,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     agent: params.meta.agent,
     runtimeSessionName: params.meta.runtimeSessionName,
     ...(nextIdentity ? { identity: nextIdentity } : {}),
+    ...(params.meta.sessionResumeSupported !== undefined
+      ? { sessionResumeSupported: params.meta.sessionResumeSupported }
+      : {}),
     mode: params.meta.mode,
     ...(params.meta.runtimeOptions ? { runtimeOptions: params.meta.runtimeOptions } : {}),
     ...(params.meta.cwd ? { cwd: params.meta.cwd } : {}),
@@ -159,6 +162,9 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         agent: base.agent,
         runtimeSessionName: base.runtimeSessionName,
         ...(nextIdentity ? { identity: nextIdentity } : {}),
+        ...(base.sessionResumeSupported !== undefined
+          ? { sessionResumeSupported: base.sessionResumeSupported }
+          : {}),
         mode: base.mode,
         ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),

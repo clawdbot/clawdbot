@@ -131,6 +131,9 @@ async function clearPersistedRuntimeResumeState(params: {
         agent: base.agent,
         runtimeSessionName: base.runtimeSessionName,
         identity: nextIdentity,
+        ...(base.sessionResumeSupported !== undefined
+          ? { sessionResumeSupported: base.sessionResumeSupported }
+          : {}),
         mode: base.mode,
         ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),
@@ -181,6 +184,9 @@ export async function discardPersistedManagerRuntimeState(params: {
         agent: base.agent,
         runtimeSessionName: base.runtimeSessionName,
         ...(nextIdentity ? { identity: nextIdentity } : {}),
+        ...(base.sessionResumeSupported !== undefined
+          ? { sessionResumeSupported: base.sessionResumeSupported }
+          : {}),
         mode: base.mode,
         ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),

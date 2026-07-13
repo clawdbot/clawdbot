@@ -2468,6 +2468,7 @@ describe("sessions tools", () => {
             mode: "oneshot",
             state: "running",
             lastActivityAt: 1000,
+            sessionResumeSupported: true,
             identity: {
               state: "resolved",
               source: "status",
@@ -2504,6 +2505,53 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
+  it("sessions_send rejects one-shots whose agent cannot resume sessions", async () => {
+    const requesterKey = "agent:main:cron:job-1";
+    const targetKey = "agent:claude:acp:child-no-resume";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+    });
+    readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "claude",
+      runtimeSessionName: "claude",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 1000,
+      sessionResumeSupported: false,
+      identity: {
+        state: "resolved",
+        source: "status",
+        agentSessionId: "claude-inner-session",
+        lastUpdatedAt: 1000,
+      },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-unsupported-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("does not support session resume");
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
   it("sessions_send resumes a one-shot whose persisted running state is stale", async () => {
     const requesterKey = "agent:main:cron:job-1";
     const targetKey = "agent:claude:acp:child-1";
@@ -2527,6 +2575,7 @@ describe("sessions tools", () => {
             mode: "oneshot",
             state: "running",
             lastActivityAt: 1000,
+            sessionResumeSupported: true,
             identity: {
               state: "resolved",
               source: "status",

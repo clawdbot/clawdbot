@@ -180,11 +180,14 @@ export async function ensureManagerRuntimeHandle(params: {
       ? { agentSessionId: nextHandleIdentifiers.agentSessionId }
       : {}),
   };
+  const sessionResumeSupported =
+    ensured.sessionResumeSupported ?? previousMeta.sessionResumeSupported;
   const nextMeta: SessionAcpMeta = {
     backend: ensured.backend || backend.id,
     agent,
     runtimeSessionName: ensured.runtimeSessionName,
     ...(nextIdentity ? { identity: nextIdentity } : {}),
+    ...(sessionResumeSupported !== undefined ? { sessionResumeSupported } : {}),
     mode: params.meta.mode,
     ...(Object.keys(nextRuntimeOptions).length > 0 ? { runtimeOptions: nextRuntimeOptions } : {}),
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -196,6 +199,7 @@ export async function ensureManagerRuntimeHandle(params: {
     previousMeta.backend !== nextMeta.backend ||
     previousMeta.runtimeSessionName !== nextMeta.runtimeSessionName ||
     !identityEquals(persistedIdentity, nextIdentity) ||
+    previousMeta.sessionResumeSupported !== nextMeta.sessionResumeSupported ||
     previousMeta.agent !== nextMeta.agent ||
     previousMeta.cwd !== nextMeta.cwd ||
     !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||

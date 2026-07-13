@@ -22,13 +22,21 @@ export function resolveAcpSessionsSendRoute(params: {
     normalizeOptionalString(identity?.agentSessionId) ??
     normalizeOptionalString(identity?.acpxSessionId),
   );
-  if (!params.activeAcpTurn && hasStableIdentity) {
+  if (
+    !params.activeAcpTurn &&
+    hasStableIdentity &&
+    params.acpMeta.sessionResumeSupported === true
+  ) {
     return { skipA2AFlow };
   }
+  const rejection =
+    !params.activeAcpTurn && hasStableIdentity
+      ? "sessions_send cannot resume this ACP one-shot because its agent does not support session resume. "
+      : 'sessions_send cannot interrupt running ACP mode="run" one-shot sessions or resume one-shots before a stable ACP session id is recorded. ';
   return {
     skipA2AFlow,
     rejection:
-      'sessions_send cannot interrupt running ACP mode="run" one-shot sessions or resume one-shots before a stable ACP session id is recorded. ' +
+      rejection +
       "Use session_status or the task result for progress, " +
       'spawn ACP with mode="session" and thread=true for follow-up turns, ' +
       "or use a native subagent for steerable background work.",
