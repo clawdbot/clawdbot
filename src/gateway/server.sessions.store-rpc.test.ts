@@ -201,6 +201,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
       verboseLevel?: string;
       lastAccountId?: string;
       deliveryContext?: { channel?: string; to?: string; accountId?: string };
+      presentation?: {
+        title: string;
+        titleSource: string;
+        family: string;
+        agentId?: string;
+        isMain: boolean;
+        isBackground: boolean;
+      };
     }>;
   }>("sessions.list", { includeGlobal: false, includeUnknown: false });
 
@@ -219,6 +227,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
     to: "+1555",
     accountId: "work",
     threadId: "1737500000.123456",
+  });
+  expect(main?.presentation).toMatchObject({
+    title: "Main session",
+    titleSource: "generated",
+    family: "main",
+    agentId: "main",
+    isMain: true,
+    isBackground: false,
   });
 
   const active = await directSessionReq<{
@@ -386,6 +402,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
       sendPolicy?: string;
       label?: string;
       displayName?: string;
+      presentation?: { title: string; family: string; isBackground: boolean };
     }>;
   }>("sessions.list", {});
   expect(list2.ok).toBe(true);
@@ -396,6 +413,11 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const subagent = list2.payload?.sessions.find((s) => s.key === "agent:main:subagent:one");
   expect(subagent?.label).toBe("Briefing");
   expect(subagent?.displayName).toBe("Briefing");
+  expect(subagent?.presentation).toMatchObject({
+    title: "Briefing",
+    family: "subagent",
+    isBackground: true,
+  });
 
   const clearedVerbose = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
     key: "agent:main:main",
