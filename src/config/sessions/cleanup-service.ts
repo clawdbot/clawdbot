@@ -703,7 +703,9 @@ export async function runSessionsCleanup(params: {
         maintenance,
       });
       const preview = previewResults.find(
-        (result) => result.summary.storePath === target.storePath,
+        (result) =>
+          result.summary.agentId === target.agentId &&
+          result.summary.storePath === target.storePath,
       );
       const summary: SessionCleanupSummary =
         appliedReport === null

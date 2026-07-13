@@ -350,7 +350,7 @@ export function resolveSessionTranscriptArchiveDirectoryFromStorePath(
 ): string {
   const resolvedStorePath = path.resolve(storePath);
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(resolvedStorePath, options).path;
-  if (sqlitePath && resolveAgentIdFromSqliteDatabasePath(sqlitePath)) {
+  if (sqlitePath && path.basename(path.dirname(sqlitePath)) === "agent") {
     return path.join(path.dirname(path.dirname(sqlitePath)), "sessions");
   }
   return path.dirname(resolvedStorePath);

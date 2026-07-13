@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  resolveSessionTranscriptArchiveDirectoryFromStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -265,5 +268,15 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
       path: path.resolve("tmp", "stores", "openclaw-agent.work.sqlite"),
     });
+  });
+
+  it("resolves direct agent SQLite archives to the sibling sessions directory", () => {
+    const agentDir = path.join("tmp", "agents", "work");
+
+    expect(
+      resolveSessionTranscriptArchiveDirectoryFromStorePath(
+        path.join(agentDir, "agent", "custom.sqlite"),
+      ),
+    ).toBe(path.resolve(agentDir, "sessions"));
   });
 });
