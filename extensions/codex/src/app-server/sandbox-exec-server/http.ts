@@ -280,9 +280,10 @@ function readStreamingSandboxHttpResponse(params: {
           done: true,
           error: streamFailure,
         });
-        return;
+      } else {
+        reject(new Error(streamFailure));
       }
-      reject(new Error(streamFailure));
+      params.child.kill("SIGTERM");
     };
     params.child.stdout.on("error", streamErrorToFail);
     params.child.stderr.on("error", streamErrorToFail);

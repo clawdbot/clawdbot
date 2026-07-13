@@ -31,10 +31,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import {
-  closeCodexSandboxExecServersForTests,
-  ensureCodexSandboxExecServerEnvironment,
-} from "./sandbox-exec-server.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   collectNotifications,
   createClient,
@@ -69,7 +67,7 @@ function expectStreamErrorSuppressed(
 }
 
 afterEach(async () => {
-  await closeCodexSandboxExecServersForTests();
+  await sandboxExecServerRegistry.closeAll();
 });
 
 beforeEach(() => {
@@ -170,14 +168,18 @@ describe("sandbox exec-server pipe survival", () => {
     socket.close();
   });
 
-  it("streaming HTTP request settles on pre-header stdout error while child stays alive", async () => {
+  it("streaming HTTP request terminates after a pre-header stdout error and finalizes on close", async () => {
     // Child stays alive forever without emitting headers so the only way the
-    // request settles is through the stream-error path.  finalizeExec must NOT
-    // be called before close, only after the child has actually exited.
+    // request settles is through the stream-error path. It ignores SIGTERM so
+    // the test can prove termination is requested without finalizing before close.
     const finalizeExec = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
-        argv: [process.execPath, "-e", "setTimeout(function(){},300000)"],
+        argv: [
+          process.execPath,
+          "-e",
+          "process.on('SIGTERM',function(){});setTimeout(function(){},300000)",
+        ],
         env: { PATH: process.env.PATH, TMPDIR },
         stdinMode: "pipe-closed" as const,
       }),
@@ -201,21 +203,23 @@ describe("sandbox exec-server pipe survival", () => {
     await delay(100);
     const child = spawnedChildren.at(-1);
     expect(child).toBeDefined();
+    const kill = vi.spyOn(child!, "kill");
 
     // Emit a stdout error before headers; the fix must settle the request
-    // through its guarded failure path instead of hanging.
+    // through its guarded failure path instead of hanging, then terminate the helper.
     child!.stdout.emit("error", new Error("EPIPE: simulated broken output pipe"));
 
     await expect(requestPromise).rejects.toThrow("sandbox http/request output stream error");
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
 
-    // finalizeExec must NOT have been called yet: the child is still alive and
-    // close owns backend finalization.
+    // finalizeExec must NOT have been called yet: the child ignored SIGTERM and
+    // close remains the only backend finalization owner.
     expect(finalizeExec).not.toHaveBeenCalled();
 
     // The WebSocket bridge must survive the settled failure.
     expect(socket.readyState).toBe(WS_OPEN);
 
-    // Kill the child so close fires; finalizeExec must be called exactly once
+    // Force the child closed; finalizeExec must be called exactly once
     // now that the child has actually exited.
     child!.kill("SIGKILL");
     await vi.waitFor(() => {
