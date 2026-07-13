@@ -7,7 +7,6 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  applySessionArchiveCleanup,
   collectSessionEntryArtifactPaths,
   SessionArchiveCleanupPreviewCoordinator,
 } from "./cleanup-archive.js";
@@ -504,7 +503,12 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
-  const archiveCleanupCoordinator = new SessionArchiveCleanupPreviewCoordinator();
+  const archiveCleanupCoordinator = new SessionArchiveCleanupPreviewCoordinator({
+    selectedTargets: targets,
+    // An explicit store is the documented offline-repair scope and owns its directory.
+    // Agent-scoped cleanup must account for every configured owner of a shared directory.
+    knownTargets: opts.store ? targets : resolveSessionStoreTargets(cfg, { allAgents: true }),
+  });
   for (const target of targets) {
     const result = await previewStoreCleanup({
       cfg,
@@ -572,7 +576,7 @@ export async function runSessionsCleanup(params: {
         mode === "warn"
           ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
           : (appliedReport?.archiveCleanup ??
-            (await applySessionArchiveCleanup({
+            (await archiveCleanupCoordinator.apply({
               target,
               maintenance,
             })));

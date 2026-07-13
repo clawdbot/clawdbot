@@ -64,19 +64,54 @@ type SessionArchiveCleanupPreview = {
   excludeCanonicalPaths: ReadonlySet<string>;
 };
 
-/** Deduplicates archive previews when multiple logical stores share one transcript directory. */
+function resolveArchiveDirectory(target: SessionStoreTarget): string {
+  return path.resolve(
+    resolveSessionTranscriptArchiveDirectoryFromStorePath(target.storePath, {
+      agentId: target.agentId,
+    }),
+  );
+}
+
+function resolveTargetIdentity(target: SessionStoreTarget): string {
+  return `${target.agentId}\0${path.resolve(target.storePath)}`;
+}
+
+/** Coordinates safe archive cleanup when multiple logical stores share one directory. */
 export class SessionArchiveCleanupPreviewCoordinator {
   readonly #filePathsByDirectory = new Map<string, Set<string>>();
+  readonly #appliedDirectories = new Set<string>();
+  readonly #cleanableDirectories = new Set<string>();
+
+  constructor(params: {
+    selectedTargets: readonly SessionStoreTarget[];
+    knownTargets: readonly SessionStoreTarget[];
+  }) {
+    const selectedIdentities = new Set(params.selectedTargets.map(resolveTargetIdentity));
+    const ownersByDirectory = new Map<string, Set<string>>();
+    for (const target of [...params.knownTargets, ...params.selectedTargets]) {
+      const directory = resolveArchiveDirectory(target);
+      const owners = ownersByDirectory.get(directory) ?? new Set<string>();
+      owners.add(resolveTargetIdentity(target));
+      ownersByDirectory.set(directory, owners);
+    }
+    for (const [directory, owners] of ownersByDirectory) {
+      if ([...owners].every((owner) => selectedIdentities.has(owner))) {
+        this.#cleanableDirectories.add(directory);
+      }
+    }
+  }
 
   async preview(params: {
     target: SessionStoreTarget;
     maintenance: ResolvedSessionMaintenanceConfig;
   }): Promise<SessionArchiveCleanupPreview> {
-    const archiveDirectory = path.resolve(
-      resolveSessionTranscriptArchiveDirectoryFromStorePath(params.target.storePath, {
-        agentId: params.target.agentId,
-      }),
-    );
+    const archiveDirectory = resolveArchiveDirectory(params.target);
+    if (!this.#cleanableDirectories.has(archiveDirectory)) {
+      return {
+        report: { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT },
+        excludeCanonicalPaths: new Set<string>(),
+      };
+    }
     const existingFilePaths = this.#filePathsByDirectory.get(archiveDirectory);
     if (existingFilePaths) {
       return {
@@ -96,14 +131,22 @@ export class SessionArchiveCleanupPreviewCoordinator {
     });
     return { report, excludeCanonicalPaths: filePaths };
   }
-}
 
-export async function applySessionArchiveCleanup(params: {
-  target: SessionStoreTarget;
-  maintenance: ResolvedSessionMaintenanceConfig;
-}): Promise<SessionArchiveCleanupReport> {
-  return await cleanupArchivedTranscriptsForSummary({
-    ...params,
-    dryRun: false,
-  });
+  async apply(params: {
+    target: SessionStoreTarget;
+    maintenance: ResolvedSessionMaintenanceConfig;
+  }): Promise<SessionArchiveCleanupReport> {
+    const archiveDirectory = resolveArchiveDirectory(params.target);
+    if (
+      !this.#cleanableDirectories.has(archiveDirectory) ||
+      this.#appliedDirectories.has(archiveDirectory)
+    ) {
+      return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
+    }
+    this.#appliedDirectories.add(archiveDirectory);
+    return await cleanupArchivedTranscriptsForSummary({
+      ...params,
+      dryRun: false,
+    });
+  }
 }

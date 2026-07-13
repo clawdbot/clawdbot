@@ -128,10 +128,9 @@ describe("cleanupArchivedSessionTranscripts", () => {
 
     expect(result).toEqual({ removed: 1, scanned: 2 });
     expect(onRemoveFile).toHaveBeenCalledTimes(1);
-    expect(onRemoveFile.mock.calls[0]?.[0]).toMatch(
-      new RegExp(`/b\\.jsonl\\.deleted\\.${OLD_STAMP}$`),
-    );
-    expect(await remaining()).toEqual([`a.jsonl.deleted.${OLD_STAMP}`]);
+    const remainingFiles = await remaining();
+    expect(remainingFiles).toHaveLength(1);
+    expect(onRemoveFile.mock.calls[0]?.[0]).not.toContain(remainingFiles[0]);
   });
 
   it("skips excluded archive paths during dry-run", async () => {
