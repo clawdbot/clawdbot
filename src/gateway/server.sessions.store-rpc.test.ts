@@ -84,6 +84,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
         sessionId: "sess-group",
         updatedAt: stale,
         totalTokens: 50,
+        origin: { label: "U123ABC45" },
       },
       "agent:main:subagent:one": {
         sessionId: "sess-subagent",
@@ -236,6 +237,9 @@ test("lists and patches session store via sessions.* RPC", async () => {
     isMain: true,
     isBackground: false,
   });
+  const group = list1.payload?.sessions.find((s) => s.key === "agent:main:discord:group:dev");
+  expect(group?.presentation?.title).toBe("Discord group");
+  expect(JSON.stringify(group?.presentation)).not.toContain("U123ABC45");
 
   const active = await directSessionReq<{
     sessions: Array<{ key: string }>;
