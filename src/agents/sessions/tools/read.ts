@@ -352,6 +352,9 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
+      if (limit !== undefined && !Number.isSafeInteger(limit)) {
+        throw new Error("Limit must be an integer");
+      }
       return new Promise<{
         content: (TextContent | ImageContent)[];
         details: ReadToolDetails;
