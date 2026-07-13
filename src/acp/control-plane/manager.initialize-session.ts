@@ -92,9 +92,6 @@ export async function runManagerInitializeSession(params: {
     agent,
     runtimeSessionName: handle.runtimeSessionName,
     identity: initializedIdentity,
-    ...(handle.sessionResumeSupported !== undefined
-      ? { sessionResumeSupported: handle.sessionResumeSupported }
-      : {}),
     mode: input.mode,
     ...(Object.keys(effectiveRuntimeOptions).length > 0
       ? { runtimeOptions: effectiveRuntimeOptions }

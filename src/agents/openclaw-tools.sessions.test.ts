@@ -2468,11 +2468,11 @@ describe("sessions tools", () => {
             mode: "oneshot",
             state: "running",
             lastActivityAt: 1000,
-            sessionResumeSupported: true,
             identity: {
               state: "resolved",
               source: "status",
               agentSessionId: "claude-inner-session",
+              sessionResumeSupported: true,
               lastUpdatedAt: 1000,
             },
           }
@@ -2521,11 +2521,11 @@ describe("sessions tools", () => {
       mode: "oneshot",
       state: "idle",
       lastActivityAt: 1000,
-      sessionResumeSupported: false,
       identity: {
         state: "resolved",
         source: "status",
         agentSessionId: "claude-inner-session",
+        sessionResumeSupported: false,
         lastUpdatedAt: 1000,
       },
     });
@@ -2575,11 +2575,11 @@ describe("sessions tools", () => {
             mode: "oneshot",
             state: "running",
             lastActivityAt: 1000,
-            sessionResumeSupported: true,
             identity: {
               state: "resolved",
               source: "status",
               agentSessionId: "claude-inner-session",
+              sessionResumeSupported: true,
               lastUpdatedAt: 1000,
             },
           }

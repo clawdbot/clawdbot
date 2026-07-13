@@ -313,14 +313,14 @@ function createAcpSessionStoreEntry(params: {
     mode: params.mode,
     state: "idle",
     lastActivityAt: Date.now(),
-    ...(params.sessionResumeSupported !== undefined
-      ? { sessionResumeSupported: params.sessionResumeSupported }
-      : {}),
     ...(params.resumeSessionId
       ? {
           identity: {
             state: "resolved" as const,
             agentSessionId: params.resumeSessionId,
+            ...(params.sessionResumeSupported !== undefined
+              ? { sessionResumeSupported: params.sessionResumeSupported }
+              : {}),
             source: "event" as const,
             lastUpdatedAt: Date.now(),
           },

@@ -33,6 +33,10 @@ function normalizeIdentity(
   const acpxRecordId = normalizeText(identity.acpxRecordId);
   const acpxSessionId = normalizeText(identity.acpxSessionId);
   const agentSessionId = normalizeText(identity.agentSessionId);
+  const sessionResumeSupported =
+    typeof identity.sessionResumeSupported === "boolean"
+      ? identity.sessionResumeSupported
+      : undefined;
   const lastUpdatedAt =
     typeof identity.lastUpdatedAt === "number" && Number.isFinite(identity.lastUpdatedAt)
       ? identity.lastUpdatedAt
@@ -48,6 +52,7 @@ function normalizeIdentity(
     ...(acpxRecordId ? { acpxRecordId } : {}),
     ...(acpxSessionId ? { acpxSessionId } : {}),
     ...(agentSessionId ? { agentSessionId } : {}),
+    ...(sessionResumeSupported !== undefined ? { sessionResumeSupported } : {}),
     source: source ?? "status",
     lastUpdatedAt: lastUpdatedAt ?? Date.now(),
   };
@@ -136,6 +141,7 @@ export function identityEquals(
     a.acpxRecordId === b.acpxRecordId &&
     a.acpxSessionId === b.acpxSessionId &&
     a.agentSessionId === b.agentSessionId &&
+    a.sessionResumeSupported === b.sessionResumeSupported &&
     a.source === b.source
   );
 }
@@ -169,6 +175,8 @@ export function mergeSessionIdentity(params: {
     allowIncomingValue && incoming.agentSessionId
       ? incoming.agentSessionId
       : current.agentSessionId;
+  const nextSessionResumeSupported =
+    incoming.sessionResumeSupported ?? current.sessionResumeSupported;
 
   const nextResolved = Boolean(nextAcpxSessionId || nextAgentSessionId);
   const nextState: SessionAcpIdentity["state"] = nextResolved
@@ -182,6 +190,9 @@ export function mergeSessionIdentity(params: {
     ...(nextRecordId ? { acpxRecordId: nextRecordId } : {}),
     ...(nextAcpxSessionId ? { acpxSessionId: nextAcpxSessionId } : {}),
     ...(nextAgentSessionId ? { agentSessionId: nextAgentSessionId } : {}),
+    ...(nextSessionResumeSupported !== undefined
+      ? { sessionResumeSupported: nextSessionResumeSupported }
+      : {}),
     source: nextSource,
     lastUpdatedAt: params.now,
   };
@@ -193,12 +204,19 @@ export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  return buildSessionIdentity({
+  const identity = buildSessionIdentity({
     ids: readIdentityIdsFromHandle(params.handle),
     state: "pending",
     source: "ensure",
     now: params.now,
   });
+  if (!identity || params.handle.sessionResumeSupported === undefined) {
+    return identity;
+  }
+  return {
+    ...identity,
+    sessionResumeSupported: params.handle.sessionResumeSupported,
+  };
 }
 
 /** Create an identity from a runtime event handle. */
@@ -207,12 +225,19 @@ export function createIdentityFromHandleEvent(params: {
   now: number;
 }): SessionAcpIdentity | undefined {
   const ids = readIdentityIdsFromHandle(params.handle);
-  return buildSessionIdentity({
+  const identity = buildSessionIdentity({
     ids,
     state: ids.agentSessionId ? "resolved" : "pending",
     source: "event",
     now: params.now,
   });
+  if (!identity || params.handle.sessionResumeSupported === undefined) {
+    return identity;
+  }
+  return {
+    ...identity,
+    sessionResumeSupported: params.handle.sessionResumeSupported,
+  };
 }
 
 /** Create an identity from runtime status output. */

@@ -446,9 +446,6 @@ export class AcpSessionManager {
           agent: base.agent,
           runtimeSessionName: base.runtimeSessionName,
           ...(base.identity ? { identity: base.identity } : {}),
-          ...(base.sessionResumeSupported !== undefined
-            ? { sessionResumeSupported: base.sessionResumeSupported }
-            : {}),
           mode: base.mode,
           ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
           ...(base.cwd ? { cwd: base.cwd } : {}),

@@ -22,11 +22,7 @@ export function resolveAcpSessionsSendRoute(params: {
     normalizeOptionalString(identity?.agentSessionId) ??
     normalizeOptionalString(identity?.acpxSessionId),
   );
-  if (
-    !params.activeAcpTurn &&
-    hasStableIdentity &&
-    params.acpMeta.sessionResumeSupported === true
-  ) {
+  if (!params.activeAcpTurn && hasStableIdentity && identity?.sessionResumeSupported === true) {
     return { skipA2AFlow };
   }
   const rejection =

@@ -545,10 +545,11 @@ function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entr
 }
 
 function isResumableOneShotAcpSession(acpEntry: AcpSessionStoreEntry): boolean {
+  const identity = resolveSessionIdentityFromMeta(acpEntry.acp);
   return (
     acpEntry.acp?.mode === "oneshot" &&
-    acpEntry.acp.sessionResumeSupported === true &&
-    identityHasStableSessionId(resolveSessionIdentityFromMeta(acpEntry.acp))
+    identity?.sessionResumeSupported === true &&
+    identityHasStableSessionId(identity)
   );
 }
 
