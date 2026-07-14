@@ -114,6 +114,7 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stagePostCompactionDelegate } from "../continuation-delegate-store.js";
+import { stripContinuationSignal } from "../continuation/signal.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -124,7 +125,6 @@ import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
-  stripContinuationSignal,
   stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";

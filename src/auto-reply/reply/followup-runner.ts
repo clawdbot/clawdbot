@@ -1878,10 +1878,8 @@ export function createFollowupRunner(params: {
         traceparent?: string;
       }[] = continuationSessionKey ? selectedContinueWorkRequests : [];
       if (effectiveContinueWorkRequests.length === 0 && continuationSessionKey) {
-        const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
-          import("../continuation/signal.js"),
-          import("../tokens.js"),
-        ]);
+        const { extractContinuationSignal, stripContinuationSignal } =
+          await import("../continuation/signal.js");
         const continuationPayloads = runResult.payloads ?? [];
         const extraction = extractContinuationSignal({
           payloads: continuationPayloads.map((payload) => ({ ...payload })),

@@ -1,8 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
-import { parseContinuationSignal, stripContinuationSignal } from "../tokens.js";
-import { extractContinuationSignal } from "./signal.js";
+import {
+  extractContinuationSignal,
+  parseContinuationSignal,
+  stripContinuationSignal,
+} from "./signal.js";
 import {
   enqueueContinuationReturnDeliveries,
   hasCrossSessionDelegateTargeting,
@@ -95,7 +98,6 @@ describe("continuation RFC contract scenarios", () => {
         silent: undefined,
         silentWake: true,
         fanoutMode: "tree",
-        traceparent: TRACEPARENT,
         model: "sonnet",
       });
 
@@ -177,7 +179,7 @@ describe("continuation RFC contract scenarios", () => {
       ]);
     });
 
-    it("tool-call request supplies work reason and traceparent only when no bracket signal exists", () => {
+    it("tool-call request supplies work reason without exposing traceparent to the signal", () => {
       const result = extractContinuationSignal({
         payloads: [{ text: "ordinary reply" }],
         continueWorkRequest: {
@@ -190,7 +192,7 @@ describe("continuation RFC contract scenarios", () => {
       });
 
       expect(result).toEqual({
-        signal: { kind: "work", delayMs: 15_000, traceparent: TRACEPARENT },
+        signal: { kind: "work", delayMs: 15_000 },
         fromBracket: false,
         workReason: "collect follow-up",
       });

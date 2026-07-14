@@ -39,9 +39,9 @@ import {
   stagePostCompactionDelegate,
 } from "../continuation-delegate-store.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
+import type { ContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
-import type { ContinuationSignal } from "../tokens.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import type { FollowupRun } from "./queue/types.js";
 

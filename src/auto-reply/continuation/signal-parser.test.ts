@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseContinuationSignal, stripContinuationSignal } from "./tokens.js";
+import { CONTINUE_WORK_TOKEN, parseContinuationSignal, stripContinuationSignal } from "./signal.js";
+
+const VALID_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 describe("parseContinuationSignal", () => {
   it("returns null for empty text", () => {
@@ -314,6 +316,38 @@ describe("parseContinuationSignal", () => {
     ).toBeNull();
   });
 
+  it("consumes but ignores model-supplied traceparent directive options", () => {
+    const signal = parseContinuationSignal(
+      `[[CONTINUE_DELEGATE: traced handoff | silent-wake | target=agent:main:root | traceparent=${VALID_TRACEPARENT}]]`,
+    );
+
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "traced handoff",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: true,
+      targetSessionKey: "agent:main:root",
+    });
+  });
+
+  it.each(["", "not-a-traceparent"])(
+    "consumes an untrusted traceparent value %j without rejecting the delegate",
+    (traceparent) => {
+      expect(
+        parseContinuationSignal(
+          `[[CONTINUE_DELEGATE: untrusted trace | silent | traceparent=${traceparent}]]`,
+        ),
+      ).toEqual({
+        kind: "delegate",
+        task: "untrusted trace",
+        delayMs: undefined,
+        silent: true,
+        silentWake: undefined,
+      });
+    },
+  );
+
   it("does not match CONTINUE_WORK mid-text", () => {
     expect(parseContinuationSignal("I used CONTINUE_WORK earlier. Done now.")).toBeNull();
   });
@@ -393,5 +427,11 @@ describe("stripContinuationSignal", () => {
       silent: undefined,
       silentWake: true,
     });
+  });
+});
+
+describe("continuation token constant", () => {
+  it("exports the parser token from the continuation owner", () => {
+    expect(CONTINUE_WORK_TOKEN).toBe("CONTINUE_WORK");
   });
 });

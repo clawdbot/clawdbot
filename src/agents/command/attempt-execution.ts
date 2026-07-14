@@ -1146,10 +1146,8 @@ export async function runAgentAttempt(params: {
         }
         return embeddedRunResult;
       }
-      const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
-        import("../../auto-reply/continuation/signal.js"),
-        import("../../auto-reply/tokens.js"),
-      ]);
+      const { extractContinuationSignal, stripContinuationSignal } =
+        await import("../../auto-reply/continuation/signal.js");
       const continuationPayloads = embeddedRunResult.payloads ?? [];
       const firstWorkRequest = attemptContinueWorkRequests[0];
       const extraction = extractContinuationSignal({

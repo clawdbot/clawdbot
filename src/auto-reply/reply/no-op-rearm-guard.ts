@@ -18,11 +18,8 @@ import {
   type InputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
-import {
-  isSilentReplyPayloadText,
-  SILENT_REPLY_TOKEN,
-  stripContinuationSignal,
-} from "../tokens.js";
+import { stripContinuationSignal } from "../continuation/signal.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 /**
  * Default consecutive self-rearm no-op turns (within the cadence window) before a
