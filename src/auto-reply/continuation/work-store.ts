@@ -34,6 +34,11 @@ import {
 
 const log = createSubsystemLogger("continuation/work-store");
 
+type PendingWorkDeliveryCommitResult = Readonly<
+  | { applied: true; work: PendingContinuationWork }
+  | { applied: false; work: PendingContinuationWork }
+>;
+
 function finalizeDeliveredWorkFlow(flow: TaskFlowRecord, state: PendingWorkState): void {
   const now = Date.now();
   const foldedActive = state.disposition === "folded-active";
@@ -317,9 +322,9 @@ export function markPendingWorkFolded(
 export function markPendingWorkFoldDelivered(
   work: PendingContinuationWork,
   params: { foldedAt: number; overdueByMs: number },
-): boolean {
+): PendingWorkDeliveryCommitResult {
   if (!work.flowId || work.expectedRevision === undefined) {
-    return false;
+    return { applied: false, work };
   }
   const current = getTaskFlowById(work.flowId);
   const state = current ? decodeWorkState(current) : undefined;
@@ -344,15 +349,20 @@ export function markPendingWorkFoldDelivered(
     log.warn(
       `[continuation:work-fold-deliver-mark-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
     );
-    return false;
+    return { applied: false, work };
   }
-  work.expectedRevision = updated.flow.revision;
-  work.disposition = "folded-active";
-  work.foldedAt = params.foldedAt;
-  work.overdueByMs = params.overdueByMs;
-  work.busySkipCount = 0;
-  work.succeeded = succeeded;
-  return true;
+  return {
+    applied: true,
+    work: {
+      ...work,
+      expectedRevision: updated.flow.revision,
+      disposition: "folded-active",
+      foldedAt: params.foldedAt,
+      overdueByMs: params.overdueByMs,
+      busySkipCount: 0,
+      succeeded,
+    },
+  };
 }
 
 /**
@@ -362,15 +372,17 @@ export function markPendingWorkFoldDelivered(
  * before the dispatch loop's follow-on {@link markPendingWorkTurnGranted}
  * finalizes the flow. The flow stays `running`; only `stateJson.succeeded` is
  * set, so a crash in the deliver→finalize window leaves a row the consume
- * read-guard recognizes as delivered (no restart-gap re-delivery). The bumped
- * revision and durable marker are threaded back onto `work` so the follow-on
- * finishFlow still applies. INVARIANT (load-bearing): the mark is durably
- * persisted here — an in-memory-only mark is lost with the process and the gap
- * stays open.
+ * read-guard recognizes as delivered (no restart-gap re-delivery). The returned
+ * committed value carries the bumped revision and durable marker so the
+ * follow-on finishFlow still applies without mutating caller-owned state.
+ * INVARIANT (load-bearing): the mark is durably persisted here — an
+ * in-memory-only mark is lost with the process and the gap stays open.
  */
-export function markPendingWorkDelivered(work: PendingContinuationWork): boolean {
+export function markPendingWorkDelivered(
+  work: PendingContinuationWork,
+): PendingWorkDeliveryCommitResult {
   if (!work.flowId || work.expectedRevision === undefined) {
-    return false;
+    return { applied: false, work };
   }
   const current = getTaskFlowById(work.flowId);
   const state = current ? decodeWorkState(current) : undefined;
@@ -394,12 +406,18 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
     log.warn(
       `[continuation:work-deliver-mark-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
     );
-    return false;
+    return { applied: false, work };
   }
-  work.expectedRevision = updated.flow.revision;
-  work.deliveredAt = now;
-  work.succeeded = succeeded;
-  return true;
+  return {
+    applied: true,
+    work: {
+      ...work,
+      expectedRevision: updated.flow.revision,
+      deliveredAt: now,
+      disposition: "granted",
+      succeeded,
+    },
+  };
 }
 
 /**

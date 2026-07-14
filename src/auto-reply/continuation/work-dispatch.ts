@@ -539,7 +539,7 @@ function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], no
 }
 
 type ContinuationTurnGrantResult =
-  | { status: "ran" }
+  | { status: "ran"; work: PendingContinuationWork }
   // Turn ran, but the durable delivered-mark lost the revision race and the row
   // was reconciled here (guard written or parked non-retryable). The caller must
   // NOT run markPendingWorkTurnGranted with the stale revision.
@@ -660,9 +660,10 @@ async function driveContinuationTurn(
   // #990 locus-3: the wake is confirmed delivered (the turn ran). Write the
   // durable delivered-mark NOW — before the persist-gap between here and the
   // dispatch loop's finishFlow — so a crash in that window leaves a row the
-  // consume read-guard skips (no restart-gap re-delivery). The mark bumps the
-  // revision on `work` so the follow-on markPendingWorkTurnGranted still applies.
-  if (!markPendingWorkDelivered(work)) {
+  // consume read-guard skips (no restart-gap re-delivery). Advance only with the
+  // returned committed revision; the claimed input remains caller-owned.
+  const deliveredMark = markPendingWorkDelivered(work);
+  if (!deliveredMark.applied) {
     // #1144: the provider turn already ran, but the durable delivered-mark lost
     // the expected-revision race (a revision/cancel landed between claim and
     // here). Returning a plain "ran" would let the caller run
@@ -674,7 +675,7 @@ async function driveContinuationTurn(
     reconcileUndeliverableGrantedWork(work);
     return { status: "ran-finalized" };
   }
-  return { status: "ran" };
+  return { status: "ran", work: deliveredMark.work };
 }
 
 function earlierDueAt(left: number | undefined, right: number | undefined): number | undefined {
@@ -844,10 +845,10 @@ async function foldMaturedWorkIntoActiveTurn(
       foldedAt: delivery.deliveredAt,
       overdueByMs,
     });
-    if (!deliveredMark) {
+    if (!deliveredMark.applied) {
       continue;
     }
-    markPendingWorkFolded(work, {
+    markPendingWorkFolded(deliveredMark.work, {
       summary: "matured while a later turn was active",
       foldedAt: delivery.deliveredAt,
       overdueByMs,
@@ -977,7 +978,7 @@ export async function dispatchPendingContinuationWork(
       const wakeText = formatContinuationWakeText(work);
       const result = await driveContinuationTurn(work, wakeText);
       if (result.status === "ran") {
-        markPendingWorkTurnGranted(work);
+        markPendingWorkTurnGranted(result.work);
         dispatched++;
         continue;
       }

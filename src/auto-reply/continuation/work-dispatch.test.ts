@@ -581,6 +581,7 @@ describe("durable continuation_work dispatch", () => {
         ...input,
         expectedRevision: (input.expectedRevision ?? 0) + 1,
         deliveredAt: Date.now(),
+        disposition: "granted",
         succeeded: { point: "optimal", durability: "durable" },
       },
     });
