@@ -240,12 +240,6 @@ vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
   dispatchToolDelegates: (params: unknown) => dispatchToolDelegatesMock(params),
 }));
 
-vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
-  clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
-    clearQueuedDelegatesChainTokensFoldMock(sessionKey),
-}));
-
 // Feed the in-function tool-delegate drain (subagent-announce.ts) and capture
 // its spawn. Keep untouched canonical store exports real so cleanup and due
 // queries exercise the same owner as production.
