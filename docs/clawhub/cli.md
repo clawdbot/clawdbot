@@ -14,7 +14,8 @@ title: "ClawHub CLI"
 publishers push versioned packages, and any OpenClaw agent or Gateway can
 discover, install, and update them with one command. It exists so a capability
 built for one setup can be reused across others without copying files by hand,
-with trust metadata (scan and moderation state) that keeps installs safe by
+with trust metadata (scan and moderation state) that helps you weigh a
+package's risk before installing. Third-party packages stay untrusted by
 default.
 
 Two command-line surfaces talk to ClawHub:
