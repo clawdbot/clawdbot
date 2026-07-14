@@ -12,17 +12,17 @@ import {
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
-  clearMemoryPluginState,
-  registerTestMemoryPromptBuilder,
-} from "../../../plugins/memory-state.test-fixtures.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../../plugins/memory-state.test-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -2426,12 +2426,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       );
       expect(imageDetectionInput.prompt).toContain("[CreditCardNumber]");
       expect(JSON.stringify(imageDetectionInput)).not.toContain("4111111111111111");
-      const trajectoryEvents = (
-        await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-      )
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as TrajectoryEvent);
+      const trajectoryEvents = await readTrajectoryEvents(tempPaths);
       const modelBoundEvents = trajectoryEvents.filter((event) =>
         ["context.compiled", "prompt.submitted", "model.completed", "trace.artifacts"].includes(
           event.type ?? "",

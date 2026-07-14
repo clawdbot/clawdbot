@@ -4786,10 +4786,9 @@ describe("runCliAgent reliability", () => {
       expect(JSON.stringify(supervisorSpawnMock.mock.calls)).toContain("[CreditCardNumber]");
       expect(JSON.stringify(supervisorSpawnMock.mock.calls)).not.toContain("4111111111111111");
 
-      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-      const userTurnLine = JSON.parse(lines[lines.length - 1]);
-      expect(JSON.stringify(userTurnLine)).toContain(redactedPrompt);
-      expect(JSON.stringify(userTurnLine)).not.toContain("4111111111111111");
+      const persistedMessages = await readTranscriptMessages(sessionFile);
+      expect(JSON.stringify(persistedMessages)).toContain(redactedPrompt);
+      expect(JSON.stringify(persistedMessages)).not.toContain("4111111111111111");
 
       const agentEndEvent = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
