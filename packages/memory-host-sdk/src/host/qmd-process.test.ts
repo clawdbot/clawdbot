@@ -39,14 +39,14 @@ import {
 function createMockChild(params: { pid?: number } = {}) {
   const child = new EventEmitter() as EventEmitter & {
     pid?: number;
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
     closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
   child.pid = params.pid;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   child.kill = vi.fn();
   child.closeWith = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
@@ -340,6 +340,8 @@ describe("runCliCommand", () => {
         stderr: "ggml-metal-device.m:612",
       });
       expect(err.message).toContain("qmd query test failed (code 134)");
+      expect(child.stdout.setEncoding).toHaveBeenCalledWith("utf8");
+      expect(child.stderr.setEncoding).toHaveBeenCalledWith("utf8");
     }
   });
 
