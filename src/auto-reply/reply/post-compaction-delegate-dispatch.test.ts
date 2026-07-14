@@ -6,11 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionStoreModule from "../../config/sessions/store.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  enqueuePostCompactionDelegateDelivery,
+  loadPendingSessionDelivery,
+} from "../../infra/session-delivery-queue-storage.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   buildPostCompactionLifecycleEvent,
   deliverQueuedPostCompactionDelegate,
+  drainPostCompactionDelegateDeliveries,
   dispatchPostCompactionDelegates,
   normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
@@ -347,6 +352,49 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(taken).toEqual([normalizePostCompactionDelegate(delegate("persisted"))]);
       const stored = readSessionStore(storePath);
       expect(stored.main?.pendingPostCompactionDelegates).toBeUndefined();
+    });
+  });
+
+  it("keeps supplied session snapshots synchronized with durable persist and take", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-sync-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, {
+        main: {
+          sessionId: "session",
+          updatedAt: 1,
+          pendingPostCompactionDelegates: [delegate("durable existing")],
+        },
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        pendingPostCompactionDelegates: [delegate("local stale")],
+      };
+      const sessionStore = { main: { ...sessionEntry } };
+
+      const persisted = await persistPendingPostCompactionDelegates({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        delegates: [delegate("new")],
+      });
+
+      expect(persisted.map((item) => item.task)).toEqual(["durable existing", "new"]);
+      expect(sessionEntry.pendingPostCompactionDelegates).toEqual(persisted);
+      expect(sessionStore.main.pendingPostCompactionDelegates).toEqual(persisted);
+
+      const taken = await takePendingPostCompactionDelegates({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      expect(taken).toEqual(persisted);
+      expect(sessionEntry.pendingPostCompactionDelegates).toBeUndefined();
+      expect(sessionStore.main.pendingPostCompactionDelegates).toBeUndefined();
+      expect(readSessionStore(storePath).main?.pendingPostCompactionDelegates).toBeUndefined();
     });
   });
 
@@ -880,11 +928,19 @@ describe("post-compaction delegate dispatch extraction", () => {
     expect(enqueuePostCompactionDelegateDelivery).not.toHaveBeenCalled();
   });
 
-  it("re-stages delegates when queue enqueue fails", async () => {
+  it("settles every enqueue before preserving failures and finalizing exact claims", async () => {
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1 };
     const preserve: SessionPostCompactionDelegate[] = [];
-    const { deps, log } = createDispatchDeps({
-      staged: [delegate("first"), delegate("second")],
+    const {
+      deps,
+      enqueuePostCompactionDelegateDelivery,
+      finalizeStagedPostCompactionDelegates,
+      log,
+    } = createDispatchDeps({
+      staged: [
+        { ...delegate("first"), flowId: "flow-first" },
+        { ...delegate("second"), flowId: "flow-second" },
+      ],
       rejectEnqueueAt: 1,
     });
 
@@ -901,9 +957,20 @@ describe("post-compaction delegate dispatch extraction", () => {
     );
 
     expect(result).toEqual({ queuedDelegates: 1, droppedDelegates: 1 });
+    expect(enqueuePostCompactionDelegateDelivery).toHaveBeenCalledTimes(2);
+    expect(
+      enqueuePostCompactionDelegateDelivery.mock.calls.map((call) => call[0].delegate.task),
+    ).toEqual(["first", "second"]);
     expect(sessionEntry.pendingPostCompactionDelegates).toEqual([
       normalizePostCompactionDelegate(delegate("second")),
     ]);
+    expect(finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([
+      "flow-first",
+      "flow-second",
+    ]);
+    expect(Math.max(...enqueuePostCompactionDelegateDelivery.mock.invocationCallOrder)).toBeLessThan(
+      finalizeStagedPostCompactionDelegates.mock.invocationCallOrder[0]!,
+    );
     expect(preserve).toEqual([]);
     expect(log).toHaveBeenCalledWith(
       "Failed to enqueue post-compaction delegate for main (re-staged): Error: queue write failed",
@@ -982,9 +1049,8 @@ describe("post-compaction delegate dispatch extraction", () => {
     await withTempDir({ prefix: "openclaw-post-compaction-source-flow-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
-      const { deps, markPendingDelegateSpawnAccepted, spawnSubagentDirect } = createDeliveryDeps({
-        storePath,
-      });
+      const { deps, enqueueSystemEvent, markPendingDelegateSpawnAccepted, spawnSubagentDirect } =
+        createDeliveryDeps({ storePath });
       const entry = createQueuedEntry({
         sourceFlowId: "pc-flow-source",
         sourceExpectedRevision: 7,
@@ -1007,6 +1073,12 @@ describe("post-compaction delegate dispatch extraction", () => {
           task: "queued delegate",
         },
         expect.stringMatching(/^agent:main:subagent:continuation-/),
+      );
+      expect(spawnSubagentDirect.mock.invocationCallOrder[0]).toBeLessThan(
+        markPendingDelegateSpawnAccepted.mock.invocationCallOrder[0]!,
+      );
+      expect(markPendingDelegateSpawnAccepted.mock.invocationCallOrder[0]).toBeLessThan(
+        enqueueSystemEvent.mock.invocationCallOrder[0]!,
       );
     });
   });
@@ -1489,6 +1561,56 @@ describe("post-compaction delegate dispatch extraction", () => {
     // backoff-eligible (no bypass), rescuing prior failed pending entries.
     expect(callArg).not.toHaveProperty("entryIds");
     expect(callArg).toMatchObject({ sessionKey: "main" });
+  });
+
+  it("records retry metadata only for the selected session during a mixed-session drain", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-drain-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, {
+        main: { sessionId: "main-session", updatedAt: 1 },
+        other: { sessionId: "other-session", updatedAt: 1 },
+      });
+      const mainId = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "main",
+          delegate: delegate("main retry"),
+          sequence: 0,
+          compactionCount: 1,
+        },
+        tempDir,
+      );
+      const otherId = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "other",
+          delegate: delegate("other untouched"),
+          sequence: 0,
+          compactionCount: 1,
+        },
+        tempDir,
+      );
+      const { deps, spawnSubagentDirect } = createDeliveryDeps({
+        storePath,
+        spawnError: new Error("transient spawn failure"),
+      });
+
+      await drainPostCompactionDelegateDeliveries({
+        sessionKey: "main",
+        stateDir: tempDir,
+        deliveryDeps: deps,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDelivery(mainId, tempDir)).toMatchObject({
+        sessionKey: "main",
+        retryCount: 1,
+        lastError: "transient spawn failure",
+      });
+      expect(await loadPendingSessionDelivery(otherId, tempDir)).toMatchObject({
+        sessionKey: "other",
+        retryCount: 0,
+      });
+    });
   });
 
   it("persists chain-state BEFORE spawning, so a persist failure does not spawn (cmt451: no duplicate on retry)", async () => {
