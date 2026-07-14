@@ -758,8 +758,12 @@ export async function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
-  const threadParentId = replyContext?.fullId;
-  const rawReplyToFullId = replyContext?.threadOriginatorId ?? threadParentId;
+  const inboundMessageGuid = normalizeReplyField(params.message.guid);
+  const threadOriginatorId = replyContext?.threadOriginatorId;
+  const threadParentId = threadOriginatorId
+    ? (replyContext?.fullId ?? inboundMessageGuid)
+    : inboundMessageGuid;
+  const rawReplyToFullId = threadOriginatorId ?? threadParentId;
   const replyToIdFull = rawReplyToFullId
     ? (resolveIMessageThreadReplyToId(rawReplyToFullId, {
         chatContext: { chatId, chatGuid, chatIdentifier },

@@ -405,6 +405,11 @@ export function resolveIMessageThreadReplyToId(
     }
     const next = normalizeOptionalString(cached.threadReplyToId);
     if (!next || next === current) {
+      // When next === current, the message IS the thread root.
+      // Return it so callers get a valid root GUID instead of undefined.
+      if (next === current) {
+        resolved = current;
+      }
       break;
     }
     resolved = next;
