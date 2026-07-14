@@ -456,4 +456,16 @@ describe("status-runtime-shared", () => {
       }),
     ).rejects.toThrow("gateway health probe timed out");
   });
+
+  it("does not fetch readiness when the caller will not render it", async () => {
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      gatewayReachable: true,
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ready" }),
+    );
+  });
 });
