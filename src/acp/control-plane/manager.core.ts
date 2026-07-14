@@ -472,6 +472,7 @@ export class AcpSessionManager {
     meta: SessionAcpMeta;
     runtimeStatus?: AcpRuntimeStatus;
     failOnStatusError: boolean;
+    failOnWriteError?: boolean;
   }): Promise<{
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;

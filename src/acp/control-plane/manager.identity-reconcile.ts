@@ -27,6 +27,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  failOnWriteError?: boolean;
   setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
@@ -146,6 +147,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    failOnError: params.failOnWriteError,
     mutate: (current, entry) => {
       if (!entry) {
         return null;

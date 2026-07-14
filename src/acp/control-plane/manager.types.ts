@@ -195,6 +195,7 @@ export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  failOnWriteError?: boolean;
 }) => Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;

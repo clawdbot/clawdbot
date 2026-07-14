@@ -621,6 +621,100 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("fails a completed one-shot without replaying it when resume identity persistence fails", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      let turnFinished = false;
+      runtimeState.ensureSession.mockImplementation(async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        sessionResumeSupported: true,
+      }));
+      runtimeState.runTurn.mockImplementation(async function* () {
+        turnFinished = true;
+        yield { type: "done" as const };
+      });
+      runtimeState.getStatus.mockImplementation(async () => ({
+        summary: "status=alive",
+        details: { status: "alive" },
+        ...(turnFinished ? { backendSessionId: "acpx-session-write-failure" } : {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:claude:acp:child-resume-write-failure";
+      const parentSessionKey = "agent:main:cron:job-resume-write-failure";
+      const storedMeta = readySessionMeta({
+        mode: "oneshot",
+        identity: {
+          state: "pending",
+          source: "ensure",
+          sessionResumeSupported: true,
+          lastUpdatedAt: Date.now(),
+        },
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === childSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-resume-write-failure",
+              updatedAt: Date.now(),
+              spawnedBy: parentSessionKey,
+            },
+            acp: storedMeta,
+          };
+        }
+        if (sessionKey === parentSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-resume-write-failure", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+      hoisted.upsertAcpSessionMetaMock.mockImplementation(
+        async (paramsUnknown: {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        }) => {
+          const next = paramsUnknown.mutate(storedMeta, { acp: storedMeta });
+          if (next?.identity?.acpxSessionId === "acpx-session-write-failure") {
+            throw new Error("resume identity write failed");
+          }
+          return null;
+        },
+      );
+
+      const manager = new AcpSessionManager();
+      await expectRejectedRecord(
+        manager.runTurn({
+          provenance: "system",
+          cfg: baseCfg,
+          sessionKey: childSessionKey,
+          text: "do not replay this completed turn",
+          mode: "prompt",
+          requestId: "resume-write-failure-acp-turn",
+        }),
+        {
+          code: "ACP_TURN_FAILED",
+          message: "resume identity write failed",
+        },
+      );
+
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+      expect(requireTaskByRunId("resume-write-failure-acp-turn").status).toBe("failed");
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
+
   it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

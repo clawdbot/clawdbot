@@ -368,6 +368,7 @@ export async function runManagerTurn(params: {
             handle,
             meta,
             failOnStatusError: false,
+            failOnWriteError: true,
           }));
           runtimeIdentifiersReconciled = true;
           if (acpTurnMarkedActive) {
