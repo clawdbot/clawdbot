@@ -451,6 +451,11 @@ export const mainLanes = [
     },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+  serviceLane(
+    "hosting-profiles",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+    { stateScenario: "empty" },
+  ),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
@@ -836,6 +841,11 @@ const primaryReleasePathChunks = {
       weight: 2,
     }),
     serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+    serviceLane(
+      "hosting-profiles",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+      { stateScenario: "empty" },
+    ),
     serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
       stateScenario: "empty",
     }),
