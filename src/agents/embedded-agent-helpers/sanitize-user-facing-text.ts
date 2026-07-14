@@ -432,34 +432,53 @@ const STACK_FRAME_LINE_RE =
   /^\s+at\s+(?:async\s+)?(?:[^\s(]+(?:\s+\[as\s+[^\]]+\])?\s*)?\(?(?:[^()]+:\d+:\d+|native)\)?$/;
 
 /**
- * Inline credential prose — natural-sentence suffixes that embed an auth
- * scheme or credential-label word alongside a token-like value.  The
- * label-shaped guards inside `containsOnlySafeProse` catch `Bearer:` /
- * `API Key:` forms; this catches prose like `Authorization header: Bearer
- * sk-...`, `The bearer token is sk-...`, `The secret key is sk-...`, or
- * `The password was hunter2abc3` that would otherwise pass the
- * natural-sentence allow-list.  The phrase gate includes credential-class
- * words (bearer / api key / access token / refresh token / client secret /
- * authorization header / authorization: / secret / password / credential /
- * key) and is paired with a value gate that requires a known credential
- * prefix or 5+ alphanumeric run containing a digit.  Safe guidance like
- * `Key finding: the worker was OOM-killed` has no token-like value and
- * does not match.  See ClawSweeper P1 findings on PR #96107 (reviews
- * 2026-07-06 and 2026-07-07).
- */
-const INLINE_CREDENTIAL_PROSE_RE =
-  /\b(?:bearer|api[\s-]key|api[\s-]token|access[\s-]token|refresh[\s-]token|client[\s-]secret|authorization\s+header|authorization\s*:|secret|password|credential|key)\b[^.\n]{0,80}?(?:Bearer\s+\S+|sk-[\w-]+|sk_[\w]+|pat_[\w]+|AKIA[\w]+|gh[po]_[\w]+|csec_[\w-]+|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{4,})/i;
-
-/**
  * Safe-prose allow-list for the suffix that follows a classified error-prefix
  * line.  By the time the suffix reaches this guard, upstream checks have
  * already rejected every known error class (billing, context overflow, raw API
  * payloads, streaming parse errors, etc.).  The residual text is in an unknown
  * error domain, so the default stance is to discard the entire suffix and
- * return only the classified error label.  Only lines that are provably
- * human-written prose — bullet points, numbered lists, natural sentences — are
- * allowed through.
+ * return only the classified error label.
+ *
+ * This guard uses a strict positive allow-list, not a negative credential
+ * block-list.  Only three syntactic forms pass through:
+ *
+ * 1. Bullet points (dash / emoji variants)
+ * 2. Numbered lists (`1.` / `1)` ...)
+ * 3. Guidance headings — `CapitalCase label: value` where the label is in a
+ *    fixed safe-word list (`Recommendation`, `Next step`, `Next steps`,
+ *    `Suggested fix`, `Common issues`, `Key finding`, `Key step`,
+ *    `Key takeaway`, `Tip`, `Note`, `Caution`, `Warning`)
+ *
+ * All other forms — including natural sentences like `The password is X` or
+ * `Try restarting the service.` — are rejected by default.  This trades
+ * agent-output coverage for credential safety: a credential embedded in a
+ * free-form natural sentence can never match a known safe label, so it is
+ * discarded without needing to enumerate every possible credential shape.
+ * Prior iterations used a negative credential regex block-list, which
+ * ClawSweeper found could be bypassed by new phrasings on every review cycle
+ * (PR #96107 reviews 2026-07-03 through 2026-07-10); the allow-list design
+ * makes bypass impossible by construction.
  */
+const SAFE_GUIDANCE_LABELS = [
+  "Recommendation",
+  "Next step",
+  "Next steps",
+  "Suggested fix",
+  "Common issues",
+  "Key finding",
+  "Key step",
+  "Key takeaway",
+  "Tip",
+  "Note",
+  "Caution",
+  "Warning",
+] as const;
+
+const SAFE_GUIDANCE_HEADING_RE = new RegExp(
+  `^\\s*(?:${SAFE_GUIDANCE_LABELS.map((l) => l.replace(/[ ]/g, "\\s+")).join("|")})\\s*:(?:\\s+\\S.*)?$`,
+  "i",
+);
+
 function containsOnlySafeProse(suffix: string): boolean {
   const lines = suffix.split("\n");
   if (lines.length === 0) {
@@ -487,97 +506,32 @@ function containsOnlySafeProse(suffix: string): boolean {
       return false;
     }
 
-    // Diagnostic key:value — lowercase single-word key + colon + value.
-    if (/^\s*[a-z][a-z0-9_-]*\s*:\s/.test(trimmed)) {
-      return false;
-    }
-
-    // CapitalCase diagnostic headers — known security-sensitive HTTP headers.
-    if (
-      /^\s*(?:Authorization|WWW-Authenticate|Proxy-Authorization|Set-Cookie|Cookie|[Xx]-Api-Key)\s*:/i.test(
-        trimmed,
-      )
-    ) {
-      return false;
-    }
-
-    // Known diagnostic multi-segment keys (case-insensitive) with a
-    // non-empty value after the colon.  Only matches specific identifiers
-    // that carry request/correlation/trace IDs — "Request ID:",
-    // "X-Request-Id:", "Correlation ID:", "Trace ID:".  Safe guidance
-    // labels ("Next step:", "Suggested fix:") flow through to the
-    // natural-sentence allow-list.
-    if (
-      /^\s*(?:Request|Correlation|Trace)\s+ID\s*:\s*\S/i.test(trimmed) ||
-      /^\s*X-Request-Id\s*:\s*\S/i.test(trimmed)
-    ) {
-      return false;
-    }
-
-    // Credential-bearing labels — label contains a credential-class word
-    // (`secret`, `token`, `password`, `credential`, `bearer`) or `key` in a
-    // credential shape.  `key` is special: `Key:`, `API Key:`, `Access Key:`,
-    // `Private Key:` are credentials, but `Key finding:`, `Key step:`,
-    // `Key takeaway:` are safe guidance headings.  Distinguish by requiring
-    // `key` to NOT be followed by whitespace + another word — that form is
-    // guidance, not a credential label.  See ClawSweeper P1 findings on
-    // PR #96107 (reviews 2026-07-03 and 2026-07-06).
-    const labelColonMatch = trimmed.match(/^\s*([^:\n]+)\s*:/);
-    if (labelColonMatch) {
-      const label = labelColonMatch[1];
-      if (/\b(?:secret|token|password|credential|bearer)\b|\bkey\b(?!\s+\w)/i.test(label)) {
-        return false;
-      }
-    }
-
-    // Auth-scheme token lines.
-    if (/^\s*Bearer\s+\S+/i.test(trimmed)) {
-      return false;
-    }
-
-    // Any HTTP URL.
+    // Any HTTP URL (covers diagnostic endpoint URLs and raw API links).
     if (/https?:\/\//i.test(trimmed)) {
       return false;
     }
 
-    // Inline credential prose — natural-sentence suffixes that carry an
-    // auth/credential value without matching the label-shaped guards above.
-    // The natural-sentence allow-list below would otherwise let these
-    // through, leaking credentials into channel replies.  Match when a
-    // credential-class phrase (`bearer`, `api key`, `api-key`, `api token`,
-    // `access token`, `refresh token`, `client secret`, `authorization
-    // header`, `authorization:`) appears in the line alongside a token-like
-    // value (`Bearer …`, `sk-…`, `sk_…`, `pat_…`, `AKIA…`, `ghp_…`, `gho_…`,
-    // `csec_…`, or any 8+ char run of letters/digits/dash/underscore that
-    // starts after the phrase).  See ClawSweeper P1 late finding on PR
-    // #96107 (review 2026-07-06).
-    if (INLINE_CREDENTIAL_PROSE_RE.test(trimmed)) {
+    // Auth-scheme token lines (`Bearer sk-...`).
+    if (/^\s*Bearer\s+\S+/i.test(trimmed)) {
       return false;
     }
 
-    // === safe-prose allow-list gate ===
-    // Only lines that are recognizably human prose pass through:
-    //
-    // 1. Bullet points (including emoji/dash variants)
+    // Strict allow-list — three safe forms.  Everything else is rejected.
+    // 1. Bullet points (dash / emoji variants).
     if (/^\s*(?:[-•*✓✅＞»▸▪◦◇])\s/.test(line)) {
       continue;
     }
-    //
-    // 2. Numbered lists
+    // 2. Numbered lists.
     if (/^\s*\d+[.)]\s/.test(line)) {
       continue;
     }
-    //
-    // 3. Natural sentences — start with a letter or common emoji / symbol
-    //    and contain at least one space (multi-word phrase).
-    if (
-      /^\s*[A-Za-z\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(trimmed) &&
-      trimmed.includes(" ")
-    ) {
+    // 3. Guidance headings with a known safe label.
+    if (SAFE_GUIDANCE_HEADING_RE.test(trimmed)) {
       continue;
     }
 
-    // Unrecognized — default to reject.
+    // Unrecognized — default to reject.  Natural sentences, label:value
+    // pairs, raw error text, and anything else all land here.
     return false;
   }
   return true;

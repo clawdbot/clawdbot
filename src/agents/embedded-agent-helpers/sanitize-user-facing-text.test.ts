@@ -26,17 +26,14 @@ describe("sanitizeUserFacingText (error context)", () => {
       const text = [
         "Error: fetch failed. SocketError: other side closed",
         "",
-        "Here is a summary of findings:",
+        "Recommendation: review the findings below and restart the service.",
         "• Item A is healthy",
         "• Item B is healthy",
-        "",
-        "Recommendation: try restarting the service and verify the config.",
       ].join("\n");
       const result = sanitizeUserFacingText(text, { errorContext: true });
       // Leading line classified as transport error
       expect(result).toContain("LLM request failed");
       // Safe prose appended
-      expect(result).toContain("summary of findings");
       expect(result).toContain("Item A is healthy");
       expect(result).toContain("Recommendation");
     });
@@ -45,12 +42,13 @@ describe("sanitizeUserFacingText (error context)", () => {
       const text = [
         "API Error 500: internal server error",
         "",
-        "Alternative approach:",
-        "Use cached results from the previous run.",
+        "Suggested fix: restart the worker and verify the configuration.",
+        "1. Check logs",
+        "2. Retry",
       ].join("\n");
       const result = sanitizeUserFacingText(text, { errorContext: true });
-      expect(result).toContain("Alternative approach");
-      expect(result).toContain("cached results");
+      expect(result).toContain("Suggested fix");
+      expect(result).toContain("Check logs");
     });
   });
 
@@ -147,18 +145,35 @@ describe("sanitizeUserFacingText (error context)", () => {
 
     it("appends safe prose after a classified leading line even when one line looks suspicious", () => {
       // A single "at …" line that does not match the stack-frame pattern
-      // (no file:line:line suffix) is treated as safe prose.
-      const text = [
+      // (no file:line:line suffix) still blocks the whole suffix under the
+      // strict allow-list, because it is not a bullet / numbered list /
+      // guidance heading. Verify that a suffix containing a guidance
+      // heading followed by a numbered list survives, while the suspicious
+      // free-form "at ..." line rejects an alternate suffix.
+      const safeText = [
+        "Error: Connection refused",
+        "",
+        "Recommendation: verify the proxy settings.",
+        "1. Check the network proxy port",
+      ].join("\n");
+      const safeResult = sanitizeUserFacingText(safeText, { errorContext: true });
+      expect(safeResult).toContain("LLM request failed");
+      expect(safeResult).toContain("Recommendation");
+      expect(safeResult).toContain("proxy port");
+
+      const unsafeText = [
         "Error: Connection refused",
         "",
         "Please check:",
         "  at the network proxy settings first.",
         "1. Verify the proxy port",
       ].join("\n");
-      const result = sanitizeUserFacingText(text, { errorContext: true });
-      expect(result).toContain("LLM request failed");
-      expect(result).toContain("Please check");
-      expect(result).toContain("Verify the proxy port");
+      const unsafeResult = sanitizeUserFacingText(unsafeText, { errorContext: true });
+      expect(unsafeResult).toContain("LLM request failed");
+      // Free-form "Please check:" is not a guidance heading (not in safe
+      // labels), and the "at ..." line is not a bullet, so the whole
+      // suffix is rejected.
+      expect(unsafeResult).not.toContain("Please check");
     });
 
     it("strips node:internal stack frames", () => {
@@ -426,6 +441,27 @@ describe("sanitizeUserFacingText (error context)", () => {
         "The private key is sk-proj-abc123xyz",
         ["private key", "sk-proj-abc123xyz"],
       ],
+      // Alphabetic-only credential values (no digit) — bot P1 finding 2026-07-10.
+      [
+        "password alphabetic-only inline sentence",
+        "The password was correcthorsebattery",
+        ["password", "correcthorsebattery"],
+      ],
+      [
+        "secret alphabetic-only inline sentence",
+        "The secret is correcthorsebatterystaple",
+        ["secret", "correcthorsebatterystaple"],
+      ],
+      [
+        "credential alphabetic-only inline sentence",
+        "The credential is CorrectHorseBattery",
+        ["credential", "CorrectHorseBattery"],
+      ],
+      [
+        "private key alphabetic-only inline sentence",
+        "The private key is correcthorsebatterystaple",
+        ["private key", "correcthorsebatterystaple"],
+      ],
     ])("rejects suffix when it contains inline credential prose (%s)", (_label, line, snippets) => {
       const text = ["Error: fetch failed", line].join("\n");
       const result = sanitizeUserFacingText(text, { errorContext: true });
@@ -502,9 +538,9 @@ describe("sanitizeUserFacingText (error context)", () => {
       // Accepted safe prose goes through containsOnlySafeProse and should
       // NOT be routed through formatRawAssistantErrorForUi (which truncates
       // raw text at 600 UTF-16 units).  Build a suffix with 650+ chars of
-      // recognizable natural prose plus a unique tail phrase.
-      const tail = "End of long prose verification token here.";
-      const line = "Step 1: verify the configuration and check all settings.\n";
+      // recognizable guidance headings plus a unique tail phrase.
+      const tail = "Recommendation: end of long prose verification token here.";
+      const line = "Tip: verify the configuration and check all settings.\n";
       const body = Array.from({ length: 40 }, () => line).join("");
       const suffix = `${body}${tail}`;
       expect(suffix.length).toBeGreaterThan(600);
