@@ -96,11 +96,21 @@ describe("boundedJsonUtf8Bytes", () => {
 
   it("uses actual UTF-8 byte length for fast-path bailout on CJK strings", () => {
     // "中".repeat(3_000) = 3,000 UTF-16 code units but 9,000 UTF-8 bytes.
-    // The old estimate (value.length + 2 = 3,002) would incorrectly pass the
-    // guard and fall through to the expensive JSON.stringify path.
-    // The fixed estimate (Buffer.byteLength + 2 = 9,002) correctly bails early.
+    // The O(1) lower bound (value.length + 2 = 3,002) does not exceed the
+    // remaining byte budget (~8,183), so it falls through to the UTF-8
+    // byte-length guard which correctly bails at 9,002 bytes.
     const cjkPayload = { value: "中".repeat(3_000) };
     const result = boundedJsonUtf8Bytes(cjkPayload, 8_192);
+    expect(result.complete).toBe(false);
+    expect(result.bytes).toBeGreaterThan(8_192);
+  });
+
+  it("preserves O(1) bailout for oversized ASCII strings", () => {
+    // "x".repeat(50_000) = 50,000 UTF-16 code units = 50,000 UTF-8 bytes.
+    // The O(1) lower bound (value.length + 2 = 50,002) immediately exceeds
+    // the budget, avoiding the O(n) Buffer.byteLength scan.
+    const asciiPayload = { value: "x".repeat(50_000) };
+    const result = boundedJsonUtf8Bytes(asciiPayload, 8_192);
     expect(result.complete).toBe(false);
     expect(result.bytes).toBeGreaterThan(8_192);
   });

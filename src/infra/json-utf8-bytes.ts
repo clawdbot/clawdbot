@@ -28,6 +28,15 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
+  // O(1) lower-bound guard: value.length (UTF-16 code units) is never larger
+  // than the actual UTF-8 byte count.  If even this minimum already exceeds
+  // the budget, bail immediately without the O(n) UTF-8 scan.
+  if (value.length + 2 > remainingBytes) {
+    return remainingBytes + 1;
+  }
+  // CJK and emoji content can still exceed the budget when the code-unit lower
+  // bound is inconclusive; a UTF-8 byte-length pass catches those without the
+  // full JSON.stringify allocation.
   if (Buffer.byteLength(value, "utf8") + 2 > remainingBytes) {
     return remainingBytes + 1;
   }
