@@ -30,6 +30,7 @@ import {
   isQueuedPostCompactionDelegateDelivery,
   normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
+  resolvePostCompactionDelegateDeliveryContext,
   takePendingPostCompactionDelegates,
   type PostCompactionDelegateDeliveryDeps,
 } from "./post-compaction-delegate-delivery.js";
@@ -159,20 +160,6 @@ export function buildPostCompactionLifecycleEvent(params: {
       : undefined,
   ].filter(Boolean);
   return parts.join(" ");
-}
-
-function resolvePostCompactionDeliveryContext(
-  followupRun: FollowupRun,
-): SessionDeliveryContext | undefined {
-  const deliveryContext: SessionDeliveryContext = {
-    ...(followupRun.originatingChannel ? { channel: followupRun.originatingChannel } : {}),
-    ...(followupRun.originatingTo ? { to: followupRun.originatingTo } : {}),
-    ...(followupRun.originatingAccountId ? { accountId: followupRun.originatingAccountId } : {}),
-    ...(followupRun.originatingThreadId != null
-      ? { threadId: followupRun.originatingThreadId }
-      : {}),
-  };
-  return Object.keys(deliveryContext).length > 0 ? deliveryContext : undefined;
 }
 
 function applyReleaseTraceparent(
@@ -334,7 +321,7 @@ export async function dispatchPostCompactionDelegates(
     });
   }
 
-  const deliveryContext = resolvePostCompactionDeliveryContext(params.followupRun);
+  const deliveryContext = resolvePostCompactionDelegateDeliveryContext(params.followupRun);
   const enqueueResults = await Promise.allSettled(
     releasedCompactionDelegates.map((delegate, sequence) =>
       deps.enqueuePostCompactionDelegateDelivery({

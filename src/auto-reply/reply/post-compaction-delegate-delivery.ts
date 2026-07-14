@@ -17,7 +17,10 @@ import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
-import type { QueuedSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
+import type {
+  QueuedSessionDelivery,
+  SessionDeliveryContext,
+} from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
@@ -133,6 +136,21 @@ export function normalizePostCompactionDelegate(
 
 export function formatPostCompactionDelegateTaskPreview(task: string): string {
   return JSON.stringify(task.length > 120 ? `${task.slice(0, 117)}...` : task);
+}
+
+export function resolvePostCompactionDelegateDeliveryContext(params: {
+  originatingChannel?: string;
+  originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+}): SessionDeliveryContext | undefined {
+  const deliveryContext: SessionDeliveryContext = {
+    ...(params.originatingChannel ? { channel: params.originatingChannel } : {}),
+    ...(params.originatingTo ? { to: params.originatingTo } : {}),
+    ...(params.originatingAccountId ? { accountId: params.originatingAccountId } : {}),
+    ...(params.originatingThreadId != null ? { threadId: params.originatingThreadId } : {}),
+  };
+  return Object.keys(deliveryContext).length > 0 ? deliveryContext : undefined;
 }
 
 export async function persistPendingPostCompactionDelegates(params: {

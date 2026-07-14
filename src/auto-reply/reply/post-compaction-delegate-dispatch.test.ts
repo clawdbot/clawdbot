@@ -1792,4 +1792,38 @@ describe("post-compaction delegate dispatch extraction", () => {
 
     expect(finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith(["flow-1", "flow-2"]);
   });
+
+  it("keeps batch dispatch and single-entry delivery ownership one-way", async () => {
+    const dispatchSource = await fs.readFile(
+      new URL("./post-compaction-delegate-dispatch.ts", import.meta.url),
+      "utf8",
+    );
+    const deliverySource = await fs.readFile(
+      new URL("./post-compaction-delegate-delivery.ts", import.meta.url),
+      "utf8",
+    );
+    const restartSource = await fs.readFile(
+      new URL("../../gateway/server-restart-sentinel.ts", import.meta.url),
+      "utf8",
+    );
+    const combinedSource = `${dispatchSource}\n${deliverySource}`;
+
+    expect(dispatchSource).toContain('from "./post-compaction-delegate-delivery.js"');
+    expect(deliverySource).not.toContain("post-compaction-delegate-dispatch");
+    expect(restartSource).toContain(
+      'from "../auto-reply/reply/post-compaction-delegate-delivery.js"',
+    );
+    expect(restartSource).not.toContain(
+      'from "../auto-reply/reply/post-compaction-delegate-dispatch.js"',
+    );
+    expect(
+      combinedSource.match(/export async function deliverQueuedPostCompactionDelegate/g),
+    ).toHaveLength(1);
+    expect(dispatchSource).not.toMatch(
+      /\b(?:updateSessionStore|loadSessionStore|spawnSubagentDirect|markPendingDelegateSpawnAccepted|markPendingDelegateFailed)\b/,
+    );
+    expect(deliverySource).not.toMatch(
+      /\b(?:DispatchPostCompactionDelegatesParams|buildPostCompactionLifecycleEvent|postCompactionDelegatesToPreserve|readPostCompactionContext|drainPostCompactionDelegateDeliveries)\b/,
+    );
+  });
 });
