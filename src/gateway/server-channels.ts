@@ -234,24 +234,6 @@ type ChannelManagerOptions = {
   tryRecoverAutostartSuppression?: () => boolean;
 };
 
-export type StartChannelOptions = {
-  /**
-   * Include accounts that the manager already knows about in addition to the
-   * plugin's current account listing.
-   *
-   * Channel hot-reload uses this as a safety net for externally-managed
-   * account stores. Some channel plugins refresh their on-disk account index
-   * asynchronously during login; the Gateway must not tear down an already
-   * running account just because the freshly-loaded plugin account list only
-   * exposes the account that triggered the reload.
-   */
-  includeKnownAccounts?: boolean;
-  preserveRestartAttempts?: boolean;
-  preserveManualStop?: boolean;
-  deferAccountStartUntil?: Promise<void>;
-  manual?: boolean;
-};
-
 export type StopChannelOptions = {
   manual?: boolean;
 };
