@@ -65,6 +65,7 @@ import type {
   OpenClawPluginHttpRouteParams,
   OpenClawPluginNodeCliFeatureOptions,
   OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginReadinessCriterion,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -252,6 +253,8 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
+  /** Register an advisory readiness criterion that an operator may require. */
+  registerReadinessCriterion: (criterion: OpenClawPluginReadinessCriterion) => void;
   registerService: (service: OpenClawPluginService) => void;
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;

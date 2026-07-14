@@ -1,4 +1,4 @@
-export type ReadinessConditionType =
+export type BuiltInReadinessConditionType =
   | "GatewayStartupComplete"
   | "GatewayAcceptingWork"
   | "ChannelRuntimeReady"
@@ -8,6 +8,8 @@ export type ReadinessConditionType =
   | "WorkspaceWritable"
   | "GatewayResponding"
   | "PluginsLoaded";
+
+export type ReadinessConditionType = BuiltInReadinessConditionType | (string & {});
 
 export type ReadinessConditionStatus = "True" | "False" | "Unknown";
 export type ReadinessRequirement = "required" | "advisory";
@@ -41,6 +43,7 @@ export type RuntimeReadinessInput = {
   gateway: "responding" | "not-checked" | "unavailable";
   plugins?: PluginReadinessInput;
   coreConditions?: ReadinessCondition[];
+  additionalConditions?: ReadinessCondition[];
 };
 
 export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
@@ -147,6 +150,7 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
         ? "Runtime configuration loaded."
         : "Runtime configuration was not loaded.",
     },
+    ...(input.additionalConditions ?? []),
     buildGatewayCondition(input.gateway),
     buildPluginCondition(input.plugins),
   ];

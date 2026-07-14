@@ -9,6 +9,7 @@ import {
   createReadinessChecker,
   mergeReadinessResults,
   type ReadinessResult,
+  withReadinessEvaluationTimeout,
 } from "./readiness.js";
 
 /**
@@ -539,5 +540,19 @@ describe("mergeReadinessResults", () => {
       "GatewayResponding",
       "PluginsLoaded",
     ]);
+  });
+});
+
+describe("withReadinessEvaluationTimeout", () => {
+  it("rejects a readiness evaluation that never settles", async () => {
+    await expect(withReadinessEvaluationTimeout(new Promise<never>(() => {}), 5)).rejects.toThrow(
+      "readiness evaluation exceeded 5ms",
+    );
+  });
+
+  it("returns a readiness evaluation that settles inside the outer budget", async () => {
+    await expect(withReadinessEvaluationTimeout(Promise.resolve("ready"), 5)).resolves.toBe(
+      "ready",
+    );
   });
 });

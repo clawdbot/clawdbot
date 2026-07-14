@@ -543,6 +543,27 @@ See [Plugins](/tools/plugin).
 
 ---
 
+## Gateway readiness
+
+```json5
+{
+  gateway: {
+    readiness: {
+      requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
+      advisoryCriteria: ["plugin.metrics.exporter"],
+    },
+  },
+}
+```
+
+- `requiredCriteria`: registered criteria that must report `True` for readiness.
+- `advisoryCriteria`: registered criteria included in diagnostics without blocking readiness.
+
+The Gateway's lifecycle conditions always apply. Explicit criteria add to that
+baseline and do not require a hosting profile. See [Health checks](/gateway/health#selected-readiness-criteria)
+for evaluation semantics and the [Plugin SDK](/plugins/sdk-overview#infrastructure)
+for plugin registration.
+
 ## Gateway
 
 ```json5
