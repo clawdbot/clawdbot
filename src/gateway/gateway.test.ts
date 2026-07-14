@@ -51,6 +51,7 @@ const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_HOSTING_PROFILE",
 ] as const;
 
 function nextGatewayId(prefix: string): string {
@@ -235,6 +236,23 @@ describe("gateway e2e", () => {
       }
       await removeGatewayTempHome(tempHome);
       envSnapshot.restore();
+    }
+  });
+
+  it("rejects an invalid hosting profile from the environment before startup", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-invalid-hosting-profile-",
+      minimalGateway: true,
+    });
+    try {
+      setTestEnvValue("OPENCLAW_HOSTING_PROFILE", "unsupported");
+
+      await expect(startGatewayServer(await getFreeGatewayPort())).rejects.toThrow(
+        'Invalid hosting profile from OPENCLAW_HOSTING_PROFILE: "unsupported".',
+      );
+    } finally {
+      envSnapshot.restore();
+      await removeGatewayTempHome(tempHome);
     }
   });
 
