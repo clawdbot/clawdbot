@@ -419,6 +419,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
       syncExternalCli: false,
     });
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledTimes(2);
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store,
       profileId,
@@ -481,6 +482,17 @@ describe("modelsAuthClearCooldownCommand", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
+  it("rejects inherited object keys as unknown profile ids", async () => {
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ version: 1, profiles: {} });
+
+    await expect(
+      modelsAuthClearCooldownCommand({ profileId: "constructor" }, createRuntime()),
+    ).rejects.toThrow('Auth profile "constructor" not found');
+
+    expect(mocks.clearAuthProfileCooldown).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("reports a failed store update without refreshing the gateway", async () => {
     const store = {
       version: 1,
@@ -496,6 +508,34 @@ describe("modelsAuthClearCooldownCommand", () => {
       },
     };
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+
+    await expect(modelsAuthClearCooldownCommand({ profileId }, createRuntime())).rejects.toThrow(
+      `Failed to clear cooldown state for auth profile "${profileId}"`,
+    );
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("detects failure state that appears in the authoritative reload", async () => {
+    const initiallyClearStore = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key" as const, provider: "openai", key: "placeholder" },
+      },
+    };
+    const persistedBlockedStore = {
+      ...initiallyClearStore,
+      usageStats: {
+        [profileId]: {
+          blockedUntil: Date.now() + 3_600_000,
+          blockedReason: "subscription_limit" as const,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime
+      .mockReturnValueOnce(initiallyClearStore)
+      .mockReturnValueOnce(persistedBlockedStore);
     mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
 
     await expect(modelsAuthClearCooldownCommand({ profileId }, createRuntime())).rejects.toThrow(

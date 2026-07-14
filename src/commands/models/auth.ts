@@ -815,7 +815,7 @@ export async function modelsAuthClearCooldownCommand(
   const profileId = opts.profileId.trim();
   const agentDir = await resolveModelsAuthAgentDir(opts.agent);
   const store = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
-  if (!store.profiles[profileId]) {
+  if (!Object.hasOwn(store.profiles, profileId)) {
     throw new Error(
       `Auth profile "${profileId}" not found. Run ${formatCliCommand("openclaw models auth list")} to see saved profiles.`,
     );
@@ -823,7 +823,8 @@ export async function modelsAuthClearCooldownCommand(
 
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
   await clearAuthProfileCooldown({ store, profileId, agentDir: ownerAgentDir });
-  if (hasAuthProfileFailureState(store.usageStats?.[profileId])) {
+  const refreshedStore = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
+  if (hasAuthProfileFailureState(refreshedStore.usageStats?.[profileId])) {
     throw new Error(
       `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
     );
