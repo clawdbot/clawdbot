@@ -1,12 +1,12 @@
 // Tool Call Repair module implements payload behavior.
 import {
-  consumeLineBreak,
   consumeStructuralLineBreakAfterHorizontalWhitespace,
   END_TOOL_REQUEST,
   HARMONY_CALL_MARKER,
   HARMONY_CHANNEL_MARKER,
   HARMONY_MESSAGE_MARKER,
   isPlainTextToolNameChar,
+  scanStandaloneXmlishInvokeBlock,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -14,6 +14,11 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
+import {
+  advancePastStrippedBlock,
+  createPreservedInvokeExamplePredicate,
+  parseXmlishPlainTextToolCallBlockAt,
+} from "./payload-strip-invoke.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -37,7 +42,7 @@ export type PlainTextToolCallParseOptions = {
   maxPayloadBytes?: number;
 };
 
-type NormalizedPlainTextToolCallParseOptions = Omit<
+export type NormalizedPlainTextToolCallParseOptions = Omit<
   PlainTextToolCallParseOptions,
   "allowedToolNames"
 > & { allowedToolNames?: ReadonlySet<string> };
@@ -567,72 +572,6 @@ function parseJsonArguments(
     : null;
 }
 
-function extractXmlishParameterValue(
-  text: string,
-  start: number,
-  end: number,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): string {
-  let value = text.slice(start, end);
-  if (consumeLineBreak(text, skipHorizontalWhitespace(text, start)) === null) {
-    const boundary = consumeStructuralLineBreakAfterHorizontalWhitespace(
-      text,
-      start,
-      structuralLineBreaks,
-    );
-    if (boundary !== null) {
-      const offset = boundary - start;
-      value = `${value.slice(0, offset)}\n${value.slice(offset)}`;
-    }
-  }
-  const payloadStart = consumeLineBreak(value, 0);
-  if (payloadStart === null) {
-    return value;
-  }
-  return value.slice(payloadStart).replace(/(?:\r\n|[\r\n])$/u, "");
-}
-
-function parseXmlishPlainTextToolCallBlockAt(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  const scan = scanXmlishToolCall(text, start, structuralLineBreaks);
-  if (scan.kind !== "complete") {
-    return null;
-  }
-  const name = text.slice(scan.name.start, scan.name.end);
-  if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-    return null;
-  }
-
-  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-  if (
-    utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) === null
-  ) {
-    return null;
-  }
-  const args = Object.fromEntries(
-    scan.parameters.map((parameter) => [
-      text.slice(parameter.name.start, parameter.name.end),
-      extractXmlishParameterValue(
-        text,
-        parameter.value.start,
-        parameter.value.end,
-        structuralLineBreaks,
-      ),
-    ]),
-  );
-  return {
-    arguments: args,
-    end: scan.end,
-    name,
-    raw: text.slice(start, scan.end),
-    start,
-  };
-}
-
 function parsePlainTextToolCallBlockAtAnySyntax(
   text: string,
   start: number,
@@ -680,18 +619,33 @@ export function parseStandalonePlainTextToolCallBlocks(
   return blocks.length > 0 ? blocks : null;
 }
 
-/** Removes full-line standalone plain-text tool-call blocks from user-visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
+/**
+ * Removes full-line standalone plain-text tool-call blocks from user-visible text.
+ *
+ * The attribute/invoke dialect (`<invoke name="...">…</invoke>`, optionally wrapped
+ * in `<function_calls>` and namespaced `antml:`/`mm:`) is treated as a leaked call
+ * and scrubbed, but a copy that sits inside a Markdown code fence / inline span is a
+ * documentation example and is preserved. `isInsideCodeRegion` lets a caller supply
+ * its own code-region test computed against the exact text handed in; when omitted a
+ * default Markdown code-region scan is used so a bare package call still spares
+ * examples. Pass `() => false` to force a strict scrub of every region.
+ */
+export function stripPlainTextToolCallBlocks(
+  text: string,
+  isInsideCodeRegion?: (offset: number) => boolean,
+): string {
   if (
     !text ||
     (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
       !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
         text,
       ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text) &&
+      !/(?:^|[\r\n])[^\S\r\n]*<\s*(?:antml:|mm:)?(?:function_calls|invoke)\b/i.test(text))
   ) {
     return text;
   }
+  const isPreservedInvokeExample = createPreservedInvokeExamplePredicate(text, isInsideCodeRegion);
   let result = "";
   let cursor = 0;
   let index = 0;
@@ -702,6 +656,28 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     const blockStart = skipLineIndentation(text, index);
+    // The attribute/invoke dialect is scrubbable but never promoted, so it is not
+    // part of the shared `scanPlainTextToolCall` (which drives stream buffering).
+    // Recognize a complete standalone invoke block here, on the strip path only.
+    const invoke = scanStandaloneXmlishInvokeBlock(text, blockStart);
+    if (invoke.kind === "incomplete") {
+      // An unterminated invoke open (leaked/truncated degraded call): stop scrubbing
+      // and preserve the remainder verbatim, mirroring the prefix bail below. This
+      // also prevents rescanning the same unclosed tail at every later line start.
+      return result + text.slice(cursor);
+    }
+    if (invoke.kind === "complete") {
+      if (isPreservedInvokeExample(blockStart)) {
+        // Example markup inside a code fence / inline span: leave it intact and
+        // skip past the whole block so its inner lines are not rescanned.
+        index = Math.max(index + 1, invoke.end);
+        continue;
+      }
+      result += text.slice(cursor, index);
+      cursor = advancePastStrippedBlock(text, invoke.end);
+      index = cursor;
+      continue;
+    }
     const scan = scanPlainTextToolCall(text, blockStart);
     if (scan.kind === "prefix" && scan.completeEnd === undefined) {
       return result + text.slice(cursor);
@@ -731,11 +707,7 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       }
       blockEnd = adjacentEnd;
     }
-    const lineBreakStart = skipLineIndentation(text, blockEnd);
-    cursor =
-      lineBreakStart === text.length
-        ? lineBreakStart
-        : (consumeLineBreak(text, lineBreakStart) ?? blockEnd);
+    cursor = advancePastStrippedBlock(text, blockEnd);
     index = cursor;
   }
   result += text.slice(cursor);

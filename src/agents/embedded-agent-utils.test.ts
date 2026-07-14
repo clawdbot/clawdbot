@@ -81,7 +81,7 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Let me check that.");
   });
 
-  it("keeps invoke snippets without Minimax markers", () => {
+  it("scrubs a leaked unfenced invoke block from visible text (#97750)", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -93,10 +93,10 @@ describe("extractAssistantText", () => {
       timestamp: Date.now(),
     });
 
+    // A degraded invoke tool call that leaks into visible text is scrubbed; a fenced
+    // example would be preserved (covered by the tool-call-repair strip tests).
     const result = extractAssistantText(msg);
-    expect(result).toBe(
-      `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
-    );
+    expect(result).toBe("Example:");
   });
 
   it("preserves normal text without tool invocations", () => {

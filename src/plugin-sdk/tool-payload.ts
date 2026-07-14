@@ -3,6 +3,7 @@ import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
 } from "../../packages/tool-call-repair/src/index.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
 /** Plugin-facing plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -34,9 +35,36 @@ export function parseStandalonePlainTextToolCallBlocks(
   return parseStandaloneRepairToolCallBlocks(text, options);
 }
 
-/** Removes full-line standalone plain-text tool call blocks from visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
-  return stripRepairToolCallBlocks(text);
+/** Options for the plugin-facing plain-text tool-call stripper. */
+export type StripPlainTextToolCallOptions = {
+  /**
+   * Preserve blocks that sit inside a Markdown code fence or inline span, treating
+   * them as documentation examples rather than leaked calls. Off by default so the
+   * exported helper stays a strict scrubber of untrusted visible text, where a
+   * tool-call-shaped block is always a leak.
+   */
+  preserveCodeRegions?: boolean;
+};
+
+/**
+ * Removes full-line standalone plain-text tool call blocks from visible text.
+ *
+ * Strict by default: a leaked block is scrubbed even when it sits inside a Markdown
+ * code fence or inline span, preserving the prior SDK contract for callers that
+ * sanitize untrusted visible text. Pass `{ preserveCodeRegions: true }` to opt into
+ * code-aware behavior that leaves example blocks inside code fences/spans intact.
+ */
+export function stripPlainTextToolCallBlocks(
+  text: string,
+  options?: StripPlainTextToolCallOptions,
+): string {
+  if (options?.preserveCodeRegions) {
+    const codeRegions = findCodeRegions(text);
+    return stripRepairToolCallBlocks(text, (offset) => isInsideCode(offset, codeRegions));
+  }
+  // Force a strict scrub: the repair helper spares code-region examples by default,
+  // so an always-false predicate keeps the untrusted-text contract unchanged.
+  return stripRepairToolCallBlocks(text, () => false);
 }
 
 type ToolPayloadTextBlock = {

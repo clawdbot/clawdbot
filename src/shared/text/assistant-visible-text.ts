@@ -2,6 +2,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import {
+  NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE,
+  TOOL_CALL_JSON_PAYLOAD_START_RE,
+  TOOL_CALL_QUICK_RE,
+  TOOL_CALL_TAG_NAMES,
+  TOOL_CALL_XML_PAYLOAD_START_RE,
+} from "./assistant-visible-text-tool-call-patterns.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import {
@@ -32,25 +39,6 @@ const INTERNAL_CHANNEL_TRACE_LINE_RE =
  * This stateful pass hides content from an opening tag through the matching
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
-const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
-const TOOL_CALL_TAG_NAMES = new Set([
-  "tool_call",
-  "tool_result",
-  "function_call",
-  "function_calls",
-  "function_response",
-  "function",
-  "tool_calls",
-  "antml:invoke",
-  "antml:parameter",
-]);
-const TOOL_CALL_JSON_PAYLOAD_START_RE =
-  /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
-const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
-const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
-
 type ToolCallPayloadKind = "json" | "xml" | null;
 
 function endsInsideQuotedString(text: string, start: number, end: number): boolean {
@@ -549,6 +537,7 @@ export function stripToolCallXmlTags(
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
         tag.tagName === "antml:invoke" ||
+        tag.tagName === "mm:invoke" ||
         ((options.stripFunctionCallsXmlPayloads === true ||
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);

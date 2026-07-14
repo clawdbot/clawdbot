@@ -2,6 +2,7 @@
 
 export * from "./boolean-coercion.js";
 export * from "./cjk-chars.js";
+export * from "./code-regions.js";
 export * from "./error-coercion.js";
 export * from "./expect.js";
 export * from "./format.js";

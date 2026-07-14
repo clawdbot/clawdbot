@@ -822,6 +822,12 @@ describe("stripToolCallXmlTags", () => {
     expect(stripToolCallXmlTags(input)).toBe("prefix  suffix");
   });
 
+  it("strips mm:invoke/parameter tool call XML from visible content", () => {
+    const input =
+      'before <mm:invoke name="exec"><mm:parameter name="command">ls</mm:parameter></mm:invoke> after';
+    expect(stripToolCallXmlTags(input)).toBe("before  after");
+  });
+
   it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
     const input = 'keep <invoke name="something">content</invoke> keep';
     expect(stripToolCallXmlTags(input)).toBe(input);
