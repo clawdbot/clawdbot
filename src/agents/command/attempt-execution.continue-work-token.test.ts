@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTINUATION_WORK_CONTROLLER_ID } from "../../auto-reply/continuation/work-store.js";
+import { CONTINUATION_WORK_CONTROLLER_ID } from "../../auto-reply/continuation/work-flow-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest, type SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";

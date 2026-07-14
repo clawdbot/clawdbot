@@ -15,6 +15,7 @@ import { evaluateNoOpRearmAdmission, type NoOpRearmDecision } from "../reply/no-
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
 import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import type { ContinuationWorkReasonCategory, PendingContinuationWork } from "./work-flow-state.js";
 import {
   consumePendingWork,
   enqueuePendingWork,
@@ -35,8 +36,6 @@ import {
   reconcileUndeliverableGrantedWork,
   requeuePendingWork,
   supersedeQueuedTurnEndParkedWork,
-  type ContinuationWorkReasonCategory,
-  type PendingContinuationWork,
 } from "./work-store.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
