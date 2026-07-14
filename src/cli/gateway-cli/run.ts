@@ -34,6 +34,11 @@ import {
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import {
+  formatHostingProfileIds,
+  HOSTING_PROFILE_ENV,
+  parseHostingProfileId,
+} from "../../hosting/profiles.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -700,6 +705,16 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     return;
   }
   setVerbose(Boolean(opts.verbose));
+  const hostingProfileRaw = toOptionString(opts.hostingProfile);
+  if (hostingProfileRaw !== undefined) {
+    const hostingProfile = parseHostingProfileId(hostingProfileRaw);
+    if (!hostingProfile) {
+      defaultRuntime.error(`Invalid --hosting-profile. Use ${formatHostingProfileIds()}.`);
+      defaultRuntime.exit(1);
+      return;
+    }
+    process.env[HOSTING_PROFILE_ENV] = hostingProfile;
+  }
   if (opts.cliBackendLogs || opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/cli-backend"]);
     process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT = "1";

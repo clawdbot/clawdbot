@@ -47,8 +47,15 @@ export function createSelectedReadinessResolver() {
     config: OpenClawConfig;
     registry: Pick<PluginRegistry, "readinessCriteria">;
     env?: NodeJS.ProcessEnv;
+    additionalRequiredCriteria?: readonly string[];
   }): Promise<ReadinessCondition[]> => {
-    const selected = resolveSelectedReadinessCriteria(params.config);
+    const selectedById = new Map(
+      resolveSelectedReadinessCriteria(params.config).map((entry) => [entry.id, entry]),
+    );
+    for (const id of params.additionalRequiredCriteria ?? []) {
+      selectedById.set(id, { id, requirement: "required" });
+    }
+    const selected = Array.from(selectedById.values());
     if (selected.length === 0) {
       return [];
     }

@@ -25,6 +25,11 @@ import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
+export type HostingConfig = {
+  /** Built-in hosting profile selected for runtime readiness. Defaults to local. */
+  profile?: import("../hosting/profiles.js").HostingProfileId;
+};
+
 /** One persisted suppression for a known security audit finding. */
 export type SecurityAuditSuppression = {
   /** Exact security audit check id to suppress. */
@@ -124,6 +129,8 @@ export type OpenClawConfig = {
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
+  /** Runtime hosting profile and host-facing readiness settings. */
+  hosting?: HostingConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
   /** Security audit suppressions and security policy settings. */

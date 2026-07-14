@@ -49,6 +49,11 @@ import {
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import {
+  buildHostingProfileConditions,
+  requiredCriteriaForHostingProfile,
+  resolveHostingProfile,
+} from "../hosting/profiles.js";
+import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
@@ -1295,10 +1300,21 @@ export async function startGatewayServer(
   const evaluateRuntimeReadiness = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = readinessRuntimeSnapshot;
+      const profile = resolveHostingProfile({ config: snapshot.config, env: process.env });
+      const auth = getResolvedAuth();
+      const profileConditions = buildHostingProfileConditions(profile, {
+        bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
+        bindHost,
+        port,
+        authMode: auth.mode,
+        trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+        trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
+      });
       const additionalConditions = await resolveSelectedReadiness({
         config: snapshot.config,
         registry: snapshot.registry,
         env: process.env,
+        additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
       });
       if (snapshot !== readinessRuntimeSnapshot) {
         continue;
@@ -1307,7 +1323,7 @@ export async function startGatewayServer(
         configLoaded: true,
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
-        additionalConditions,
+        additionalConditions: [...profileConditions, ...additionalConditions],
       });
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");
