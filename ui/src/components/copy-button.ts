@@ -15,8 +15,68 @@ type CopyButtonOptions = {
   label?: string;
 };
 
-function setButtonLabel(button: HTMLButtonElement, label: string) {
-  button.setAttribute("aria-label", label);
+type CopyButtonState = "idle" | "copying" | "copied" | "error";
+
+interface CopyButtonElement extends HTMLButtonElement {
+  __copyState?: CopyButtonState;
+  __copyTimeout?: number;
+}
+
+function setButtonState(button: CopyButtonElement, state: CopyButtonState, idleLabel: string) {
+  button.__copyState = state;
+
+  switch (state) {
+    case "copying":
+      button.dataset.copying = "1";
+      button.setAttribute("aria-busy", "true");
+      button.disabled = true;
+      button.setAttribute("aria-label", idleLabel);
+      break;
+    case "copied":
+      delete button.dataset.copying;
+      button.removeAttribute("aria-busy");
+      button.disabled = false;
+      button.dataset.copied = "1";
+      button.setAttribute("aria-label", COPIED_LABEL);
+      break;
+    case "error":
+      delete button.dataset.copying;
+      button.removeAttribute("aria-busy");
+      button.disabled = false;
+      button.dataset.error = "1";
+      button.setAttribute("aria-label", ERROR_LABEL);
+      break;
+    default:
+      delete button.dataset.copying;
+      delete button.dataset.copied;
+      delete button.dataset.error;
+      button.removeAttribute("aria-busy");
+      button.disabled = false;
+      button.setAttribute("aria-label", idleLabel);
+  }
+}
+
+function cleanupButtonState(button: CopyButtonElement) {
+  if (button.__copyTimeout !== undefined) {
+    window.clearTimeout(button.__copyTimeout);
+    button.__copyTimeout = undefined;
+  }
+  delete button.__copyState;
+}
+
+function resetButtonToIdle(button: CopyButtonElement, idleLabel: string) {
+  cleanupButtonState(button);
+  setButtonState(button, "idle", idleLabel);
+}
+
+function scheduleStateReset(button: CopyButtonElement, state: CopyButtonState, idleLabel: string, delay: number) {
+  cleanupButtonState(button);
+  button.__copyTimeout = window.setTimeout(() => {
+    button.__copyTimeout = undefined;
+    if (button.isConnected && button.__copyState === state) {
+      resetButtonToIdle(button, idleLabel);
+    }
+  }, delay);
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {
@@ -28,49 +88,49 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
         type="button"
         aria-label=${idleLabel}
         @click=${async (e: Event) => {
-          const btn = e.currentTarget as HTMLButtonElement | null;
+          const btn = e.currentTarget as CopyButtonElement | null;
 
-          if (!btn || btn.dataset.copying === "1") {
+          if (!btn || btn.__copyState === "copying") {
             return;
           }
 
-          btn.dataset.copying = "1";
-          btn.setAttribute("aria-busy", "true");
-          btn.disabled = true;
+          setButtonState(btn, "copying", idleLabel);
 
-          const copied = await copyToClipboard(options.text());
-          if (!btn.isConnected) {
-            return;
-          }
+          try {
+            const copied = await copyToClipboard(options.text());
 
-          delete btn.dataset.copying;
-          btn.removeAttribute("aria-busy");
-          btn.disabled = false;
-
-          if (!copied) {
-            btn.dataset.error = "1";
-            setButtonLabel(btn, ERROR_LABEL);
-
-            window.setTimeout(() => {
-              if (!btn.isConnected) {
-                return;
-              }
-              delete btn.dataset.error;
-              setButtonLabel(btn, idleLabel);
-            }, ERROR_FOR_MS);
-            return;
-          }
-
-          btn.dataset.copied = "1";
-          setButtonLabel(btn, COPIED_LABEL);
-
-          window.setTimeout(() => {
             if (!btn.isConnected) {
               return;
             }
-            delete btn.dataset.copied;
-            setButtonLabel(btn, idleLabel);
-          }, COPIED_FOR_MS);
+
+            if (!copied) {
+              setButtonState(btn, "error", idleLabel);
+              scheduleStateReset(btn, "error", idleLabel, ERROR_FOR_MS);
+              return;
+            }
+
+            setButtonState(btn, "copied", idleLabel);
+            scheduleStateReset(btn, "copied", idleLabel, COPIED_FOR_MS);
+          } catch {
+            if (!btn.isConnected) {
+              return;
+            }
+
+            setButtonState(btn, "error", idleLabel);
+            scheduleStateReset(btn, "error", idleLabel, ERROR_FOR_MS);
+          }
+        }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            (e.currentTarget as HTMLButtonElement).click();
+          }
+        }}
+        @mouseleave=${(e: Event) => {
+          const btn = e.currentTarget as CopyButtonElement;
+          if (btn.__copyState === "copied" || btn.__copyState === "error") {
+            resetButtonToIdle(btn, idleLabel);
+          }
         }}
       >
         <span class="chat-copy-btn__icon" aria-hidden="true">
