@@ -79,6 +79,20 @@ describe("status-json-payload", () => {
         memoryPlugin: { enabled: true },
         agents: [{ id: "main" }],
         secretDiagnostics: ["diag"],
+        readiness: {
+          ready: true,
+          conditions: [
+            {
+              type: "PluginsLoaded",
+              status: "False",
+              requirement: "advisory",
+              reason: "PluginLoadFailures",
+              message: "One selected plugin failed to load.",
+            },
+          ],
+          failures: [],
+          advisories: ["PluginLoadFailures"],
+        },
         securityAudit: { summary: { critical: 1 } },
         health: { ok: true },
         usage: { providers: [] },
@@ -95,6 +109,12 @@ describe("status-json-payload", () => {
     ).toEqual({
       ok: true,
       os: { platform: "linux" },
+      readiness: {
+        ready: true,
+        failures: [],
+        advisories: ["PluginLoadFailures"],
+        conditions: expect.any(Array),
+      },
       update: {
         root: "/tmp/openclaw",
         installKind: "package",
@@ -139,35 +159,44 @@ describe("status-json-payload", () => {
   });
 
   it("omits optional sections when they are absent", () => {
-    expect(
-      buildStatusJsonPayload({
-        summary: { ok: true },
-        surface: {
-          cfg: { gateway: {} },
-          update: {
-            root: "/tmp/openclaw",
-            installKind: "package",
-            packageManager: "npm",
-          } as never,
-          tailscaleMode: "off",
-          gatewayMode: "local",
-          remoteUrlMissing: false,
-          gatewayConnection: { url: "ws://127.0.0.1:18789" },
-          gatewayReachable: false,
-          gatewayProbe: null,
-          gatewayProbeAuth: null,
-          gatewaySelf: null,
-          gatewayProbeAuthWarning: null,
-          gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
-          nodeService: { label: "node", installed: false, loadedText: "not installed" },
-        },
-        osSummary: { platform: "linux" },
-        memory: null,
-        memoryPlugin: null,
-        agents: [],
-        secretDiagnostics: [],
-      }),
-    ).not.toHaveProperty("securityAudit");
+    const payload = buildStatusJsonPayload({
+      summary: { ok: true },
+      surface: {
+        cfg: { gateway: {} },
+        update: {
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+        } as never,
+        tailscaleMode: "off",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: { url: "ws://127.0.0.1:18789" },
+        gatewayReachable: false,
+        gatewayProbe: null,
+        gatewayProbeAuth: null,
+        gatewaySelf: null,
+        gatewayProbeAuthWarning: null,
+        gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
+        nodeService: { label: "node", installed: false, loadedText: "not installed" },
+      },
+      osSummary: { platform: "linux" },
+      memory: null,
+      memoryPlugin: null,
+      agents: [],
+      secretDiagnostics: [],
+    });
+    expect(payload).not.toHaveProperty("securityAudit");
+    expect(payload.readiness).toMatchObject({
+      ready: false,
+      failures: [
+        "GatewayStartupNotChecked",
+        "GatewayAdmissionNotChecked",
+        "ChannelRuntimeNotChecked",
+        "GatewayUnavailable",
+      ],
+      advisories: ["EventLoopStatusUnavailable", "PluginStatusUnavailable"],
+    });
   });
 
   it("includes model-pricing health from the gateway probe", () => {

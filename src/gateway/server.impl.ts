@@ -73,12 +73,14 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
+  getActivePluginRegistry,
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -161,7 +163,11 @@ import {
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  mergeReadinessResults,
+  type ReadinessResult,
+} from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
@@ -218,6 +224,21 @@ function approvalRequestTargetsSession(
     (typeof record.sessionId === "string" && record.sessionId === sessionId) ||
     (typeof record.sessionKey === "string" && sessionKeys.has(record.sessionKey))
   );
+}
+
+function buildGatewayPluginReadinessInput(
+  registry: NonNullable<ReturnType<typeof getActivePluginRegistry>>,
+): PluginReadinessInput {
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin) => ({
+      id: plugin.id,
+      activated: plugin.activated === true,
+      ...(plugin.activationSource ? { activationSource: plugin.activationSource } : {}),
+      error: plugin.error ?? "unknown plugin load error",
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return { errors };
 }
 
 type GatewayStartupChannelPlugin = {
@@ -1252,7 +1273,7 @@ export async function startGatewayServer(
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -1263,6 +1284,15 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const getReadiness = async (): Promise<ReadinessResult> => {
+    const gatewayReadiness = await getGatewayReadiness();
+    const runtimeReadiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: buildGatewayPluginReadinessInput(pluginRegistry),
+    });
+    return mergeReadinessResults(gatewayReadiness, runtimeReadiness);
+  };
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const watchNodeRequestHandler: {

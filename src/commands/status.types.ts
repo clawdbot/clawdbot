@@ -53,6 +53,7 @@ export type HeartbeatStatus = {
 /** Aggregate status summary before text or JSON formatting. */
 export type StatusSummary = {
   runtimeVersion?: string | null;
+  readiness?: import("../readiness/conditions.js").CanonicalReadinessResult;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   linkChannel?: {
     id: ChannelId;
