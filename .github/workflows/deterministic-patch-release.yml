@@ -1,0 +1,38 @@
+name: Deterministic patch release
+
+on:
+  push:
+    tags:
+      - "20*.*.*-deterministic.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build deterministic dist
+        run: |
+          node scripts/tsdown-build.mjs
+          node scripts/runtime-postbuild.mjs
+      - name: Publish patch artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME%%-deterministic.*}"
+          asset="openclaw-${version}-deterministic-${GITHUB_SHA::8}.tar.gz"
+          tar -czf "$asset" dist
+          sha256sum "$asset" > "$asset.sha256"
+          gh release create "$GITHUB_REF_NAME" "$asset" "$asset.sha256" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Deterministic dummy/dummy and dummy/note patch for OpenClaw v${version}."
