@@ -1,20 +1,21 @@
 /** Durable same-session continuation_work dispatch. */
 
 import type { SubagentRunLiveness } from "../../agents/subagent-run-liveness.js";
-import {
-  emitContinuationWorkFireSpan,
-  emitContinuationWorkSpan,
-  resolveContinuationTraceparent,
-} from "../../infra/continuation-tracer.js";
-import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
-import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
+import { emitContinuationWorkSpan } from "../../infra/continuation-tracer.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import { evaluateNoOpRearmAdmission, type NoOpRearmDecision } from "../reply/no-op-rearm-guard.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
 import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import {
+  commitFoldedContinuationWork,
+  executePendingContinuationWork,
+  getContinuationReplyRunRegistry,
+  prepareFoldedContinuationWork,
+  type ContinuationWorkExecutionDirective,
+  type ContinuationWorkIdleRetryTrigger,
+} from "./work-dispatch-execution.js";
 import type { ContinuationWorkReasonCategory, PendingContinuationWork } from "./work-flow-state.js";
 import {
   consumePendingWork,
@@ -22,33 +23,17 @@ import {
   finalizeAnchorPendingWork,
   hasPendingIdleRetryWork,
   listPendingWorkSessionKeysForRecovery,
-  markPendingWorkDelivered,
-  markPendingWorkFailed,
-  markPendingWorkFoldDelivered,
-  markPendingWorkFolded,
-  markPendingWorkReaped,
   markPendingWorkSuperseded,
-  markPendingWorkTurnGranted,
   peekSoonestQueuedWorkDueAt,
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   queuedPendingWorkCount,
-  reconcileUndeliverableGrantedWork,
-  requeuePendingWork,
   supersedeQueuedTurnEndParkedWork,
 } from "./work-store.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
-const TRANSIENT_ERROR_RETRY_MS = 5_000;
 const DISABLED_CONTINUATION_RECHECK_MS = 15_000;
-const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
-const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
-const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
-const CONTINUATION_TURN_DRAINING_REASON = "draining";
-// Non-retryable: the no-op replay guard tripped (#1138/#1142). The row is
-// terminal-parked (superseded) so the self-rearm loop stops; never requeued.
-const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 // #986 Guard 2: a matured backlog member is "stale" (superseded-eligible) when it
@@ -59,21 +44,6 @@ const SUPERSEDED_GRACE_MULTIPLIER = 2;
 const workTimers = new Map<string, NodeJS.Timeout>();
 const idleRetryFailureTimers = new Map<string, { fireAt: number; handle: NodeJS.Timeout }>();
 const idleRetryControllers = new Map<string, AbortController>();
-
-// Memoize the reply-run-registry module import. The dynamic import keeps the
-// reply graph off the continuation static import cycle, but a fresh `import()`
-// per call can race a concurrently in-flight import of the same module (e.g. the
-// idle-retry waiter started moments earlier), intermittently resolving a
-// different module instance. Caching the promise gives every caller the one
-// resolved registry, which the active-turn gate depends on being stable.
-let replyRunRegistryModulePromise:
-  | Promise<typeof import("../reply/reply-run-registry.js")>
-  | undefined;
-
-function importReplyRunRegistry(): Promise<typeof import("../reply/reply-run-registry.js")> {
-  replyRunRegistryModulePromise ??= import("../reply/reply-run-registry.js");
-  return replyRunRegistryModulePromise;
-}
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -196,21 +166,6 @@ export function resetContinuationWorkDispatchForTests(): void {
   clearIdleRetryControllersForTests();
 }
 
-function isRetryableContinuationSkipReason(reason: string): boolean {
-  return (
-    isRetryableHeartbeatBusySkipReason(reason) ||
-    reason === CONTINUATION_TURN_DRAINING_REASON ||
-    reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON
-  );
-}
-
-/** Emit the guard's single per-episode suppression diagnostic, when present. */
-function emitNoOpRearmBlockedDiagnostic(decision: NoOpRearmDecision): void {
-  if (!decision.admit && decision.diagnostic) {
-    log.warn(decision.diagnostic.message);
-  }
-}
-
 /**
  * #990 rate curve retained for diagnostics/config compatibility.
  *
@@ -261,60 +216,24 @@ export function bucket1ReapVerdict(
   return "rate-cap-forever";
 }
 
-/**
- * Read-time parent-liveness join (#990): classify the latest subagent run for a
- * flow's own session against the LIVE registry map. Never persisted — liveness
- * mutates after a flow is classified (a driver can die or finish between the
- * classify and this read). Lazy dynamic import keeps the agents registry off the
- * continuation static import graph (cycle-safe) while the read itself is a
- * synchronous in-process Map lookup.
- */
-async function readChildSessionRunLiveness(
+function idleRetryTriggerKey(
   sessionKey: string,
-  options: { now: number; staleCutoffMs?: number },
-): Promise<SubagentRunLiveness> {
-  const [{ subagentRuns }, { classifyChildSessionRunLivenessFromRuns }] = await Promise.all([
-    import("../../agents/subagent-registry-memory.js"),
-    import("../../agents/subagent-registry-queries.js"),
-  ]);
-  return classifyChildSessionRunLivenessFromRuns(subagentRuns, sessionKey, options);
-}
-
-function requeueWorkForRetry(
-  work: PendingContinuationWork,
-  params: Parameters<typeof requeuePendingWork>[1],
-): boolean {
-  const requeued = requeuePendingWork(work, params);
-  if (requeued) {
-    armNextWorkTimer(work.sessionKey, params.dueAt);
-  }
-  return requeued;
-}
-
-const GATEWAY_RESTARTING_REPLY_TEXT =
-  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
-
-type ReplyPayloadLike = { text?: unknown };
-
-type ContinuationIdleRetryTrigger =
-  | { kind: "reply-run-ended" }
-  | { kind: "command-lane-idle"; lane: string };
-
-function idleRetryTriggerKey(sessionKey: string, trigger: ContinuationIdleRetryTrigger): string {
+  trigger: ContinuationWorkIdleRetryTrigger,
+): string {
   return trigger.kind === "reply-run-ended"
     ? `reply:${sessionKey}`
     : `lane:${trigger.lane}:${sessionKey}`;
 }
 
 function idleRetryTriggerLabel(
-  trigger: ContinuationIdleRetryTrigger,
+  trigger: ContinuationWorkIdleRetryTrigger,
 ): "reply-run-ended" | "command-lane-idle" {
   return trigger.kind;
 }
 
 function idleRetryTriggerFromWork(
   work: PendingContinuationWork,
-): ContinuationIdleRetryTrigger | undefined {
+): ContinuationWorkIdleRetryTrigger | undefined {
   if (!work.idleRetry) {
     return undefined;
   }
@@ -370,7 +289,7 @@ export function classifyContinuationWorkReason(
     : "follow-up-work";
 }
 
-function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTrigger): void {
+function registerIdleRetry(sessionKey: string, trigger: ContinuationWorkIdleRetryTrigger): void {
   const key = idleRetryTriggerKey(sessionKey, trigger);
   if (idleRetryControllers.has(key)) {
     return;
@@ -385,7 +304,7 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     const idle =
       trigger.kind === "reply-run-ended"
         ? await (async () => {
-            const { replyRunRegistry } = await importReplyRunRegistry();
+            const replyRunRegistry = await getContinuationReplyRunRegistry();
             return await replyRunRegistry.waitForIdle(sessionKey, undefined, {
               signal: controller.signal,
             });
@@ -421,261 +340,6 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     );
     armIdleRetryFailureTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
   });
-}
-
-function isReplyPayloadLike(value: unknown): value is ReplyPayloadLike {
-  return Boolean(value && typeof value === "object");
-}
-
-function isGatewayRestartingReplyPayload(value: unknown): boolean {
-  return isReplyPayloadLike(value) && value.text === GATEWAY_RESTARTING_REPLY_TEXT;
-}
-
-function hasNonDrainReplyPayload(reply: unknown): boolean {
-  if (reply === undefined) {
-    return false;
-  }
-  const payloads = Array.isArray(reply) ? reply : [reply];
-  return payloads.some((payload) => !isGatewayRestartingReplyPayload(payload));
-}
-
-function isoOrUndefined(ms: number | undefined): string | undefined {
-  return ms !== undefined ? new Date(ms).toISOString() : undefined;
-}
-
-function quotePriorReason(reason: string | undefined): string {
-  return reason ? JSON.stringify(reason) : "(none)";
-}
-
-type ContinuationProvenanceDisposition =
-  | { disposition: "granted"; deliveredAt: number }
-  | { disposition: "folded-active"; foldedAt: number };
-
-function provenanceLines(
-  work: PendingContinuationWork,
-  now: number,
-  terminal?: ContinuationProvenanceDisposition,
-): string[] {
-  const overdueByMs = Math.max(0, now - work.dueAt);
-  const lines: string[] = [];
-  if (work.originRunId) {
-    lines.push(`Origin run: ${work.originRunId}`);
-  }
-  if (work.originTurnId) {
-    lines.push(`Origin turn: ${work.originTurnId}`);
-  }
-  lines.push(`Elected at: ${isoOrUndefined(work.electedAt) ?? "unknown"}`);
-  if (work.anchorFinalizedAt !== undefined) {
-    lines.push(`Electing turn finalized at: ${isoOrUndefined(work.anchorFinalizedAt)}`);
-  }
-  lines.push(`Due at: ${isoOrUndefined(work.dueAt) ?? "unknown"}`);
-  lines.push(`Overdue by: ${overdueByMs}ms`);
-  if (terminal?.disposition === "granted") {
-    lines.push(`Delivered at: ${isoOrUndefined(terminal.deliveredAt)}`);
-  } else if (terminal?.disposition === "folded-active") {
-    lines.push(`Folded at: ${isoOrUndefined(terminal.foldedAt)}`);
-  }
-  if (terminal) {
-    lines.push(`Disposition: ${terminal.disposition}`);
-  }
-  lines.push(
-    `Chain: ${work.chainId ?? work.flowId ?? "n/a"} hop ${work.hop}/${work.maxChainLength}`,
-  );
-  lines.push(`Flow: ${work.flowId ?? "n/a"}`);
-  lines.push(`Prior reason: ${quotePriorReason(work.reason)}`);
-  return lines;
-}
-
-function formatContinuationWakeText(work: PendingContinuationWork): string {
-  const deliveredAt = Date.now();
-  const provenance = provenanceLines(work, deliveredAt, {
-    disposition: "granted",
-    deliveredAt,
-  }).join(" ");
-  return (
-    `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
-    (work.chainStartedAt !== undefined
-      ? `Chain started at ${new Date(work.chainStartedAt).toISOString()}. `
-      : "") +
-    (work.accumulatedChainTokens !== undefined
-      ? `Accumulated tokens: ${work.accumulatedChainTokens}. `
-      : "") +
-    `The agent elected to continue working.` +
-    (work.reason ? ` Prior reason: ${quotePriorReason(work.reason)}` : "") +
-    ` [provenance] ${provenance}`
-  );
-}
-
-const MAX_FOLD_NOTE_DETAILED = 5;
-const MAX_FOLD_NOTE_OMITTED_FLOW_IDS = 5;
-
-function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], now: number): string {
-  const header =
-    works.length === 1
-      ? `[system:continuation-note] A prior same-session continue_work intent matured while this session was active. It was folded into this turn and will not fire separately as a new turn.`
-      : `[system:continuation-note] ${works.length} prior same-session continue_work intents matured while this session was active. They were folded into this turn and will not fire separately as new turns.`;
-  const ordered = works.toSorted((a, b) => b.electedAt - a.electedAt);
-  const detailed = ordered.slice(0, MAX_FOLD_NOTE_DETAILED);
-  const blocks = detailed.map((work, index) => {
-    const label =
-      works.length === 1 ? "Folded intent" : `Folded intent ${index + 1}/${works.length}`;
-    return `${label}:\n${provenanceLines(work, now, {
-      disposition: "folded-active",
-      foldedAt: now,
-    }).join("\n")}`;
-  });
-  const omitted = ordered.length - detailed.length;
-  const tail =
-    omitted > 0
-      ? `\n(${omitted} older folded continuation${omitted === 1 ? "" : "s"} omitted; sample flowIds ${ordered
-          .slice(MAX_FOLD_NOTE_DETAILED)
-          .slice(0, MAX_FOLD_NOTE_OMITTED_FLOW_IDS)
-          .map((work) => work.flowId ?? "n/a")
-          .join(", ")}${omitted > MAX_FOLD_NOTE_OMITTED_FLOW_IDS ? ", ..." : ""})`
-      : "";
-  const guidance =
-    "\nTreat these as prior-turn context, not fresh commands. Re-evaluate before acting; the rows were consumed and will not fire separately.";
-  return `${header}\n\n${blocks.join("\n\n")}${tail}${guidance}`;
-}
-
-type ContinuationTurnGrantResult =
-  | { status: "ran"; work: PendingContinuationWork }
-  // Turn ran, but the durable delivered-mark lost the revision race and the row
-  // was reconciled here (guard written or parked non-retryable). The caller must
-  // NOT run markPendingWorkTurnGranted with the stale revision.
-  | { status: "ran-finalized" }
-  | { status: "skipped"; reason: string; retryTrigger?: ContinuationIdleRetryTrigger };
-
-async function driveContinuationTurn(
-  work: PendingContinuationWork,
-  wakeText: string,
-): Promise<ContinuationTurnGrantResult> {
-  const [
-    { getRuntimeConfig },
-    { resolveStorePath },
-    { loadSessionEntry },
-    { parseAgentSessionKey, isSubagentSessionKey },
-    { resolveSessionLane },
-    { getReplyFromConfig },
-    { replyRunRegistry },
-    { getQueueSize, isGatewayDraining },
-  ] = await Promise.all([
-    import("../../config/config.js"),
-    import("../../config/sessions/paths.js"),
-    import("../../config/sessions/session-accessor.js"),
-    import("../../sessions/session-key-utils.js"),
-    import("../../agents/embedded-agent-runner/lanes.js"),
-    import("../reply/get-reply.js"),
-    importReplyRunRegistry(),
-    import("../../process/command-queue.js"),
-  ]);
-
-  // Same-session continuations grant a normal turn directly. Do not route through
-  // heartbeat wake registration/active-hours gates, which are agent-schedule policy
-  // and can strand subagent sessions that are otherwise eligible for a turn.
-  if (isGatewayDraining()) {
-    return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
-  }
-  if (replyRunRegistry.isActive(work.sessionKey)) {
-    return {
-      status: "skipped",
-      reason: CONTINUATION_TURN_BUSY_REASON,
-      retryTrigger: { kind: "reply-run-ended" },
-    };
-  }
-  // Direct grants bypass heartbeat policy, but a main-session continuation must
-  // not jump ahead of already queued user/main-lane work. A subagent continues
-  // on its own session via a direct grant that never enters the shared main lane;
-  // its readiness is the own-session active check above.
-  const continuationLane = isSubagentSessionKey(work.sessionKey)
-    ? resolveSessionLane(work.sessionKey)
-    : undefined;
-  if (continuationLane === undefined && getQueueSize(MAIN_COMMAND_LANE) > 0) {
-    return {
-      status: "skipped",
-      reason: CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON,
-      retryTrigger: { kind: "command-lane-idle", lane: MAIN_COMMAND_LANE },
-    };
-  }
-
-  const cfg = getRuntimeConfig();
-  const agentId = parseAgentSessionKey(work.sessionKey)?.agentId;
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const agentSessionEntry = loadSessionEntry({
-    clone: false,
-    hydrateSkillPromptRefs: false,
-    readConsistency: "latest",
-    sessionKey: work.sessionKey,
-    storePath,
-  });
-  if (!agentSessionEntry) {
-    return { status: "skipped", reason: "missing-session" };
-  }
-
-  // Pre-provider no-op replay guard (#1138/#1142). A durable continuation work row
-  // is a same-session self-rearm wake; do not buy a provider turn when this
-  // session's no-op streak is tripped. Keyed by sessionKey (not flowId/chainId) to
-  // stay consistent with the post-turn recording site, which runs through the
-  // shared per-session reply path (getReplyFromConfig -> runReplyAgent). A concrete
-  // awaited completion resets the streak via its own inter-session wake; if a
-  // structured same-session awaited-completion exception is ever needed, add a
-  // structured field to PendingContinuationWork rather than parsing reason text.
-  const admission = evaluateNoOpRearmAdmission({
-    sessionKey: work.sessionKey,
-    isContinuationWake: true,
-    ...(work.parentRunId ? { parentRunId: work.parentRunId } : {}),
-  });
-  if (!admission.admit) {
-    emitNoOpRearmBlockedDiagnostic(admission);
-    return { status: "skipped", reason: CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON };
-  }
-
-  const reply = await runWithDiagnosticTraceparent(work.traceparent, () =>
-    getReplyFromConfig(
-      {
-        Body: wakeText,
-        BodyForCommands: wakeText,
-        CommandBody: wakeText,
-        Provider: "system",
-        Surface: "system",
-        From: "system",
-        To: "agent",
-        SessionKey: work.sessionKey,
-        RuntimePolicySessionKey: work.sessionKey,
-        ...(agentId ? { AgentId: agentId } : {}),
-      },
-      {
-        continuationTrigger: "work-wake",
-        parentRunId: work.parentRunId,
-        lane: continuationLane,
-        typingPolicy: "system_event",
-        suppressTyping: true,
-      },
-      cfg,
-    ),
-  );
-  if (!hasNonDrainReplyPayload(reply) && isGatewayDraining()) {
-    return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
-  }
-  // #990 locus-3: the wake is confirmed delivered (the turn ran). Write the
-  // durable delivered-mark NOW — before the persist-gap between here and the
-  // dispatch loop's finishFlow — so a crash in that window leaves a row the
-  // consume read-guard skips (no restart-gap re-delivery). Advance only with the
-  // returned committed revision; the claimed input remains caller-owned.
-  const deliveredMark = markPendingWorkDelivered(work);
-  if (!deliveredMark.applied) {
-    // #1144: the provider turn already ran, but the durable delivered-mark lost
-    // the expected-revision race (a revision/cancel landed between claim and
-    // here). Returning a plain "ran" would let the caller run
-    // markPendingWorkTurnGranted with the stale revision — that finish also
-    // fails, leaving the row `running`, so recovery would re-drive this
-    // already-executed turn. Reconcile terminalizes the current-revision row
-    // (finished, or failed non-retryably if it races again) so it can never be
-    // replayed and is not left non-terminal; tell the caller not to finalize.
-    reconcileUndeliverableGrantedWork(work);
-    return { status: "ran-finalized" };
-  }
-  return { status: "ran", work: deliveredMark.work };
 }
 
 function earlierDueAt(left: number | undefined, right: number | undefined): number | undefined {
@@ -764,98 +428,35 @@ export function partitionSupersededWork(
   return { drive, superseded };
 }
 
-async function deliverFoldedProvenanceNoteToActiveTurn(params: {
-  sessionKey: string;
-  note: string;
-}): Promise<{ delivered: true; deliveredAt: number } | { delivered: false; reason: string }> {
-  const { replyRunRegistry } = await importReplyRunRegistry();
-  const sessionId = replyRunRegistry.resolveSessionId(params.sessionKey);
-  if (!sessionId) {
-    return { delivered: false, reason: "missing-active-session-id" };
+function applyExecutionDirective(directive: ContinuationWorkExecutionDirective): void {
+  if (directive.kind !== "requeued") {
+    return;
   }
-  const { isEmbeddedAgentRunHandleActive, queueEmbeddedAgentMessageWithOutcomeAsync } =
-    await import("../../agents/embedded-agent-runner/runs.js");
-  if (!isEmbeddedAgentRunHandleActive(sessionId)) {
-    return { delivered: false, reason: "active-embedded-run-required-for-transcript-proof" };
+  armNextWorkTimer(directive.sessionKey, directive.dueAt);
+  if (directive.retryTrigger) {
+    registerIdleRetry(directive.sessionKey, directive.retryTrigger);
   }
-  const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, params.note, {
-    steeringMode: "all",
-    debounceMs: 0,
-    deliveryTimeoutMs: HEDGE_DISPATCH_FAILURE_RETRY_MS,
-    waitForTranscriptCommit: true,
-  });
-  if (outcome.queued && outcome.deliveredAtMs !== undefined) {
-    return { delivered: true, deliveredAt: outcome.deliveredAtMs };
-  }
-  if (outcome.queued) {
-    return { delivered: false, reason: `queued-without-transcript-commit:${outcome.target}` };
-  }
-  return { delivered: false, reason: outcome.reason };
 }
 
-async function foldMaturedWorkIntoActiveTurn(
-  sessionKey: string,
-  works: readonly PendingContinuationWork[],
-): Promise<number> {
-  const now = Date.now();
-  const note = buildFoldedProvenanceNote(works, now);
-  let delivery: Awaited<ReturnType<typeof deliverFoldedProvenanceNoteToActiveTurn>>;
-  try {
-    delivery = await deliverFoldedProvenanceNoteToActiveTurn({ sessionKey, note });
-  } catch (err) {
-    delivery = { delivered: false, reason: formatErrorMessage(err) };
-  }
-  if (!delivery.delivered) {
-    const retryDueAt = now + HEDGE_DISPATCH_FAILURE_RETRY_MS;
-    const retryAfterActiveRun =
-      delivery.reason === "active-embedded-run-required-for-transcript-proof" ||
-      delivery.reason.startsWith("queued-without-transcript-commit:");
-    for (const work of works) {
-      clearIdleRetryForWork(work);
-      requeueWorkForRetry(work, {
-        dueAt: retryDueAt,
-        summary: `Continuation fold-note delivery failed (${delivery.reason}); keeping row recoverable.`,
-        ...(retryAfterActiveRun
-          ? {
-              idleRetry: {
-                trigger: "reply-run-ended",
-                reasonCategory: classifyContinuationWorkReason(work.reason),
-                armedAt: now,
-              },
-            }
-          : {}),
-      });
-    }
-    if (retryAfterActiveRun) {
-      registerIdleRetry(sessionKey, { kind: "reply-run-ended" });
-    }
-    log.warn(
-      `[continuation:work-fold-note-undelivered] session=${sessionKey} count=${works.length} reason=${delivery.reason} rows kept recoverable, not terminalized`,
-    );
-    return 0;
-  }
-  let folded = 0;
-  for (const work of works) {
-    clearIdleRetryForWork(work);
-    const overdueByMs = Math.max(0, now - work.dueAt);
-    log.info(
-      `[continuation:work-folded-active] flowId=${work.flowId ?? "none"} session=${sessionKey} hop=${work.hop} overdueMs=${overdueByMs} folded into active turn`,
-    );
-    const deliveredMark = markPendingWorkFoldDelivered(work, {
-      foldedAt: delivery.deliveredAt,
-      overdueByMs,
-    });
-    if (!deliveredMark.applied) {
-      continue;
-    }
-    markPendingWorkFolded(deliveredMark.work, {
-      summary: "matured while a later turn was active",
-      foldedAt: delivery.deliveredAt,
-      overdueByMs,
-    });
-    folded++;
-  }
-  return folded;
+function executionPolicyForWork(
+  work: PendingContinuationWork,
+  runtimeConfig: ContinuationRuntimeConfig,
+) {
+  // busySkipBackoff is always set by resolveContinuationRuntimeConfig; the
+  // fallback only covers hand-built fixtures.
+  const backoff = runtimeConfig.busySkipBackoff ?? {
+    baseMs: 1_000,
+    ceilingMs: runtimeConfig.maxDelayMs,
+    factor: 2,
+  };
+  return {
+    reasonCategory: classifyContinuationWorkReason(work.reason),
+    busyRetryDelayMs: computeBusySkipBackoffMs(work.busySkipCount ?? 0, backoff),
+    idleRetryHedgeMs: backoff.ceilingMs,
+    ...(runtimeConfig.orphanReapStaleCutoffMs !== undefined
+      ? { orphanReapStaleCutoffMs: runtimeConfig.orphanReapStaleCutoffMs }
+      : {}),
+  };
 }
 
 export async function dispatchPendingContinuationWork(
@@ -882,7 +483,7 @@ export async function dispatchPendingContinuationWork(
     }
     return { dispatched: 0, failed: 0, reaped: 0 };
   }
-  const { replyRunRegistry } = await importReplyRunRegistry();
+  const replyRunRegistry = await getContinuationReplyRunRegistry();
   const sessionActive = replyRunRegistry.isActive(params.sessionKey);
   const activeSessionId = sessionActive
     ? replyRunRegistry.resolveSessionId(params.sessionKey)
@@ -954,146 +555,39 @@ export async function dispatchPendingContinuationWork(
     const foldWorks = worksToDrive.filter((work) => work.anchorFinalizedAt !== undefined);
     worksToGrant = worksToDrive.filter((work) => work.anchorFinalizedAt === undefined);
     if (foldWorks.length > 0) {
-      await foldMaturedWorkIntoActiveTurn(params.sessionKey, foldWorks);
+      const foldCandidates = foldWorks.map((work) => ({
+        work,
+        reasonCategory: classifyContinuationWorkReason(work.reason),
+      }));
+      const foldAttempt = await prepareFoldedContinuationWork(params.sessionKey, foldCandidates);
+      // Match the durable ordering: transcript proof first, then lifecycle-owned
+      // controller cleanup, then the execution owner's row transitions.
+      for (const work of foldWorks) {
+        clearIdleRetryForWork(work);
+      }
+      const foldResult = commitFoldedContinuationWork(
+        params.sessionKey,
+        foldCandidates,
+        foldAttempt,
+      );
+      for (const directive of foldResult.requeues) {
+        applyExecutionDirective(directive);
+      }
     }
   }
   for (const work of worksToGrant) {
     clearIdleRetryForWork(work);
-    try {
-      const fireDeferredMs = Date.now() - work.electedAt;
-      const fireChainId = work.chainId ?? work.flowId ?? work.sessionKey;
-      const outboundTraceparent = resolveContinuationTraceparent(work.traceparent);
-      emitContinuationWorkFireSpan({
-        chainId: fireChainId,
-        chainStepRemainingAtDispatch: Math.max(0, work.maxChainLength - work.hop),
-        delayMs: work.delayMs,
-        fireDeferredMs,
-        reason: work.reason,
-        traceparent: outboundTraceparent,
-        log: (message) => log.info(message),
-      });
-      log.info(
-        `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey} reasonCategory=${classifyContinuationWorkReason(work.reason)}`,
-      );
-      const wakeText = formatContinuationWakeText(work);
-      const result = await driveContinuationTurn(work, wakeText);
-      if (result.status === "ran") {
-        markPendingWorkTurnGranted(result.work);
-        dispatched++;
-        continue;
-      }
-      if (result.status === "ran-finalized") {
-        // The turn ran; driveContinuationTurn already reconciled the flow after
-        // a delivered-mark revision race (#1144). Do NOT finalize again with a
-        // stale revision — count it as dispatched and move on.
-        dispatched++;
-        continue;
-      }
-      const skippedReason = result.reason;
-      const reasonCategory = classifyContinuationWorkReason(work.reason);
-      log.warn(
-        `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason} reasonCategory=${reasonCategory}`,
-      );
-      if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
-        // No-op replay guard tripped (#1138/#1142): terminal-park the row cleanly so
-        // the self-rearm loop stops re-arming. Supersede semantics intentionally skip
-        // the system-warning + retry of the failure path, which would re-wake the
-        // session. The guard already emitted its single trusted diagnostic.
-        markPendingWorkSuperseded(
-          work,
-          `No-op replay guard suppressed continuation turn (${skippedReason}).`,
-        );
-        failed++;
-        continue;
-      }
-      if (isRetryableContinuationSkipReason(skippedReason)) {
-        // #990 bucket-1: a busy-defer is the storm symptom. Before parking for
-        // idle-event retry with a slow hedge, check whether
-        // this is an ORPHAN whose parent run is confident-terminal and can never
-        // rehydrate it. Read-time liveness join (never persisted — liveness
-        // mutates after classify). Delegate-flow-gate FIRST: a flow with no
-        // parentRunId (same-session continue_work) skips the read entirely and
-        // quiesces (#952: never enter the orphan-branch for same-session work).
-        // Only a confident-terminal parent authorizes the reap; alive/uncertain
-        // all quiesce (asymmetric cost — wrongly-cull-busy is unrecoverable).
-        const now = Date.now();
-        const parentLiveness: SubagentRunLiveness =
-          work.parentRunId == null
-            ? "uncertain"
-            : await readChildSessionRunLiveness(work.sessionKey, {
-                now,
-                ...(runtimeConfig.orphanReapStaleCutoffMs !== undefined
-                  ? { staleCutoffMs: runtimeConfig.orphanReapStaleCutoffMs }
-                  : {}),
-              });
-        if (bucket1ReapVerdict(work.parentRunId, parentLiveness) === "reap") {
-          log.info(
-            `[continuation:work-orphan-reaped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} parentRunId=${work.parentRunId} — parent confident-terminal, can never rehydrate`,
-          );
-          markPendingWorkReaped(
-            work,
-            `Orphan continuation reaped: parent run ${work.parentRunId} is confident-terminal and can never rehydrate this flow.`,
-          );
-          reaped++;
-          continue;
-        }
-        // Event-driven primary path: park behind the matching idle event and
-        // keep only a slow hedge timer for lost events. busySkipCount remains
-        // diagnostic/rate-cap state and never feeds the transient-error fail-bound.
-        const priorBusySkips = work.busySkipCount ?? 0;
-        // busySkipBackoff is always set by resolveContinuationRuntimeConfig; the
-        // fallback only covers hand-built fixtures.
-        const backoff = runtimeConfig.busySkipBackoff ?? {
-          baseMs: 1_000,
-          ceilingMs: runtimeConfig.maxDelayMs,
-          factor: 2,
-        };
-        const retryDelayMs = result.retryTrigger
-          ? backoff.ceilingMs
-          : computeBusySkipBackoffMs(priorBusySkips, backoff);
-        const retryDueAt = now + retryDelayMs;
-        const requeued = requeueWorkForRetry(work, {
-          dueAt: retryDueAt,
-          summary: `Retryable continuation skip: ${skippedReason}`,
-          busySkipCount: priorBusySkips + 1,
-          ...(result.retryTrigger
-            ? {
-                idleRetry: {
-                  trigger: idleRetryTriggerLabel(result.retryTrigger),
-                  reasonCategory,
-                  armedAt: now,
-                },
-              }
-            : {}),
-        });
-        if (requeued && result.retryTrigger) {
-          registerIdleRetry(work.sessionKey, result.retryTrigger);
-        }
-      } else {
-        enqueueSystemEvent(
-          `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
-          { sessionKey: work.sessionKey, trusted: true },
-        );
-        markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
-        failed++;
-      }
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      const retryCount = (work.retryCount ?? 0) + 1;
-      if (retryCount <= MAX_TRANSIENT_ERROR_RETRY_COUNT) {
-        const retryDueAt = Date.now() + TRANSIENT_ERROR_RETRY_MS;
-        log.warn(
-          `[continuation:work-drive-error-retry] flowId=${work.flowId ?? "none"} session=${work.sessionKey} retry=${retryCount}/${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
-        );
-        requeueWorkForRetry(work, {
-          dueAt: retryDueAt,
-          summary: `Transient continuation turn error: ${message}`,
-          retryCount,
-        });
-      } else {
-        markPendingWorkFailed(work, message);
-        failed++;
-      }
+    const directive = await executePendingContinuationWork(
+      work,
+      executionPolicyForWork(work, runtimeConfig),
+    );
+    applyExecutionDirective(directive);
+    if (directive.kind === "dispatched") {
+      dispatched++;
+    } else if (directive.kind === "failed") {
+      failed++;
+    } else if (directive.kind === "reaped") {
+      reaped++;
     }
   }
   return { dispatched, failed, reaped };
@@ -1152,7 +646,7 @@ export async function scheduleContinuationWork(params: {
   // active anchors to that turn's finalization, not the tool-call timestamp or a
   // later unrelated turn. `reason` remains provenance/rate metadata, never an
   // admission gate.
-  const { replyRunRegistry } = await importReplyRunRegistry();
+  const replyRunRegistry = await getContinuationReplyRunRegistry();
   const electingTurnActive = replyRunRegistry.isActive(params.sessionKey);
   const recoveryHedgeAt = electedAt + params.config.maxDelayMs;
   const idleRetry = electingTurnActive
