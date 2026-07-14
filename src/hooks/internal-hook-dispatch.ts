@@ -46,7 +46,7 @@ const INTERNAL_HOOK_SLOW_HANDLER_WARN_MS = 500;
  * Not exported from the plugin SDK; only `triggerInternalHookWithScheduling`
  * callers (currently agent bootstrap) pass these.
  */
-export type InternalHookTriggerOptions = {
+type InternalHookTriggerOptions = {
   yieldBetweenHandlers?: boolean;
   onHandlerTiming?: (info: { index: number; durationMs: number }) => void;
 };
