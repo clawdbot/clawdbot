@@ -699,10 +699,17 @@ describe("durable continuation_work dispatch", () => {
     await waitForMockWaiter(replyIdleWaiters, sessionKey);
     expect(replyRegistryReceivers.size).toBe(1);
 
-    resolveReplyRunIdle(sessionKey);
-    await waitForTurnGrantCount(1);
+    // Drive the persisted idle-retry row directly after the active run ends.
+    // This keeps the identity proof deterministic even when the execution
+    // owner's first dynamic provider/session imports are cold on CI.
+    activeSessions.delete(sessionKey);
+    const result = await dispatchPendingContinuationWork({
+      sessionKey,
+      includeIdleRetry: true,
+    });
 
     expect(replyRegistryReceivers.size).toBe(1);
+    expect(result).toEqual({ dispatched: 1, failed: 0, reaped: 0 });
     expect(turnGrants).toHaveLength(1);
   });
 
