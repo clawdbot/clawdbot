@@ -9,11 +9,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   runModelsCommand: vi.fn(async (action: () => Promise<void>) => action()),
   resolveModelAgentOption: vi.fn((command?: Command, opts?: { agent?: unknown }) => {
-    for (
-      let current: Command | null | undefined = command;
-      current;
-      current = current.parent
-    ) {
+    for (let current: Command | null | undefined = command; current; current = current.parent) {
       const value = current.opts<{ agent?: unknown }>().agent;
       if (typeof value === "string") {
         return value;
