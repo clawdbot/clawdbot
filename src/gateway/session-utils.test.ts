@@ -1467,6 +1467,44 @@ describe("gateway session utils", () => {
     expect(opaqueRow.displayName).toMatch(/^telegram:/);
   });
 
+  test("buildGatewaySessionRow presentation uses saved non-group names but not group tokens", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const subagentEntry = {
+      displayName: "Research",
+    } as SessionEntry;
+    const subagentRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:subagent:one": subagentEntry },
+      key: "agent:main:subagent:one",
+      entry: subagentEntry,
+    });
+    expect(subagentRow.presentation).toMatchObject({
+      title: "Research",
+      titleSource: "displayName",
+      family: "subagent",
+    });
+
+    const groupEntry = {
+      chatType: "group",
+      channel: "telegram",
+      displayName: "telegram:g-private-token",
+    } as SessionEntry;
+    const groupRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": groupEntry },
+      key: "agent:main:telegram:group:99",
+      entry: groupEntry,
+    });
+    expect(groupRow.presentation).toMatchObject({
+      title: "Telegram group",
+      titleSource: "generated",
+      family: "group",
+    });
+    expect(JSON.stringify(groupRow.presentation)).not.toContain("private-token");
+  });
+
   test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry: SessionEntry = {
