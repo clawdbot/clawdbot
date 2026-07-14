@@ -785,6 +785,27 @@ export async function modelsAuthPasteApiKeyCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
+/** Clears persisted failure windows for one auth profile without changing credentials. */
+export async function modelsAuthClearCooldownCommand(
+  opts: { profileId: string; agent?: string },
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const profileId = opts.profileId.trim();
+  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const store = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
+  if (!store.profiles[profileId]) {
+    throw new Error(
+      `Auth profile "${profileId}" not found. Run ${formatCliCommand("openclaw models auth list")} to see saved profiles.`,
+    );
+  }
+
+  await clearAuthProfileCooldown({ store, profileId, agentDir });
+  await refreshRunningGatewayAuthState();
+  runtime.log(`Cleared cooldown state for auth profile "${profileId}".`);
+  runtime.log(
+    "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
+  );
+}
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({

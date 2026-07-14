@@ -275,6 +275,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
 
 const {
   modelsAuthAddCommand,
+  modelsAuthClearCooldownCommand,
   modelsAuthLoginCommand,
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
@@ -355,6 +356,77 @@ function createProvider(params: {
     ],
   };
 }
+
+describe("modelsAuthClearCooldownCommand", () => {
+  const profileId = "openai:user@example.com";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadValidConfigOrThrow.mockResolvedValue({});
+    mocks.resolveDefaultAgentId.mockReturnValue("main");
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
+    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.callGateway.mockResolvedValue({});
+  });
+
+  it("clears the selected profile and refreshes the running gateway", async () => {
+    const store = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          blockedUntil: Date.now() + 3_600_000,
+          blockedReason: "subscription_limit" as const,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    const runtime = createRuntime();
+
+    await modelsAuthClearCooldownCommand({ profileId, agent: "main" }, runtime);
+
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
+      syncExternalCli: false,
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store,
+      profileId,
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      1,
+      `Cleared cooldown state for auth profile "${profileId}".`,
+    );
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      2,
+      "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
+    );
+  });
+
+  it("rejects an unknown profile without changing the store", async () => {
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ version: 1, profiles: {} });
+
+    await expect(modelsAuthClearCooldownCommand({ profileId }, createRuntime())).rejects.toThrow(
+      `Auth profile "${profileId}" not found`,
+    );
+
+    expect(mocks.clearAuthProfileCooldown).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+});
 
 describe("modelsAuthLoginCommand", () => {
   let restoreStdin: (() => void) | null = null;
