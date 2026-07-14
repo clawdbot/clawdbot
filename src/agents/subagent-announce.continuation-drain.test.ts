@@ -247,9 +247,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
 }));
 
 // Feed the in-function tool-delegate drain (subagent-announce.ts) and capture
-// its spawn. `consumePendingDelegates` is mocked on the canonical store module
-// (not the barrel shim) because the forks pool does not intercept barrel
-// re-exports; the shim forwards the canonical binding.
+// its spawn. Keep untouched canonical store exports real so cleanup and due
+// queries exercise the same owner as production.
 vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
@@ -1992,8 +1991,7 @@ describe("subagent-announce continuation drain (F7)", () => {
 
     expect(stagePostCompactionDelegateMock).toHaveBeenCalledWith("agent:main:main", {
       task: "rehydrate later",
-      stagedAt: expect.any(Number),
-      firstArmedAt: expect.any(Number),
+      createdAt: expect.any(Number),
     });
     expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
