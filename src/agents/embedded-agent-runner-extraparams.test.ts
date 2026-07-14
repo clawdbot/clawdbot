@@ -97,6 +97,9 @@ const ANTHROPIC_DEFAULT_BETAS = [
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_OAUTH_BETAS = ["oauth-2025-04-20", "claude-code-20250219"];
 
+const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
+  ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
+]);
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
   ["grok-3-mini", "grok-3-mini-fast"],
@@ -135,6 +138,32 @@ function createTestXaiFastModeWrapper(
         throw new Error("missing stream function");
       })
     )(fastModelId ? { ...model, id: fastModelId } : model, context, options);
+  };
+}
+
+function createTestMinimaxFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  fastMode: boolean,
+): StreamFn {
+  // MiniMax fast mode swaps M2.7 for its highspeed model before the request
+  // reaches the base stream function. The plugin wrapper also carries the
+  // highspeed cost and the M3 priority tier; those are proven in
+  // extensions/minimax/stream-wrappers.test.ts, which owns that behavior.
+  return (model, context, options) => {
+    const underlying =
+      baseStreamFn ??
+      (() => {
+        throw new Error("missing stream function");
+      });
+    if (
+      !fastMode ||
+      model.api !== "anthropic-messages" ||
+      (model.provider !== "minimax" && model.provider !== "minimax-portal")
+    ) {
+      return underlying(model, context, options);
+    }
+    const fastModelId = MINIMAX_FAST_MODEL_IDS.get(model.id.trim());
+    return underlying(fastModelId ? { ...model, id: fastModelId } : model, context, options);
   };
 }
 
@@ -297,7 +326,6 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
-import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
@@ -378,7 +406,7 @@ function installFullProviderRuntimeDepsForTest() {
         return params.context.streamFn;
       }
       if (params.provider === "minimax" || params.provider === "minimax-portal") {
-        return createMinimaxFastModeWrapper(
+        return createTestMinimaxFastModeWrapper(
           params.context.streamFn,
           params.context.extraParams?.fastMode === true,
         );
@@ -3592,22 +3620,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.reasoning).toEqual({ effort: "medium" });
     expect(payload.text).toEqual({ verbosity: "high" });
     expect(payload.service_tier).toBe("default");
-  });
-
-  it("maps MiniMax /fast to the matching highspeed model", () => {
-    const resolvedModelId = runResolvedModelIdCase({
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.7",
-      extraParamsOverride: { fastMode: true },
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-        baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
-    });
-
-    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
   it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {

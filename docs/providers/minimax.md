@@ -352,7 +352,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Fast mode">
-    `/fast on` or `params.fastMode: true` rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed` on the Anthropic-compatible stream path (`api: "anthropic-messages"`, provider `minimax` or `minimax-portal`).
+    `/fast on` or `params.fastMode: true` opts into MiniMax's faster paid lanes on the Anthropic-compatible stream path (provider `minimax` or `minimax-portal`). `MiniMax-M2.7` routes to the `MiniMax-M2.7-highspeed` model and is billed at that model's rate. `MiniMax-M3` has no highspeed model, so it opts into MiniMax's paid `service_tier: "priority"` tier instead, billed at 1.5x the standard M3 rate (a `service_tier` already set upstream is preserved).
   </Accordion>
 
   <Accordion title="Fallback example">

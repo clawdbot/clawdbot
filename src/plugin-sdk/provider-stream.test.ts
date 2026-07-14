@@ -17,7 +17,6 @@ import {
   createToolStreamWrapper,
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
-  MINIMAX_FAST_MODE_STREAM_HOOKS,
   MOONSHOT_THINKING_STREAM_HOOKS,
   OPENAI_RESPONSES_STREAM_HOOKS,
   OPENROUTER_THINKING_STREAM_HOOKS,
@@ -201,14 +200,12 @@ describe("composeProviderStreamWrappers", () => {
 describe("buildProviderStreamFamilyHooks", () => {
   it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
-    let capturedModelId: string | undefined;
     let capturedModelReasoning: boolean | undefined;
     let capturedHeaders: Record<string, string> | undefined;
     let capturedReasoning: string | undefined;
     let payloadSeed: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = model.id;
       capturedModelReasoning = model.reasoning;
       capturedReasoning = options?.reasoning;
       const payload = {
@@ -243,24 +240,6 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
-
-    const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
-    const minimaxStream = requireStreamFn(
-      requireWrapStreamFn(minimaxHooks.wrapStreamFn)({
-        streamFn: baseStreamFn,
-        extraParams: { fastMode: true },
-      } as never),
-    );
-    await minimaxStream(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-      } as never,
-      {} as never,
-      {},
-    );
-    expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
     const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
     void requireStreamFn(
@@ -490,7 +469,6 @@ describe("buildProviderStreamFamilyHooks", () => {
   it("exposes canonical stream hook constants for reused families", () => {
     expect(GOOGLE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(KILOCODE_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
-    expect(MINIMAX_FAST_MODE_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(MOONSHOT_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
