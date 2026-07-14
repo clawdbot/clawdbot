@@ -14,7 +14,7 @@ import {
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "./types.js";
 
 export type { CronEvent } from "./service/state.js";
 
@@ -133,6 +133,20 @@ export class CronService implements CronServiceContract {
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
     return await ops.run(this.state, id, mode, opts);
+  }
+
+  /**
+   * Gateway on-exit watcher entry. Runs a job with `watcher-terminal` origin so
+   * a force run still consumes deleteAfterRun/on-exit jobs (unlike an operator
+   * run). Deliberately absent from the public CronServiceContract so plugin/RPC/
+   * test callers cannot request watcher-terminal scheduler-consuming semantics
+   * (#83538, #83933).
+   */
+  async runOnExitTerminal(id: string, payload?: CronPayload): Promise<CronServiceRunResult> {
+    return await ops.run(this.state, id, "force", {
+      origin: "watcher-terminal",
+      ...(payload ? { payload } : {}),
+    });
   }
 
   async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {

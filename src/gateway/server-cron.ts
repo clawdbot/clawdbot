@@ -1124,11 +1124,7 @@ export function buildGatewayCronService(params: {
           // The watcher already disabled the job; a watcher-terminal force run
           // still consumes deleteAfterRun/on-exit jobs (unlike an operator run),
           // preserving the #104550/#104518 delete-on-success contract (#83933).
-          run: (jobId, payload) =>
-            cron.run(jobId, "force", {
-              origin: "watcher-terminal",
-              ...(payload ? { payload } : {}),
-            }),
+          run: (jobId, payload) => cron.runOnExitTerminal(jobId, payload),
         }),
       );
     },

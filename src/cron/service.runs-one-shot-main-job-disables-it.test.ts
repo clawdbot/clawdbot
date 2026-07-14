@@ -12,6 +12,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import type { CronServiceContract } from "./service-contract.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
@@ -488,6 +489,63 @@ describe("CronService", () => {
 
     const jobs = await cron.list({ includeDisabled: true });
     expect(jobs.find((candidate) => candidate.id === job.id)?.enabled).toBe(false);
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("public run cannot obtain watcher-terminal semantics: a deleteAfterRun one-shot is preserved (#83538, #83933)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job } = await addDefaultIsolatedAnnounceJob(cron, "public-run-operator-semantics");
+    // "at" one-shots default to deleteAfterRun; a scheduled/watcher run would
+    // consume this, but a public run never can.
+    expect(job.deleteAfterRun).toBe(true);
+
+    // Public callers reach cron only through the origin-free CronServiceContract,
+    // so run() always resolves to operator semantics and can never request the
+    // watcher-terminal consuming path (#83538, #83933).
+    const publicCron: CronServiceContract = cron;
+    await expect(publicCron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    // Preserved, not consumed; scheduler counters untouched.
+    expect(updated).toBeDefined();
+    expect(updated?.state.lastRunWasManual).toBe(true);
+    expect(updated?.state.consecutiveErrors ?? 0).toBe(0);
+    expect(updated?.state.consecutiveSkipped ?? 0).toBe(0);
+    expect(events.events.some((evt) => evt.jobId === job.id && evt.action === "removed")).toBe(
+      false,
+    );
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("runOnExitTerminal consumes a successful on-exit deleteAfterRun one-shot (#83538, #83933)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const job = await cron.add({
+      // The gateway watcher disables the job before force-running its payload.
+      enabled: false,
+      name: "on-exit watcher consume",
+      schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      deleteAfterRun: true,
+      payload: { kind: "agentTurn", message: "post-exit payload" },
+      delivery: { mode: "announce" },
+    });
+
+    // The private watcher entry runs with watcher-terminal origin, so a
+    // successful deleteAfterRun on-exit one-shot is still consumed.
+    await expect(cron.runOnExitTerminal(job.id)).resolves.toEqual({ ok: true, ran: true });
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((entry) => entry.id === job.id)).toBeUndefined();
+    expect(events.events.some((evt) => evt.jobId === job.id && evt.action === "removed")).toBe(
+      true,
+    );
+
     await stopCronAndCleanup(cron, store);
   });
 
