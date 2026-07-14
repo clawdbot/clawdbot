@@ -166,9 +166,8 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import {
   createReadinessChecker,
-  mergeReadinessResults,
-  type ReadinessResult,
-  withReadinessEvaluationTimeout,
+  evaluateCanonicalGatewayReadiness,
+  type CanonicalGatewayReadinessResult,
 } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -1292,24 +1291,25 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   const resolveSelectedReadiness = createSelectedReadinessResolver();
-  const evaluateReadiness = async (): Promise<ReadinessResult> => {
-    const gatewayReadiness = await getGatewayReadiness();
+  const evaluateRuntimeReadiness = async () => {
     const config = getRuntimeConfig();
     const additionalConditions = await resolveSelectedReadiness({
       config,
       registry: pluginRegistry,
       env: process.env,
     });
-    const runtimeReadiness = buildRuntimeReadiness({
+    return buildRuntimeReadiness({
       configLoaded: true,
       gateway: "responding",
       plugins: buildGatewayPluginReadinessInput(pluginRegistry),
       additionalConditions,
     });
-    return mergeReadinessResults(gatewayReadiness, runtimeReadiness);
   };
-  const getReadiness = (): Promise<ReadinessResult> =>
-    withReadinessEvaluationTimeout(evaluateReadiness());
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
+    evaluateCanonicalGatewayReadiness({
+      evaluateGateway: getGatewayReadiness,
+      evaluateRuntime: evaluateRuntimeReadiness,
+    });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const watchNodeRequestHandler: {
@@ -2169,6 +2169,7 @@ export async function startGatewayServer(
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,
           getHealthCache,
+          getReadiness,
           refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
           logHealth,
           logGateway: log,

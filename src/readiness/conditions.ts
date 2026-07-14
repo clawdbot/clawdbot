@@ -4,6 +4,7 @@ export type BuiltInReadinessConditionType =
   | "ChannelRuntimeReady"
   | "ChannelRuntimeSuppressed"
   | "EventLoopHealthy"
+  | "ReadinessEvaluationComplete"
   | "ConfigLoaded"
   | "WorkspaceWritable"
   | "GatewayResponding"

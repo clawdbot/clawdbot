@@ -7,6 +7,7 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import type { ChannelManager } from "../server-channels.js";
 import {
   createReadinessChecker,
+  evaluateCanonicalGatewayReadiness,
   mergeReadinessResults,
   type ReadinessResult,
   withReadinessEvaluationTimeout,
@@ -554,5 +555,59 @@ describe("withReadinessEvaluationTimeout", () => {
     await expect(withReadinessEvaluationTimeout(Promise.resolve("ready"), 5)).resolves.toBe(
       "ready",
     );
+  });
+});
+
+describe("evaluateCanonicalGatewayReadiness", () => {
+  it("returns a structured required failure when extended evaluation times out", async () => {
+    const gateway = readySnapshot() as ReadinessResult;
+    const result = await evaluateCanonicalGatewayReadiness({
+      evaluateGateway: () => gateway,
+      evaluateRuntime: () => new Promise<never>(() => {}),
+      timeoutMs: 5,
+    });
+
+    expect(result).toMatchObject({
+      ready: false,
+      failing: ["ReadinessEvaluationTimedOut"],
+      failures: ["ReadinessEvaluationTimedOut"],
+    });
+    expect(result.conditions).toContainEqual({
+      type: "ReadinessEvaluationComplete",
+      status: "Unknown",
+      requirement: "required",
+      reason: "ReadinessEvaluationTimedOut",
+      message: "Readiness evaluation did not complete within its bounded deadline.",
+    });
+  });
+
+  it("redacts unexpected extended evaluation failures", async () => {
+    const result = await evaluateCanonicalGatewayReadiness({
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => {
+        throw new Error("secret backend path");
+      },
+    });
+
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
+    expect(JSON.stringify(result)).not.toContain("secret backend path");
+  });
+
+  it("fails closed without rejecting when the core Gateway checker throws", async () => {
+    const result = await evaluateCanonicalGatewayReadiness({
+      evaluateGateway: () => {
+        throw new Error("unexpected core failure");
+      },
+      evaluateRuntime: async () =>
+        buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+    });
+
+    expect(result).toMatchObject({
+      ready: false,
+      uptimeMs: 0,
+      failing: ["ReadinessEvaluationFailed"],
+      failures: ["ReadinessEvaluationFailed"],
+    });
+    expect(JSON.stringify(result)).not.toContain("unexpected core failure");
   });
 });

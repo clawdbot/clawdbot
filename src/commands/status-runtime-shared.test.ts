@@ -19,6 +19,13 @@ const mocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn(),
 }));
 
+const ready = {
+  ready: true,
+  conditions: [],
+  failures: [],
+  advisories: [],
+};
+
 vi.mock("../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: mocks.resolveReadOnlyChannelPluginsForConfig,
 }));
@@ -73,7 +80,9 @@ describe("status-runtime-shared", () => {
     vi.clearAllMocks();
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
-    mocks.callGateway.mockResolvedValue({ ok: true });
+    mocks.callGateway.mockImplementation(async (params: { method?: string }) =>
+      params.method === "ready" ? ready : { ok: true },
+    );
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
     mocks.resolveModelAuthLabel.mockReturnValue(undefined);
@@ -387,12 +396,14 @@ describe("status-runtime-shared", () => {
         timeoutMs: 1234,
         usage: true,
         deep: true,
+        includeReadiness: true,
         gatewayReachable: true,
         includeSecurityAudit: true,
       }),
     ).resolves.toEqual({
       securityAudit: { summary: { critical: 0 }, findings: [] },
       usage: { providers: [] },
+      readiness: ready,
       health: { ok: true },
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
@@ -408,5 +419,17 @@ describe("status-runtime-shared", () => {
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
     });
+  });
+
+  it("does not fetch readiness when the caller will not render it", async () => {
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      gatewayReachable: true,
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ready" }),
+    );
   });
 });

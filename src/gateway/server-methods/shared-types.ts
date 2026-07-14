@@ -20,6 +20,7 @@ import type {
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { CanonicalReadinessResult } from "../../readiness/conditions.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -193,6 +194,7 @@ export type GatewayRequestContext = {
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
+  getReadiness?: () => Promise<CanonicalReadinessResult>;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;

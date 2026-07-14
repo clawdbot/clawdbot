@@ -6,6 +6,7 @@ import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import type { CanonicalReadinessResult } from "../../readiness/conditions.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -15,6 +16,16 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+
+async function withLiveReadiness<T extends { readiness?: CanonicalReadinessResult }>(
+  summary: T,
+  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
+): Promise<T> {
+  if (!context.getReadiness) {
+    return summary;
+  }
+  return { ...summary, readiness: await context.getReadiness() };
+}
 
 function cachedAccountForRuntimeSnapshot(params: {
   cachedChannel: ChannelHealthSummary | undefined;
@@ -135,6 +146,17 @@ function mergeCachedHealthRuntimeState(params: {
 
 /** Gateway handlers for health snapshots and status summaries. */
 export const healthHandlers: GatewayRequestHandlers = {
+  ready: async ({ respond, context }) => {
+    if (!context.getReadiness) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "readiness unavailable"));
+      return;
+    }
+    try {
+      respond(true, await context.getReadiness(), undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
     const wantsProbe = params?.probe === true;
@@ -161,11 +183,14 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        mergeCachedHealthRuntimeState({
-          cached,
-          eventLoop: context.getEventLoopHealth?.(),
-          configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
-        }),
+        await withLiveReadiness(
+          mergeCachedHealthRuntimeState({
+            cached,
+            eventLoop: context.getEventLoopHealth?.(),
+            configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+          }),
+          context,
+        ),
         undefined,
         { cached: true },
       );
@@ -178,17 +203,20 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, snap, undefined);
+      respond(true, await withLiveReadiness(snap, context), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const status = await getStatusSummary({
-      includeSensitive: scopes.includes(ADMIN_SCOPE),
-      includeChannelSummary: params.includeChannelSummary !== false,
-    });
+    const status = await withLiveReadiness(
+      await getStatusSummary({
+        includeSensitive: scopes.includes(ADMIN_SCOPE),
+        includeChannelSummary: params.includeChannelSummary !== false,
+      }),
+      context,
+    );
     if (context.getEventLoopHealth) {
       status.eventLoop = context.getEventLoopHealth();
     }

@@ -183,6 +183,32 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+  program
+    .command("ready")
+    .description("Check whether the running gateway is ready to accept work")
+    .option("--json", "Output the canonical readiness result as JSON", false)
+    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw ready", "Show readiness conditions and findings."],
+          ["openclaw ready --json", "Output the canonical readiness result."],
+          ["openclaw ready --timeout 2500", "Tighten the Gateway connection timeout."],
+        ])}`,
+    )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/ready", "docs.openclaw.ai/cli/ready")}\n`,
+    )
+    .action(async (opts) => {
+      await runWithVerboseAndTimeout(opts, async ({ timeoutMs }) => {
+        const { readyCommand } = await import("../../commands/ready.js");
+        await readyCommand({ json: Boolean(opts.json), timeoutMs }, defaultRuntime);
+      });
+    });
+
   const sessionsCmd = addSessionsListOptions(
     program.command("sessions").description("List stored conversation sessions"),
   )
