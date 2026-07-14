@@ -119,10 +119,6 @@ import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 import { registerSubagentTraceparentHandoff } from "./subagent-traceparent-handoff.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
-export {
-  SUBAGENT_SPAWN_ACCEPTED_NOTE,
-  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
-} from "./subagent-spawn-accepted-note.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);

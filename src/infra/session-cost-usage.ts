@@ -18,7 +18,7 @@ import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  parseCompactionCheckpointTranscriptFileName,
+  parseParentSessionIdFromCheckpointFileName,
   parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
@@ -2088,11 +2088,10 @@ export async function discoverAllSessions(params?: {
     // re-read for label (the parent primary already carries it), and advance
     // the parent's mtime if this checkpoint is newer.
     if (!sqliteMarker && isCompactionCheckpointTranscriptFileName(fileName)) {
-      const checkpoint = parseCompactionCheckpointTranscriptFileName(fileName);
-      if (!checkpoint) {
+      const parentId = parseParentSessionIdFromCheckpointFileName(fileName);
+      if (!parentId) {
         continue;
       }
-      const parentId = checkpoint.sessionId;
       const existing = discovered.get(parentId);
       if (!existing) {
         // Parent primary may not have been scanned yet (or may be absent
