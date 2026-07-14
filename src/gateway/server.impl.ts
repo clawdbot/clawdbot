@@ -48,6 +48,7 @@ import {
   resolveEffectiveOperatorDeviceIdentity,
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
+import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
 import {
   buildHostingProfileConditions,
   requiredCriteriaForHostingProfile,
@@ -122,6 +123,7 @@ import { isLoopbackHost } from "./net.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
+import type { NodeSession } from "./node-registry.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,

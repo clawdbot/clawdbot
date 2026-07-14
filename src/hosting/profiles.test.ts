@@ -59,4 +59,19 @@ describe("buildHostingProfileConditions", () => {
       }),
     );
   });
+
+  it("requires pairing, a connected target, command approval, and a control channel", () => {
+    const conditions = buildHostingProfileConditions("node-mode", facts, {
+      pairing: { pairedCount: 1, pendingCount: 0 },
+      targets: { knownCount: 1, connectedCount: 1 },
+      commandApproval: { configured: true, approvedCommandCount: 1 },
+      controlChannel: { connectedCount: 1 },
+    });
+
+    expect(
+      conditions
+        .filter((condition) => condition.type !== "ProfileSelected")
+        .every((condition) => condition.status === "True"),
+    ).toBe(true);
+  });
 });

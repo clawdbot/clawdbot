@@ -4,7 +4,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import type { ReadinessCondition } from "../readiness/conditions.js";
 import { WORKSPACE_WRITABLE_CRITERION_ID } from "../readiness/selection.js";
 
-export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy"] as const;
+export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 export type HostingProfileId = (typeof HOSTING_PROFILE_IDS)[number];
 
 export const DEFAULT_HOSTING_PROFILE: HostingProfileId = "local";
@@ -30,6 +30,11 @@ const STANDARD_HOSTING_PROFILES: Record<HostingProfileId, HostingProfileDescript
   "reverse-proxy": {
     id: "reverse-proxy",
     description: "Gateway behind a trusted identity proxy.",
+    requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
+  },
+  "node-mode": {
+    id: "node-mode",
+    description: "Gateway controlling one or more paired execution targets.",
     requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
   },
 };
@@ -92,6 +97,84 @@ export type HostingRuntimeFacts = {
   trustedProxyCount: number;
 };
 
+export type NodeModeReadinessEvidence = {
+  pairing?: {
+    pairedCount: number;
+    pendingCount: number;
+    error?: string;
+    timedOut?: boolean;
+  };
+  targets?: { knownCount: number; connectedCount: number };
+  commandApproval?: { configured: boolean; approvedCommandCount: number };
+  controlChannel?: { connectedCount: number };
+};
+
+function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): ReadinessCondition[] {
+  const pairing = evidence?.pairing;
+  const pairingCondition: ReadinessCondition = pairing?.error
+    ? {
+        type: "NodePairingReady",
+        status: "Unknown",
+        requirement: "required",
+        reason: pairing.timedOut ? "NodePairingTimedOut" : "NodePairingUnavailable",
+        message: `Node pairing state could not be read: ${pairing.error}`,
+      }
+    : (pairing?.pairedCount ?? 0) > 0
+      ? {
+          type: "NodePairingReady",
+          status: "True",
+          requirement: "required",
+          reason: "NodePairingReady",
+          message: `Node pairing has ${pairing?.pairedCount} approved target${pairing?.pairedCount === 1 ? "" : "s"}.`,
+        }
+      : {
+          type: "NodePairingReady",
+          status: "False",
+          requirement: "required",
+          reason: (pairing?.pendingCount ?? 0) > 0 ? "NodePairingPending" : "NodePairingMissing",
+          message: "Node-mode requires at least one approved node pairing.",
+        };
+
+  const connectedCount = evidence?.targets?.connectedCount ?? 0;
+  const targetCondition: ReadinessCondition = {
+    type: "ControlledTargetsReady",
+    status: connectedCount > 0 ? "True" : "False",
+    requirement: "required",
+    reason: connectedCount > 0 ? "ControlledTargetsReady" : "ControlledTargetsDisconnected",
+    message:
+      connectedCount > 0
+        ? `${connectedCount} controlled target${connectedCount === 1 ? " is" : "s are"} connected.`
+        : "Node-mode requires at least one connected controlled target.",
+  };
+
+  const approvedCount = evidence?.commandApproval?.approvedCommandCount ?? 0;
+  const commandCondition: ReadinessCondition = {
+    type: "CommandApprovalReady",
+    status: evidence?.commandApproval?.configured ? "True" : "False",
+    requirement: "required",
+    reason: evidence?.commandApproval?.configured
+      ? "CommandApprovalReady"
+      : "CommandApprovalMissing",
+    message: evidence?.commandApproval?.configured
+      ? `${approvedCount} executable command approval${approvedCount === 1 ? " is" : "s are"} available.`
+      : "Node-mode requires an approved command exposed by a connected target.",
+  };
+
+  const controlCount = evidence?.controlChannel?.connectedCount ?? 0;
+  const controlCondition: ReadinessCondition = {
+    type: "ControlChannelReady",
+    status: controlCount > 0 ? "True" : "False",
+    requirement: "required",
+    reason: controlCount > 0 ? "ControlChannelReady" : "ControlChannelUnavailable",
+    message:
+      controlCount > 0
+        ? `${controlCount} node control channel${controlCount === 1 ? " is" : "s are"} connected.`
+        : "No node control channel is connected.",
+  };
+
+  return [pairingCondition, targetCondition, commandCondition, controlCondition];
+}
+
 function buildContainerCondition(facts: HostingRuntimeFacts): ReadinessCondition {
   if (facts.bind === "loopback" || isLoopbackHost(facts.bindHost)) {
     return {
@@ -151,6 +234,7 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
 export function buildHostingProfileConditions(
   profile: HostingProfileId,
   facts: HostingRuntimeFacts,
+  nodeMode?: NodeModeReadinessEvidence,
 ): ReadinessCondition[] {
   const conditions: ReadinessCondition[] = [
     {
@@ -166,6 +250,9 @@ export function buildHostingProfileConditions(
   }
   if (profile === "reverse-proxy") {
     conditions.push(buildTrustedProxyCondition(facts));
+  }
+  if (profile === "node-mode") {
+    conditions.push(...buildNodeModeConditions(nodeMode));
   }
   return conditions;
 }
