@@ -1111,6 +1111,66 @@ describe("cron service ops regressions", () => {
     expect(events.map((event) => event.action)).toEqual(["started", "finished"]);
   });
 
+  it.each([
+    {
+      label: "watcher-terminal",
+      origin: "watcher-terminal" as const,
+      // The gateway on-exit watcher owns scheduler state, so an invalid-spec
+      // skip records a scheduled outcome and bumps consecutiveSkipped.
+      expectedManual: false,
+      expectedConsecutiveSkipped: 1,
+    },
+    {
+      label: "operator",
+      origin: "operator" as const,
+      // A manual run only records the outcome; scheduler counters stay put.
+      expectedManual: true,
+      expectedConsecutiveSkipped: undefined,
+    },
+  ])(
+    "#83933: invalid persisted job finalizes with $label scheduler-state semantics",
+    async (params) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const nowMs = Date.now();
+      const job = createIsolatedRegressionJob({
+        id: `invalid-spec-${params.label}`,
+        name: `invalid-spec-${params.label}`,
+        scheduledAt: nowMs,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        payload: { kind: "agentTurn", message: "run payload" },
+        state: {},
+      });
+      // A `main` job with an agentTurn payload loads fine (persisted-shape only
+      // checks payload kind) but fails assertSupportedJobSpec at preflight, so
+      // the run funnels through skipInvalidPersistedManualRun (#83933).
+      job.sessionTarget = "main";
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const state = createCronServiceState({
+        cronEnabled: false,
+        storePath: store.storePath,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+        onEvent: vi.fn(),
+      });
+
+      await expect(run(state, job.id, "force", { origin: params.origin })).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "invalid-spec",
+      });
+
+      const memoryJob = state.store?.jobs.find((entry) => entry.id === job.id);
+      expect(memoryJob?.state.lastStatus).toBe("skipped");
+      // Origin decides scheduler-state ownership: the watcher-terminal path
+      // records a scheduled skip, while operator only records the outcome.
+      expect(memoryJob?.state.lastRunWasManual).toBe(params.expectedManual);
+      expect(memoryJob?.state.consecutiveSkipped).toBe(params.expectedConsecutiveSkipped);
+    },
+  );
+
   it("#83933 P1-A: operator due run on a fired trigger job that errors stays non-consuming", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");

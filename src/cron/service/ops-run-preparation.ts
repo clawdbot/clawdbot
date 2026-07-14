@@ -151,6 +151,7 @@ async function skipInvalidPersistedManualRun(params: {
   runId?: string;
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
+  origin: CronRunOrigin;
 }) {
   const rollbackSnapshot = snapshotStoreForRollback(params.state);
   const endedAt = params.state.deps.nowMs();
@@ -169,10 +170,11 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    // Invalid-spec skips only ever reach here from the manual run path, so the
-    // outcome is recorded without consuming deleteAfterRun or perturbing
-    // scheduler-owned state (#83933).
-    { origin: "operator" },
+    // Invalid-spec skips record the outcome without perturbing scheduler-owned
+    // state. The resolved caller origin is forwarded so watcher-terminal runs
+    // keep scheduled/consuming semantics instead of being mis-attributed as
+    // operator (#83933).
+    { origin: params.origin },
   );
 
   emitCronRunFinished(
@@ -215,6 +217,7 @@ async function inspectManualRunPreflight(
   terminalTracker?: ManualRunTerminalTracker,
   streamScheduleKey?: string,
   streamSourceIdentity?: string,
+  origin: CronRunOrigin = "operator",
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -239,7 +242,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
+      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error, origin });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (hasActiveCronRun(job)) {
@@ -285,6 +288,7 @@ export async function prepareManualRun(
     opts?.terminalTracker,
     opts?.streamScheduleKey,
     opts?.streamSourceIdentity,
+    opts?.origin ?? "operator",
   );
   if (!preflight.ok) {
     return preflight;
@@ -326,6 +330,7 @@ export async function prepareManualRun(
         runId: opts?.runId,
         terminalTracker: opts?.terminalTracker,
         error,
+        origin: opts?.origin ?? "operator",
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
@@ -463,6 +468,7 @@ export async function activatePreparedManualRun(
         runId: prepared.runId,
         terminalTracker: prepared.terminalTracker,
         error,
+        origin: prepared.origin,
       });
       releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
