@@ -343,6 +343,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(readFileSync(output, "utf8")).toBe("openclaw@2026.7.2|feishu-channel\n");
   });
 
+  it("plans the hosting profile conformance lane", () => {
+    const plan = planFor({ selectedLaneNames: ["hosting-profiles"] });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+        imageKind: "functional",
+        live: false,
+        name: "hosting-profiles",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        weight: 2,
+      },
+    ]);
+  });
+
   it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
       selectedLaneNames: ["cli-installer-distribution", "compose-setup", "docker-package-install"],

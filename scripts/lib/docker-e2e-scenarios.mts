@@ -530,6 +530,11 @@ export const mainLanes: DockerE2eLane[] = [
     },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+  serviceLane(
+    "hosting-profiles",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+    { stateScenario: "empty" },
+  ),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
@@ -886,6 +891,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
     ...scheduledLaneList(
       "onboard",
       "gateway-network",
+      "hosting-profiles",
       "config-reload",
       "session-runtime-context",
       "plugin-binding-command-escape",

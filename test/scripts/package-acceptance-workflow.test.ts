@@ -3604,6 +3604,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_profile: custom");
     expect(String(packageAcceptanceJob.with?.docker_lanes ?? "").split(/\s+/u)).toEqual([
       "release-typed-onboarding",
+      "hosting-profiles",
       "doctor-switch",
       "update-channel-switch",
       "skill-install",
