@@ -1235,6 +1235,47 @@ export const en: TranslationMap = {
         cannotRender: "Cannot render avatar",
       },
     },
+
+    pending: {
+      title: "Unsaved changes",
+      hint: "Save stores your changes. Apply Now also reloads the current session.",
+      discard: "Discard",
+      applying: "Applying…",
+      applyNow: "Apply Now",
+    },
+    presets: {
+      none: "None",
+      title: "Context Profile",
+      apply: "Apply",
+      applying: "Applying…",
+      active: "Active",
+      personal: {
+        label: "Personal Assistant",
+        description: "Balanced default for daily use.",
+        detail: "Good fit for chat, docs, and light edits without a large coding budget.",
+        impact: "Injects bootstrap context every turn with a moderate prompt budget.",
+      },
+      codeAgent: {
+        label: "Code Agent",
+        description: "Highest context budget for repo work.",
+        detail: "Best for multi-file changes, long bootstrap docs, and code-heavy sessions.",
+        impact: "Uses the largest prompt budget and reinjects context every turn.",
+      },
+      teamBot: {
+        label: "Team Bot",
+        description: "Lean follow-ups for shared bots.",
+        detail:
+          "Best for multi-channel workflows where continuity matters more than large bootstrap payloads.",
+        impact: "Keeps follow-up turns smaller by skipping safe continuation reinjection.",
+      },
+      minimal: {
+        label: "Minimal",
+        description: "Smallest context budget and lowest cost.",
+        detail: "Best for quick utility turns, automations, and cost-sensitive workflows.",
+        impact: "Uses the smallest bootstrap budget and the leanest follow-up behavior.",
+      },
+    },
+
   },
   configPage: {
     content: "Settings content",

@@ -14,6 +14,7 @@ import {
 } from "../config-form-utils.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
+import { applyPresetConfig } from "./patch-and-preset.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
 
@@ -109,6 +110,7 @@ export type RuntimeConfigCapability = {
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
+  applyPreset: (patch: Record<string, unknown>, note: string) => Promise<boolean>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -208,6 +210,12 @@ function isCurrentConfigConnection(
     currentConfigConnectionEpoch(state) === connectionEpoch
   );
 }
+
+const configGuard = {
+  epoch: (s: object) => currentConfigConnectionEpoch(s),
+  isCurrent: (s: object, client: { request: CallableFunction }, epoch: number) =>
+    isCurrentConfigConnection(s, client as GatewayBrowserClient, epoch),
+};
 
 function isCurrentRequest(
   state: ConfigState,
@@ -1750,6 +1758,17 @@ export function createRuntimeConfigCapability(
           ? build(config)
           : { error: "Configuration is unavailable; refresh and try again." };
       }),
+    applyPreset: (patch, note) =>
+      run(() =>
+        applyPresetConfig(
+          state,
+          patch,
+          note,
+          configGuard,
+          loadConfig,
+          resolveEditableSnapshotConfig,
+        ),
+      ),
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);

@@ -14,7 +14,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
@@ -48,13 +47,19 @@ import {
   type ConfigPageId,
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
-import { renderQuickSettings } from "./quick.ts";
+import { executeApplyPreset, type ConfigPresetId } from "./presets.ts";
+import {
+  renderQuickSettings,
+  type QuickSettingsChannel,
+  type QuickSettingsSecurity,
+} from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
+import { executeClearCustomTheme, executeImportCustomTheme } from "./theme-import-helper.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -280,6 +285,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   private sessionObserverModelsClient: GatewayBrowserClient | null = null;
   private readonly sessionObserverModelLoads = new WeakMap<GatewayBrowserClient, Promise<void>>();
   private readonly sessionObserverModelFailures = new WeakSet<GatewayBrowserClient>();
+  @state() private pendingPresetId: ConfigPresetId | null = null;
+  @state() private presetApplying: ConfigPresetId | null = null;
+  @state() private presetError: string | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -788,48 +796,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private async importCustomTheme() {
-    if (this.customThemeImportBusy) {
-      return;
-    }
-    this.customThemeImportExpanded = true;
-    this.customThemeImportBusy = true;
-    this.customThemeImportMessage = null;
-    try {
-      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
-      const selectTheme = !this.settings.customTheme || this.customThemeImportSelectOnSuccess;
-      this.applySettings({
-        ...this.settings,
-        customTheme,
-        theme: selectTheme ? "custom" : this.settings.theme,
-      });
-      this.customThemeImportUrl = "";
-      this.customThemeImportSelectOnSuccess = false;
-      this.customThemeImportMessage = {
-        kind: "success",
-        text: t("configPage.themeImported", { name: customTheme.label }),
-      };
-    } catch (error) {
-      this.customThemeImportMessage = {
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      this.customThemeImportBusy = false;
-    }
+    await executeImportCustomTheme(this, this.settings, (s) => this.applySettings(s));
   }
 
   private clearCustomTheme() {
-    this.customThemeImportExpanded = true;
-    this.customThemeImportSelectOnSuccess = false;
-    this.applySettings({
-      ...this.settings,
-      theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
-      customTheme: undefined,
-    });
-    this.customThemeImportMessage = {
-      kind: "success",
-      text: t("configPage.themeRemoved"),
-    };
+    executeClearCustomTheme(this, this.settings, (s) => this.applySettings(s));
   }
 
   private includeSections(): readonly string[] | undefined {
@@ -1052,6 +1023,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     return renderConfig(props);
   }
 
+  private async applyPreset(presetId: ConfigPresetId) {
+    this.pendingPresetId = null;
+    this.presetApplying = presetId;
+    this.presetError = null;
+    try {
+      this.presetError = await executeApplyPreset(this.context.runtimeConfig, presetId);
+    } finally {
+      this.presetApplying = null;
+    }
+  }
+
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
@@ -1094,6 +1076,40 @@ export class ConfigPage extends OpenClawLightDomElement {
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+      onChannelConfigure: () => this.navigate("communications"),
+      onManageCron: () => this.navigate("cron"),
+      onBrowseSkills: () => this.navigate("skills"),
+      onConfigureMcp: () => this.navigate("mcp"),
+      onSecurityConfigure: () => {
+        this.settingsMode = "advanced";
+        this.selections = {
+          ...this.selections,
+          config: { activeSection: "auth", activeSubsection: null },
+        };
+      },
+      canPairDevice:
+        runtimeConfig.state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
+      onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
+      onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+      activePresetId: null,
+      pendingPresetId: this.pendingPresetId,
+      presetApplying: this.presetApplying,
+      presetError: this.presetError,
+      onSelectPreset: (presetId) => {
+        this.pendingPresetId = presetId;
+      },
+      onApplyPreset: (presetId) => void this.applyPreset(presetId),
+      assistantAvatar: appConfig.assistantIdentity.avatar,
+      assistantAvatarUrl: appConfig.assistantIdentity.avatar,
+      assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
+      assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
+      assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
+      assistantAvatarOverride: null,
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
+      basePath: this.context.basePath,
     });
   }
 

@@ -26,13 +26,35 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { type PresetSectionProps, renderContextProfileSection } from "./context-profile-section.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
 // ── Types ──
 
-type QuickSettingsProps = {
+export type QuickSettingsChannel = {
+  id: string;
+  label: string;
+  connected: boolean;
+  detail?: string;
+};
+type QuickSettingsAutomation = {
+  cronJobCount: number;
+  skillCount: number;
+  mcpServerCount: number;
+};
+
+export type QuickSettingsSecurity = {
+  gatewayAuth: string;
+  execPolicy: string;
+  deviceAuth: boolean;
+  browserEnabled: boolean;
+  toolProfile: string;
+};
+
+type QuickSettingsProps = PresetSectionProps & {
   // General
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -147,7 +169,8 @@ function renderModelSection(props: QuickSettingsProps) {
           },
         }),
       }),
-    ],
+      ...renderContextProfileSection(props, configBusy),
+    ].filter(Boolean),
   );
 }
 

@@ -2136,6 +2136,218 @@ describe("config form auto-save", () => {
     await expect(savePromise).resolves.toBe(true);
     expect(server.submissions[0]?.raw).toBe(rawDraft);
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
+
+    runtimeConfig.dispose();
+  });
+});
+
+describe("applyPreset reconciliation", () => {
+  it("merges preset values and rebases clean baselines while preserving dirty form edits", async () => {
+    const patchCalls: Array<{ baseHash: string; raw: string }> = [];
+    let getCount = 0;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "config.get") {
+        getCount += 1;
+        // First load: initial snapshot. Second load: post-preset snapshot.
+        return getCount === 1
+          ? {
+              config: { agents: { defaults: { bootstrapMaxChars: 10000 } }, other: { keep: 1 } },
+              hash: "hash-initial",
+              valid: true,
+              issues: [],
+              raw: '{"agents":{"defaults":{"bootstrapMaxChars":10000}},"other":{"keep":1}}',
+            }
+          : {
+              config: {
+                agents: {
+                  defaults: {
+                    bootstrapMaxChars: 20000,
+                    bootstrapTotalMaxChars: 150000,
+                    contextInjection: "always",
+                  },
+                },
+                other: { keep: 1 },
+              },
+              hash: "hash-post-patch",
+              valid: true,
+              issues: [],
+              raw: '{"agents":{"defaults":{"bootstrapMaxChars":20000,"bootstrapTotalMaxChars":150000,"contextInjection":"always"}},"other":{"keep":1}}',
+            };
+      }
+      if (method === "config.patch") {
+        const p = params as { baseHash: string; raw: string } | undefined;
+        patchCalls.push({ baseHash: p?.baseHash ?? "", raw: p?.raw ?? "" });
+        return {};
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await runtimeConfig.ensureLoaded();
+    // Stage a dirty edit to an unrelated field (simulates user editing
+    // Quick Settings before clicking a Context Profile preset).
+    runtimeConfig.patchForm(["other", "keep"], 2);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    // Apply a Code Agent preset.
+    const presetPatch = {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 20000,
+          bootstrapTotalMaxChars: 150000,
+          contextInjection: "always",
+        },
+      },
+    };
+    await expect(runtimeConfig.applyPreset(presetPatch, "Code Agent preset")).resolves.toBe(true);
+
+    // config.patch was called with the preset payload and correct base hash.
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]?.baseHash).toBe("hash-initial");
+    expect(JSON.parse(patchCalls[0]?.raw ?? "{}")).toEqual(presetPatch);
+
+    // Dirty form edit is preserved alongside merged preset values.
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 20000,
+          bootstrapTotalMaxChars: 150000,
+          contextInjection: "always",
+        },
+      },
+      other: { keep: 2 },
+    });
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    // Draft base hash advanced to post-patch snapshot so the next Save/Apply uses the current hash.
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-post-patch");
+
+    // Clean baselines rebased to post-preset snapshot so Reset reverts to the patched state.
+    expect(runtimeConfig.state.configFormOriginal).toEqual({
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 20000,
+          bootstrapTotalMaxChars: 150000,
+          contextInjection: "always",
+        },
+      },
+      other: { keep: 1 },
+    });
+    expect(JSON.parse(runtimeConfig.state.configRawOriginal)).toEqual({
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 20000,
+          bootstrapTotalMaxChars: 150000,
+          contextInjection: "always",
+        },
+      },
+      other: { keep: 1 },
+    });
+
+    // Serialized raw form includes both preset and dirty values.
+    const rawForm = JSON.parse(runtimeConfig.state.configRaw);
+    expect(rawForm.agents.defaults).toEqual({
+      bootstrapMaxChars: 20000,
+      bootstrapTotalMaxChars: 150000,
+      contextInjection: "always",
+    });
+    expect(rawForm.other.keep).toBe(2);
+
+    runtimeConfig.dispose();
+  });
+
+  it("reconciles dirty raw JSON when preset is applied in raw mode", async () => {
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        return getCount === 1
+          ? {
+              config: { agents: { defaults: { bootstrapMaxChars: 10000 } }, custom: { x: 1 } },
+              hash: "hash-initial",
+              valid: true,
+              issues: [],
+              raw: '{"agents":{"defaults":{"bootstrapMaxChars":10000}},"custom":{"x":1}}',
+            }
+          : {
+              config: {
+                agents: { defaults: { bootstrapMaxChars: 20000, bootstrapTotalMaxChars: 150000 } },
+                custom: { x: 1 },
+              },
+              hash: "hash-post-patch",
+              valid: true,
+              issues: [],
+              raw: '{"agents":{"defaults":{"bootstrapMaxChars":20000,"bootstrapTotalMaxChars":150000}},"custom":{"x":1}}',
+            };
+      }
+      if (method === "config.patch") {
+        return {};
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await runtimeConfig.ensureLoaded();
+    // Switch to raw mode and make a dirty edit.
+    runtimeConfig.state.configFormMode = "raw";
+    runtimeConfig.setRaw('{"agents":{"defaults":{"bootstrapMaxChars":10000}},"custom":{"x":999}}');
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    // Apply preset in raw mode.
+    const presetPatch = {
+      agents: { defaults: { bootstrapMaxChars: 20000, bootstrapTotalMaxChars: 150000 } },
+    };
+    await expect(runtimeConfig.applyPreset(presetPatch, "Raw mode preset")).resolves.toBe(true);
+
+    // Raw JSON should contain both preset values and dirty custom value.
+    const raw = JSON.parse(runtimeConfig.state.configRaw);
+    expect(raw.agents.defaults).toEqual({
+      bootstrapMaxChars: 20000,
+      bootstrapTotalMaxChars: 150000,
+    });
+    expect(raw.custom.x).toBe(999);
+
+    runtimeConfig.dispose();
+  });
+
+  it("handles applyPreset failure without corrupting form state", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { agents: { defaults: { bootstrapMaxChars: 10000 } } },
+          hash: "hash-initial",
+          valid: true,
+          issues: [],
+          raw: '{"agents":{"defaults":{"bootstrapMaxChars":10000}}}',
+        };
+      }
+      if (method === "config.patch") {
+        throw new Error("gateway error: hash conflict");
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["agents", "defaults", "bootstrapMaxChars"], 5000);
+    const formBefore = { ...runtimeConfig.state.configForm };
+
+    await expect(
+      runtimeConfig.applyPreset(
+        { agents: { defaults: { bootstrapMaxChars: 20000 } } },
+        "Should fail",
+      ),
+    ).resolves.toBe(false);
+
+    // Form state unchanged after failed preset.
+    expect(runtimeConfig.state.configForm).toEqual(formBefore);
+
     runtimeConfig.dispose();
   });
 });
