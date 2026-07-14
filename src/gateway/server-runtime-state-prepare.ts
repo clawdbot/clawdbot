@@ -30,9 +30,8 @@ import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import {
   createReadinessChecker,
-  mergeReadinessResults,
-  type ReadinessResult,
-  withReadinessEvaluationTimeout,
+  evaluateCanonicalGatewayReadiness,
+  type CanonicalGatewayReadinessResult,
 } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -366,24 +365,25 @@ export async function prepareGatewayRuntimeState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   const resolveSelectedReadiness = createSelectedReadinessResolver();
-  const evaluateReadiness = async (): Promise<ReadinessResult> => {
-    const gatewayReadiness = await getGatewayReadiness();
+  const evaluateRuntimeReadiness = async () => {
     const config = getRuntimeConfig();
     const additionalConditions = await resolveSelectedReadiness({
       config,
       registry: pluginRuntime.registry,
       env: process.env,
     });
-    const runtimeReadiness = buildRuntimeReadiness({
+    return buildRuntimeReadiness({
       configLoaded: true,
       gateway: "responding",
       plugins: buildGatewayPluginReadinessInput(pluginRuntime.registry),
       additionalConditions,
     });
-    return mergeReadinessResults(gatewayReadiness, runtimeReadiness);
   };
-  const getReadiness = (): Promise<ReadinessResult> =>
-    withReadinessEvaluationTimeout(evaluateReadiness());
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
+    evaluateCanonicalGatewayReadiness({
+      evaluateGateway: getGatewayReadiness,
+      evaluateRuntime: evaluateRuntimeReadiness,
+    });
   log.info("starting HTTP server...");
   const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
     current: undefined,

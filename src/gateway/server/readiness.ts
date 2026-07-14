@@ -23,11 +23,20 @@ export type ReadinessResult = {
   advisories?: string[];
 };
 
+export type CanonicalGatewayReadinessResult = ReadinessResult & CanonicalReadinessResult;
+
 /** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult | Promise<ReadinessResult>;
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 export const DEFAULT_READINESS_EVALUATION_TIMEOUT_MS = 2_000;
+
+export class ReadinessEvaluationTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`readiness evaluation exceeded ${timeoutMs}ms`);
+    this.name = "ReadinessEvaluationTimeoutError";
+  }
+}
 
 export async function withReadinessEvaluationTimeout<T>(
   evaluation: Promise<T>,
@@ -39,7 +48,7 @@ export async function withReadinessEvaluationTimeout<T>(
       evaluation,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(
-          () => reject(new Error(`readiness evaluation exceeded ${timeoutMs}ms`)),
+          () => reject(new ReadinessEvaluationTimeoutError(timeoutMs)),
           Math.max(1, timeoutMs),
         );
         timeout.unref?.();
@@ -50,6 +59,27 @@ export async function withReadinessEvaluationTimeout<T>(
       clearTimeout(timeout);
     }
   }
+}
+
+function buildReadinessEvaluationFailure(error: unknown): CanonicalReadinessResult {
+  const timedOut = error instanceof ReadinessEvaluationTimeoutError;
+  const reason = timedOut ? "ReadinessEvaluationTimedOut" : "ReadinessEvaluationFailed";
+  return {
+    ready: false,
+    conditions: [
+      {
+        type: "ReadinessEvaluationComplete",
+        status: "Unknown",
+        requirement: "required",
+        reason,
+        message: timedOut
+          ? "Readiness evaluation did not complete within its bounded deadline."
+          : "Readiness evaluation could not be completed.",
+      },
+    ],
+    failures: [reason],
+    advisories: [],
+  };
 }
 
 function buildCoreCondition(params: {
@@ -316,7 +346,7 @@ function withEventLoopHealth(
 export function mergeReadinessResults(
   gateway: ReadinessResult,
   runtime: CanonicalReadinessResult,
-): ReadinessResult {
+): CanonicalGatewayReadinessResult {
   const conditions = [...(gateway.conditions ?? []), ...runtime.conditions];
   const failures = Array.from(
     new Set(
@@ -340,4 +370,27 @@ export function mergeReadinessResults(
     failures,
     advisories,
   };
+}
+
+export async function evaluateCanonicalGatewayReadiness(params: {
+  evaluateGateway: ReadinessChecker;
+  evaluateRuntime: () => Promise<CanonicalReadinessResult>;
+  timeoutMs?: number;
+}): Promise<CanonicalGatewayReadinessResult> {
+  let gateway: ReadinessResult | undefined;
+  try {
+    return await withReadinessEvaluationTimeout(
+      Promise.resolve().then(async () => {
+        gateway = await params.evaluateGateway();
+        const runtime = await params.evaluateRuntime();
+        return mergeReadinessResults(gateway, runtime);
+      }),
+      params.timeoutMs,
+    );
+  } catch (error) {
+    return mergeReadinessResults(
+      gateway ?? { ready: false, failing: [], uptimeMs: 0 },
+      buildReadinessEvaluationFailure(error),
+    );
+  }
 }

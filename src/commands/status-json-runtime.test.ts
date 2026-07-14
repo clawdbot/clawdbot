@@ -64,6 +64,7 @@ describe("status-json-runtime", () => {
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
+      readiness: { ready: true, conditions: [], failures: [], advisories: [] },
       health: { ok: true },
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
@@ -85,6 +86,7 @@ describe("status-json-runtime", () => {
       timeoutMs: 1234,
       usage: true,
       deep: true,
+      includeReadiness: true,
       gatewayReachable: true,
       includeSecurityAudit: true,
       suppressHealthErrors: undefined,
@@ -100,6 +102,12 @@ describe("status-json-runtime", () => {
     expect(payloadInput.surface.nodeService).toStrictEqual({ label: "node" });
     expect(payloadInput.securityAudit).toStrictEqual({ summary: { critical: 1 } });
     expect(payloadInput.usage).toStrictEqual({ providers: [] });
+    expect(payloadInput.readiness).toStrictEqual({
+      ready: true,
+      conditions: [],
+      failures: [],
+      advisories: [],
+    });
     expect(payloadInput.health).toStrictEqual({ ok: true });
     expect(payloadInput.lastHeartbeat).toStrictEqual({ status: "ok" });
     expect(payloadInput.pluginCompatibility).toStrictEqual([
@@ -139,6 +147,7 @@ describe("status-json-runtime", () => {
       timeoutMs: 500,
       usage: false,
       deep: false,
+      includeReadiness: true,
       gatewayReachable: true,
       includeSecurityAudit: false,
       suppressHealthErrors: undefined,
@@ -180,6 +189,7 @@ describe("status-json-runtime", () => {
       timeoutMs: 500,
       usage: undefined,
       deep: true,
+      includeReadiness: true,
       gatewayReachable: true,
       includeSecurityAudit: false,
       suppressHealthErrors: true,
