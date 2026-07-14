@@ -726,6 +726,15 @@ describe("durable continuation_work dispatch", () => {
     expect(executionSource).not.toMatch(
       /const (?:workTimers|idleRetryFailureTimers|idleRetryControllers) =/,
     );
+    expect(executionSource).not.toMatch(/from "\.\/work-dispatch\.js"/);
+    expect(executionSource).not.toMatch(
+      /\b(?:armWorkTimer|armNextWorkTimer|armIdleRetryFailureTimer|registerIdleRetry)\s*\(/,
+    );
+    expect(canonicalSource).not.toMatch(
+      /\b(?:markPendingWorkDelivered|markPendingWorkFoldDelivered|markPendingWorkTurnGranted|markPendingWorkFolded|markPendingWorkFailed|markPendingWorkReaped)\s*\(/,
+    );
+    expect(executionSource).toMatch(/export type ContinuationWorkExecutionDirective = Readonly</);
+    expect(canonicalSource).toMatch(/applyExecutionDirective\(directive\)/);
   });
 
   it("commits provider delivery before finishing the claimed row", async () => {

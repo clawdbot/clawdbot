@@ -24,7 +24,6 @@ import {
 } from "./work-store.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
-const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
 const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
@@ -33,7 +32,6 @@ const CONTINUATION_TURN_DRAINING_REASON = "draining";
 // Non-retryable: the no-op replay guard tripped (#1138/#1142). The row is
 // terminal-parked (superseded) so the self-rearm loop stops; never requeued.
 const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
-const MAIN_COMMAND_LANE = "main";
 const GATEWAY_RESTARTING_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
@@ -59,6 +57,7 @@ export type ContinuationWorkExecutionPolicy = Readonly<{
   reasonCategory: ContinuationWorkReasonCategory;
   busyRetryDelayMs: number;
   idleRetryHedgeMs: number;
+  mainCommandLane: string;
   orphanReapStaleCutoffMs?: number;
 }>;
 
@@ -87,7 +86,13 @@ export type ContinuationWorkFoldCandidate = Readonly<{
 
 export type ContinuationWorkFoldAttempt = Readonly<{
   now: number;
+  retryDelayMs: number;
   delivery: { delivered: true; deliveredAt: number } | { delivered: false; reason: string };
+}>;
+
+export type ContinuationWorkFoldPolicy = Readonly<{
+  deliveryTimeoutMs: number;
+  retryDelayMs: number;
 }>;
 
 function formatErrorMessage(err: unknown): string {
@@ -248,6 +253,7 @@ type ContinuationTurnGrantResult =
 async function driveContinuationTurn(
   work: PendingContinuationWork,
   wakeText: string,
+  mainCommandLane: string,
 ): Promise<ContinuationTurnGrantResult> {
   const [
     { getRuntimeConfig },
@@ -284,11 +290,11 @@ async function driveContinuationTurn(
   const continuationLane = isSubagentSessionKey(work.sessionKey)
     ? resolveSessionLane(work.sessionKey)
     : undefined;
-  if (continuationLane === undefined && getQueueSize(MAIN_COMMAND_LANE) > 0) {
+  if (continuationLane === undefined && getQueueSize(mainCommandLane) > 0) {
     return {
       status: "skipped",
       reason: CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON,
-      retryTrigger: { kind: "command-lane-idle", lane: MAIN_COMMAND_LANE },
+      retryTrigger: { kind: "command-lane-idle", lane: mainCommandLane },
     };
   }
 
@@ -356,6 +362,7 @@ async function driveContinuationTurn(
 async function deliverFoldedProvenanceNoteToActiveTurn(params: {
   sessionKey: string;
   note: string;
+  deliveryTimeoutMs: number;
 }): Promise<{ delivered: true; deliveredAt: number } | { delivered: false; reason: string }> {
   const replyRunRegistry = await getContinuationReplyRunRegistry();
   const sessionId = replyRunRegistry.resolveSessionId(params.sessionKey);
@@ -370,7 +377,7 @@ async function deliverFoldedProvenanceNoteToActiveTurn(params: {
   const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, params.note, {
     steeringMode: "all",
     debounceMs: 0,
-    deliveryTimeoutMs: HEDGE_DISPATCH_FAILURE_RETRY_MS,
+    deliveryTimeoutMs: params.deliveryTimeoutMs,
     waitForTranscriptCommit: true,
   });
   if (outcome.queued && outcome.deliveredAtMs !== undefined) {
@@ -385,17 +392,22 @@ async function deliverFoldedProvenanceNoteToActiveTurn(params: {
 export async function prepareFoldedContinuationWork(
   sessionKey: string,
   candidates: readonly ContinuationWorkFoldCandidate[],
+  policy: ContinuationWorkFoldPolicy,
 ): Promise<ContinuationWorkFoldAttempt> {
   const works = candidates.map((candidate) => candidate.work);
   const now = Date.now();
   const note = buildFoldedProvenanceNote(works, now);
   let delivery: Awaited<ReturnType<typeof deliverFoldedProvenanceNoteToActiveTurn>>;
   try {
-    delivery = await deliverFoldedProvenanceNoteToActiveTurn({ sessionKey, note });
+    delivery = await deliverFoldedProvenanceNoteToActiveTurn({
+      sessionKey,
+      note,
+      deliveryTimeoutMs: policy.deliveryTimeoutMs,
+    });
   } catch (err) {
     delivery = { delivered: false, reason: formatErrorMessage(err) };
   }
-  return { now, delivery };
+  return { now, retryDelayMs: policy.retryDelayMs, delivery };
 }
 
 export function commitFoldedContinuationWork(
@@ -406,7 +418,7 @@ export function commitFoldedContinuationWork(
   const works = candidates.map((candidate) => candidate.work);
   const { delivery, now } = attempt;
   if (!delivery.delivered) {
-    const retryDueAt = now + HEDGE_DISPATCH_FAILURE_RETRY_MS;
+    const retryDueAt = now + attempt.retryDelayMs;
     const retryAfterActiveRun =
       delivery.reason === "active-embedded-run-required-for-transcript-proof" ||
       delivery.reason.startsWith("queued-without-transcript-commit:");
@@ -484,7 +496,11 @@ export async function executePendingContinuationWork(
     log.info(
       `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey} reasonCategory=${policy.reasonCategory}`,
     );
-    const result = await driveContinuationTurn(work, formatContinuationWakeText(work));
+    const result = await driveContinuationTurn(
+      work,
+      formatContinuationWakeText(work),
+      policy.mainCommandLane,
+    );
     if (result.status === "ran") {
       markPendingWorkTurnGranted(result.work);
       return { kind: "dispatched" };

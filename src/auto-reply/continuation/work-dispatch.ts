@@ -453,6 +453,7 @@ function executionPolicyForWork(
     reasonCategory: classifyContinuationWorkReason(work.reason),
     busyRetryDelayMs: computeBusySkipBackoffMs(work.busySkipCount ?? 0, backoff),
     idleRetryHedgeMs: backoff.ceilingMs,
+    mainCommandLane: MAIN_COMMAND_LANE,
     ...(runtimeConfig.orphanReapStaleCutoffMs !== undefined
       ? { orphanReapStaleCutoffMs: runtimeConfig.orphanReapStaleCutoffMs }
       : {}),
@@ -559,7 +560,10 @@ export async function dispatchPendingContinuationWork(
         work,
         reasonCategory: classifyContinuationWorkReason(work.reason),
       }));
-      const foldAttempt = await prepareFoldedContinuationWork(params.sessionKey, foldCandidates);
+      const foldAttempt = await prepareFoldedContinuationWork(params.sessionKey, foldCandidates, {
+        deliveryTimeoutMs: HEDGE_DISPATCH_FAILURE_RETRY_MS,
+        retryDelayMs: HEDGE_DISPATCH_FAILURE_RETRY_MS,
+      });
       // Match the durable ordering: transcript proof first, then lifecycle-owned
       // controller cleanup, then the execution owner's row transitions.
       for (const work of foldWorks) {
