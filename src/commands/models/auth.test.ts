@@ -40,6 +40,7 @@ function readMockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unk
 }
 
 const mocks = vi.hoisted(() => ({
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
   clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
@@ -64,7 +65,6 @@ const mocks = vi.hoisted(() => ({
   isRemoteEnvironment: vi.fn(() => false),
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   loadAuthProfileStoreForRuntime: vi.fn(),
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
