@@ -175,6 +175,36 @@ describe("google music generation provider", () => {
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts valid base64url inline audio", async () => {
+    mockGoogleAuth();
+    const audioBytes = Buffer.from([251, 255, 254, 250]);
+    generateContentMock.mockResolvedValue({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inlineData: {
+                  data: audioBytes.toString("base64url"),
+                  mimeType: "audio/mpeg",
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await buildGoogleMusicGenerationProvider().generateMusic({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      prompt: "upbeat synthpop anthem",
+      cfg: {},
+    });
+
+    expect(result.tracks[0]?.buffer).toEqual(audioBytes);
+  });
+
   it("retries once when Lyria returns an unblocked text-only response", async () => {
     mockGoogleAuth();
     generateContentMock

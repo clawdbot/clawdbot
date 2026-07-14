@@ -214,6 +214,47 @@ describe("Google speech provider", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts valid base64url Gemini TTS audio", async () => {
+    const pcm = Buffer.from([251, 255, 254, 250]);
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "audio/L16;codec=pcm;rate=24000",
+                      data: pcm.toString("base64url"),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release,
+    });
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Say this.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "audio-file",
+      timeoutMs: 12_000,
+    });
+
+    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const release = vi.fn(async () => {});

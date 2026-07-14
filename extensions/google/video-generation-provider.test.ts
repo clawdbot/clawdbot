@@ -302,6 +302,38 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google generated video response returned malformed video base64");
   });
 
+  it("accepts valid base64url inline video bytes", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const videoBytes = Buffer.from([251, 255, 254, 250]);
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: videoBytes.toString("base64url"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await buildGoogleVideoGenerationProvider().generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(result.videos[0]?.buffer).toEqual(videoBytes);
+  });
+
   it("strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
