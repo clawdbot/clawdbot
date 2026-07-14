@@ -4040,6 +4040,7 @@ td.data-table-key-col {
 
 .md-preview-dialog__body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
