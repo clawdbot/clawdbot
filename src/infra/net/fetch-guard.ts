@@ -22,7 +22,11 @@ import {
 } from "./one-hop-fetch-dispatcher.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
-import { fetchWithRuntimeDispatcher, isMockedFetch } from "./runtime-fetch.js";
+import {
+  fetchWithRuntimeDispatcher,
+  isMockedFetch,
+  type DispatcherAwareRequestInit,
+} from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
   buildNetworkGuardProfileV1,
@@ -650,7 +654,6 @@ async function fetchWithSsrFGuardInternal(
       const init: OneHopFetchRequest["init"] = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
-        ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
       };
 
@@ -666,9 +669,18 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const oneHopDispatcher: OneHopFetchDispatcher = createLocalOneHopFetchDispatcher(
-        shouldUseRuntimeFetch ? fetchWithRuntimeDispatcher : defaultFetch,
-      );
+      const localFetch = async (url: string, requestInit: OneHopFetchRequest["init"]) => {
+        const localInit: DispatcherAwareRequestInit = {
+          ...requestInit,
+          ...(dispatcher ? { dispatcher } : {}),
+        };
+        return shouldUseRuntimeFetch
+          ? await fetchWithRuntimeDispatcher(url, localInit)
+          : await defaultFetch(url, localInit);
+      };
+      const oneHopDispatcher: OneHopFetchDispatcher = createLocalOneHopFetchDispatcher(localFetch, {
+        hasPreparedDispatcher: Boolean(dispatcher),
+      });
       const response = await oneHopDispatcher.dispatch({
         url: parsedUrl.toString(),
         init,

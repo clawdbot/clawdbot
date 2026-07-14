@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertLocalNetworkGuardPrepared,
+  assertNetworkGuardProfileV1,
   assertNetworkGuardProfileTarget,
   NETWORK_GUARD_PROFILE_VERSION,
   type NetworkGuardProfileV1,
@@ -34,6 +35,11 @@ function createProfile(): NetworkGuardProfileV1 {
       },
     },
   };
+}
+
+function serializeProfile(): Record<string, unknown> {
+  const encoded = JSON.stringify(createProfile());
+  return JSON.parse(encoded) as Record<string, unknown>;
 }
 
 describe("network guard profile", () => {
@@ -127,6 +133,54 @@ describe("network guard profile", () => {
     ).toThrow(/does not match/i);
   });
 
+  it("accepts a complete serialized v1 profile", () => {
+    expect(() => assertNetworkGuardProfileV1(serializeProfile())).not.toThrow();
+  });
+
+  it.each([
+    {
+      name: "unknown fields",
+      mutate: (profile: Record<string, unknown>) => {
+        profile.futureField = true;
+      },
+      expected: /unsupported network guard profile shape/i,
+    },
+    {
+      name: "target TLS mismatch",
+      mutate: (profile: Record<string, unknown>) => {
+        (profile.route as Record<string, unknown>).tls = "cleartext";
+      },
+      expected: /TLS posture is inconsistent/i,
+    },
+    {
+      name: "route and resolution mismatch",
+      mutate: (profile: Record<string, unknown>) => {
+        (profile.route as Record<string, unknown>).mode = "explicit-proxy";
+      },
+      expected: /resolution is inconsistent with the route/i,
+    },
+    {
+      name: "non-string policy arrays",
+      mutate: (profile: Record<string, unknown>) => {
+        (profile.addressPolicy as Record<string, unknown>).allowedPrivateCidrs = [10];
+      },
+      expected: /invalid network guard allowed private CIDRs/i,
+    },
+    {
+      name: "DNS enforcement mismatch",
+      mutate: (profile: Record<string, unknown>) => {
+        const policy = profile.addressPolicy as Record<string, unknown>;
+        (policy.dnsRebinding as Record<string, unknown>).enforcement = "connection-owner-required";
+      },
+      expected: /DNS rebinding enforcement is inconsistent/i,
+    },
+  ])("rejects serialized profiles with $name", ({ mutate, expected }) => {
+    const profile = serializeProfile();
+    mutate(profile);
+
+    expect(() => assertNetworkGuardProfileV1(profile)).toThrow(expected);
+  });
+
   it("requires prepared pinned dispatch state for local execution", () => {
     const profile = createProfile();
     expect(() =>
@@ -155,6 +209,6 @@ describe("network guard profile", () => {
         requestUrl: "https://api.example.com/v1",
         hasDispatcher: true,
       }),
-    ).toThrow(/does not match resolution mode/i);
+    ).toThrow(/DNS rebinding enforcement is inconsistent/i);
   });
 });

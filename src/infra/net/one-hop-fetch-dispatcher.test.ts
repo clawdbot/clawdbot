@@ -74,4 +74,21 @@ describe("createLocalOneHopFetchDispatcher", () => {
       }),
     ).rejects.toBe(transportError);
   });
+
+  it("keeps local dispatcher state outside the portable request", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok"));
+    const dispatcher = createLocalOneHopFetchDispatcher(fetchImpl, {
+      hasPreparedDispatcher: true,
+    });
+    const request = {
+      url: "https://public.example/resource",
+      init: { redirect: "manual" as const },
+      networkGuard: createNetworkGuard("pinned"),
+    };
+
+    await dispatcher.dispatch(request);
+
+    expect(request.init).toEqual({ redirect: "manual" });
+    expect(fetchImpl).toHaveBeenCalledWith(request.url, request.init);
+  });
 });
