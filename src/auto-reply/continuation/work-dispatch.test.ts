@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
 const activeQueueDeliveries: unknown[] = [];
+const workTransitionEvents: string[] = [];
+const replyRegistryReceivers = new Set<unknown>();
 const activeSessions = new Set<string>();
 const replyIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
 const laneIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
@@ -166,22 +168,30 @@ vi.mock("../../sessions/session-key-utils.js", async (importOriginal) => ({
 
 vi.mock("../reply/reply-run-registry.js", () => ({
   replyRunRegistry: {
-    isActive: (sessionKey: string) => activeSessions.has(sessionKey),
-    resolveSessionId: (sessionKey: string) =>
-      activeSessions.has(sessionKey) ? `active-session:${sessionKey}` : undefined,
-    waitForIdle: (sessionKey: string, _timeoutMs?: number, opts?: { signal?: AbortSignal }) =>
-      waitForMockIdle(
+    isActive(sessionKey: string) {
+      replyRegistryReceivers.add(this);
+      return activeSessions.has(sessionKey);
+    },
+    resolveSessionId(sessionKey: string) {
+      replyRegistryReceivers.add(this);
+      return activeSessions.has(sessionKey) ? `active-session:${sessionKey}` : undefined;
+    },
+    waitForIdle(sessionKey: string, _timeoutMs?: number, opts?: { signal?: AbortSignal }) {
+      replyRegistryReceivers.add(this);
+      return waitForMockIdle(
         replyIdleWaiters,
         sessionKey,
         () => !activeSessions.has(sessionKey),
         opts?.signal,
-      ),
+      );
+    },
   },
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   isEmbeddedAgentRunHandleActive: vi.fn(() => activeQueueHandleAvailable),
   queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(async (sessionId: string, text: string) => {
+    workTransitionEvents.push("fold-transcript-committed");
     activeQueueDeliveries.push({ sessionId, text });
     if (activeQueueMode === "delivered") {
       return {
@@ -230,6 +240,7 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../reply/get-reply.js", () => ({
   getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
+    workTransitionEvents.push("provider-called");
     if (observeSubordinateAdmission) {
       const { isGatewaySubordinateWorkAdmissionClosed } =
         await import("../../process/gateway-work-admission.js");
@@ -380,6 +391,11 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       if (!flow || flow.revision !== params.expectedRevision) {
         return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
       }
+      if (params.patch.currentStep === "Continuation wake delivered (durable mark)") {
+        workTransitionEvents.push("delivered-mark-committed");
+      } else if (params.patch.currentStep === "Continuation fold note delivered (durable mark)") {
+        workTransitionEvents.push("fold-delivered-mark-committed");
+      }
       Object.assign(flow, params.patch, { revision: flow.revision + 1 });
       return { applied: true, flow: cloneFlow(flow) };
     },
@@ -397,6 +413,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       if (!flow || flow.revision !== params.expectedRevision) {
         return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
       }
+      workTransitionEvents.push(`flow-finished:${params.currentStep ?? "unknown"}`);
       const endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
       flow.status = "succeeded";
       flow.currentStep = params.currentStep;
@@ -520,6 +537,8 @@ describe("durable continuation_work dispatch", () => {
     turnGrants.length = 0;
     systemEvents.length = 0;
     activeQueueDeliveries.length = 0;
+    workTransitionEvents.length = 0;
+    replyRegistryReceivers.clear();
     activeSessions.clear();
     replyIdleWaiters.clear();
     laneIdleWaiters.clear();
@@ -655,6 +674,135 @@ describe("durable continuation_work dispatch", () => {
     expect(result).toEqual({ applied: false, work });
     expect(work).toEqual(input);
     expect(flow.stateJson).toEqual(stateBeforeConflict);
+  });
+
+  it("keeps one reply-run registry identity across election, idle retry, and execution", async () => {
+    const sessionKey = "agent:main:registry-singleton";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    const immediateConfig = {
+      ...config,
+      defaultDelayMs: 0,
+      minDelayMs: 0,
+    } satisfies ContinuationRuntimeConfig;
+
+    await scheduleContinuationWork({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      request: { delaySeconds: 0, reason: "singleton registry proof" },
+      config: immediateConfig,
+    });
+    await waitForMockWaiter(replyIdleWaiters, sessionKey);
+    expect(replyRegistryReceivers.size).toBe(1);
+
+    resolveReplyRunIdle(sessionKey);
+    await waitForTurnGrantCount(1);
+
+    expect(replyRegistryReceivers.size).toBe(1);
+    expect(turnGrants).toHaveLength(1);
+  });
+
+  it("keeps registry memoization singular and timer/controller state lifecycle-owned", () => {
+    const canonicalSource = fs.readFileSync(new URL("./work-dispatch.ts", import.meta.url), "utf8");
+    const executionUrl = new URL("./work-dispatch-execution.ts", import.meta.url);
+    const executionSource = fs.existsSync(executionUrl)
+      ? fs.readFileSync(executionUrl, "utf8")
+      : "";
+    const combinedSource = `${canonicalSource}\n${executionSource}`;
+
+    expect(combinedSource.match(/let replyRunRegistryModulePromise/g)).toHaveLength(1);
+    expect(
+      combinedSource.match(
+        /replyRunRegistryModulePromise \?\?= import\("\.\.\/reply\/reply-run-registry\.js"\)/g,
+      ),
+    ).toHaveLength(1);
+    expect(canonicalSource).toMatch(/const workTimers = new Map/);
+    expect(canonicalSource).toMatch(/const idleRetryFailureTimers = new Map/);
+    expect(canonicalSource).toMatch(/const idleRetryControllers = new Map/);
+    expect(executionSource).not.toMatch(
+      /const (?:workTimers|idleRetryFailureTimers|idleRetryControllers) =/,
+    );
+  });
+
+  it("commits provider delivery before finishing the claimed row", async () => {
+    const sessionKey = "agent:main:provider-finish-order";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "provider finish ordering",
+    });
+
+    await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(workTransitionEvents).toEqual([
+      "provider-called",
+      "delivered-mark-committed",
+      "flow-finished:Same-session continuation turn granted",
+    ]);
+  });
+
+  it("commits an active-turn transcript and fold delivery before finishing the row", async () => {
+    const sessionKey = "agent:main:fold-finish-order";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now() - 1,
+      anchorFinalizedAt: Date.now() - 1,
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "fold finish ordering",
+    });
+
+    await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(workTransitionEvents).toEqual([
+      "fold-transcript-committed",
+      "fold-delivered-mark-committed",
+      "flow-finished:folded-into-active-turn: matured while a later turn was active",
+    ]);
+  });
+
+  it("reset aborts lifecycle-owned idle waiters and clears every dispatch timer", async () => {
+    const replySessionKey = "agent:main:reset-reply-idle";
+    const laneSessionKey = "agent:main:reset-lane-idle";
+    mockSessionStore[replySessionKey] = { sessionKey: replySessionKey };
+    mockSessionStore[laneSessionKey] = { sessionKey: laneSessionKey };
+    activeSessions.add(replySessionKey);
+    mainQueueSize = 1;
+    for (const sessionKey of [replySessionKey, laneSessionKey]) {
+      enqueuePendingWork({
+        sessionKey,
+        hop: 1,
+        delayMs: 0,
+        electedAt: Date.now(),
+        dueAt: Date.now(),
+        maxChainLength: 8,
+        reason: "reset cleanup proof",
+      });
+      await dispatchPendingContinuationWork({ sessionKey });
+    }
+    await waitForMockWaiter(replyIdleWaiters, replySessionKey);
+    await waitForMockWaiter(laneIdleWaiters, "main");
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    resetContinuationWorkDispatchForTests();
+    await flushAsyncWork();
+
+    expect(replyIdleWaiters.has(replySessionKey)).toBe(false);
+    expect(laneIdleWaiters.has("main")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("requeues without mutating its claimed work input and clears retry-only state", () => {
