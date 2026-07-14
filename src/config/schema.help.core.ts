@@ -87,6 +87,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "TCP port used by the gateway listener for API, control UI, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
     'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
+  "gateway.readiness":
+    "Additional readiness criteria selected by the operator. Gateway lifecycle conditions always apply; use this section only for deployment-specific dependencies that should appear in the canonical readiness result.",
+  "gateway.readiness.requiredCriteria":
+    "Registered readiness criterion ids that must report True before the Gateway is ready. A False, Unknown, missing, timed-out, or failed criterion blocks readiness; use this list only for dependencies necessary to serve work.",
+  "gateway.readiness.advisoryCriteria":
+    "Registered readiness criterion ids reported as diagnostics without blocking readiness. Use advisory criteria to observe optional dependencies before deciding whether they belong in the required serving contract.",
   "gateway.bind":
     'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" for local-only operation; "auto" can expose all interfaces.',
   "gateway.customBindHost":
