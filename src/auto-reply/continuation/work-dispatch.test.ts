@@ -455,6 +455,9 @@ import {
   consumePendingWork,
   enqueuePendingWork,
   hasLiveOrRecentlyDispatchedContinuationWork,
+  markPendingWorkDelivered,
+  markPendingWorkFoldDelivered,
+  requeuePendingWork,
 } from "./work-store.js";
 
 const getReplyFromConfigMock = vi.mocked(getReplyFromConfig);
@@ -489,6 +492,26 @@ const config = {
 async function flushTimers(): Promise<void> {
   await vi.runOnlyPendingTimersAsync();
   await Promise.resolve();
+}
+
+function claimMaturedWork(sessionKey: string) {
+  const enqueued = enqueuePendingWork({
+    sessionKey,
+    hop: 1,
+    delayMs: 0,
+    electedAt: Date.now(),
+    dueAt: Date.now(),
+    maxChainLength: 8,
+    reason: "immutable transition characterization",
+  });
+  if (!enqueued) {
+    throw new Error("expected continuation work enqueue");
+  }
+  const [work] = consumePendingWork(sessionKey);
+  if (!work) {
+    throw new Error("expected matured continuation work claim");
+  }
+  return work;
 }
 
 describe("durable continuation_work dispatch", () => {
@@ -544,6 +567,138 @@ describe("durable continuation_work dispatch", () => {
     resetGatewayWorkAdmission();
     commandLaneIdleError = undefined;
     vi.useRealTimers();
+  });
+
+  it("returns the committed revision without mutating delivered-work input", () => {
+    const work = claimMaturedWork("agent:main:immutable-delivered");
+    const input = structuredClone(work);
+
+    const result = markPendingWorkDelivered(work);
+
+    expect(result).toEqual({
+      applied: true,
+      work: {
+        ...input,
+        expectedRevision: (input.expectedRevision ?? 0) + 1,
+        deliveredAt: Date.now(),
+        succeeded: { point: "optimal", durability: "durable" },
+      },
+    });
+    expect(work).toEqual(input);
+    expect(mockFlows.get(work.flowId ?? "")).toMatchObject({
+      revision: (input.expectedRevision ?? 0) + 1,
+      stateJson: {
+        deliveredAt: Date.now(),
+        disposition: "granted",
+        succeeded: { point: "optimal", durability: "durable" },
+      },
+    });
+  });
+
+  it("returns the committed revision without mutating fold-delivered input", () => {
+    const work = claimMaturedWork("agent:main:immutable-fold-delivered");
+    const input = structuredClone(work);
+
+    const result = markPendingWorkFoldDelivered(work, {
+      foldedAt: Date.now(),
+      overdueByMs: 250,
+    });
+
+    expect(result).toEqual({
+      applied: true,
+      work: {
+        ...input,
+        expectedRevision: (input.expectedRevision ?? 0) + 1,
+        disposition: "folded-active",
+        foldedAt: Date.now(),
+        overdueByMs: 250,
+        busySkipCount: 0,
+        succeeded: { point: "optimal", durability: "durable" },
+      },
+    });
+    expect(work).toEqual(input);
+    expect(mockFlows.get(work.flowId ?? "")).toMatchObject({
+      revision: (input.expectedRevision ?? 0) + 1,
+      stateJson: {
+        disposition: "folded-active",
+        foldedAt: Date.now(),
+        overdueByMs: 250,
+        busySkipCount: 0,
+        succeeded: { point: "optimal", durability: "durable" },
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "delivered",
+      apply: (work: ReturnType<typeof claimMaturedWork>) => markPendingWorkDelivered(work),
+    },
+    {
+      name: "fold-delivered",
+      apply: (work: ReturnType<typeof claimMaturedWork>) =>
+        markPendingWorkFoldDelivered(work, { foldedAt: Date.now(), overdueByMs: 250 }),
+    },
+  ])("returns the original $name work on a CAS conflict", ({ apply }) => {
+    const work = claimMaturedWork("agent:main:immutable-cas-conflict");
+    const input = structuredClone(work);
+    const flow = mockFlows.get(work.flowId ?? "");
+    if (!flow) {
+      throw new Error("expected claimed continuation work flow");
+    }
+    const stateBeforeConflict = structuredClone(flow.stateJson);
+    flow.revision += 1;
+
+    const result = apply(work);
+
+    expect(result).toEqual({ applied: false, work });
+    expect(work).toEqual(input);
+    expect(flow.stateJson).toEqual(stateBeforeConflict);
+  });
+
+  it("requeues without mutating its claimed work input and clears retry-only state", () => {
+    const sessionKey = "agent:main:immutable-requeue";
+    const enqueued = enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      recoveryDueAt: Date.now(),
+      maxChainLength: 8,
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "wait-shaped",
+        armedAt: Date.now(),
+      },
+    });
+    if (!enqueued) {
+      throw new Error("expected continuation work enqueue");
+    }
+    const [work] = consumePendingWork(sessionKey, { includeIdleRetry: true });
+    if (!work) {
+      throw new Error("expected continuation work claim");
+    }
+    const input = structuredClone(work);
+    const nextDueAt = Date.now() + 5_000;
+
+    expect(
+      requeuePendingWork(work, {
+        dueAt: nextDueAt,
+        summary: "immutable requeue characterization",
+        busySkipCount: 2,
+      }),
+    ).toBe(true);
+
+    expect(work).toEqual(input);
+    const flow = mockFlows.get(work.flowId ?? "");
+    expect(flow).toMatchObject({
+      status: "queued",
+      revision: (input.expectedRevision ?? 0) + 1,
+      stateJson: { dueAt: nextDueAt, busySkipCount: 2 },
+    });
+    expect(flow?.stateJson).not.toMatchObject({ idleRetry: expect.anything() });
+    expect(flow?.stateJson).not.toMatchObject({ recoveryDueAt: expect.anything() });
   });
 
   it("honors hot-disabled continuation before consuming or driving queued work (#1144)", async () => {
