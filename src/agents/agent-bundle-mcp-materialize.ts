@@ -12,6 +12,7 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
+import { tryNormalizeToolParameterSchema } from "./agent-bundle-mcp-schema-guard.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
@@ -57,6 +58,10 @@ function buildAppToolPolicyProjections(params: {
     return serverOrder || a.toolName.localeCompare(b.toolName);
   });
   for (const tool of appOnlyTools) {
+    const parameters = tryNormalizeToolParameterSchema(tool);
+    if (!parameters) {
+      continue;
+    }
     const name = buildSafeToolName({
       serverName: tool.safeServerName,
       toolName: tool.toolName,
@@ -67,7 +72,7 @@ function buildAppToolPolicyProjections(params: {
       name,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters,
       execute: async () => {
         throw new Error("MCP App policy projections cannot execute tools");
       },
@@ -86,7 +91,6 @@ function buildAppToolPolicyProjections(params: {
   }
   return tools.toSorted((a, b) => a.name.localeCompare(b.name));
 }
-
 function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
@@ -137,7 +141,6 @@ function toAgentToolResult(params: {
     details,
   };
 }
-
 function toJsonAgentToolResult(params: {
   serverName: string;
   operation: string;
@@ -157,7 +160,6 @@ function toJsonAgentToolResult(params: {
     },
   };
 }
-
 function requireStringArg(input: unknown, key: string): string {
   if (!input || typeof input !== "object") {
     throw new Error(`${key} is required`);
@@ -168,7 +170,6 @@ function requireStringArg(input: unknown, key: string): string {
   }
   return value;
 }
-
 function optionalStringRecordArg(input: unknown, key: string): Record<string, string> | undefined {
   if (!input || typeof input !== "object") {
     return undefined;
@@ -291,12 +292,16 @@ export function buildBundleMcpToolsFromCatalog(params: {
         `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );
     }
+    const parameters = tryNormalizeToolParameterSchema(tool);
+    if (!parameters) {
+      continue;
+    }
     reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
     const agentTool: AnyAgentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters,
       executionMode,
       execute:
         params.createExecute?.(tool) ??
@@ -316,7 +321,6 @@ export function buildBundleMcpToolsFromCatalog(params: {
     });
     tools.push(agentTool);
   }
-
   for (const server of Object.values(params.catalog.servers).toSorted((a, b) =>
     a.serverName.localeCompare(b.serverName),
   )) {
@@ -397,13 +401,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
       });
     }
   }
-
   // Sort deterministically by name: keeps the API tools block stable across turns
   // (listTools() order is not guaranteed). Collision suffixes above stay order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
   return tools;
 }
-
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
@@ -512,7 +514,6 @@ export async function materializeBundleMcpToolsForRun(params: {
     modelTools: tools,
     reservedToolNames,
   });
-
   return {
     tools,
     appTools,
@@ -544,7 +545,6 @@ export async function materializeBundleMcpToolsForRun(params: {
     },
   };
 }
-
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
