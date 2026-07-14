@@ -37,6 +37,8 @@ function normalizeIdentity(
     typeof identity.sessionResumeSupported === "boolean"
       ? identity.sessionResumeSupported
       : undefined;
+  const sessionResumeReady =
+    typeof identity.sessionResumeReady === "boolean" ? identity.sessionResumeReady : undefined;
   const lastUpdatedAt =
     typeof identity.lastUpdatedAt === "number" && Number.isFinite(identity.lastUpdatedAt)
       ? identity.lastUpdatedAt
@@ -53,6 +55,7 @@ function normalizeIdentity(
     ...(acpxSessionId ? { acpxSessionId } : {}),
     ...(agentSessionId ? { agentSessionId } : {}),
     ...(sessionResumeSupported !== undefined ? { sessionResumeSupported } : {}),
+    ...(sessionResumeReady !== undefined ? { sessionResumeReady } : {}),
     source: source ?? "status",
     lastUpdatedAt: lastUpdatedAt ?? Date.now(),
   };
@@ -142,6 +145,7 @@ export function identityEquals(
     a.acpxSessionId === b.acpxSessionId &&
     a.agentSessionId === b.agentSessionId &&
     a.sessionResumeSupported === b.sessionResumeSupported &&
+    a.sessionResumeReady === b.sessionResumeReady &&
     a.source === b.source
   );
 }
@@ -177,6 +181,7 @@ export function mergeSessionIdentity(params: {
       : current.agentSessionId;
   const nextSessionResumeSupported =
     incoming.sessionResumeSupported ?? current.sessionResumeSupported;
+  const nextSessionResumeReady = incoming.sessionResumeReady ?? current.sessionResumeReady;
 
   const nextResolved = Boolean(nextAcpxSessionId || nextAgentSessionId);
   const nextState: SessionAcpIdentity["state"] = nextResolved
@@ -193,6 +198,7 @@ export function mergeSessionIdentity(params: {
     ...(nextSessionResumeSupported !== undefined
       ? { sessionResumeSupported: nextSessionResumeSupported }
       : {}),
+    ...(nextSessionResumeReady !== undefined ? { sessionResumeReady: nextSessionResumeReady } : {}),
     source: nextSource,
     lastUpdatedAt: params.now,
   };

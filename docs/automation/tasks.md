@@ -381,7 +381,7 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
     Checks whether active tasks still have authoritative runtime backing. ACP tasks require a live in-process turn, subagent tasks use child-session state, automation tasks use active-job ownership plus durable run history, and CLI tasks with run identity use the owning run context. If backing state is gone for more than 5 minutes (30 minutes for childless native subagent tasks), the task is marked `lost`.
   </Step>
   <Step title="ACP session repair">
-    Closes terminal or orphaned parent-owned one-shot ACP sessions that have no stable resume identity or whose agent did not advertise session resume/load support. Confirmed-resumable one-shots keep their session metadata after runtime cleanup so the parent can send a later follow-up. Stale terminal or orphaned persistent ACP sessions close only when no active conversation binding remains.
+    Closes terminal or orphaned parent-owned one-shot ACP sessions that have no stable resume identity, whose agent did not advertise session resume/load support, or that never completed a turn to confirm resumable state. Confirmed-resumable one-shots keep their session metadata after runtime cleanup so the parent can send a later follow-up. Stale terminal or orphaned persistent ACP sessions close only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
     Sets a `cleanupAfter` timestamp on terminal tasks (terminal time + retention window). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they become errors.

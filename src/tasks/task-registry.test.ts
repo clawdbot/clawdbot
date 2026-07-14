@@ -305,6 +305,7 @@ function createAcpSessionStoreEntry(params: {
   mode: "persistent" | "oneshot";
   resumeSessionId?: string;
   sessionResumeSupported?: boolean;
+  sessionResumeReady?: boolean;
 }): AcpSessionStoreEntry {
   const acp = {
     backend: "acpx",
@@ -320,6 +321,9 @@ function createAcpSessionStoreEntry(params: {
             agentSessionId: params.resumeSessionId,
             ...(params.sessionResumeSupported !== undefined
               ? { sessionResumeSupported: params.sessionResumeSupported }
+              : {}),
+            ...(params.sessionResumeReady !== undefined
+              ? { sessionResumeReady: params.sessionResumeReady }
               : {}),
             source: "event" as const,
             lastUpdatedAt: Date.now(),
@@ -3541,6 +3545,7 @@ describe("task-registry", () => {
           mode: "oneshot",
           resumeSessionId: "claude-session-123",
           sessionResumeSupported: true,
+          sessionResumeReady: true,
         }),
         closeAcpSession,
         unbindSessionBindings,
@@ -3550,6 +3555,58 @@ describe("task-registry", () => {
 
       expect(closeAcpSession).not.toHaveBeenCalled();
       expect(unbindSessionBindings).not.toHaveBeenCalled();
+    });
+  });
+
+  it("closes terminal one-shot ACP sessions before resume is confirmed ready", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:codex:acp:unmaterialized-oneshot";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-unmaterialized-oneshot",
+        task: "Cancelled before the first prompt",
+        status: "cancelled",
+        deliveryStatus: "delivered",
+        lastEventAt: now - 60_000,
+      });
+      finalizeTaskRunByRunId({
+        runId: "run-terminal-acp-unmaterialized-oneshot",
+        runtime: "acp",
+        status: "cancelled",
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      const current = getTaskById(task.taskId)!;
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, current]]),
+        snapshotTasks: [current],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "oneshot",
+          resumeSessionId: "codex-unmaterialized-thread",
+          sessionResumeSupported: true,
+        }),
+        closeAcpSession,
+        unbindSessionBindings: vi.fn().mockResolvedValue([]),
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
     });
   });
 
@@ -3765,6 +3822,7 @@ describe("task-registry", () => {
             mode: "oneshot",
             resumeSessionId: "claude-session-456",
             sessionResumeSupported: true,
+            sessionResumeReady: true,
           }),
         ],
         closeAcpSession,

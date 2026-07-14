@@ -907,6 +907,28 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it.each([
+    new Error("connection reset while resuming session"),
+    Object.assign(new Error("Server overloaded; retry later."), { code: -32001 }),
+    Object.assign(new Error("Resource not found: workspace file"), { code: -32002 }),
+  ])("preserves transient ensure-time resume failures %#", async (resumeError) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockRejectedValue(resumeError);
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:transient-resume-failure",
+        agent: "claude",
+        mode: "oneshot",
+        resumeSessionId: "claude-session-retryable",
+      }),
+    ).rejects.toBe(resumeError);
+  });
+
   it("adds Codex wrapper stderr tail to generic terminal turn error events", async () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(
@@ -4059,7 +4081,37 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
+  it.each([
+    new Error("no rollout found for thread id codex-session-missing"),
+    Object.assign(new Error("Resource not found: session"), { code: -32002 }),
+    Object.assign(new Error("Invalid params"), {
+      code: -32602,
+      data: { message: 'Session "claude-session-missing" not found' },
+    }),
+  ])("classifies missing ensure-time resume targets %#", async (resumeError) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockRejectedValue(resumeError);
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:acp:missing-resume-target",
+        agent: "codex",
+        mode: "oneshot",
+        resumeSessionId: "codex-session-missing",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      detailCode: "SESSION_RESUME_REQUIRED",
+      cause: resumeError,
+    });
+  });
+
   it("opens a new process lease when resuming a stale one-shot record", async () => {
+    const saveSession = vi.fn(async () => {});
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         name: "agent:codex:acp:resumed-oneshot",
@@ -4069,7 +4121,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         closed: false,
         agentCapabilities: { sessionCapabilities: { resume: {} } },
       })),
-      save: vi.fn(async () => {}),
+      save: saveSession,
     };
     const leaseStore = makeLeaseStore();
     const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
@@ -4115,7 +4167,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
     expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
     expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
-    expect(baseStore.save).toHaveBeenCalledWith(
+    expect(saveSession).toHaveBeenCalledWith(
       expect.objectContaining({
         agentCommand: CODEX_ACP_WRAPPER_COMMAND,
         openclawGatewayInstanceId: "gateway-test",

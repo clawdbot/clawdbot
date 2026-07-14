@@ -59,6 +59,8 @@ export type SessionAcpIdentity = {
   agentSessionId?: string;
   /** Whether the agent advertised session/resume or session/load support. */
   sessionResumeSupported?: boolean;
+  /** Whether a completed turn confirmed that this specific session can be resumed. */
+  sessionResumeReady?: boolean;
   /** Runtime lifecycle point that last supplied the identity fields. */
   source: SessionAcpIdentitySource;
   lastUpdatedAt: number;

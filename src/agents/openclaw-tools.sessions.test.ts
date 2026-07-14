@@ -2473,6 +2473,7 @@ describe("sessions tools", () => {
               source: "status",
               agentSessionId: "claude-inner-session",
               sessionResumeSupported: true,
+              sessionResumeReady: true,
               lastUpdatedAt: 1000,
             },
           }
@@ -2500,6 +2501,53 @@ describe("sessions tools", () => {
     expect(details.error).toContain('ACP mode="run"');
     expect(details.error).toContain("one-shot");
     expect(details.error).toContain('mode="session"');
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
+  it("sessions_send rejects one-shots before resume is confirmed ready", async () => {
+    const requesterKey = "agent:main:cron:job-1";
+    const targetKey = "agent:codex:acp:child-unmaterialized";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+    });
+    readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 1000,
+      identity: {
+        state: "resolved",
+        source: "status",
+        agentSessionId: "codex-unmaterialized-thread",
+        sessionResumeSupported: true,
+        lastUpdatedAt: 1000,
+      },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-unmaterialized-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("not ready to resume");
     expect(
       callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
     ).toBe(false);
@@ -2580,6 +2628,7 @@ describe("sessions tools", () => {
               source: "status",
               agentSessionId: "claude-inner-session",
               sessionResumeSupported: true,
+              sessionResumeReady: true,
               lastUpdatedAt: 1000,
             },
           }
@@ -2615,6 +2664,73 @@ describe("sessions tools", () => {
     expect(
       callGatewayMock.mock.calls.filter((call) => (call[0] as GatewayCall).method === "agent"),
     ).toHaveLength(1);
+  });
+
+  it("sessions_send defers waited resumable one-shot replies to task completion", async () => {
+    const requesterKey = "agent:main:cron:job-waited-followup";
+    const targetKey = "agent:claude:acp:child-waited-followup";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+    });
+    readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "claude",
+      runtimeSessionName: "claude",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 1000,
+      identity: {
+        state: "resolved",
+        source: "status",
+        agentSessionId: "claude-inner-session",
+        sessionResumeSupported: true,
+        sessionResumeReady: true,
+        lastUpdatedAt: 1000,
+      },
+    });
+    callGatewayMock.mockImplementation(async (call: GatewayCall) => {
+      if (call.method === "agent") {
+        return { ok: true, runId: "run-waited-followup" };
+      }
+      if (call.method === "chat.history") {
+        throw new Error("history service unavailable");
+      }
+      if (call.method === "agent.wait") {
+        return { runId: "run-waited-followup", status: "ok" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-waited-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "Continue with the previous context.",
+      timeoutSeconds: 1,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(targetKey);
+    expect(details.delivery?.status).toBe("skipped");
+    expect(
+      callGatewayMock.mock.calls.filter((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toHaveLength(1);
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent.wait"),
+    ).toBe(false);
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "chat.history"),
+    ).toBe(false);
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {

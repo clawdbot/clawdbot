@@ -1,7 +1,3 @@
-import {
-  identityHasStableSessionId,
-  resolveSessionIdentityFromMeta,
-} from "@openclaw/acp-core/runtime/session-identity";
 // Reconciles stale or lost task registry records during maintenance passes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
@@ -62,6 +58,11 @@ import {
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
+import {
+  isParentOwnedAcpSessionEntry,
+  isParentOwnedAcpSessionTask,
+  isResumableOneShotAcpSession,
+} from "./task-registry.acp-session-lifecycle.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -517,40 +518,6 @@ function taskReferenceAt(task: TaskRecord): number {
 
 function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
   return normalizeOptionalString(task.childSessionKey);
-}
-
-function getAcpSessionParentKeys(acpEntry: Pick<AcpSessionStoreEntry, "entry">): string[] {
-  return [
-    normalizeOptionalString(acpEntry.entry?.spawnedBy),
-    normalizeOptionalString(acpEntry.entry?.parentSessionKey),
-  ].filter((value): value is string => Boolean(value));
-}
-
-function isParentOwnedAcpSessionTask(
-  task: TaskRecord,
-  acpEntry: ReturnType<typeof readAcpSessionEntry>,
-): boolean {
-  const entry = acpEntry?.entry;
-  if (!entry) {
-    return false;
-  }
-  const ownerKey = normalizeOptionalString(task.ownerKey);
-  const requesterKey = normalizeOptionalString(task.requesterSessionKey);
-  const parentKeys = getAcpSessionParentKeys({ entry });
-  return parentKeys.some((parentKey) => parentKey === ownerKey || parentKey === requesterKey);
-}
-
-function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entry">): boolean {
-  return getAcpSessionParentKeys(acpEntry).length > 0;
-}
-
-function isResumableOneShotAcpSession(acpEntry: AcpSessionStoreEntry): boolean {
-  const identity = resolveSessionIdentityFromMeta(acpEntry.acp);
-  return (
-    acpEntry.acp?.mode === "oneshot" &&
-    identity?.sessionResumeSupported === true &&
-    identityHasStableSessionId(identity)
-  );
 }
 
 function hasActiveSessionBinding(sessionKey: string): boolean {

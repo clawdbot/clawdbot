@@ -715,6 +715,87 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("keeps a completed persistent turn successful when identity persistence fails", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      let turnFinished = false;
+      runtimeState.ensureSession.mockImplementation(async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+      }));
+      runtimeState.runTurn.mockImplementation(async function* () {
+        turnFinished = true;
+        yield { type: "done" as const };
+      });
+      runtimeState.getStatus.mockImplementation(async () => ({
+        summary: "status=alive",
+        details: { status: "alive" },
+        ...(turnFinished ? { backendSessionId: "persistent-session-write-failure" } : {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:claude:acp:persistent-write-failure";
+      const parentSessionKey = "agent:main:cron:persistent-write-failure";
+      const storedMeta = readySessionMeta({ mode: "persistent" });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === childSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "persistent-write-failure",
+              updatedAt: Date.now(),
+              spawnedBy: parentSessionKey,
+            },
+            acp: storedMeta,
+          };
+        }
+        if (sessionKey === parentSessionKey) {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "persistent-write-failure-parent", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+      hoisted.upsertAcpSessionMetaMock.mockImplementation(
+        async (paramsUnknown: {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        }) => {
+          const next = paramsUnknown.mutate(storedMeta, { acp: storedMeta });
+          if (next?.identity?.acpxSessionId === "persistent-session-write-failure") {
+            throw new Error("persistent identity write failed");
+          }
+          return null;
+        },
+      );
+
+      const manager = new AcpSessionManager();
+      await expect(
+        manager.runTurn({
+          provenance: "system",
+          cfg: baseCfg,
+          sessionKey: childSessionKey,
+          text: "complete despite best-effort identity persistence",
+          mode: "prompt",
+          requestId: "persistent-write-failure-acp-turn",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+      expect(requireTaskByRunId("persistent-write-failure-acp-turn").status).toBe("succeeded");
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
+
   it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

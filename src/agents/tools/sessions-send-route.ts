@@ -10,27 +10,35 @@ export function resolveAcpSessionsSendRoute(params: {
   acpMeta: SessionAcpMeta | undefined;
   requesterSessionKey: string | null | undefined;
   activeAcpTurn: boolean;
-}): { skipA2AFlow: boolean; rejection?: string } {
+}): { skipA2AFlow: boolean; deferToTaskCompletion: boolean; rejection?: string } {
   const entry =
     params.acpMeta && params.entry ? { ...params.entry, acp: params.acpMeta } : params.entry;
   const skipA2AFlow = isRequesterParentOfBackgroundAcpSession(entry, params.requesterSessionKey);
   if (!skipA2AFlow || params.acpMeta?.mode !== "oneshot") {
-    return { skipA2AFlow };
+    return { skipA2AFlow, deferToTaskCompletion: false };
   }
   const identity = params.acpMeta.identity;
   const hasStableIdentity = Boolean(
     normalizeOptionalString(identity?.agentSessionId) ??
     normalizeOptionalString(identity?.acpxSessionId),
   );
-  if (!params.activeAcpTurn && hasStableIdentity && identity?.sessionResumeSupported === true) {
-    return { skipA2AFlow };
+  if (
+    !params.activeAcpTurn &&
+    hasStableIdentity &&
+    identity?.sessionResumeSupported === true &&
+    identity.sessionResumeReady === true
+  ) {
+    return { skipA2AFlow, deferToTaskCompletion: true };
   }
   const rejection =
-    !params.activeAcpTurn && hasStableIdentity
+    !params.activeAcpTurn && hasStableIdentity && identity?.sessionResumeSupported !== true
       ? "sessions_send cannot resume this ACP one-shot because its agent does not support session resume. "
-      : 'sessions_send cannot interrupt running ACP mode="run" one-shot sessions or resume one-shots before a stable ACP session id is recorded. ';
+      : !params.activeAcpTurn && hasStableIdentity && identity?.sessionResumeReady !== true
+        ? "sessions_send cannot resume this ACP one-shot because this session is not ready to resume. "
+        : 'sessions_send cannot interrupt running ACP mode="run" one-shot sessions or resume one-shots before a stable ACP session id is recorded. ';
   return {
     skipA2AFlow,
+    deferToTaskCompletion: false,
     rejection:
       rejection +
       "Use session_status or the task result for progress, " +

@@ -1,3 +1,4 @@
+import type { AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 /** Tests ACP runtime handle caching, reuse, re-ensure, and lifecycle cleanup. */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -879,6 +880,7 @@ describe("AcpSessionManager runtime handles", () => {
             source: "status",
             acpxSessionId: "acpx-sid-oneshot",
             sessionResumeSupported: true,
+            sessionResumeReady: true,
             lastUpdatedAt: Date.now(),
           },
         },
@@ -951,7 +953,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expect(mockCallArg(runtimeState.ensureSession).resumeSessionId).toBeUndefined();
-    const turnHandle = mockCallArg(runtimeState.runTurn).handle;
+    const turnHandle = mockCallArg(runtimeState.runTurn).handle as AcpRuntimeHandle;
     expectRecordFields(turnHandle, {
       backendSessionId: "fresh-acpx-session",
     });
@@ -961,31 +963,50 @@ describe("AcpSessionManager runtime handles", () => {
   it("fails closed when a persisted one-shot session cannot be resumed", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValue(
-      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "failed to resume one-shot ACP session"),
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "failed to resume one-shot ACP session", {
+        detailCode: "SESSION_RESUME_REQUIRED",
+      }),
     );
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
       runtime: runtimeState.runtime,
     });
     const sessionKey = "agent:claude:acp:binding:demo-binding:default:oneshot-stale";
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      runtimeSessionName: sessionKey,
+      mode: "oneshot",
+      identity: {
+        state: "resolved",
+        source: "status",
+        agentSessionId: "agent-session-stale",
+        sessionResumeSupported: true,
+        sessionResumeReady: true,
+        lastUpdatedAt: Date.now(),
+      },
+    };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: key,
-          mode: "oneshot",
-          identity: {
-            state: "resolved",
-            source: "status",
-            agentSessionId: "agent-session-stale",
-            sessionResumeSupported: true,
-            lastUpdatedAt: Date.now(),
-          },
-        },
+        entry: { sessionId: "session-oneshot-stale", updatedAt: Date.now(), acp: currentMeta },
+        acp: currentMeta,
       };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (!next) {
+        return null;
+      }
+      currentMeta = next;
+      return { sessionId: "session-oneshot-stale", updatedAt: Date.now(), acp: currentMeta };
     });
 
     const manager = new AcpSessionManager();
@@ -1010,6 +1031,9 @@ describe("AcpSessionManager runtime handles", () => {
       resumeSessionId: "agent-session-stale",
     });
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
+    expect(currentMeta.identity?.agentSessionId).toBeUndefined();
+    expect(currentMeta.identity?.sessionResumeSupported).toBeUndefined();
+    expect(currentMeta.identity?.sessionResumeReady).toBeUndefined();
   });
 
   it("falls back to a fresh ensure without reusing stale agent session ids", async () => {
@@ -1183,6 +1207,7 @@ describe("AcpSessionManager runtime handles", () => {
       provenance: "system",
     });
     expect(currentMeta?.identity?.sessionResumeSupported).toBe(true);
+    expect(currentMeta?.identity?.sessionResumeReady).toBe(true);
     const managerB = new AcpSessionManager();
     await managerB.runTurn({
       cfg: baseCfg,
@@ -1201,6 +1226,71 @@ describe("AcpSessionManager runtime handles", () => {
       resumeSessionId: "acpx-session-1",
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark a pre-prompt cancelled one-shot ready to resume", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:cancelled-before-prompt",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:cancelled-before-prompt:oneshot:runtime",
+      acpxRecordId: "record-cancelled-before-prompt",
+      backendSessionId: "codex-unmaterialized-thread",
+      sessionResumeSupported: true,
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "done", stopReason: "cancelled" };
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:cancelled-before-prompt";
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      runtimeSessionName: sessionKey,
+      mode: "oneshot",
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      sessionId: "session-cancelled-before-prompt",
+      updatedAt: Date.now(),
+      acp: currentMeta,
+    }));
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-cancelled-before-prompt",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "never submitted",
+      mode: "prompt",
+      requestId: "r-cancelled-before-prompt",
+      provenance: "system",
+    });
+
+    expect(currentMeta.identity).toMatchObject({
+      acpxSessionId: "codex-unmaterialized-thread",
+      sessionResumeSupported: true,
+    });
+    expect(currentMeta.identity?.sessionResumeReady).toBeUndefined();
   });
 
   it("preserves one-shot resume support until status resolves the session id", async () => {
