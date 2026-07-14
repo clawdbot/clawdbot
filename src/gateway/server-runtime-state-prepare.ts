@@ -6,6 +6,11 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  buildHostingProfileConditions,
+  requiredCriteriaForHostingProfile,
+  resolveHostingProfile,
+} from "../hosting/profiles.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import {
@@ -403,6 +408,16 @@ export async function prepareGatewayRuntimeState(params: {
   const evaluateRuntimeReadiness = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = pluginRuntime.readinessSnapshot;
+      const profile = resolveHostingProfile({ config: snapshot.config, env: process.env });
+      const auth = getResolvedAuth();
+      const profileConditions = buildHostingProfileConditions(profile, {
+        bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
+        bindHost,
+        port,
+        authMode: auth.mode,
+        trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+        trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
+      });
       const contribution = await resolveSelectedReadiness({
         config: snapshot.config,
         registry: snapshot.registry,
@@ -411,6 +426,7 @@ export async function prepareGatewayRuntimeState(params: {
         stateServices: {
           scheduler: runtimeStateRef.current?.cronState.cron.getReadinessSnapshot(),
         },
+        additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
       });
       if (snapshot !== pluginRuntime.readinessSnapshot) {
         continue;
@@ -420,7 +436,7 @@ export async function prepareGatewayRuntimeState(params: {
         configLoaded: true,
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
-        additionalConditions: contribution.conditions,
+        additionalConditions: [...profileConditions, ...contribution.conditions],
         additionalSubjects: contribution.subjects,
       });
     }

@@ -149,8 +149,15 @@ export function createSelectedReadinessResolver() {
     executionCapabilities?: ExecutionCapabilityReadinessSnapshot;
     env?: NodeJS.ProcessEnv;
     stateServices?: StateServiceReadinessSnapshot;
+    additionalRequiredCriteria?: readonly string[];
   }): Promise<ReadinessContribution> => {
-    const selected = resolveSelectedReadinessCriteria(params.config).filter(
+    const selectedById = new Map(
+      resolveSelectedReadinessCriteria(params.config).map((entry) => [entry.id, entry]),
+    );
+    for (const id of params.additionalRequiredCriteria ?? []) {
+      selectedById.set(id, { id, requirement: "required" });
+    }
+    const selected = Array.from(selectedById.values()).filter(
       ({ id }) => !CANONICAL_CONDITION_TYPES.has(id),
     );
     if (selected.length === 0) {

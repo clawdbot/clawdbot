@@ -9,6 +9,7 @@ const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--auth",
   "--password",
   "--password-file",
+  "--hosting-profile",
   "--tailscale",
   "--ws-log",
   "--raw-stream-path",
