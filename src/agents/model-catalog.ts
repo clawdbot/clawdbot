@@ -24,6 +24,11 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
+import {
+  DETERMINISTIC_GATEWAY_MODEL,
+  DETERMINISTIC_GATEWAY_PROVIDER,
+  DETERMINISTIC_NOTE_MODEL,
+} from "./deterministic-gateway-model.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import {
   buildAgentModelCatalogCacheKey,
@@ -305,6 +310,23 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
   });
 }
 
+function withDeterministicModelCatalog(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  const models = [...entries];
+  mergeCatalogEntries(models, [
+    {
+      provider: DETERMINISTIC_GATEWAY_PROVIDER,
+      id: DETERMINISTIC_GATEWAY_MODEL,
+      name: "Deterministic gateway",
+    },
+    {
+      provider: DETERMINISTIC_GATEWAY_PROVIDER,
+      id: DETERMINISTIC_NOTE_MODEL,
+      name: "Deterministic NOTE",
+    },
+  ]);
+  return sortModelCatalogEntries(models);
+}
+
 function normalizePersistedModelCatalogEntry(
   providerRaw: string,
   entry: Record<string, unknown>,
@@ -553,18 +575,20 @@ export async function loadModelCatalog(params?: {
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   if (params?.cacheOnly === true) {
-    return loadedModelCatalogGeneration === modelCatalogGeneration
-      ? (loadedModelCatalogSnapshot ?? [])
-      : [];
+    return withDeterministicModelCatalog(
+      loadedModelCatalogGeneration === modelCatalogGeneration
+        ? (loadedModelCatalogSnapshot ?? [])
+        : [],
+    );
   }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
     try {
-      return await loadReadOnlyPersistedModelCatalog(params);
+      return withDeterministicModelCatalog(await loadReadOnlyPersistedModelCatalog(params));
     } catch {
       // Keep gateway models.list on side-effect-free sources. The RPC timeout
       // cannot fire while provider discovery blocks the event loop.
-      return loadReadOnlyStaticModelCatalog(params);
+      return withDeterministicModelCatalog(await loadReadOnlyStaticModelCatalog(params));
     }
   }
   if (!readOnly && params?.useCache === false) {
@@ -625,7 +649,7 @@ export async function loadModelCatalog(params?: {
           | undefined;
         if (cached?.length) {
           logStage("state-cache-hit", `entries=${cached.length}`);
-          return cached;
+          return withDeterministicModelCatalog(cached);
         }
       }
       if (!readOnly) {
@@ -649,7 +673,7 @@ export async function loadModelCatalog(params?: {
               | undefined;
             if (cached?.length) {
               logStage("state-cache-hit", `entries=${cached.length}`);
-              return cached;
+              return withDeterministicModelCatalog(cached);
             }
           }
         }
@@ -794,7 +818,7 @@ export async function loadModelCatalog(params?: {
         }
       }
 
-      const sorted = sortModels(models);
+      const sorted = withDeterministicModelCatalog(models);
       if (!readOnly) {
         writeCachedAgentModelCatalog({
           agentDir,
@@ -814,9 +838,9 @@ export async function loadModelCatalog(params?: {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return sortModels(models);
+        return withDeterministicModelCatalog(models);
       }
-      return [];
+      return withDeterministicModelCatalog([]);
     }
   };
 

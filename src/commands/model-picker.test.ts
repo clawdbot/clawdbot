@@ -351,6 +351,77 @@ afterEach(() => {
 });
 
 describe("promptDefaultModel", () => {
+  it("offers deterministic gateway mode without a provider catalog", async () => {
+    loadModelCatalog.mockResolvedValue([]);
+    const select = vi.fn(async (params) => {
+      const option = params.options.find(
+        (candidate: { value: string }) => candidate.value === "dummy/dummy",
+      );
+      return option?.value as never;
+    });
+    const prompter = makePrompter({ select });
+
+    const result = await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(result).toEqual({ model: "dummy/dummy" });
+    expect(requireOption(pickerOptions(select as MockCallSource), "dummy/dummy").label).toBe(
+      "dummy/dummy - No AI - deterministic gateway only",
+    );
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+  });
+
+  it("offers deterministic NOTE mode without a provider catalog", async () => {
+    loadModelCatalog.mockResolvedValue([]);
+    const select = vi.fn(
+      async (params) =>
+        params.options.find((candidate: { value: string }) => candidate.value === "dummy/note")
+          ?.value as never,
+    );
+    const prompter = makePrompter({ select });
+
+    const result = await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(result).toEqual({ model: "dummy/note" });
+    expect(requireOption(pickerOptions(select as MockCallSource), "dummy/note").label).toBe(
+      "dummy/note - No AI - deterministic NOTE model",
+    );
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate deterministic gateway mode when configured directly", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: {
+        agents: { defaults: { model: { primary: "dummy/dummy" } } },
+      } as OpenClawConfig,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      loadCatalog: false,
+    });
+
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__keep__",
+      "__manual__",
+      "dummy/dummy",
+      "dummy/note",
+    ]);
+  });
+
   it("adds runtime-route hints for canonical OpenAI models", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -395,7 +466,7 @@ describe("promptDefaultModel", () => {
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
-    expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(values).toEqual(["anthropic/claude-sonnet-4-6", "dummy/dummy", "dummy/note"]);
   });
 
   it("keeps implicit Bedrock AWS SDK models visible without API-key auth", async () => {
@@ -417,7 +488,11 @@ describe("promptDefaultModel", () => {
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
-    expect(values).toEqual(["amazon-bedrock/us.anthropic.claude-sonnet-4-5"]);
+    expect(values).toEqual([
+      "amazon-bedrock/us.anthropic.claude-sonnet-4-5",
+      "dummy/dummy",
+      "dummy/note",
+    ]);
   });
 
   it("hides legacy runtime providers from default model choices", async () => {
@@ -448,6 +523,8 @@ describe("promptDefaultModel", () => {
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3.1-pro-preview",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 
@@ -470,6 +547,8 @@ describe("promptDefaultModel", () => {
     expect(result.model).toBe("google/gemini-3.1-pro-preview");
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
       "google/gemini-3.1-pro-preview",
+      "dummy/dummy",
+      "dummy/note",
     ]);
     expect(
       requireRecord(
@@ -685,7 +764,13 @@ describe("promptDefaultModel", () => {
     expect(params.searchable).toBe(false);
     expect(params.initialValue).toBe("__keep__");
     const options = pickerOptions(select as MockCallSource);
-    expect(optionValues(options)).toEqual(["__keep__", "__manual__", "__browse__"]);
+    expect(optionValues(options)).toEqual([
+      "__keep__",
+      "__manual__",
+      "__browse__",
+      "dummy/dummy",
+      "dummy/note",
+    ]);
     expect(requireOption(options, "__keep__").label).toBe(
       "Keep current (nvidia/nvidia/nemotron-3-super-120b-a12b)",
     );
@@ -721,6 +806,8 @@ describe("promptDefaultModel", () => {
       "__keep__",
       "__manual__",
       "__browse__",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 
@@ -754,6 +841,8 @@ describe("promptDefaultModel", () => {
       "__keep__",
       "__manual__",
       "__browse__",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 
@@ -899,6 +988,8 @@ describe("promptDefaultModel", () => {
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "nvidia/moonshotai/kimi-k2.5",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 
@@ -941,6 +1032,8 @@ describe("promptDefaultModel", () => {
       "nvidia/z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "dummy/dummy",
+      "dummy/note",
     ]);
     expect(
       requireOption(pickerOptions(select as MockCallSource), "nvidia/nemotron-3-ultra-550b-a55b")
@@ -1060,6 +1153,8 @@ describe("promptDefaultModel", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "nvidia/minimaxai/minimax-m2.7",
       "nvidia/z-ai/glm-5.1",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 
@@ -1261,6 +1356,8 @@ describe("promptDefaultModel", () => {
       "__keep__",
       "__manual__",
       "openai/gpt-5.5",
+      "dummy/dummy",
+      "dummy/note",
     ]);
   });
 

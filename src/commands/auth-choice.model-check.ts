@@ -1,6 +1,7 @@
 // Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { isDeterministicGatewayModel } from "../agents/deterministic-gateway-model.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -109,6 +110,11 @@ export async function warnIfModelConfigLooksOff(
     cfg: config,
     agentId: options?.agentId,
   });
+  // The deterministic gateway model is intentionally credential-free and never
+  // appears in provider catalogs; both checks below would be false positives.
+  if (isDeterministicGatewayModel(ref.provider, ref.model)) {
+    return;
+  }
   const warnings: string[] = [];
   if (options?.validateCatalog !== false) {
     const catalog = await loadModelCatalog({

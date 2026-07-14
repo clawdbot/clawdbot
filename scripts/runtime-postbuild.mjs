@@ -25,6 +25,8 @@ const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
 const PLUGIN_SDK_ROOT_ALIAS_OUTPUT = "dist/plugin-sdk/root-alias.cjs";
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
+const DETERMINISTIC_GATEWAY_REPLIES_SOURCE = "src/agents/deterministic-gateway-replies.txt";
+const DETERMINISTIC_GATEWAY_REPLIES_OUTPUT = "dist/deterministic-gateway-replies.txt";
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // v2026.4.29 dispatch lazy chunks. Package updates used to replace the
   // dist tree before the live gateway had restarted, so an already-loaded old
@@ -540,6 +542,14 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+export function copyDeterministicGatewayReplies(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  fs.copyFileSync(
+    path.join(rootDir, DETERMINISTIC_GATEWAY_REPLIES_SOURCE),
+    path.join(rootDir, DETERMINISTIC_GATEWAY_REPLIES_OUTPUT),
+  );
+}
+
 function shouldCopyStaticExtensionAssets(params) {
   const env = params.env ?? process.env;
   return env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
@@ -564,6 +574,7 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
+  runPhase("deterministic gateway replies", () => copyDeterministicGatewayReplies(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("static extension assets", () => {
     if (!shouldCopyStaticExtensionAssets(params)) {

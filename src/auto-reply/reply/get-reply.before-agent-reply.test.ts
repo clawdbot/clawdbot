@@ -1,5 +1,6 @@
 // Tests before-agent-reply hooks in the get-reply pipeline.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DETERMINISTIC_GATEWAY_REPLY } from "../../agents/deterministic-gateway-model.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -34,7 +35,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
-function createContinueDirectivesResult() {
+function createContinueDirectivesResult(overrides: { provider?: string; model?: string } = {}) {
   return createGetReplyContinueDirectivesResult({
     body: "hello world",
     abortKey: "agent:main:telegram:-100123",
@@ -44,6 +45,7 @@ function createContinueDirectivesResult() {
     commandSource: "text",
     senderIsOwner: false,
     resetHookTriggered: false,
+    ...overrides,
   });
 }
 
@@ -107,6 +109,8 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           sessionKey?: string;
           sessionId?: string;
           workspaceDir?: string;
+          modelProviderId?: string;
+          modelId?: string;
           messageProvider?: string;
           trigger?: string;
           channelId?: string;
@@ -125,6 +129,8 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.sessionKey).toBe("agent:main:telegram:-100123");
     expect(hookCtx.sessionId).toBe("session-1");
     expect(hookCtx.workspaceDir).toBe("/tmp/workspace");
+    expect(hookCtx.modelProviderId).toBeTruthy();
+    expect(hookCtx.modelId).toBeTruthy();
     expect(hookCtx.messageProvider).toBe("telegram");
     expect(hookCtx.trigger).toBe("user");
     expect(hookCtx.channel).toBe("telegram");
@@ -144,6 +150,59 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
+  });
+
+  it("returns a deterministic reply instead of running the agent harness", async () => {
+    mocks.resolveReplyDirectives.mockResolvedValue(
+      createContinueDirectivesResult({ provider: "dummy", model: "dummy" }),
+    );
+    mocks.runBeforeAgentReply.mockResolvedValue({ handled: false });
+
+    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+
+    expect(result).toEqual({ text: DETERMINISTIC_GATEWAY_REPLY });
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the deterministic NOTE model to plugin hooks", async () => {
+    mocks.resolveReplyDirectives.mockResolvedValue(
+      createContinueDirectivesResult({ provider: "dummy", model: "note" }),
+    );
+    mocks.runBeforeAgentReply.mockResolvedValue({ handled: true, reply: { text: "saved" } });
+
+    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+
+    expect(result).toEqual({ text: "saved" });
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ modelProviderId: "dummy", modelId: "note" }),
+    );
+  });
+
+  it("passes inbound media and location data to plugin hooks", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({ handled: true, reply: { text: "saved" } });
+    const ctx = buildGetReplyGroupCtx({
+      BodyForCommands: "photo caption",
+      MediaPaths: ["/tmp/photo.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaWorkspaceDir: "/tmp/workspace",
+      LocationLat: 48.2,
+      LocationLon: 16.37,
+      LocationName: "Vienna",
+    });
+
+    await getReplyFromConfig(ctx, undefined, {});
+
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userText: "photo caption",
+        mediaPaths: ["/tmp/photo.jpg"],
+        mediaTypes: ["image/jpeg"],
+        mediaWorkspaceDir: "/tmp/workspace",
+        location: expect.objectContaining({ latitude: 48.2, longitude: 16.37, name: "Vienna" }),
+      }),
+      expect.anything(),
+    );
   });
 });
 afterEach(() => {

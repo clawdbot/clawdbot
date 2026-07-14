@@ -138,6 +138,26 @@ describe("warnIfModelConfigLooksOff", () => {
     );
   });
 
+  it("treats the deterministic gateway model as intentionally credential-free", async () => {
+    const note = vi.fn(async () => {});
+    const prompter = makePrompter({ note });
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "dummy/dummy",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await warnIfModelConfigLooksOff(config, prompter);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
+  });
+
   it("keeps full catalog validation enabled by default", async () => {
     const note = vi.fn(async () => {});
     const prompter = makePrompter({ note });

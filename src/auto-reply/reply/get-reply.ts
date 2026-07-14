@@ -11,6 +11,11 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import {
+  DETERMINISTIC_GATEWAY_REPLY,
+  isDeterministicGatewayModel,
+  isDeterministicNoteModel,
+} from "../../agents/deterministic-gateway-model.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -27,6 +32,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
+import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -993,14 +999,59 @@ export async function getReplyFromConfig(
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
       const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
+      const hookUserText =
+        normalizeOptionalString(ctx.CommandBody) ??
+        normalizeOptionalString(ctx.RawBody) ??
+        normalizeOptionalString(ctx.BodyForCommands);
+      const hookMediaPaths = Array.isArray(ctx.MediaPaths)
+        ? ctx.MediaPaths.filter(
+            (value): value is string => typeof value === "string" && Boolean(value.trim()),
+          )
+        : typeof ctx.MediaPath === "string" && ctx.MediaPath.trim()
+          ? [ctx.MediaPath]
+          : [];
+      const hookMediaTypes = Array.isArray(ctx.MediaTypes)
+        ? ctx.MediaTypes.filter(
+            (value): value is string => typeof value === "string" && Boolean(value.trim()),
+          )
+        : typeof ctx.MediaType === "string" && ctx.MediaType.trim()
+          ? [ctx.MediaType]
+          : [];
+      const hookLocation =
+        typeof ctx.LocationLat === "number" && typeof ctx.LocationLon === "number"
+          ? {
+              latitude: ctx.LocationLat,
+              longitude: ctx.LocationLon,
+              ...(typeof ctx.LocationAccuracy === "number"
+                ? { accuracy: ctx.LocationAccuracy }
+                : {}),
+              ...(ctx.LocationName ? { name: ctx.LocationName } : {}),
+              ...(ctx.LocationAddress ? { address: ctx.LocationAddress } : {}),
+              ...(ctx.LocationSource ? { source: ctx.LocationSource } : {}),
+              ...(typeof ctx.LocationIsLive === "boolean" ? { isLive: ctx.LocationIsLive } : {}),
+              ...(ctx.LocationCaption ? { caption: ctx.LocationCaption } : {}),
+            }
+          : undefined;
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
-          { cleanedBody },
+          {
+            cleanedBody,
+            ...(hookUserText ? { userText: hookUserText } : {}),
+            ...(hookMediaPaths.length > 0 ? { mediaPaths: hookMediaPaths } : {}),
+            ...(hookMediaTypes.length > 0 ? { mediaTypes: hookMediaTypes } : {}),
+            ...(ctx.MediaWorkspaceDir ? { mediaWorkspaceDir: ctx.MediaWorkspaceDir } : {}),
+            ...(hookLocation ? { location: hookLocation } : {}),
+            ...(ctx.UntrustedStructuredContext?.length
+              ? { structuredContext: ctx.UntrustedStructuredContext }
+              : {}),
+          },
           {
             agentId,
             sessionKey: agentSessionKey,
             sessionId,
             workspaceDir,
+            modelProviderId: runProvider,
+            modelId: runModel,
             trigger: hookTrigger,
             ...buildAgentHookContextChannelFields({
               sessionKey: agentSessionKey,
@@ -1023,6 +1074,21 @@ export async function getReplyFromConfig(
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
     }
+  }
+
+  if (isDeterministicNoteModel(runProvider, runModel)) {
+    const notePluginLoaded =
+      getGlobalPluginRegistry()?.plugins.some(
+        (plugin) => plugin.id === "note" && plugin.status === "loaded",
+      ) ?? false;
+    return {
+      text: notePluginLoaded
+        ? "NOTE ✅"
+        : "NOTE is not installed. Please install: https://github.com/safrano9999/NOTE/releases/latest/download/note-latest.zip",
+    };
+  }
+  if (isDeterministicGatewayModel(runProvider, runModel)) {
+    return { text: DETERMINISTIC_GATEWAY_REPLY };
   }
 
   // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
