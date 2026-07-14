@@ -365,7 +365,17 @@ describe("modelsAuthClearCooldownCommand", () => {
     mocks.loadValidConfigOrThrow.mockResolvedValue({});
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
-    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.clearAuthProfileCooldown.mockImplementation(async ({ store, profileId }) => {
+      store.usageStats = {
+        ...store.usageStats,
+        [profileId]: {
+          ...store.usageStats?.[profileId],
+          errorCount: 0,
+          blockedUntil: undefined,
+          blockedReason: undefined,
+        },
+      };
+    });
     mocks.callGateway.mockResolvedValue({});
   });
 
@@ -424,6 +434,30 @@ describe("modelsAuthClearCooldownCommand", () => {
     );
 
     expect(mocks.clearAuthProfileCooldown).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed store update without refreshing the gateway", async () => {
+    const store = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key" as const, provider: "openai", key: "sk-test" },
+      },
+      usageStats: {
+        [profileId]: {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "billing" as const,
+          errorCount: 2,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+
+    await expect(modelsAuthClearCooldownCommand({ profileId }, createRuntime())).rejects.toThrow(
+      `Failed to clear cooldown state for auth profile "${profileId}"`,
+    );
+
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 });

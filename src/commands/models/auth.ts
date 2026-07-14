@@ -23,7 +23,9 @@ import {
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileCredential, ProfileUsageStats } from "../../agents/auth-profiles/types.js";
+import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -75,6 +77,23 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
     throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
   }
   return expires;
+}
+
+function hasAuthProfileFailureState(stats: ProfileUsageStats | undefined): boolean {
+  return Boolean(
+    stats &&
+    ((stats.errorCount ?? 0) > 0 ||
+      stats.blockedUntil !== undefined ||
+      stats.blockedReason !== undefined ||
+      stats.blockedSource !== undefined ||
+      stats.blockedModel !== undefined ||
+      stats.cooldownUntil !== undefined ||
+      stats.cooldownReason !== undefined ||
+      stats.cooldownModel !== undefined ||
+      stats.disabledUntil !== undefined ||
+      stats.disabledReason !== undefined ||
+      stats.failureCounts !== undefined),
+  );
 }
 
 function guardCancel<T>(value: T | symbol): T {
@@ -800,6 +819,11 @@ export async function modelsAuthClearCooldownCommand(
   }
 
   await clearAuthProfileCooldown({ store, profileId, agentDir });
+  if (hasAuthProfileFailureState(store.usageStats?.[profileId])) {
+    throw new Error(
+      `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
+    );
+  }
   await refreshRunningGatewayAuthState();
   runtime.log(`Cleared cooldown state for auth profile "${profileId}".`);
   runtime.log(
