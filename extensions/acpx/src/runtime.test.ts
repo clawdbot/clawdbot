@@ -1544,6 +1544,90 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["effort", "none"],
+    ["effort", "off"],
+    ["thinking", "off"],
+  ])("resets disabled Claude ACP %s config controls", async (key, value) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({ handle, key, value });
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "effort",
+      value: "default",
+    });
+  });
+
+  it("preserves supported Claude ACP effort config controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({ handle, key: "effort", value: "medium" });
+
+    expect(setConfigOption).toHaveBeenCalledWith({ handle, key: "effort", value: "medium" });
+  });
+
+  it("clears an existing Claude ACP effort override when effort is disabled", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({ handle, key: "effort", value: "medium" });
+    await runtime.setConfigOption({ handle, key: "effort", value: "off" });
+
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
+      handle,
+      key: "effort",
+      value: "medium",
+    });
+    expect(setConfigOption).toHaveBeenNthCalledWith(2, {
+      handle,
+      key: "effort",
+      value: "default",
+    });
+  });
+
   it("normalizes model config controls for claude-agent-acp", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
