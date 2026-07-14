@@ -170,7 +170,7 @@ describe("google music generation provider", () => {
         prompt: "upbeat synthpop anthem",
         cfg: {},
       }),
-    ).rejects.toThrow("Generated music asset contains malformed base64 audio data");
+    ).rejects.toThrow("Google music generation response returned malformed audio base64");
 
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });

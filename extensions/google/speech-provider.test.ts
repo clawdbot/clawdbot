@@ -7,10 +7,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const { canonicalizeBase64 } = await import("@openclaw/media-core/base64");
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
-    canonicalizeBase64,
+    ...actual,
     transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
   };
 });
@@ -172,6 +172,46 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.readUInt32LE(24)).toBe(24_000);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Gemini TTS audio base64", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "audio/L16;codec=pcm;rate=24000",
+                      data: "not valid base64!",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release,
+    });
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Say this.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 12_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed audio base64");
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {

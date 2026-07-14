@@ -235,7 +235,7 @@ describe("google video generation provider", () => {
         cfg: {},
         durationSeconds: 3,
       }),
-    ).rejects.toThrow("Google video generation returned malformed base64 video data");
+    ).rejects.toThrow("Google generated video response returned malformed video base64");
   });
 
   it("rejects inline video bytes that exceed the configured media cap", async () => {
@@ -268,6 +268,38 @@ describe("google video generation provider", () => {
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+  });
+
+  it("rejects malformed inline video base64", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: "not valid base64!",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video response returned malformed video base64");
   });
 
   it("strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK", async () => {

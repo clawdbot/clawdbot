@@ -1,6 +1,5 @@
 // Google provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -17,6 +16,7 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { decodeGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -37,12 +37,6 @@ const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
   return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
-}
-
-function assertGeneratedVideoBufferWithinLimit(buffer: Buffer, maxBytes: number): void {
-  if (buffer.length > maxBytes) {
-    throw new Error(`Google generated video download exceeds ${maxBytes} bytes`);
-  }
 }
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
@@ -565,12 +559,12 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             | { videoBytes?: string; uri?: string; mimeType?: string }
             | undefined;
           if (inline?.videoBytes) {
-            const canonicalVideo = canonicalizeBase64(inline.videoBytes);
-            if (!canonicalVideo) {
-              throw new Error("Google video generation returned malformed base64 video data");
-            }
-            const buffer = Buffer.from(canonicalVideo, "base64");
-            assertGeneratedVideoBufferWithinLimit(buffer, maxVideoBytes);
+            const buffer = decodeGoogleProviderBase64(inline.videoBytes, {
+              malformedMessage: "Google generated video response returned malformed video base64",
+              maxBytes: maxVideoBytes,
+              overflowMessage: (maxBytes) =>
+                `Google generated video download exceeds ${maxBytes} bytes`,
+            });
             return {
               buffer,
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
