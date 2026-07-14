@@ -28,15 +28,21 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  // O(1) lower-bound guard: value.length (UTF-16 code units) is never larger
-  // than the actual UTF-8 byte count.  If even this minimum already exceeds
-  // the budget, bail immediately without the O(n) UTF-8 scan.
+  // Tier 1 — O(1) lower bound.  Even the shortest possible encoding (ASCII,
+  // 1 byte per code unit) would exceed the budget, so bail immediately.
   if (value.length + 2 > remainingBytes) {
     return remainingBytes + 1;
   }
-  // CJK and emoji content can still exceed the budget when the code-unit lower
-  // bound is inconclusive; a UTF-8 byte-length pass catches those without the
-  // full JSON.stringify allocation.
+  // Tier 2 — O(1) upper bound.  Even the longest possible encoding (CJK,
+  // 3 bytes per code unit) + JSON quotes fits within the budget.  Skip both
+  // the O(n) UTF-8 scan and the JSON.stringify allocation; go straight to
+  // the accurate measurement.  This is the common case for fitting strings.
+  if (value.length * 3 + 2 <= remainingBytes) {
+    return jsonUtf8BytesOrInfinity(value);
+  }
+  // Tier 3 — O(n).  Only reached by strings in the narrow band where the
+  // code-unit bounds are inconclusive (CJK / emoji near the byte limit).
+  // A single UTF-8 scan decides bailout vs. JSON.stringify.
   if (Buffer.byteLength(value, "utf8") + 2 > remainingBytes) {
     return remainingBytes + 1;
   }

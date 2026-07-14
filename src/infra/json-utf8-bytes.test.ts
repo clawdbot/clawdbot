@@ -123,6 +123,17 @@ describe("boundedJsonUtf8Bytes", () => {
     expect(result).toEqual({ bytes: expectedBytes, complete: true });
   });
 
+  it("skips expensive scans for CJK strings well within the byte budget", () => {
+    // "中"×2_000 = 2,000 code units → 6,000 UTF-8 bytes.
+    // Tier 1: 2,002 ≯ 10,000 → pass.
+    // Tier 2: 2,000 × 3 + 2 = 6,002 ≤ 10,000 → skip scan, JSON.stringify only.
+    // This is the common fitting-string path; no O(n) scan overhead.
+    const cjkFit = { value: "中".repeat(2_000) };
+    const expectedBytes = Buffer.byteLength(JSON.stringify(cjkFit), "utf8");
+    const result = boundedJsonUtf8Bytes(cjkFit, 10_000);
+    expect(result).toEqual({ bytes: expectedBytes, complete: true });
+  });
+
   it.each([
     { name: "circular objects", value: createCircularValue() },
     { name: "BigInt", value: { value: 12n } },
