@@ -29,6 +29,7 @@ The Gateway is OpenClaw's WebSocket server (channels, nodes, sessions, hooks). A
 openclaw gateway
 openclaw gateway run   # equivalent, explicit form
 openclaw gateway run --hosting-profile container
+openclaw gateway run --hosting-profile container --runtime-id tenant-42/scout-primary
 ```
 
 <AccordionGroup>
@@ -36,6 +37,7 @@ openclaw gateway run --hosting-profile container
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
     - When startup finds a repairable invalid config, an interactive terminal offers to run `openclaw doctor --fix` and retries startup once after consent. Non-interactive runs never repair automatically; they print the command instead. If the repaired config is still invalid, startup remains stopped.
     - `--hosting-profile <profile>` selects the hosting profile used by status, health, and readiness. Config can also select the profile with `hosting.profile`; the default is `local`.
+    - `--runtime-id <id>` identifies the logical runtime across restarts. `--incarnation-id <id>` identifies this process or container execution. OpenClaw defaults to runtime `local` and generates an incarnation id when neither is supplied.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths today; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -70,6 +72,15 @@ openclaw gateway run --hosting-profile container
 </ParamField>
 For controlled execution nodes, select `node-mode`. Its readiness result reports
 pairing, target inventory, command approval posture, and control-channel conditions.
+<ParamField path="--runtime-id <id>" type="string">
+  Logical runtime identity reported by readiness, health, and status. It may
+  also be supplied through `OPENCLAW_RUNTIME_ID`.
+</ParamField>
+<ParamField path="--incarnation-id <id>" type="string">
+  Identity for this process or container execution. It may also be supplied
+  through `OPENCLAW_INCARNATION_ID`; otherwise OpenClaw generates one at
+  Gateway startup.
+</ParamField>
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>

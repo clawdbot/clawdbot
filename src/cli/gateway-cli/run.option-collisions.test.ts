@@ -139,6 +139,8 @@ const serviceEnvSnapshot = captureEnv([
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
+  "OPENCLAW_RUNTIME_ID",
+  "OPENCLAW_INCARNATION_ID",
 ]);
 
 vi.mock("../../config/config.js", () => ({
@@ -373,6 +375,8 @@ describe("gateway run option collisions", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_HOSTING_PROFILE;
+    delete process.env.OPENCLAW_RUNTIME_ID;
+    delete process.env.OPENCLAW_INCARNATION_ID;
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};
@@ -1474,6 +1478,21 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).toHaveBeenCalledOnce();
   });
 
+  it("sets runtime activation identity before gateway startup", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--runtime-id",
+      "tenant-42/scout-primary",
+      "--incarnation-id",
+      "pod-7f9c",
+      "--allow-unconfigured",
+    ]);
+
+    expect(process.env.OPENCLAW_RUNTIME_ID).toBe("tenant-42/scout-primary");
+    expect(process.env.OPENCLAW_INCARNATION_ID).toBe("pod-7f9c");
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+  });
   it("rejects unsupported hosting profiles before gateway startup", async () => {
     await expect(
       runGatewayCli(["gateway", "run", "--hosting-profile", "custom-host", "--allow-unconfigured"]),

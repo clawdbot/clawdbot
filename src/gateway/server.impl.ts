@@ -678,6 +678,8 @@ export async function startGatewayServer(
       docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
+  const runtimeActivationIdentity =
+    opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 

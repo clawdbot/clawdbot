@@ -30,6 +30,8 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--password <password>", "Password for auth mode=password")
     .option("--password-file <path>", "Read gateway password from file")
     .option("--hosting-profile <profile>", "Hosting profile for readiness evaluation")
+    .option("--runtime-id <id>", "Logical runtime identity reported through readiness")
+    .option("--incarnation-id <id>", "Process/container identity reported through readiness")
     .option(
       "--tailscale <mode>",
       `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,

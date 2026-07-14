@@ -153,4 +153,23 @@ describe("buildRuntimeReadiness", () => {
     expect(condition?.message).not.toContain("super-secret-value-that-must-not-escape");
     expect(Buffer.byteLength(condition?.message ?? "", "utf8")).toBeLessThanOrEqual(512);
   });
+
+  it("attributes readiness to one logical runtime activation", () => {
+    const activation = { runtimeId: "tenant-42/scout", incarnationId: "pod-7f9c" };
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      activation,
+    });
+
+    expect(readiness.activation).toEqual(activation);
+    expect(readiness.conditions).toContainEqual(
+      expect.objectContaining({
+        type: "RuntimeActivationIdentified",
+        status: "True",
+        requirement: "required",
+      }),
+    );
+  });
 });

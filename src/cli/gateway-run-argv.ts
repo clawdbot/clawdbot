@@ -10,6 +10,8 @@ const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--password",
   "--password-file",
   "--hosting-profile",
+  "--runtime-id",
+  "--incarnation-id",
   "--tailscale",
   "--ws-log",
   "--raw-stream-path",

@@ -14,6 +14,7 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /** Snapshot returned by the gateway readiness probe. */
 type ReadinessResult = {
+  activation?: CanonicalReadinessResult["activation"];
   ready: boolean;
   failing: string[];
   suppressed?: string[];
@@ -368,6 +369,7 @@ function mergeReadinessResults(
   );
   return {
     ...gateway,
+    ...(runtime.activation ? { activation: runtime.activation } : {}),
     ready: failures.length === 0,
     failing: Array.from(new Set([...gateway.failing, ...runtime.failures])),
     conditions,

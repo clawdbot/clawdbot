@@ -542,6 +542,21 @@ describe("canonical configured Gateway readiness", () => {
       "PluginsLoaded",
     ]);
   });
+  it("preserves runtime activation identity", async () => {
+    const activation = { runtimeId: "tenant-42/scout", incarnationId: "pod-7f9c" };
+    const runtime = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      activation,
+    });
+    const result = await evaluateCanonicalGatewayReadiness({
+      evaluateGateway: () => failingSnapshot([]),
+      evaluateRuntime: async () => runtime,
+    });
+
+    expect(result.activation).toEqual(activation);
+  });
   it("returns a structured required failure when extended evaluation times out", async () => {
     const gateway = readySnapshot() as ReadinessResult;
     const result = await evaluateConfiguredGatewayReadiness({
