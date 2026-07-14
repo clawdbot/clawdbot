@@ -42,6 +42,7 @@ export function startAgentRunExecution(params: {
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
+  sessionContinuationTraceparent?: string;
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   requestedSessionKeyRaw?: string;
@@ -251,10 +252,11 @@ export function startAgentRunExecution(params: {
       })?.traceparent;
       const trustedContinuationRuntimeHandoff =
         params.canUseInternalRuntimeHandoff || Boolean(subagentTraceparentHandoff);
+      // Persistence clears the durable one-shot field before this asynchronous dispatch.
       const inheritedTraceparent =
         (params.canUseInternalRuntimeHandoff ? params.request.traceparent : undefined) ??
         subagentTraceparentHandoff ??
-        params.sessionEntry?.continuationTraceparent;
+        params.sessionContinuationTraceparent;
 
       dispatchAgentRunFromGateway({
         ingressOpts: {

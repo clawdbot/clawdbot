@@ -1,14 +1,9 @@
 // Live Gateway RPC coverage for trusted continuation handoff consumption.
 import { describe, expect, test } from "vitest";
-import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
-import {
-  installGatewayTestHooks,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

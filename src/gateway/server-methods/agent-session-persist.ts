@@ -40,6 +40,7 @@ export type CronContinuationClaim = {
 
 type AgentSessionPersistResult = {
   sessionEntry?: SessionEntry;
+  consumedContinuationTraceparent?: string;
   resolvedSessionId?: string;
   sessionPersistedBeforeGatewayAdmission: boolean;
   supersededSessionId?: string;
@@ -102,6 +103,7 @@ export async function persistAgentSessionPhase(params: {
 }): Promise<AgentSessionPersistResult | undefined> {
   let patchBuild = params.initialPatchBuild;
   let sessionEntry = params.initialSessionEntry;
+  let consumedContinuationTraceparent = params.entry?.continuationTraceparent;
   let resolvedSessionId = params.initialResolvedSessionId;
   let sessionPersistedBeforeGatewayAdmission = params.initialSessionPersistedBeforeGatewayAdmission;
   let supersededSessionId = params.initialSupersededSessionId;
@@ -223,6 +225,8 @@ export async function persistAgentSessionPhase(params: {
               });
             }
             patchBuild = params.buildSessionPatch(entryForPatch);
+            // Carry the authoritative one-shot value before the canonical row clears it.
+            consumedContinuationTraceparent = entryForPatch?.continuationTraceparent;
             const effectivePatch =
               recoveredSessionStartedAt !== undefined &&
               entryForPatch?.sessionStartedAt === undefined &&
@@ -408,6 +412,7 @@ export async function persistAgentSessionPhase(params: {
       params.canonicalSessionKey === "global");
   return {
     sessionEntry,
+    consumedContinuationTraceparent,
     resolvedSessionId,
     sessionPersistedBeforeGatewayAdmission,
     supersededSessionId,
