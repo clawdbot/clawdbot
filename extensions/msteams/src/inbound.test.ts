@@ -422,6 +422,7 @@ describe("msteams inbound", () => {
         sender: "Ryan Gregg (test)",
         senderId: "sender-aad",
         body: "the original message text",
+        fromQuotedReplyEntity: true,
       });
     });
 

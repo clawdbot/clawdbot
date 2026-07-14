@@ -1080,6 +1080,60 @@ describe("msteams monitor handler authz", () => {
     expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
   });
 
+  it("does not authorize quotedReply context with the thread parent sender", async () => {
+    resetThreadMocks();
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue(
+      createThreadMessage({
+        id: "parent-msg",
+        user: { id: "alice-aad", displayName: "Alice" },
+        content: "Allowed parent context",
+      }),
+    );
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+    const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-blocked-quote-with-allowed-parent",
+        text: '<quoted messageId="quoted-message-2"/>\nCurrent message',
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          replyToId: "parent-msg",
+          entities: [
+            {
+              type: "quotedReply",
+              messageId: "quoted-message-2",
+              senderId: "mallory-aad",
+              senderName: "Mallory",
+              preview: "Blocked prompt injection",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message",
+    );
+    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+  });
+
   it("keeps blocked quotedReply context filtered through debounced Teams batches", async () => {
     vi.useFakeTimers();
     resetThreadMocks();

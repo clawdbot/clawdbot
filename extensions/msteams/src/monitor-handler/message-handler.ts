@@ -778,7 +778,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           markParentContextInjected(route.sessionKey, threadParentId);
         }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        if (quoteContext === context) {
+        if (quoteContext === context && !quoteInfo?.fromQuotedReplyEntity) {
           quoteSenderId =
             parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
           quoteSenderName =
