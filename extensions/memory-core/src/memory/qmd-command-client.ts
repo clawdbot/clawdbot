@@ -1,8 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createSubsystemLogger,
-  resolveGlobalSingleton,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
@@ -16,15 +13,11 @@ import type {
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { asQmdAbortError, parseFailedQmdSearchJson } from "./qmd-command-errors.js";
+import { QmdMcporterClient } from "./qmd-mcporter-client.js";
+import { parseMcporterResponseJson } from "./qmd-mcporter-config.js";
 import type { MemorySearchDeadlineAction } from "./search-deadline.js";
 
 const log = createSubsystemLogger("memory");
-const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
-
-type McporterState = {
-  coldStartWarned: boolean;
-  daemonStart: Promise<void> | null;
-};
 
 type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 
@@ -60,13 +53,6 @@ export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): num
   return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
 }
 
-function getMcporterState(): McporterState {
-  return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
-    coldStartWarned: false,
-    daemonStart: null,
-  }));
-}
-
 async function runInQmdCommandPhase<T>(
   report: QmdCommandPhaseReporter | undefined,
   task: () => Promise<T>,
@@ -81,13 +67,25 @@ async function runInQmdCommandPhase<T>(
 
 export class QmdCommandClient {
   private qmdMcpToolVersion: "v2" | "v1" | null = null;
+  private readonly mcporter: QmdMcporterClient;
 
   constructor(
     private readonly qmd: ResolvedQmdConfig,
     private readonly env: NodeJS.ProcessEnv,
     private readonly workspaceDir: string,
     private readonly maxOutputChars: number,
-  ) {}
+    qmdDir: string,
+    mcporterEnv: NodeJS.ProcessEnv,
+  ) {
+    this.mcporter = new QmdMcporterClient({
+      qmd,
+      qmdEnv: env,
+      mcporterEnv,
+      qmdDir,
+      workspaceDir,
+      maxOutputChars,
+    });
+  }
 
   async run(
     args: string[],
@@ -149,7 +147,7 @@ export class QmdCommandClient {
     if (params.signal?.aborted) {
       throw asQmdAbortError(params.signal);
     }
-    await this.ensureMcporterDaemonStarted(params.mcporter);
+    await this.mcporter.ensureDaemonStarted(params.mcporter);
 
     const effectiveTool =
       params.tool === "query" && this.qmdMcpToolVersion === "v1"
@@ -189,7 +187,7 @@ export class QmdCommandClient {
     let result: { stdout: string };
     try {
       result = await runInQmdCommandPhase(params.reportCommandPhase, async () =>
-        this.runMcporter(
+        this.mcporter.run(
           [
             "call",
             selector,
@@ -317,58 +315,10 @@ export class QmdCommandClient {
     }
   }
 
-  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
-    if (!mcporter.enabled) {
-      return;
-    }
-    const state = getMcporterState();
-    if (!mcporter.startDaemon) {
-      if (!state.coldStartWarned) {
-        state.coldStartWarned = true;
-        log.warn(
-          "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
-        );
-      }
-      return;
-    }
-    if (!state.daemonStart) {
-      state.daemonStart = (async () => {
-        try {
-          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
-        } catch (err) {
-          log.warn(`mcporter daemon start failed: ${String(err)}`);
-          state.daemonStart = null;
-        }
-      })();
-    }
-    await state.daemonStart;
-  }
-
-  private async runMcporter(
-    args: string[],
-    opts?: { timeoutMs?: number; signal?: AbortSignal },
-  ): Promise<{ stdout: string; stderr: string }> {
-    const spawnInvocation = resolveCliSpawnInvocation({
-      command: "mcporter",
-      args,
-      env: this.env,
-      packageName: "mcporter",
-    });
-    return await runCliCommand({
-      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-      spawnInvocation,
-      env: this.env,
-      cwd: this.workspaceDir,
-      timeoutMs: opts?.timeoutMs,
-      maxOutputChars: this.maxOutputChars,
-      signal: opts?.signal,
-    });
-  }
-
   private parseMcporterResults(stdout: string): QmdQueryResult[] {
     let parsedUnknown: unknown;
     try {
-      parsedUnknown = JSON.parse(stdout);
+      parsedUnknown = parseMcporterResponseJson(stdout);
     } catch {
       throw new Error("qmd mcporter returned non-JSON stdout", {
         cause: new Error("mcporter stdout was not valid JSON"),

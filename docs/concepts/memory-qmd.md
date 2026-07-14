@@ -92,6 +92,30 @@ The first search may be slow - QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
 
+## MCPorter integration
+
+When `memory.qmd.mcporter.enabled` is `true`, OpenClaw routes QMD searches
+through [MCPorter](https://github.com/openclaw/mcporter) instead of spawning a
+new `qmd` process for every search. This keeps the QMD MCP server warm and
+eliminates cold-start overhead on large models.
+
+OpenClaw discovers your existing mcporter configuration in the same order
+mcporter itself uses:
+
+1. `MCPORTER_CONFIG` environment variable, if set.
+2. `<workspaceDir>/config/mcporter.json` (project-scoped).
+3. `$XDG_CONFIG_HOME/mcporter/mcporter.json` (falls back to `~/.mcporter/mcporter.json`).
+
+If your existing `qmd` server entry has any custom material -- environment
+variables, auth headers, relative paths, or `logging.daemon.enabled` -- OpenClaw
+treats it as **external** and routes the daemon through your original mcporter
+config. Otherwise OpenClaw generates a per-agent config under
+`~/.openclaw/agents/<id>/qmd/mcporter/mcporter.json` with the default QMD
+stdio shape (`command: "qmd", args: ["mcp"]`).
+
+The per-agent generated config is rewritten only when its contents actually
+change, so repeated searches do not thrash the filesystem.
+
 ## Search performance and compatibility
 
 OpenClaw keeps the QMD search path compatible with both current and older QMD

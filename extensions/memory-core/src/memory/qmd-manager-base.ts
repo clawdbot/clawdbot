@@ -132,11 +132,18 @@ export abstract class QmdManagerBase {
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
+    const mcporterEnv = {
+      ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
+      NO_COLOR: "1",
+    };
     this.commands = new QmdCommandClient(
       this.qmd,
       this.env,
       this.workspaceDir,
       this.maxQmdOutputChars,
+      this.qmdDir,
+      mcporterEnv,
     );
     this.collectionController = new QmdCollectionController(
       this.qmd,
