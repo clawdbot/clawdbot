@@ -134,6 +134,10 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `preflight` and `security-fast` needing `runner-admission`.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
+- Canonical PR Node tests use one precise changed-target job when possible;
+  broad, deleted, unknown, or planner-failed changes fall back to the 14-job
+  compact full-suite plan. Targeted plans retain the full built-artifact
+  boundary gate. `main`, manual, and release runs stay full.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.

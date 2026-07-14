@@ -510,6 +510,8 @@ export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
 /** Runs a cron job immediately or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
+  /** Rejects the mutation if the Gateway restarted after the caller's preflight. */
+  expectedProcessInstanceId: Type.Optional(NonEmptyString),
 });
 
 /** Query params for cron run history. */

@@ -721,6 +721,22 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   return tarball;
 }
 
+export async function writePackageInventoryForDocker(sourceDir, runImpl = run) {
+  // Frozen release refs own their inventory shape; run their writer instead of importing current-main helpers.
+  const tsxModuleUrl = import.meta.resolve("tsx");
+  await runImpl(
+    "node",
+    ["--import", tsxModuleUrl, path.join(sourceDir, "scripts/write-package-dist-inventory.ts")],
+    sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
+        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
+      ),
+    },
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
@@ -735,23 +751,7 @@ async function main() {
   }
 
   console.error("==> Writing OpenClaw package inventory");
-  await run(
-    "node",
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      "const { writePackageDistInventory } = await import('./scripts/lib/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
-    ],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
-        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
-      ),
-    },
-  );
+  await writePackageInventoryForDocker(sourceDir);
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,

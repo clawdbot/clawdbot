@@ -43,6 +43,15 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+function selectSegmented(control: HTMLElement) {
+  const group = expectElement(
+    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
+    "segmented radio group",
+  );
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("config form renderer", () => {
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
@@ -73,17 +82,17 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
     const tokenButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "token",
       ),
       "token segmented button",
     );
-    tokenButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectSegmented(tokenButton);
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
-      "enabled checkbox",
+      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      "enabled switch",
     );
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
@@ -106,12 +115,12 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
 
     const tailnetButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "tailnet",
       ),
       "tailnet segmented button",
     );
-    tailnetButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectSegmented(tailnetButton);
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
@@ -143,7 +152,7 @@ describe("config form renderer", () => {
     expect(rowTitles).toEqual(["Token"]);
   });
 
-  it("renders boolean fields as label-wrapped toggle rows", () => {
+  it("renders boolean fields as named toggle rows", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -169,15 +178,16 @@ describe("config form renderer", () => {
     );
 
     const checkbox = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
-      "beta checkbox",
+      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      "beta switch",
     );
     const row = expectElement(checkbox.closest(".settings-row"), "beta toggle row");
-    expect(row.tagName).toBe("LABEL");
+    expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe("Beta");
     expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
       "Enable beta features",
     );
+    expect(checkbox.textContent?.trim()).toBe("Beta");
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["features", "beta"], true);

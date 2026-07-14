@@ -52,6 +52,38 @@ openclaw config set skills.workshop.autonomous.enabled false --strict-json
 User-requested skill creation, `/learn`, and manual Skill Workshop operations
 continue to work while self-learning is disabled.
 
+## Review past sessions manually
+
+Manual history review is the conservative alternative to autonomous capture.
+Open **Plugins → Workshop** in the Control UI and select **Find skill ideas**.
+This does not change `skills.workshop.autonomous.enabled`.
+
+Each scan:
+
+- starts with the newest unreviewed sessions and moves backward;
+- reviews up to 20 substantial sessions with at least six model turns;
+- skips cron, heartbeat, hook, subagent, ACP, plugin-owned, and internal review
+  sessions;
+- redacts recognized secrets and bounds the transcript bundle before sending it
+  to the selected agent's configured model;
+- uses the same high bar as autonomous experience review; and
+- can create or revise at most three pending proposals, never live skills.
+
+The Workshop reports cumulative session count, date coverage, and ideas found.
+Select **Scan earlier work** for the next older window. When the cursor reaches
+the beginning of eligible history, the action changes to **Scan new work**.
+OpenClaw persists only cursor and coverage metadata in the shared state database;
+it does not create a second transcript archive.
+
+Sessions are scanned only when OpenClaw can prove their ownership and exclude
+external-hook content. After an upgrade, the current pre-upgrade transcript can
+be classified locally, but rotated pre-upgrade transcripts without per-run
+provenance are skipped. New transcripts retain this provenance across rotation.
+
+Manual scans still incur model-provider cost and send eligible conversation
+content to the configured provider. Use them only when that review matches the
+workspace's privacy and data-handling requirements.
+
 ## What OpenClaw can learn
 
 Self-learning has two conservative paths:

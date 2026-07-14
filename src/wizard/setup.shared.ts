@@ -115,6 +115,14 @@ export async function readSetupConfigFileSnapshot() {
   return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
 }
 
+export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
+  const snapshot = await readSetupConfigFileSnapshot();
+  if (!snapshot.valid) {
+    throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+  }
+  return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
+}
+
 /** One-time security acknowledgement; persisted so reruns stay quiet. */
 export async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;

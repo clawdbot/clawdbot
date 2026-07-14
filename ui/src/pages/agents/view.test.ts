@@ -647,11 +647,11 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const dialog = container.querySelector<HTMLDialogElement>(".md-preview-dialog");
+    const dialog = container.querySelector("openclaw-modal-dialog");
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
     const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
 
-    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(dialog).not.toBeNull();
     expect(panel).toBeInstanceOf(HTMLElement);
     expect(expandButton).toBeInstanceOf(HTMLButtonElement);
     const previewPanel = panel!;
@@ -669,7 +669,7 @@ describe("renderAgentFiles", () => {
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
-    dialog!.dispatchEvent(new Event("close"));
+    container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
     expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
     expect([...previewExpandButton.classList]).toEqual([

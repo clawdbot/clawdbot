@@ -9,7 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { parse as parseSemverVersion, prerelease as parseSemverPrerelease } from "semver";
+import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -19,7 +19,6 @@ import {
   parseStrictPositiveInteger,
 } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
-import { compareValidSemver } from "./semver.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
@@ -546,35 +545,6 @@ function normalizePartialComparableVersion(version: string): {
     : { version: trimmed, isPartial: false };
 }
 
-function compareSemver(left: string, right: string): number | null {
-  const normalizedLeft = normalizePartialComparableVersion(left).version;
-  const normalizedRight = normalizePartialComparableVersion(right).version;
-  return compareValidSemver(normalizedLeft, normalizedRight);
-}
-
-function upperBoundForCaret(version: string): string | null {
-  const parsed = parseSemverVersion(normalizePartialComparableVersion(version).version);
-  if (!parsed) {
-    return null;
-  }
-  if (parsed.major > 0) {
-    return `${parsed.major + 1}.0.0`;
-  }
-  if (parsed.minor > 0) {
-    return `0.${parsed.minor + 1}.0`;
-  }
-  return `0.0.${parsed.patch + 1}`;
-}
-
-function matchWildcardComparator(token: string): "any" | "none" | null {
-  const match = /^(>=|<=|>|<|=|\^|~)?\s*([*xX])$/.exec(token);
-  if (!match) {
-    return null;
-  }
-  const operator = match[1];
-  return operator === ">" || operator === "<" ? "none" : "any";
-}
-
 function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
   return Boolean(parseSemverPrerelease(normalizePartialComparableVersion(target).version));
 }
@@ -594,49 +564,28 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!trimmed) {
     return true;
   }
-  const wildcard = matchWildcardComparator(trimmed);
-  if (wildcard) {
-    return wildcard === "any" && parseSemverVersion(version) != null;
-  }
-  if (trimmed.startsWith("^")) {
-    const base = trimmed.slice(1).trim();
-    const upperBound = upperBoundForCaret(base);
-    const comparableVersion = normalizePluginApiVersionForComparator(version, base);
-    const lowerCmp = compareSemver(comparableVersion, base);
-    const upperCmp = upperBound ? compareSemver(comparableVersion, upperBound) : null;
-    return lowerCmp != null && upperCmp != null && lowerCmp >= 0 && upperCmp < 0;
-  }
-
-  const match = /^(>=|<=|>|<|=)?\s*(.+)$/.exec(trimmed);
+  const match = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(trimmed);
   if (!match) {
     return false;
   }
-  const operator = match[1];
+  const operator = match[1] ?? "";
   const target = match[2]?.trim();
-  if (!target) {
+  if (!target || /^[<>=^~]/.test(target)) {
     return false;
   }
   const comparableVersion = normalizePluginApiVersionForComparator(version, target);
   const normalizedTarget = normalizePartialComparableVersion(target);
-  const cmp = compareSemver(comparableVersion, normalizedTarget.version);
-  if (cmp == null) {
-    return false;
-  }
-  switch (operator) {
-    case ">=":
-      return cmp >= 0;
-    case "<=":
-      return cmp <= 0;
-    case ">":
-      return cmp > 0;
-    case "<":
-      return cmp < 0;
-    default:
-      return normalizedTarget.isPartial && !operator ? cmp >= 0 : cmp === 0;
-  }
+  const comparator =
+    normalizedTarget.isPartial && !operator
+      ? `>=${normalizedTarget.version}`
+      : `${operator}${normalizedTarget.version}`;
+  return satisfiesSemver(comparableVersion, comparator, { includePrerelease: true });
 }
 
 function satisfiesSemverRange(version: string, range: string): boolean {
+  if (range.includes("||")) {
+    return false;
+  }
   const tokens = normalizeStringEntries(range.trim().split(/\s+/));
   if (tokens.length === 0) {
     return false;

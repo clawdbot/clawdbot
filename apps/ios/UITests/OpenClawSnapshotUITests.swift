@@ -38,6 +38,32 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testAutomationManagementScreenshot() {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "control",
+            initialDestination: "cron",
+            name: "automation-management"))
+
+        XCTAssertTrue(self.app?.staticTexts["Release briefing"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Weekly project review"].exists == true)
+        self.attachScreenshot(named: "automation-management")
+    }
+
+    func testSkillsManagementScreenshot() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "skills-management"))
+
+        let skills = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Skills").firstMatch)
+        XCTAssertTrue(skills.waitForExistence(timeout: 8))
+        skills.tap()
+        XCTAssertTrue(self.app?.staticTexts["github"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["calendar"].exists == true)
+        self.attachScreenshot(named: "skills-management")
+    }
+
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding"]

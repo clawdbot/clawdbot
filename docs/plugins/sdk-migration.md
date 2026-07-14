@@ -153,7 +153,7 @@ SDK.
     | Need | Import |
     | --- | --- |
     | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
-    | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Already-loaded config assertions, plugin-entry config lookup, and config merging | `openclaw/plugin-sdk/plugin-config-runtime` |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
     | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |

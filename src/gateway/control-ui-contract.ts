@@ -73,14 +73,21 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
-  /** GitHub "open a pull request for this branch" page. */
-  createUrl: string;
+  /**
+   * GitHub "open a pull request for this branch" page. Absent while the
+   * branch is unpushed or has nothing to compare — the row then only reports
+   * the session's local changed files.
+   */
+  createUrl?: string;
 };
 
 /** Pull requests detected for a session's git branch, chip row payload. */
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
-  /** Present when the session's non-default GitHub branch exists on origin. */
+  /**
+   * Present when the session's non-default GitHub branch has a creatable PR
+   * on origin or local changed files in the working tree.
+   */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;

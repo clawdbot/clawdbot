@@ -7,6 +7,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -1050,21 +1051,12 @@ function renderDetailOverlay(props: PluginsViewProps) {
   const key = pluginRowKey(plugin.id);
   const busy = props.busy[key] ?? false;
   return html`
-    <div
-      class="plugins-detail-backdrop"
-      @click=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          props.onShowDetails(null);
-        }
-      }}
+    <openclaw-modal-dialog
+      label=${plugin.name}
+      style="--openclaw-modal-width: min(580px, calc(100vw - 32px));"
+      @modal-cancel=${() => props.onShowDetails(null)}
     >
-      <section
-        class="plugins-detail"
-        role="dialog"
-        aria-modal="true"
-        aria-label=${plugin.name}
-        data-detail-plugin-id=${plugin.id}
-      >
+      <section class="plugins-detail" data-detail-plugin-id=${plugin.id}>
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-detail__close"
@@ -1147,7 +1139,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
           </div>
         </div>
       </section>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -1245,10 +1237,11 @@ export function renderPlugins(props: PluginsViewProps) {
           </div>`
         : nothing}
 
-      <div
+      <wa-tab-panel
         id="plugins-hub-panel"
         class="plugins-panel"
-        role="tabpanel"
+        name=${props.activeTab}
+        active
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
         ${props.loading && !canShowCatalog
@@ -1258,7 +1251,7 @@ export function renderPlugins(props: PluginsViewProps) {
             : !props.connected && !canShowCatalog
               ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
               : renderActivePanel(props)}
-      </div>
+      </wa-tab-panel>
       ${renderDetailOverlay(props)}
     `,
     { wide: true },

@@ -131,7 +131,12 @@ import {
 } from "../run-session-target.js";
 import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
-import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
+import {
+  createPreparedRuntimeModelMaterializer,
+  hasPreparedAuthAttemptModelMetadata,
+  providerUsesCredentialScopedModelMetadata,
+  resolveCredentialScopedAuthAttemptModelDecision,
+} from "../runtime-plan/credential-scoped-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
@@ -275,6 +280,7 @@ import {
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
+import { resolveSkillWorkshopAttemptParams } from "./run/skill-workshop-attempt-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -347,7 +353,7 @@ async function runEmbeddedAgentInternal(
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? { remaining: 1 }
+    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -924,58 +930,34 @@ async function runEmbeddedAgentInternal(
               context,
             }),
         });
-
-      const materializedRouteModels = new WeakMap<
-        AgentRuntimeAuthPlan,
-        Promise<typeof runtimeModel>
-      >();
-      const materializeAuthPlanUncached = async (plan: AgentRuntimeAuthPlan) => {
-        // Native harness sessions own their model tuple. Route preparation may
-        // attest auth/transport, but must not rediscover or replace that model.
-        if (nativeModelOwned) {
-          return runtimeModel;
-        }
-        const requiresCredentialScopedResolve = Boolean(
-          plan.modelRoute && (plan.forwardedAuthProfileId || params.authProfileId),
-        );
-        return (
-          (await materializePreparedRuntimeModel({
-            plan,
-            provider,
-            modelId,
-            config: params.config,
-            model: runtimeModel,
-            // Unscoped direct auth cannot change credential-scoped metadata.
-            // Reuse an already matching tuple; route mismatches still resolve.
-            forceResolve: requiresCredentialScopedResolve,
-            resolveModel: ({ config, authProfileId, authProfileMode }) =>
-              resolveModelAsync(provider, modelId, agentDir, config, {
-                authStorage,
-                modelRegistry,
-                skipAgentDiscovery: true,
-                allowBundledStaticCatalogFallback: true,
-                preferBundledStaticCatalogTransport: true,
-                workspaceDir: resolvedWorkspace,
-                authProfileId,
-                authProfileMode,
-              }),
-          })) ?? runtimeModel
-        );
-      };
-      const materializeAuthPlan = (plan: AgentRuntimeAuthPlan) => {
-        if (!plan.modelRoute) {
-          return materializeAuthPlanUncached(plan);
-        }
-        const cached = materializedRouteModels.get(plan);
-        if (cached) {
-          return cached;
-        }
-        // Prepared plans are immutable within one run. Carry their exact model
-        // tuple into auth initialization instead of repeating provider discovery.
-        const materialized = materializeAuthPlanUncached(plan);
-        materializedRouteModels.set(plan, materialized);
-        return materialized;
-      };
+      const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
+        provider,
+        modelId,
+        config: params.config,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      });
+      const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
+        createPreparedRuntimeModelMaterializer({
+          provider,
+          modelId,
+          config: params.config,
+          getModel: () => runtimeModel,
+          nativeModelOwned,
+          requestedProfileId: params.authProfileId,
+          providerUsesProfileScopedModelMetadata,
+          resolveModel: ({ config, authProfileId, authProfileMode }) =>
+            resolveModelAsync(provider, modelId, agentDir, config, {
+              authStorage,
+              modelRegistry,
+              skipAgentDiscovery: true,
+              allowBundledStaticCatalogFallback: true,
+              preferBundledStaticCatalogTransport: true,
+              workspaceDir: resolvedWorkspace,
+              authProfileId,
+              authProfileMode,
+            }),
+        });
       let resolvedAuthPreparation = createAuthPreparation();
       let preparedAuthAttempts = resolvedAuthPreparation.attempts;
       let activePreparedAuthPlan = resolvedAuthPreparation.plan;
@@ -1111,8 +1093,17 @@ async function runEmbeddedAgentInternal(
             `Prepared direct auth fallback cannot bypass unavailable profiles for ${provider}/${modelId}.`,
           );
         }
-        const route = attempt.plan.modelRoute;
-        const nextRuntimeModel = route ? await materializeAuthPlan(attempt.plan) : runtimeModel;
+        const modelDecision = resolveCredentialScopedAuthAttemptModelDecision({
+          attempt,
+          priorProfileAttempted: preparedProfileAttempted,
+          requestedProfileId: params.authProfileId,
+          providerUsesProfileScopedModelMetadata,
+        });
+        const nextRuntimeModel = modelDecision.shouldMaterialize
+          ? modelDecision.forceResolve
+            ? await materializeAuthPlanUncached(attempt.plan, true)
+            : await materializeAuthPlan(attempt.plan)
+          : runtimeModel;
         const nextResolvedModel = resolveEffectiveModel(nextRuntimeModel);
         const nextHarness = selectHarnessForPreparedAttempts(
           nextResolvedModel.effectiveModel,
@@ -1126,7 +1117,7 @@ async function runEmbeddedAgentInternal(
         preparedProfileAttempted ||= attempt.kind === "profile";
         return {
           runtimeModel: nextRuntimeModel,
-          authRequirement: route?.authRequirement,
+          authRequirement: modelDecision.authRequirement,
           allowAuthProfileFallback: attempt.allowAuthProfileFallback,
           commit() {
             // Model metadata and its prepared route/profile become active in
@@ -1136,9 +1127,10 @@ async function runEmbeddedAgentInternal(
           },
         };
       };
-      const hasPreparedAuthAttemptMetadata = preparedAuthAttempts.some(
-        (attempt) => attempt.plan.modelRoute || attempt.allowAuthProfileFallback !== undefined,
-      );
+      const hasPreparedAuthAttemptMetadata = hasPreparedAuthAttemptModelMetadata({
+        attempts: preparedAuthAttempts,
+        providerUsesProfileScopedModelMetadata,
+      });
       const prepareModelForAuthProfile =
         hasPreparedAuthAttemptMetadata &&
         (!pluginHarnessOwnsAuthBootstrap || pluginHarnessHasPreparedApiKeyAttempt)
@@ -2197,9 +2189,7 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
-            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
-            skillWorkshopOrigin: params.skillWorkshopOrigin,
-            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            ...resolveSkillWorkshopAttemptParams(params),
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

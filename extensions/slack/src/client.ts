@@ -1,7 +1,9 @@
 // Slack plugin module implements client behavior.
 import { createHash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
+import type { SlackLookupClientOptions } from "./client-options.js";
 import {
+  resolveSlackLookupClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_WRITE_RETRY_OPTIONS,
@@ -25,6 +27,10 @@ export {
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
+  return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
 export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {

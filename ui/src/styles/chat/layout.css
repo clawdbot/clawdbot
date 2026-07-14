@@ -1733,11 +1733,11 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-view-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 10px);
+  display: inline-flex;
   z-index: 60;
-  display: none;
+}
+
+.chat-view-menu::part(menu) {
   min-width: 200px;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
@@ -1746,32 +1746,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   box-shadow: var(--shadow-lg);
 }
 
-.chat-view-menu--open {
-  display: grid;
-  gap: 2px;
-}
-
 .chat-view-menu__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
-}
-
-.chat-view-menu__item:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-}
-
-.chat-view-menu__item:disabled {
-  color: var(--muted);
-  opacity: 0.6;
 }
 
 .chat-view-menu__check {
@@ -1898,31 +1876,17 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   flex: 0 0 auto;
 }
 
-.agent-chat__attach-menu > summary {
-  list-style: none;
-}
-
-.agent-chat__attach-menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-chat__attach-menu > summary[aria-disabled="true"] {
+.agent-chat__attach-menu > button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.agent-chat__attach-menu[open] > summary {
+.agent-chat__attach-menu[open] > button {
   color: var(--text);
   background: var(--bg-hover);
 }
 
-.agent-chat__attach-menu-popover {
-  position: absolute;
-  z-index: 30;
-  left: 0;
-  bottom: calc(100% + 8px);
-  display: grid;
-  gap: 2px;
+.agent-chat__attach-menu::part(menu) {
   width: 152px;
   padding: 5px;
   border: 1px solid var(--border);
@@ -1932,25 +1896,8 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .agent-chat__attach-menu-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 12px;
-  text-align: left;
-}
-
-.agent-chat__attach-menu-option:hover,
-.agent-chat__attach-menu-option:focus-visible {
-  background: var(--bg-hover);
-  outline: none;
 }
 
 .agent-chat__attach-menu-option svg {
@@ -2547,7 +2494,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.chat-view-menu--open),
+  .agent-chat__input:has(wa-dropdown.chat-view-menu[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
   }
@@ -2582,7 +2529,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.chat-view-menu--open),
+  .agent-chat__input:has(wa-dropdown.chat-view-menu[open]),
   .agent-chat__input:has(.context-usage details[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
@@ -3882,14 +3829,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
   .agent-chat__composer-controls .chat-controls {
     justify-content: flex-start;
-  }
-
-  .chat-view-menu {
-    position: fixed;
-    left: max(12px, var(--safe-area-left));
-    right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
-    width: auto;
   }
 
   .chat-controls__model-browser {

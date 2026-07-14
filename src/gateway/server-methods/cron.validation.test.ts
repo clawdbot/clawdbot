@@ -11,6 +11,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { GatewayClient } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
@@ -150,6 +151,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         const nextOffset = offset + pageJobs.length;
         return {
           jobs: pageJobs,
+          snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
           total,
           offset,
           limit,
@@ -701,6 +703,36 @@ describe("cron method validation", () => {
       undefined,
     );
     expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+  });
+
+  it("keeps caller-scoped cron.list revisions independent of hidden jobs", async () => {
+    const visibleJob = createCronJob({ id: "cron-visible", agentId: "ops" });
+    const firstContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-a", agentId: "worker" }),
+    ]);
+    const secondContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-b", agentId: "worker" }),
+    ]);
+
+    const first = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: firstContext, client: callerClient("ops") },
+    );
+    const second = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: secondContext, client: callerClient("ops") },
+    );
+    const firstPayload = requireRecord(first.respond.mock.calls[0]?.[1], "first cron.list payload");
+    const secondPayload = requireRecord(
+      second.respond.mock.calls[0]?.[1],
+      "second cron.list payload",
+    );
+
+    expect(firstPayload.snapshotRevision).toBe(secondPayload.snapshotRevision);
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
@@ -2097,16 +2129,41 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.run",
-      { id: "cron-1", mode: "due" },
+      {
+        id: "cron-1",
+        mode: "due",
+        expectedProcessInstanceId: getGatewayProcessInstanceId(),
+      },
       { context, client: callerClient("ops") },
     );
 
     expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due");
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ok: true, enqueued: true, runId: "run-1" },
+      {
+        ok: true,
+        enqueued: true,
+        runId: "run-1",
+        processInstanceId: getGatewayProcessInstanceId(),
+      },
       undefined,
     );
+  });
+
+  it("rejects cron.run before enqueue when the Gateway process changed after preflight", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", expectedProcessInstanceId: "stale-process" },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Gateway process changed after preflight",
+    });
   });
 
   it("hides caller-scoped cron.run for a foreign agent", async () => {

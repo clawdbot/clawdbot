@@ -539,7 +539,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers explicit mediaUrl over mediaUrls when both are present", async () => {
+  it("keeps direct API mediaUrl ahead of additive mediaUrls", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,

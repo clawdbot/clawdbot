@@ -1,6 +1,5 @@
-// Control UI view renders the Automations (cron) screen: a full-width list
-// view (stats, task table, starter ideas) and a full-page detail view for
-// creating or editing a single automation.
+// Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
+// starter ideas) and a full-page detail view for creating or editing a single automation.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -23,6 +22,8 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import type {
@@ -35,7 +36,7 @@ import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
+import { renderSegmented } from "./segmented-control.ts";
 import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
@@ -304,53 +305,9 @@ function renderRequiredTitle(label: string) {
   `;
 }
 
-// Mirrors renderSettingsSegmented markup exactly; local only so options can
-// carry the stable data-test-id hooks used by colocated and e2e tests, and so
-// view switchers can opt into real tablist semantics (roving tabindex + arrow
-// keys) wired to the panel they control.
-function renderSegmented<T extends string>(params: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string; testId?: string }>;
-  ariaLabel?: string;
-  onChange: (value: T) => void;
-  /** Render as a tablist controlling `panelId`; option ids are `idPrefix` + value. */
-  tabs?: { idPrefix: string; panelId: string };
-}) {
-  const tabs = params.tabs;
-  return html`
-    <div
-      class="settings-segmented"
-      role=${tabs ? "tablist" : "group"}
-      aria-label=${ifDefined(params.ariaLabel)}
-    >
-      ${params.options.map((option) => {
-        const active = option.value === params.value;
-        return html`
-          <button
-            type="button"
-            role=${ifDefined(tabs ? "tab" : undefined)}
-            id=${ifDefined(tabs ? `${tabs.idPrefix}${option.value}` : undefined)}
-            class="settings-segmented__btn ${active ? "settings-segmented__btn--active" : ""}"
-            aria-pressed=${tabs ? nothing : active ? "true" : "false"}
-            aria-selected=${tabs ? (active ? "true" : "false") : nothing}
-            aria-controls=${ifDefined(tabs?.panelId)}
-            .tabIndex=${tabs && !active ? -1 : 0}
-            data-test-id=${ifDefined(option.testId)}
-            @keydown=${tabs ? handleTabListKeydown : nothing}
-            @click=${() => params.onChange(option.value)}
-          >
-            ${option.label}
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-// Settings row whose control keeps its own validation message underneath.
-// Mirrors renderSettingsRow markup; local only so the title can be a real
-// <label for> that gives the wrapped control its accessible name (including
-// the visually-hidden required marker).
+// Settings row whose control keeps its own validation message underneath. Mirrors
+// renderSettingsRow markup; local only so the title can be a real <label for> that gives the
+// wrapped control its accessible name (including the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
   controlId: string;
@@ -480,8 +437,7 @@ function renderListTabs(props: CronProps) {
   });
 }
 
-// One toolbar row for both list tabs: view switch on the left, tab-specific
-// filters in the middle, refresh + New automation pinned right.
+// One toolbar row for both list tabs: view switch left, tab filters middle, refresh + New right.
 function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
   return html`
     <div class="cron-toolbar">
@@ -543,18 +499,40 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
 
 function renderJobsFilterPopover(props: CronProps, active: boolean) {
   return html`
-    <details class="cron-filter-popover">
-      <summary
-        class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
-        title=${t("cron.list.filters")}
-        aria-label=${t("cron.list.filters")}
-      >
-        ${icon("listFilter")}
-      </summary>
+    <button
+      id="cron-jobs-filter-trigger"
+      type="button"
+      class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("cron.list.filters")}
+      aria-label=${t("cron.list.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icon("listFilter")}
+    </button>
+    <wa-popover
+      class="cron-filter-popover"
+      for="cron-jobs-filter-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "true",
+        );
+      }}
+      @wa-hide=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "false",
+        );
+      }}
+    >
       <div class="cron-filter-popover__panel">
         <label class="field">
           <span>${t("cron.jobs.schedule")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-schedule-filter"
             .value=${props.jobsScheduleKindFilter}
             @change=${(e: Event) =>
@@ -572,6 +550,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.lastRun")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-last-status-filter"
             .value=${props.jobsLastStatusFilter}
             @change=${(e: Event) =>
@@ -590,6 +569,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.sort")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortBy}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
@@ -604,6 +584,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.direction")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortDir}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
@@ -623,7 +604,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           ${t("cron.jobs.reset")}
         </button>
       </div>
-    </details>
+    </wa-popover>
   `;
 }
 
@@ -767,24 +748,38 @@ function renderLastRunCell(job: CronJob) {
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
   return html`
-    <details class="cron-job-menu">
-      <summary
+    <wa-dropdown
+      class="cron-job-menu"
+      placement="bottom-end"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        switch (event.detail.item.value) {
+          case "run-if-due":
+            props.onRun(job, "due");
+            break;
+          case "clone":
+            props.onClone(job);
+            break;
+          case "remove":
+            props.onRemove(job);
+            break;
+          case undefined:
+            break;
+        }
+      }}
+    >
+      <button
+        slot="trigger"
+        type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        role="button"
-        aria-haspopup="menu"
         aria-label=${t("cron.actions.more")}
         title=${t("cron.actions.more")}
       >
         ${icon("moreHorizontal")}
-      </summary>
-      <div class="cron-job-menu__panel" role="menu">
-        ${renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
-        ${renderMenuItem(props, t("cron.actions.clone"), () => props.onClone(job))}
-        ${renderMenuItem(props, t("cron.actions.remove"), () => props.onRemove(job), {
-          danger: true,
-        })}
-      </div>
-    </details>
+      </button>
+      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
+      ${renderMenuItem(props, "clone", t("cron.actions.clone"))}
+      ${renderMenuItem(props, "remove", t("cron.actions.remove"), { danger: true })}
+    </wa-dropdown>
   `;
 }
 
@@ -1033,23 +1028,19 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
 
 function renderMenuItem(
   props: CronProps,
+  value: string,
   label: string,
-  action: () => void,
   options?: { danger?: boolean },
 ) {
   return html`
-    <button
+    <wa-dropdown-item
       class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
-      role="menuitem"
+      value=${value}
+      variant=${options?.danger ? "danger" : "default"}
       ?disabled=${props.busy}
-      @click=${(event: Event) => {
-        // Close the details-based menu before acting so it does not linger open.
-        (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
-        action();
-      }}
     >
       ${label}
-    </button>
+    </wa-dropdown-item>
   `;
 }
 

@@ -9,7 +9,7 @@ import {
 } from "../../run-termination.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-export type EmbeddedRunAttemptTerminalInput = Pick<
+type EmbeddedRunAttemptTerminalInput = Pick<
   EmbeddedRunAttemptResult,
   | "aborted"
   | "idleTimedOut"

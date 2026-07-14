@@ -3330,6 +3330,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("can combine sibling and import-graph targets for CI", () => {
+    withTinyGitRepo(
+      {
+        "src/consumer.test.ts": 'import "./value.js";\n',
+        "src/value.test.ts": 'import "./value.js";\n',
+        "src/value.ts": "export const value = 1;\n",
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["src/value.ts"], {
+            combineSiblingWithImportGraph: true,
+            cwd,
+            forceFullImportGraph: true,
+          }),
+        ).toEqual({
+          mode: "targets",
+          targets: ["src/value.test.ts", "src/consumer.test.ts"],
+        });
+      },
+    );
+  });
+
   it("routes changed ui support files to the ui lane without dead include globs", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "ui/src/styles/base.css",

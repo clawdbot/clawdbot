@@ -407,6 +407,7 @@ jobs:
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_RUN_TS_LOC: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}
+          OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
@@ -442,6 +443,15 @@ jobs:
                 : undefined;
           if (typeof createNodeTestPlan !== "function") {
             throw new Error("CI target does not export a supported Node test shard planner");
+          }
+
+          let changedNodeTestPlan = {};
+          if (existsSync("./scripts/lib/ci-changed-node-test-plan.mjs")) {
+            try {
+              changedNodeTestPlan = await import("./scripts/lib/ci-changed-node-test-plan.mjs");
+            } catch (error) {
+              console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
+            }
           }
 
           const importTargetPlan = async (path) => {
@@ -488,6 +498,16 @@ jobs:
           const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
           const hasPackageScript = (name) => typeof packageScripts[name] === "string";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
+          const changedPaths = (() => {
+            try {
+              const value = JSON.parse(process.env.OPENCLAW_CI_CHANGED_PATHS_JSON ?? "null");
+              return Array.isArray(value) && value.every((path) => typeof path === "string")
+                ? value
+                : null;
+            } catch {
+              return null;
+            }
+          })();
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
@@ -561,14 +581,29 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          let changedNodeTestShards = null;
+          if (
+            compactPullRequest &&
+            changedPaths &&
+            typeof changedNodeTestPlan.createChangedNodeTestShards === "function"
+          ) {
+            try {
+              changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            } catch (error) {
+              console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+            }
+          }
           const runQaSmokeCi =
             runNodeFull &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
-            ? createNodeTestPlan({
-                includeReleaseOnlyPluginShards: false,
-                compact: compactPullRequest,
-              }).map((shard) => ({
+            ? (changedNodeTestShards
+                ? changedNodeTestShards
+                : createNodeTestPlan({
+                    includeReleaseOnlyPluginShards: false,
+                    compact: compactPullRequest,
+                  })
+              ).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -580,6 +615,7 @@ jobs:
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
+                targets: shard.targets,
                 requires_go:
                   shard.shardName === "core-tooling" ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
@@ -587,6 +623,9 @@ jobs:
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
+          // Targeted jobs cannot discover repository-scanning boundary tests
+          // through imports, so preserve the existing full boundary gate.
+          const runNodeCoreDist = changedNodeTestShards !== null || nodeTestDistShards.length > 0;
           const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
@@ -617,7 +656,7 @@ jobs:
             run_checks: runNodeFull,
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-            run_checks_node_core_dist: nodeTestDistShards.length > 0,
+            run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_check_docs: docsChanged && eventName !== "push",
@@ -1255,10 +1294,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             loc-ratchet)
               # Frozen compatibility targets were governed by their original CI. Comparing
@@ -1608,6 +1647,7 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
@@ -1619,6 +1659,23 @@ jobs:
           import { spawnSync } from "node:child_process";
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
+
+          const targets = JSON.parse(process.env.OPENCLAW_NODE_TEST_TARGETS_JSON ?? "null");
+          if (Array.isArray(targets) && targets.length > 0) {
+            // One file per process preserves the isolation boundaries encoded by
+            // full-suite include-pattern shards while keeping one runner job.
+            for (const target of targets) {
+              const result = spawnSync(
+                "pnpm",
+                ["exec", "node", "scripts/test-projects.mjs", target],
+                { env: process.env, stdio: "inherit" },
+              );
+              if (result.status !== 0) {
+                process.exit(result.status ?? 1);
+              }
+            }
+            process.exit(0);
+          }
 
           const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
           const plans = Array.isArray(groups) && groups.length > 0

@@ -3,9 +3,9 @@ import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
 const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T/;
+const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}[Tt]/;
 const ISO_ABSOLUTE_RE =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
 
 function normalizeUtcIso(raw: string) {
   if (ISO_TZ_RE.test(raw)) {

@@ -172,7 +172,7 @@ function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: st
 }
 
 /** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -561,7 +561,7 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
 
 /** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
 /** Parses a single JSON payload emitted by a CLI backend. */
-export function parseCliJson(
+function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
   providerId?: string,
@@ -1502,7 +1502,7 @@ export function createCliJsonlStreamingParser(params: {
 
 /** Parses complete JSONL CLI output into the final assistant result and metadata. */
 /** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
-export function parseCliJsonl(
+function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
   providerId: string,

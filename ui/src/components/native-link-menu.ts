@@ -4,6 +4,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
+import "./web-awesome.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
 
@@ -16,28 +17,22 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     super.disconnectedCallback();
   }
 
   protected override firstUpdated() {
-    this.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const dropdown = this.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+      "wa-dropdown",
+    );
+    void Promise.resolve(dropdown?.updateComplete).then(() => {
+      this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
+    });
   }
-
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    const path = event.composedPath();
-    const menu = this.querySelector(".native-link-menu");
-    if ((menu && path.includes(menu)) || (this.trigger && path.includes(this.trigger))) {
-      return;
-    }
-    this.onClose();
-  };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -61,50 +56,68 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
     const clampedX = Math.max(8, Math.min(this.x, window.innerWidth - menuWidth - 8));
     const clampedY = Math.max(8, Math.min(this.y, window.innerHeight - menuMaxHeight - 8));
     return html`
-      <div
+      <wa-dropdown
         class="session-menu native-link-menu"
-        role="menu"
+        .open=${true}
+        placement="bottom-start"
+        .distance=${0}
         aria-label=${t("nativeLinkMenu.label")}
-        style="left: ${clampedX}px; top: ${clampedY}px;"
+        @wa-select=${(event: CustomEvent<{ item: { value?: NativeLinkMenuAction } }>) => {
+          event.preventDefault();
+          const action = event.detail.item.value;
+          if (action) {
+            this.trigger?.focus();
+            this.runAction(action);
+          }
+        }}
+        @wa-after-hide=${() => {
+          this.onClose();
+        }}
       >
         <button
+          slot="trigger"
           type="button"
+          tabindex="-1"
+          aria-hidden="true"
+          aria-label=${t("nativeLinkMenu.label")}
+          style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+        ></button>
+        <wa-dropdown-item
           class="session-menu__item"
-          role="menuitem"
+          value="inline"
           data-shortcut="s"
           aria-keyshortcuts="S"
-          @click=${() => this.runAction("inline")}
         >
-          <span class="session-menu__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${icons.panelRightOpen}</span
+          >
           <span class="session-menu__text">${t("nativeLinkMenu.openInline")}</span>
           ${menuShortcutHint("s")}
-        </button>
-        <button
-          type="button"
+        </wa-dropdown-item>
+        <wa-dropdown-item
           class="session-menu__item"
-          role="menuitem"
+          value="external"
           data-shortcut="b"
           aria-keyshortcuts="B"
-          @click=${() => this.runAction("external")}
         >
-          <span class="session-menu__icon" aria-hidden="true">${icons.externalLink}</span>
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${icons.externalLink}</span
+          >
           <span class="session-menu__text">${t("nativeLinkMenu.openExternal")}</span>
           ${menuShortcutHint("b")}
-        </button>
+        </wa-dropdown-item>
         <div class="session-menu__separator" role="separator"></div>
-        <button
-          type="button"
+        <wa-dropdown-item
           class="session-menu__item"
-          role="menuitem"
+          value="copy"
           data-shortcut="c"
           aria-keyshortcuts="C"
-          @click=${() => this.runAction("copy")}
         >
-          <span class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
+          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
           <span class="session-menu__text">${t("nativeLinkMenu.copy")}</span>
           ${menuShortcutHint("c")}
-        </button>
-      </div>
+        </wa-dropdown-item>
+      </wa-dropdown>
     `;
   }
 }

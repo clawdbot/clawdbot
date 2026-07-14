@@ -177,6 +177,64 @@ describe("provider adapters", () => {
     });
   });
 
+  it("cancels oversized provider response streams before buffering them fully", async () => {
+    const maxBytes = 256 * 1024;
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    const totalChunks = 64;
+    let emittedChunks = 0;
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (emittedChunks >= totalChunks) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk);
+          emittedChunks += 1;
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const guard = createOpenAiGuard({
+      apiKey: "test",
+      pinnedModel: model,
+      fetch: async () => response,
+    });
+
+    await expect(guard.classify(request)).resolves.toMatchObject({
+      decision: "deny",
+      category: "guard_failure",
+    });
+    expect(cancelled).toBe(true);
+    // Allow the overflow chunk plus one chunk queued by the stream implementation.
+    expect(emittedChunks * chunk.byteLength).toBeLessThanOrEqual(maxBytes + chunk.byteLength * 2);
+  });
+
+  it("accepts valid provider responses close to the body limit", async () => {
+    const body = JSON.stringify({
+      model,
+      status: "completed",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
+      ],
+      provider_metadata: "x".repeat(240 * 1024),
+    });
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    expect(bodyBytes).toBeGreaterThan(240 * 1024);
+    expect(bodyBytes).toBeLessThan(256 * 1024);
+    const guard = createOpenAiGuard({
+      apiKey: "test",
+      pinnedModel: model,
+      fetch: async () => new Response(body, { headers: { "content-type": "application/json" } }),
+    });
+
+    await expect(guard.classify(request)).resolves.toEqual(allow);
+  });
+
   it("fails closed on malformed JSON and provider model mismatch", async () => {
     const malformed = createOpenAiGuard({
       apiKey: "test",

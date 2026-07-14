@@ -87,7 +87,7 @@ function normalizeCompactionParts(parts: number, messageCount: number): number {
 }
 
 /** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-export function splitMessagesByTokenShare(
+function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
 ): AgentMessage[][] {
@@ -197,10 +197,7 @@ export function splitMessagesByTokenShare(
 }
 
 /** Chunks messages by a max-token budget while applying the shared estimator safety margin. */
-export function chunkMessagesByMaxTokens(
-  messages: AgentMessage[],
-  maxTokens: number,
-): AgentMessage[][] {
+function chunkMessagesByMaxTokens(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
   if (messages.length === 0) {
     return [];
   }
@@ -346,7 +343,7 @@ export function buildStageSplitPlan(params: {
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
-export function pruneHistoryForContextShare(params: {
+function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
   maxHistoryShare?: number;

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderSkills } from "./view.ts";
 
 type SkillsProps = Parameters<typeof renderSkills>[0];
@@ -225,15 +226,17 @@ describe("renderSkills", () => {
     );
     expect(refresh?.disabled).toBe(true);
     expect(
-      Array.from(container.querySelectorAll<HTMLInputElement>(".settings-toggle input")).every(
-        (toggle) => toggle.disabled,
-      ),
+      Array.from(
+        container.querySelectorAll<HTMLElement & { disabled: boolean }>(
+          "wa-switch.settings-toggle",
+        ),
+      ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
     expect(
-      container.querySelector<HTMLInputElement>(
-        '.settings-toggle input[aria-label="Repo Skill enabled"]',
+      Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find(
+        (toggle) => normalizeText(toggle) === "Repo Skill enabled",
       ),
-    ).toBeInstanceOf(HTMLInputElement);
+    ).toBeInstanceOf(HTMLElement);
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
@@ -244,7 +247,7 @@ describe("renderSkills", () => {
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
-    for (const toggle of container.querySelectorAll<HTMLInputElement>(".settings-toggle input")) {
+    for (const toggle of container.querySelectorAll<HTMLElement>("wa-switch.settings-toggle")) {
       toggle.click();
     }
     for (const button of mutationButtons) {
@@ -277,7 +280,9 @@ describe("renderSkills", () => {
     render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
     await Promise.resolve();
 
-    const toggles = container.querySelectorAll<HTMLInputElement>(".settings-toggle input");
+    const toggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      "wa-switch.settings-toggle",
+    );
     expect(toggles).toHaveLength(2);
     const passwordToggle = expectDefined(toggles[0], "password skill toggle");
     const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
@@ -301,7 +306,9 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const updatedToggles = container.querySelectorAll<HTMLInputElement>(".settings-toggle input");
+    const updatedToggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      "wa-switch.settings-toggle",
+    );
     expect(updatedToggles).toHaveLength(1);
     expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
       false,
@@ -354,10 +361,10 @@ describe("renderSkills", () => {
     document.body.append(container);
     dialogRestores.push(() => container.remove());
 
-    await Promise.resolve();
+    const { dialog } = await getRenderedModalDialog(container);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+    expect(dialog.open).toBe(true);
   });
 
   it("opens detail dialogs and routes ClawHub actions", async () => {
@@ -386,10 +393,10 @@ describe("renderSkills", () => {
       ),
       container,
     );
-    await Promise.resolve();
+    const { dialog } = await getRenderedModalDialog(container);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+    expect(dialog.open).toBe(true);
 
     const closeButton = container.querySelector<HTMLButtonElement>(
       ".md-preview-dialog__header .btn",
@@ -479,7 +486,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    expect(showModal).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(showModal).toHaveBeenCalledTimes(1));
     expect(
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited", "Installed github"]);

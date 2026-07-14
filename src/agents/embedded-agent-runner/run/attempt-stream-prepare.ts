@@ -82,9 +82,11 @@ export function prepareEmbeddedAttemptStream(input: {
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
-  builtinToolNames: ReadonlySet<string>;
-  replaySafeToolNames: ReadonlySet<string>;
-  trustedLocalMediaToolNames: ReadonlySet<string>;
+  subscriptionToolTrust: {
+    builtinToolNames: ReadonlySet<string>;
+    replaySafeToolNames: ReadonlySet<string>;
+    trustedLocalMediaToolNames: ReadonlySet<string>;
+  };
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -276,9 +278,7 @@ export function prepareEmbeddedAttemptStream(input: {
       hasRepliedRef: attempt.hasRepliedRef,
       sessionId: attempt.sessionId,
       agentId: input.hookAgentId,
-      builtinToolNames: input.builtinToolNames,
-      replaySafeToolNames: input.replaySafeToolNames,
-      trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
+      ...input.subscriptionToolTrust,
       internalEvents: attempt.internalEvents,
     }),
   );

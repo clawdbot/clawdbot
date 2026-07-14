@@ -54,12 +54,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Ensure matching GitHub release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-
       - name: Build
         run: pnpm build
 

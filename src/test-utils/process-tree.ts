@@ -52,5 +52,12 @@ export function killPidIfAlive(pid: number | undefined): void {
   if (pid === undefined || !isPidAlive(pid)) {
     return;
   }
-  process.kill(pid, "SIGKILL");
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    // The process can exit after the liveness probe; ESRCH already satisfies cleanup.
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }

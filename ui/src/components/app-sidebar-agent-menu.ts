@@ -1,14 +1,21 @@
 // Sidebar agent-chip menu (switcher, filter, utility rows), split out of
 // app-sidebar.ts to keep that hot component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { icons, type IconName } from "./icons.ts";
+import {
+  consumeDropdownKeyboardDismissal,
+  syncDropdownItemRadio,
+  trackDropdownKeyboardDismissal,
+} from "./web-awesome.ts";
 
 // External rows of the footer agent menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -29,6 +36,10 @@ const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () 
 
 /** Above this roster size the chip menu switches to pinned agents + filter. */
 const QUICK_SWITCH_AGENT_LIMIT = 10;
+const AGENT_VALUE_PREFIX = "agent:";
+const NEW_SESSION_VALUE_PREFIX = "new-session:";
+const COMMAND_VALUE_PREFIX = "command:";
+const LINK_VALUE_PREFIX = "link:";
 
 type AgentMenuAgent = { id: string; name?: string; identity?: { name?: string; emoji?: string } };
 
@@ -45,13 +56,12 @@ type SidebarAgentMenuParams = {
   gatewayVersion: string | null;
   themeMode: ThemeMode;
   agentUnreadCount: (agentId: string) => number;
-  helpOpen: boolean;
-  onHelpOpenChange: (next: boolean) => void;
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
   onOpenNewSession: (agentId: string) => void;
-  onClose: () => void;
+  onTabAway: () => void;
+  onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
 };
@@ -117,89 +127,69 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
   return html`
-    <div class="sidebar-agent-menu__agent-row">
-      <button
-        type="button"
-        class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
-        role="menuitemradio"
-        tabindex="-1"
-        aria-checked=${String(active)}
-        @click=${() => params.onSwitchAgent(agentId)}
-      >
-        <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-        <span class="sidebar-customize-menu__text">${label}</span>
-        ${unread > 0
-          ? html`<span
-              class="session-unread-dot"
-              role="img"
-              aria-label=${t("sessionsView.unread")}
-            ></span>`
-          : nothing}
-        <span class="sidebar-customize-menu__check" aria-hidden="true">
-          ${active ? icons.check : nothing}
-        </span>
-      </button>
-      <button
-        type="button"
-        class="sidebar-session-sort sidebar-agent-menu__new"
-        role="menuitem"
-        tabindex="-1"
-        title=${`${t("chat.runControls.newSession")} — ${label}`}
-        aria-label=${`${t("chat.runControls.newSession")} — ${label}`}
-        ?disabled=${!params.connected}
-        @click=${() => {
-          params.onClose();
-          params.onOpenNewSession(agentId);
-        }}
-      >
-        ${icons.plus}
-      </button>
-    </div>
+    <wa-dropdown-item
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+      value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
+      type="checkbox"
+      role="menuitemradio"
+      aria-checked=${String(active)}
+      ${ref((element) => syncDropdownItemRadio(element, active))}
+    >
+      <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+      <span class="sidebar-customize-menu__text">${label}</span>
+      ${active
+        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+            >${icons.check}</span
+          >`
+        : nothing}
+      ${unread > 0
+        ? html`<span
+            slot="details"
+            class="session-unread-dot"
+            role="img"
+            aria-label=${t("sessionsView.unread")}
+          ></span>`
+        : nothing}
+    </wa-dropdown-item>
+    <wa-dropdown-item
+      class="sidebar-customize-menu__item sidebar-agent-menu__new"
+      value=${`${NEW_SESSION_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
+      ?disabled=${!params.connected}
+    >
+      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
+      <span class="sidebar-customize-menu__text">
+        ${t("chat.runControls.newSession")} — ${label}
+      </span>
+    </wa-dropdown-item>
   `;
 }
 
-// Prefer a right flyout, flip left when the right edge is tight, and on
-// viewports too narrow for two side-by-side menus overlay the parent
-// instead — a flipped submenu would land offscreen there. Menus are
-// shrink-to-fit (224-264px, localized labels vary), so measure the open
-// parent and budget the flyout at its max width; underestimating picks a
-// side placement whose flyout clips past the viewport.
-function agentMenuHelpPlacement(position: { x: number }): "" | "--left" | "--overlay" {
-  const flyoutMaxWidth = 264;
-  const parentWidth =
-    document.querySelector(".sidebar-agent-menu")?.getBoundingClientRect().width ?? flyoutMaxWidth;
-  const fitsRight = position.x + parentWidth + 4 + flyoutMaxWidth <= window.innerWidth - 8;
-  const fitsLeft = position.x >= flyoutMaxWidth + 4 + 8;
-  return fitsRight ? "" : fitsLeft ? "--left" : "--overlay";
-}
-
-function renderAgentMenuHelpSubmenu(position: { x: number }, params: SidebarAgentMenuParams) {
-  const placement = agentMenuHelpPlacement(position);
+function renderAgentMenuHelpSubmenu() {
   return html`
-    <div
-      class="sidebar-customize-menu sidebar-customize-menu__submenu ${placement
-        ? `sidebar-customize-menu__submenu${placement}`
-        : ""}"
-      role="menu"
-      aria-label=${t("agentChip.help")}
-    >
-      ${AGENT_MENU_LINKS.map(
-        (link) => html`
+    ${AGENT_MENU_LINKS.map(
+      (link) => html`
+        <wa-dropdown-item
+          slot="submenu"
+          class="sidebar-customize-menu__item"
+          value=${`${LINK_VALUE_PREFIX}${encodeURIComponent(link.href)}`}
+          @click=${(event: MouseEvent) => {
+            if (event.target instanceof Element && event.target.closest("a")) {
+              (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
+            }
+          }}
+        >
           <a
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
             href=${link.href}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            @click=${() => params.onClose()}
+            tabindex="-1"
           >
-            <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
             <span class="sidebar-customize-menu__text">${link.label()}</span>
           </a>
-        `,
-      )}
-    </div>
+        </wa-dropdown-item>
+      `,
+    )}
   `;
 }
 
@@ -212,12 +202,73 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const { rows, showFilter } = sidebarAgentMenuRows(params);
   return html`
     <openclaw-menu-surface>
-      <div
+      <wa-dropdown
         class="sidebar-customize-menu sidebar-agent-menu"
-        role="menu"
+        .open=${true}
+        placement="top-start"
+        .distance=${0}
         aria-label=${t("agentChip.menuLabel")}
-        style="left: ${position.x}px; bottom: ${position.bottom}px;"
+        @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+          event.preventDefault();
+          const item = event.detail.item;
+          if (item.dataset.nativeNavigation) {
+            delete item.dataset.nativeNavigation;
+            params.onClose(false);
+            return;
+          }
+          const value = item.value;
+          if (!value) {
+            return;
+          }
+          params.onClose(false);
+          if (value.startsWith(AGENT_VALUE_PREFIX)) {
+            params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
+            return;
+          }
+          if (value.startsWith(NEW_SESSION_VALUE_PREFIX)) {
+            params.onOpenNewSession(
+              decodeURIComponent(value.slice(NEW_SESSION_VALUE_PREFIX.length)),
+            );
+            return;
+          }
+          if (value.startsWith(LINK_VALUE_PREFIX)) {
+            openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+            return;
+          }
+          switch (value) {
+            case `${COMMAND_VALUE_PREFIX}capabilities`:
+              params.onAskCapabilities(activeId);
+              break;
+            case `${COMMAND_VALUE_PREFIX}agent-settings`:
+              params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
+              break;
+            case `${COMMAND_VALUE_PREFIX}settings`:
+              params.onNavigate("config");
+              break;
+            case `${COMMAND_VALUE_PREFIX}pair-mobile`:
+              params.onPairMobile();
+              break;
+          }
+        }}
+        @wa-after-show=${(event: Event) => {
+          if (showFilter) {
+            (event.currentTarget as HTMLElement)
+              .querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input")
+              ?.focus();
+          }
+        }}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
+        <button
+          slot="trigger"
+          type="button"
+          tabindex="-1"
+          aria-hidden="true"
+          aria-label=${t("agentChip.menuLabel")}
+          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+        ></button>
         ${agents.length > 1
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
@@ -231,115 +282,83 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                         aria-label=${t("agentChip.filterAgents")}
                         @input=${(event: Event) =>
                           params.onFilterChange((event.target as HTMLInputElement).value)}
+                        @keydown=${(event: KeyboardEvent) => {
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const dropdown = (event.currentTarget as HTMLElement).closest(
+                              "wa-dropdown",
+                            );
+                            const items = Array.from(dropdown?.children ?? []).filter(
+                              (child): child is HTMLElement & { active: boolean } =>
+                                child instanceof HTMLElement &&
+                                child.localName === "wa-dropdown-item" &&
+                                !child.hasAttribute("disabled"),
+                            );
+                            const target = event.key === "ArrowDown" ? items.at(0) : items.at(-1);
+                            if (target) {
+                              items.forEach((item) => (item.active = item === target));
+                              target.focus({ preventScroll: true });
+                            }
+                            return;
+                          }
+                          // Keep editing keys out of Web Awesome's document-level
+                          // menu handler; Escape still dismisses the whole menu.
+                          if (event.key !== "Escape" && event.key !== "Tab") {
+                            event.stopPropagation();
+                          }
+                        }}
                       />
                     </div>
                   `
                 : nothing}
-              <div class="sidebar-agent-menu__list">
-                ${rows.map((entry) => renderAgentRow(entry, params))}
-                ${rows.length === 0
-                  ? html`<div class="sidebar-agent-menu__empty">
-                      ${t("agentChip.noAgentMatches")}
-                    </div>`
-                  : nothing}
-              </div>
+              ${rows.map((entry) => renderAgentRow(entry, params))}
+              ${rows.length === 0
+                ? html`<div class="sidebar-agent-menu__empty">
+                    ${t("agentChip.noAgentMatches")}
+                  </div>`
+                : nothing}
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing}
-        <button
-          type="button"
+        <wa-dropdown-item
           class="sidebar-customize-menu__item"
-          role="menuitem"
-          tabindex="-1"
+          value="command:capabilities"
           ?disabled=${!params.connected}
-          @click=${() => params.onAskCapabilities(activeId)}
         >
-          <span class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
           <span class="sidebar-customize-menu__text">
             ${t("agentChip.whatCanAgentDo", { name: activeName })}
           </span>
-        </button>
-        <button
-          type="button"
-          class="sidebar-customize-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          @click=${() => {
-            params.onClose();
-            params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
-          }}
-        >
-          <span class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
           <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
-        </button>
+        </wa-dropdown-item>
         <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <button
-          type="button"
-          class="sidebar-customize-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          @click=${() => {
-            params.onClose();
-            params.onNavigate("config");
-          }}
-        >
-          <span class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
           <span class="sidebar-customize-menu__text">${titleForRoute("config")}</span>
-        </button>
-        <button
-          type="button"
+        </wa-dropdown-item>
+        <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-pair-mobile"
-          role="menuitem"
-          tabindex="-1"
+          value="command:pair-mobile"
           ?disabled=${!params.canPairDevice}
           title=${params.canPairDevice ? nothing : t("nodes.pairing.adminRequired")}
-          @click=${() => {
-            params.onClose();
-            params.onPairMobile();
-          }}
         >
-          <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
-        </button>
-        <div
-          class="sidebar-customize-menu__submenu-host"
-          @pointerenter=${(event: PointerEvent) => {
-            // Hover open/close is mouse-only: on touch/pen taps the
-            // enter/leave pair would race the click below. Overlay placement
-            // covers this trigger row, so hover-opening there would land the
-            // pending click on a flyout link instead.
-            if (event.pointerType === "mouse" && agentMenuHelpPlacement(position) !== "--overlay") {
-              params.onHelpOpenChange(true);
-            }
-          }}
-          @pointerleave=${(event: PointerEvent) => {
-            if (event.pointerType === "mouse") {
-              params.onHelpOpenChange(false);
-            }
-          }}
+        </wa-dropdown-item>
+        <wa-dropdown-item
+          class="sidebar-customize-menu__item sidebar-agent-menu__help"
+          value="command:help"
         >
-          <button
-            type="button"
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            aria-haspopup="menu"
-            aria-expanded=${String(params.helpOpen)}
-            @click=${() => {
-              // Open-only: with hover-open, a toggle would close the flyout
-              // on the very click that follows the opening pointerenter.
-              // Closing happens by leaving the host or closing the menu.
-              params.onHelpOpenChange(true);
-            }}
+          <span slot="icon" class="nav-item__icon" aria-hidden="true"
+            >${icons.circleQuestionMark}</span
           >
-            <span class="nav-item__icon" aria-hidden="true">${icons.circleQuestionMark}</span>
-            <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
-            <span class="sidebar-customize-menu__chevron" aria-hidden="true">
-              ${icons.chevronRight}
-            </span>
-          </button>
-          ${params.helpOpen ? renderAgentMenuHelpSubmenu(position, params) : nothing}
-        </div>
+          <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
+          ${renderAgentMenuHelpSubmenu()}
+        </wa-dropdown-item>
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <div class="sidebar-agent-menu__footer">
           <openclaw-sidebar-build-chip
@@ -354,7 +373,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
           </span>
         </div>
-      </div>
+      </wa-dropdown>
     </openclaw-menu-surface>
   `;
 }

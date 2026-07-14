@@ -1,10 +1,11 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import {
-  resolveEmbeddedRunAttemptTerminalOutcome,
-  type EmbeddedRunAttemptTerminalInput,
-} from "./terminal-outcome.js";
+import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
+
+type EmbeddedRunAttemptTerminalInput = Parameters<
+  typeof resolveEmbeddedRunAttemptTerminalOutcome
+>[0]["attempt"];
 
 function makeAttempt(
   overrides: Partial<EmbeddedRunAttemptTerminalInput> = {},

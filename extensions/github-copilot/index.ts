@@ -3,8 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
-  type ProviderCatalogContext,
-  type ProviderCatalogResult,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
@@ -21,16 +19,11 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
-import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { resolveFirstGithubToken } from "./auth.js";
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
+import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
-import {
-  PROVIDER_ID,
-  fetchCopilotModelCatalog,
-  resolveCopilotForwardCompatModel,
-} from "./models.js";
+import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
@@ -349,72 +342,14 @@ export default definePluginEntry({
       }
       return config ? {} : startupPluginConfig;
     }
-
-    async function runGithubCopilotCatalog(
-      ctx: ProviderCatalogContext,
-    ): Promise<ProviderCatalogResult> {
-      const pluginConfig = resolveCurrentPluginConfig(ctx.config);
-      const discoveryEnabled = pluginConfig.discovery?.enabled;
-      if (discoveryEnabled === false) {
-        return null;
-      }
-      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
-        await loadGithubCopilotRuntime();
-      const { githubToken, hasProfile } = await resolveFirstGithubToken({
-        agentDir: ctx.agentDir,
-        config: ctx.config,
-        env: ctx.env,
-      });
-      if (!hasProfile && !githubToken) {
-        return null;
-      }
-      let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-      let copilotApiToken: string | undefined;
-      if (githubToken) {
-        try {
-          const token = await resolveCopilotApiToken({
-            githubToken,
-            env: ctx.env,
-            githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
-          });
-          baseUrl = token.baseUrl;
-          copilotApiToken = token.token;
-        } catch {
-          baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-        }
-      }
-      // Try to fetch the live model catalog from Copilot's /models endpoint so
-      // the runtime tracks per-account entitlements and accurate token limits
-      // without manifest churn. On any
-      // failure we return an empty model list, which lets the static manifest
-      // catalog continue to be the visible fallback for users.
-      let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
-      if (copilotApiToken) {
-        try {
-          discoveredModels = await getCachedLiveCatalogValue({
-            keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-            load: async () =>
-              await fetchCopilotModelCatalog({
-                copilotApiToken,
-                baseUrl,
-              }),
-          });
-        } catch {
-          discoveredModels = [];
-        }
-      }
-      return {
-        provider: {
-          baseUrl,
-          models: discoveredModels,
-        },
-      };
-    }
+    const dynamicModels = createGithubCopilotDynamicModelHooks({
+      discoveryEnabled: (config) => resolveCurrentPluginConfig(config).discovery?.enabled !== false,
+    });
 
     async function runGithubCopilotUnifiedLiveCatalog(
       ctx: UnifiedModelCatalogProviderContext,
     ): Promise<UnifiedModelCatalogEntry[] | null> {
-      const result = await runGithubCopilotCatalog(ctx);
+      const result = await dynamicModels.runCatalog(ctx);
       if (!result || !("provider" in result)) {
         return null;
       }
@@ -662,9 +597,11 @@ export default definePluginEntry({
       },
       catalog: {
         order: "late",
-        run: runGithubCopilotCatalog,
+        run: dynamicModels.runCatalog,
       },
-      resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      prepareDynamicModel: dynamicModels.prepareDynamicModel,
+      resolveDynamicModel: dynamicModels.resolveDynamicModel,
+      preferRuntimeResolvedModel: dynamicModels.preferRuntimeResolvedModel,
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,

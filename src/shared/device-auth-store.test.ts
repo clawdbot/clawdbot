@@ -5,13 +5,14 @@ import {
   coerceDeviceAuthStore,
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
-  type DeviceAuthStoreAdapter,
 } from "./device-auth-store.js";
 
-function createAdapter(initialStore: ReturnType<DeviceAuthStoreAdapter["readStore"]> = null) {
+type TestDeviceAuthStoreAdapter = Parameters<typeof loadDeviceAuthTokenFromStore>[0]["adapter"];
+
+function createAdapter(initialStore: ReturnType<TestDeviceAuthStoreAdapter["readStore"]> = null) {
   let store = initialStore;
   const writes: unknown[] = [];
-  const adapter: DeviceAuthStoreAdapter = {
+  const adapter: TestDeviceAuthStoreAdapter = {
     readStore: () => store,
     writeStore: (next) => {
       store = next;

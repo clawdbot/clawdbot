@@ -173,7 +173,7 @@ struct RootTabsSourceGuardTests {
         #expect(!sidebarDetail.contains("initialRoute: .cron"))
         #expect(sidebarDetail.contains("headerTitle: \"Dreaming\""))
         #expect(sidebarDetail.contains("headerTitle: \"Usage\""))
-        #expect(sidebarDetail.contains("headerTitle: \"Cron Jobs\""))
+        #expect(sidebarDetail.contains("headerTitle: \"Automations\""))
         #expect(!sidebarDetail.contains("headerTitle: \"OpenClaw\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("title: .localized(self.headerTitle)"))

@@ -113,6 +113,9 @@ For a user-facing walkthrough, see [Migrating from Claude](/install/migrating-cl
 
 ### What Claude imports
 
+- Claude Code auto-memory Markdown from `~/.claude/projects/*/memory` and a
+  user-configured `autoMemoryDirectory`, copied under
+  `memory/imports/claude-code/` for indexed recall.
 - Project `CLAUDE.md` and `.claude/CLAUDE.md` into the OpenClaw agent workspace (`AGENTS.md`).
 - User `~/.claude/CLAUDE.md` appended to workspace `USER.md`.
 - MCP server definitions from project `.mcp.json`, Claude Code `~/.claude.json` (including its per-project entries), and Claude Desktop `claude_desktop_config.json`.
@@ -142,6 +145,9 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 ### What Codex imports
 
+- Consolidated Codex `MEMORY.md` and `memory_summary.md` from
+  `$CODEX_HOME/memories`, copied under `memory/imports/codex/` for indexed
+  recall. Raw rollout memory is not imported.
 - Codex CLI skill directories under `$CODEX_HOME/skills`, excluding Codex's `.system` cache.
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current OpenClaw agent workspace for per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex app-server `plugin/list`. Planning reads `plugin/read` for each enabled installed plugin.

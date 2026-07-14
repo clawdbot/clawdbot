@@ -23,3 +23,12 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit?: (args: string[]) => string,
 ): string;
+export type WorkflowRunCheckSuite = {
+  status?: string;
+  conclusion?: string | null;
+  workflowRun?: { url?: string } | null;
+};
+export function selectWorkflowRunCheckSuite(
+  nodes: WorkflowRunCheckSuite[],
+  parentRunId: unknown,
+): WorkflowRunCheckSuite | undefined;

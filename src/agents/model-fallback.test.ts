@@ -21,7 +21,7 @@ import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
-import { OPENCLAW_ABORTABLE_WRAPPER } from "./embedded-agent-runner/run/abortable.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.js";
@@ -3754,11 +3754,18 @@ describe("runWithModelFallback", () => {
       return err;
     }
 
-    function makeAbortableWrapper(reason: Error): Error {
-      const err = new Error(reason.message, { cause: reason });
-      err.name = "AbortError";
-      (err as Error & { [OPENCLAW_ABORTABLE_WRAPPER]?: true })[OPENCLAW_ABORTABLE_WRAPPER] = true;
-      return err;
+    async function makeAbortableWrapper(reason: Error): Promise<Error> {
+      const controller = new AbortController();
+      controller.abort(reason);
+      try {
+        await abortable(controller.signal, Promise.resolve());
+      } catch (error: unknown) {
+        if (!(error instanceof Error)) {
+          throw new Error("abortable() rejected with a non-Error value");
+        }
+        return error;
+      }
+      throw new Error("abortable() unexpectedly resolved after abort");
     }
 
     function makeAbortWrapper(reason: Error): Error {
@@ -3824,7 +3831,7 @@ describe("runWithModelFallback", () => {
 
       const innerTimeout = new Error("request timed out");
       innerTimeout.name = "TimeoutError";
-      const outerWrap = makeAbortableWrapper(innerTimeout);
+      const outerWrap = await makeAbortableWrapper(innerTimeout);
       const controller = makeTaggedAbortController(outerWrap);
 
       await expect(
@@ -3844,7 +3851,7 @@ describe("runWithModelFallback", () => {
       const cfg = makeCfg();
       const innerTimeout = new Error("request timed out");
       innerTimeout.name = "TimeoutError";
-      const outerAbort = makeAbortableWrapper(innerTimeout);
+      const outerAbort = await makeAbortableWrapper(innerTimeout);
       const run = vi.fn().mockRejectedValue(outerAbort);
 
       await expect(
@@ -3863,7 +3870,7 @@ describe("runWithModelFallback", () => {
       const cfg = makeCfg();
       const innerDisconnect = new Error("client disconnected");
       innerDisconnect.name = "ClientDisconnectError";
-      const outerAbort = makeAbortableWrapper(innerDisconnect);
+      const outerAbort = await makeAbortableWrapper(innerDisconnect);
       const run = vi.fn().mockRejectedValue(outerAbort);
 
       await expect(
@@ -3881,7 +3888,7 @@ describe("runWithModelFallback", () => {
     it("rethrows when thrown error has restart abort in cause chain", async () => {
       const cfg = makeCfg();
       const restartAbort = createAgentRunRestartAbortError();
-      const outerAbort = makeAbortableWrapper(restartAbort);
+      const outerAbort = await makeAbortableWrapper(restartAbort);
       const run = vi.fn().mockRejectedValueOnce(outerAbort).mockResolvedValueOnce("ok");
 
       await expect(
@@ -3914,12 +3921,12 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
     });
 
-    it("discards deferred session suspension for private terminal abort wrappers", () => {
+    it("discards deferred session suspension for private terminal abort wrappers", async () => {
       const timeout = new Error("request timed out");
       timeout.name = "TimeoutError";
       expect(
         testing.shouldDiscardDeferredSessionSuspension({
-          error: makeAbortableWrapper(timeout),
+          error: await makeAbortableWrapper(timeout),
         }),
       ).toBe(true);
 

@@ -49,7 +49,7 @@ function normalizeGoogleChatStableEntry(entry: string): string | null {
   return withoutProvider.startsWith("users/") ? normalizeUserId(withoutProvider) : withoutProvider;
 }
 
-export function normalizeGoogleChatEmailEntry(entry: string): string | null {
+function normalizeGoogleChatEmailEntry(entry: string): string | null {
   const withoutProvider = normalizeEntryValue(entry).replace(
     /^(googlechat|google-chat|gchat):/i,
     "",
@@ -89,7 +89,7 @@ type GoogleChatGroupEntry = {
   systemPrompt?: string;
 };
 
-export function resolveGoogleChatGroupConfig(params: {
+function resolveGoogleChatGroupConfig(params: {
   groupId: string;
   groupName?: string | null;
   groups?: Record<string, GoogleChatGroupEntry>;

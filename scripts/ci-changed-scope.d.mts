@@ -45,6 +45,7 @@ export function writeGitHubOutput(
   nodeFastScope?: NodeFastScope,
   runNativeI18n?: boolean,
   runTsLoc?: boolean,
+  changedPaths?: string[] | null,
 ): void;
 
 export function parseArgs(argv: string[]): ChangedScopeArgs;

@@ -4,12 +4,12 @@
 // status instead of pills. The detail/ClawHub dialogs keep their specialized
 // markup.
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import "../../components/modal-dialog.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -46,21 +46,6 @@ function safeExternalHref(raw?: string): string | null {
     return null;
   }
   return resolveSafeExternalUrl(raw, window.location.href);
-}
-
-function showDialogWhenClosed(el?: Element) {
-  if (!(el instanceof HTMLDialogElement) || el.open) {
-    return;
-  }
-  if (el.isConnected) {
-    el.showModal();
-  } else {
-    queueMicrotask(() => {
-      if (el.isConnected && !el.open) {
-        el.showModal();
-      }
-    });
-  }
 }
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
@@ -490,28 +475,17 @@ function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
 
   return html`
-    <dialog
-      class="md-preview-dialog"
-      ${ref(showDialogWhenClosed)}
-      @click=${(e: Event) => {
-        const dialog = e.currentTarget as HTMLDialogElement;
-        if (e.target === dialog) {
-          dialog.close();
-        }
-      }}
-      @close=${props.onClawHubDetailClose}
+    <openclaw-modal-dialog
+      label=${detail?.skill?.displayName ?? props.clawhubDetailSlug ?? t("skillsPage.notFound")}
+      style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
+      @modal-cancel=${props.onClawHubDetailClose}
     >
       <div class="md-preview-dialog__panel">
         <div class="md-preview-dialog__header">
           <div class="md-preview-dialog__title">
             ${detail?.skill?.displayName ?? props.clawhubDetailSlug}
           </div>
-          <button
-            class="btn btn--sm"
-            @click=${(e: Event) => {
-              (e.currentTarget as HTMLElement).closest("dialog")?.close();
-            }}
-          >
+          <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
             ${t("skillsPage.close")}
           </button>
         </div>
@@ -567,7 +541,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                 : html`<div class="muted">${t("skillsPage.notFound")}</div>`}
         </div>
       </div>
-    </dialog>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -621,16 +595,10 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
     props.detailTab === "card" && skill.skillCard?.present ? "card" : "overview";
 
   return html`
-    <dialog
-      class="md-preview-dialog"
-      ${ref(showDialogWhenClosed)}
-      @click=${(e: Event) => {
-        const dialog = e.currentTarget as HTMLDialogElement;
-        if (e.target === dialog) {
-          dialog.close();
-        }
-      }}
-      @close=${props.onDetailClose}
+    <openclaw-modal-dialog
+      label=${skill.name}
+      style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
+      @modal-cancel=${props.onDetailClose}
     >
       <div class="md-preview-dialog__panel">
         <div class="md-preview-dialog__header">
@@ -642,12 +610,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
-          <button
-            class="btn btn--sm"
-            @click=${(e: Event) => {
-              (e.currentTarget as HTMLElement).closest("dialog")?.close();
-            }}
-          >
+          <button class="btn btn--sm" @click=${props.onDetailClose}>
             ${t("skillsPage.close")}
           </button>
         </div>
@@ -790,7 +753,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           </div>
         </div>
       </div>
-    </dialog>
+    </openclaw-modal-dialog>
   `;
 }
 

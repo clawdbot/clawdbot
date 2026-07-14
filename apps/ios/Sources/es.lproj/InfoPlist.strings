@@ -21,6 +21,8 @@
 "NSMotionUsageDescription" = "OpenClaw puede usar datos de movimiento para admitir interacciones y automatizaciones conscientes del dispositivo.";
 /* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
 "NSHealthShareUsageDescription" = "Después de activar Resúmenes de salud, OpenClaw lee los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos para compartir los datos agregados solicitados con el proveedor de IA que hayas configurado.";
+/* OpenClaw source: "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw no escribe ni modifica los datos de Salud. Los Resúmenes de Salud leen los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos para compartir los agregados solicitados con tu proveedor de IA configurado.";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw permite que tu asistente lea las fotos que autorices y te permite elegir fotos para compartir.";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

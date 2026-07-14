@@ -813,6 +813,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/reef
 - Headings:
   - H2: Quick start
+  - H2: Agent-driven setup
   - H2: Configuration
   - H2: Adding a friend
   - H2: Sending and receiving
@@ -2567,6 +2568,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: How it works
   - H2: What goes where
+  - H2: Import from coding assistants
   - H2: Action-sensitive memories
   - H2: Inferred commitments
   - H2: Memory tools
@@ -3688,7 +3690,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Trust boundary
   - H2: Isolation ladder
   - H2: Quick start
-  - H2: Deferred from the MVP
+  - H2: Current scope
   - H2: Related
 
 ## gateway/multiple-gateways.md
@@ -10053,6 +10055,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/self-learning
 - Headings:
   - H2: Enable self-learning
+  - H2: Review past sessions manually
   - H2: What OpenClaw can learn
   - H2: When experience review runs
   - H2: What the reviewer receives
@@ -10087,6 +10090,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Support files
   - H2: Agent tool
   - H2: Suggested skills
+  - H3: Scan past sessions
   - H2: Approval and autonomy
   - H2: Gateway methods
   - H2: Storage
@@ -10396,6 +10400,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Sidebar navigation
   - H2: New session page
   - H2: What it can do (today)
+  - H2: Import assistant memory
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal

@@ -1,7 +1,8 @@
 // Imessage plugin module implements group policy behavior.
 import {
-  resolveChannelGroupRequireMention,
-  resolveChannelGroupToolsPolicy,
+  buildChannelGroupsScopeTree,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
@@ -16,26 +17,24 @@ type IMessageGroupContext = {
   senderE164?: string | null;
 };
 
+function resolveScopePath(params: IMessageGroupContext) {
+  return params.groupId ? [params.groupId] : [];
+}
+
 export function resolveIMessageGroupRequireMention(params: IMessageGroupContext): boolean {
-  return resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "imessage",
-    groupId: params.groupId,
-    accountId: params.accountId,
+  return resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
+    path: resolveScopePath(params),
   });
 }
 
 export function resolveIMessageGroupToolPolicy(
   params: IMessageGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  return resolveChannelGroupToolsPolicy({
-    cfg: params.cfg,
-    channel: "imessage",
-    groupId: params.groupId,
-    accountId: params.accountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+  return resolveScopeToolsPolicy({
+    ...params,
+    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
+    path: resolveScopePath(params),
+    messageProvider: "imessage",
   });
 }

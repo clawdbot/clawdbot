@@ -8,7 +8,6 @@
       "name": "@openclaw/voice-call",
       "version": "2026.7.2",
       "dependencies": {
-        "defu": "6.1.5",
         "typebox": "1.3.3",
         "ws": "8.21.0",
         "zod": "4.4.3"
@@ -21,12 +20,6 @@
           "optional": true
         }
       }
-    },
-    "node_modules/defu": {
-      "version": "6.1.5",
-      "resolved": "https://registry.npmjs.org/defu/-/defu-6.1.5.tgz",
-      "integrity": "sha512-pwdBJxJuJXmqrLO6s0VBmfbRz+G7FUzkjldAsdi9Yrv86mPyzq0ll1o8+8gB4Gsr6GJHbK1Lh3ngllgTInDCjA==",
-      "license": "MIT"
     },
     "node_modules/typebox": {
       "version": "1.3.3",

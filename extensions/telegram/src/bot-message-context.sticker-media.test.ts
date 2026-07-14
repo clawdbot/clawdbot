@@ -1,6 +1,9 @@
 // Telegram tests cover bot message context.sticker media plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 

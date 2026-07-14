@@ -20,7 +20,8 @@ permissions:
 jobs:
   build:
     name: Build Linux companion
-    runs-on: ubuntu-latest
+    # Match the release build base so PR artifacts have the same glibc floor.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - name: Checkout

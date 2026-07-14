@@ -103,10 +103,6 @@ export class ChannelWizardController {
     return this.currentState;
   }
 
-  get activeChannel(): string | null {
-    return this.channel;
-  }
-
   async start(channel: string | null): Promise<void> {
     const client = this.getClient();
     if (!client) {

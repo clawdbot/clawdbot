@@ -9,6 +9,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@awesome.me/webawesome": "3.10.0",
     "@codemirror/commands": "6.10.4",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",

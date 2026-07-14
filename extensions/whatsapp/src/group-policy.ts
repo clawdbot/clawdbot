@@ -1,7 +1,8 @@
 // Whatsapp plugin module implements group policy behavior.
 import {
-  resolveChannelGroupRequireMention,
-  resolveChannelGroupToolsPolicy,
+  buildChannelGroupsScopeTree,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -16,26 +17,24 @@ type WhatsAppGroupContext = {
   senderE164?: string | null;
 };
 
+function resolveScopePath(params: WhatsAppGroupContext) {
+  return params.groupId ? [params.groupId] : [];
+}
+
 export function resolveWhatsAppGroupRequireMention(params: WhatsAppGroupContext): boolean {
-  return resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "whatsapp",
-    groupId: params.groupId,
-    accountId: params.accountId,
+  return resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "whatsapp", params.accountId),
+    path: resolveScopePath(params),
   });
 }
 
 export function resolveWhatsAppGroupToolPolicy(
   params: WhatsAppGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  return resolveChannelGroupToolsPolicy({
-    cfg: params.cfg,
-    channel: "whatsapp",
-    groupId: params.groupId,
-    accountId: params.accountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+  return resolveScopeToolsPolicy({
+    ...params,
+    tree: buildChannelGroupsScopeTree(params.cfg, "whatsapp", params.accountId),
+    path: resolveScopePath(params),
+    messageProvider: "whatsapp",
   });
 }

@@ -136,7 +136,10 @@ export function startNativeLinkRouting(): NativeLinkRouting {
   }
 
   let menu: NativeLinkMenu | null = null;
-  const closeMenu = () => {
+  const closeMenu = (expected?: NativeLinkMenu) => {
+    if (expected && menu !== expected) {
+      return;
+    }
     menu?.remove();
     menu = null;
   };
@@ -152,7 +155,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     nextMenu.x = x;
     nextMenu.y = y;
     nextMenu.trigger = anchor;
-    nextMenu.onClose = closeMenu;
+    nextMenu.onClose = () => closeMenu(nextMenu);
     nextMenu.onAction = (action: NativeLinkMenuAction) => {
       if (action === "copy") {
         void copyToClipboard(url.href);

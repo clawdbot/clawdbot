@@ -23,7 +23,7 @@ import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.j
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
-export type HarnessContextEngine = ContextEngine;
+type HarnessContextEngine = ContextEngine;
 
 type HarnessRuntimeSettingsParams = {
   runtimeSettings?: ContextEngineRuntimeSettings;

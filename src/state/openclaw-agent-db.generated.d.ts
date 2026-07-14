@@ -169,16 +169,20 @@ export interface SessionTranscriptIndexState {
 
 export interface Sessions {
   account_id: string | null;
+  acp_owned: Generated<number>;
   agent_harness_id: string | null;
   channel: string | null;
   chat_type: string | null;
   created_at: number;
   display_name: string | null;
   ended_at: number | null;
+  hook_external_content_source: string | null;
   model: string | null;
   model_provider: string | null;
   parent_session_key: string | null;
+  plugin_owner_id: string | null;
   primary_conversation_id: string | null;
+  session_entry_provenance: Generated<number>;
   session_id: string;
   session_key: string;
   session_scope: Generated<string>;

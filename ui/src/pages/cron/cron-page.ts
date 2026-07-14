@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -340,7 +340,6 @@ class CronPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("cron")}</div>
-          <div class="page-sub">${subtitleForRoute("cron")}</div>
         </div>
         ${renderAgentScopeControl({
           agents: this.agentsList?.agents ?? [],

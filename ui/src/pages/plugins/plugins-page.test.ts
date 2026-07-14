@@ -274,7 +274,13 @@ describe("PluginsPage", () => {
     );
 
     expect(page.activeTab).toBe("discover");
-    expect(page.querySelector("#plugins-tab-discover")?.getAttribute("aria-selected")).toBe("true");
+    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
+    ).toBe(true);
   });
 
   it("routes the skills and workshop hub tabs through navigation", async () => {

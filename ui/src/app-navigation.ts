@@ -128,7 +128,15 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "sessions", "model-providers", "automation", "mcp"],
+    routes: [
+      "agents",
+      "ai-agents",
+      "sessions",
+      "memory-import",
+      "model-providers",
+      "automation",
+      "mcp",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSystem",
@@ -166,6 +174,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   about: "fileText",
   "ai-agents": "brain",
   "model-providers": "plug",
+  "memory-import": "download",
   debug: "bug",
   logs: "scrollText",
   plugin: "puzzle",
@@ -263,6 +272,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     titleKey: "tabs.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
+  "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

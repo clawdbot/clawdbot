@@ -179,9 +179,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-open-search"));
     });
-    await expect
-      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
-      .not.toBeNull();
+    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-new-session"));
@@ -206,9 +204,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await toolbar.getByRole("button", { name: "Open command palette" }).click();
-    await expect
-      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
-      .not.toBeNull();
+    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
 
     await page.evaluate(() => {

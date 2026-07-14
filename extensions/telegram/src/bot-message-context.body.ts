@@ -68,7 +68,7 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("./media-understanding.runtime.js"),
 );
 
-export type TelegramInboundBodyResult = {
+type TelegramInboundBodyResult = {
   bodyText: string;
   rawBody: string;
   historyKey?: string;

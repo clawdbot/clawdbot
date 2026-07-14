@@ -5,7 +5,7 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const OPENCLAW_LOCK_PATTERN = /^openclaw pid=(\d+)$/;
 
-export type LockState =
+type LockState =
   | { kind: "none" }
   | { kind: "live"; pid: number }
   | { kind: "dead"; pid: number }

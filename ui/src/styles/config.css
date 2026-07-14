@@ -289,27 +289,19 @@
 }
 
 .config-top-tabs__scroller {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
   min-width: 0;
   flex: 1 1 auto;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+  --track-width: 0;
 }
 
-.config-top-tabs__scroller::-webkit-scrollbar {
-  display: none;
+.config-top-tabs__scroller::part(tabs) {
+  gap: 8px;
+  border: 0;
 }
 
 .config-top-tabs__tab {
   flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  min-height: 36px;
-  padding: 8px 14px;
-  background: var(--bg-elevated);
   color: var(--muted);
   font-size: 11.5px;
   font-weight: 600;
@@ -321,17 +313,26 @@
     box-shadow var(--duration-fast) ease;
 }
 
-:root[data-theme-mode="light"] .config-top-tabs__tab {
+.config-top-tabs__tab::part(base) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  min-height: 36px;
+  padding: 8px 14px;
+  background: var(--bg-elevated);
+  color: inherit;
+}
+
+:root[data-theme-mode="light"] .config-top-tabs__tab::part(base) {
   background: white;
 }
 
-.config-top-tabs__tab:hover {
+.config-top-tabs__tab:hover::part(base) {
   color: var(--text);
   border-color: var(--border-strong);
   background: var(--bg-hover);
 }
 
-.config-top-tabs__tab.active {
+.config-top-tabs__tab[active]::part(base) {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-subtle);

@@ -52,6 +52,29 @@ summary in `MEMORY.md`, or raise the bootstrap limits if you want to spend more
 prompt budget. Use `/context list`, `/context detail`, or `openclaw doctor` to
 see raw vs. injected sizes and truncation status.
 
+## Import from coding assistants
+
+The Control UI can import existing local memory from Codex and Claude Code.
+Open **Settings** → **Import Memory**, choose the destination agent, review the
+detected files, and confirm the import. OpenClaw copies only Markdown memory:
+
+- Codex: the consolidated `MEMORY.md` and `memory_summary.md` files under
+  `~/.codex/memories` (or `CODEX_HOME/memories`). Raw rollout and transcript
+  files are not imported.
+- Claude Code: Markdown files from each project auto-memory directory under
+  `~/.claude/projects/*/memory`, plus a user-configured
+  `autoMemoryDirectory` when present. Project instructions, sessions, settings,
+  and credentials are not part of this memory-only action.
+
+Imported files stay separate under `memory/imports/codex/` and
+`memory/imports/claude-code/` in the selected agent workspace. They are indexed
+for `memory_search` and available through `memory_get`; they are not merged into
+the agent's bootstrap `MEMORY.md`. The source files are left unchanged.
+
+The preview marks destination conflicts. Enable **Replace existing imports** to
+replace those files; apply creates a verified pre-import backup and preserves
+item-level copies of overwritten files in the migration report.
+
 ## Action-sensitive memories
 
 Most memories are ordinary Markdown notes. Some affect what the agent should

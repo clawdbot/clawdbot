@@ -1,9 +1,10 @@
 // Telegram tests cover bot update tracker plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createTelegramUpdateTracker,
-  type TelegramUpdateTrackerState,
-} from "./bot-update-tracker.js";
+import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
+
+type TelegramUpdateTrackerState = ReturnType<
+  ReturnType<typeof createTelegramUpdateTracker>["getState"]
+>;
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 
 const updateCtx = (updateId: number): TelegramUpdateKeyContext => ({

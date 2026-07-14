@@ -59,6 +59,7 @@ export {
   browserStop,
   browserTabs,
 } from "./browser/client.js";
+export { fetchBrowserJson } from "./browser/client-fetch.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";

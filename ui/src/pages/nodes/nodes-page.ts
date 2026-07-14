@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
-import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -353,7 +353,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("nodes")}</div>
-          <div class="page-sub">${subtitleForRoute("nodes")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(

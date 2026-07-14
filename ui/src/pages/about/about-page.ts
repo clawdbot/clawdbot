@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -90,7 +90,6 @@ class AboutPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("about")}</div>
-          <div class="page-sub">${subtitleForRoute("about")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

@@ -14,6 +14,7 @@ const {
   parseArgs,
   shouldRunNativeI18n,
   shouldRunTsLoc,
+  writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
@@ -978,6 +979,43 @@ describe("detectChangedScope", () => {
     expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
   });
 
+  it("reports both sides of a rename so deleted paths force safe planning", () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-rename-"));
+    tempDirs.push(repoDir);
+    git(repoDir, ["init", "-b", "main"]);
+    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+    git(repoDir, ["config", "user.name", "CI"]);
+    writeRepoFile(repoDir, "src/old.ts", "export const value = 1;\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "base"]);
+    const base = git(repoDir, ["rev-parse", "HEAD"]);
+    fs.renameSync(path.join(repoDir, "src/old.ts"), path.join(repoDir, "src/new.ts"));
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "rename"]);
+
+    expect(listChangedPaths(base, "HEAD", repoDir)).toEqual(["src/new.ts", "src/old.ts"]);
+  });
+
+  it("drops oversized changed-path payloads before workflow environment interpolation", () => {
+    const outputPath = path.join(os.tmpdir(), `openclaw-ci-scope-output-${Date.now()}.txt`);
+    markerPaths.push(outputPath);
+    const changedPaths = Array.from(
+      { length: 1_000 },
+      (_, index) => `src/generated/${index}-${"x".repeat(100)}.ts`,
+    );
+    writeGitHubOutput(
+      detectChangedScope(["docs/ci.md"]),
+      outputPath,
+      undefined,
+      undefined,
+      false,
+      false,
+      changedPaths,
+    );
+
+    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
+  });
+
   it("keeps direct CLI preflight empty diffs as no-op scope", () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-"));
     tempDirs.push(repoDir);
@@ -1013,6 +1051,7 @@ describe("detectChangedScope", () => {
       run_ui_tests: "false",
       run_native_i18n: "false",
       run_ts_loc: "false",
+      changed_paths_json: "[]",
     });
   });
 });

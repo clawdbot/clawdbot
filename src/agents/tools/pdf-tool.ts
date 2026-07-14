@@ -67,7 +67,7 @@ const DEFAULT_MAX_PAGES = 20;
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
 
-export const PdfToolSchema = Type.Object({
+const PdfToolSchema = Type.Object({
   prompt: Type.Optional(Type.String()),
   pdf: Type.Optional(Type.String({ description: "One PDF path/URL." })),
   pdfs: Type.Optional(

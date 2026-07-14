@@ -112,7 +112,7 @@ export type RunCliAgentParams = {
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
-  streamParams?: import("../command/types.js").AgentStreamParams;
+  streamParams?: import("../command/shared-types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
@@ -216,7 +216,7 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliPreparedBackend = {
+type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;

@@ -33,11 +33,10 @@ vi.mock("../provider-stream.js", () => ({
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
-let PdfToolSchema: PdfToolModule["PdfToolSchema"];
 
 async function loadCreatePdfTool() {
-  if (!createPdfTool || !PdfToolSchema) {
-    ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
+  if (!createPdfTool) {
+    ({ createPdfTool } = await import("./pdf-tool.js"));
   }
   return createPdfTool;
 }
@@ -887,21 +886,24 @@ describe("createPdfTool", () => {
   });
 
   it("tool parameters have correct schema shape", async () => {
-    await loadCreatePdfTool();
-    const schema = PdfToolSchema;
-    expect(schema.type).toBe("object");
-    expect(schema).toHaveProperty("properties");
-    const props = schema.properties as Record<string, { type?: string }>;
-    expect(props).toHaveProperty("prompt");
-    expect(props).toHaveProperty("pdf");
-    expect(props).toHaveProperty("pdfs");
-    expect(props).toHaveProperty("pages");
-    expect(props).toHaveProperty("password");
-    expect(props).toHaveProperty("model");
-    expect(props).toHaveProperty("maxBytesMb");
-    expect(PdfToolSchema.properties.maxBytesMb).toMatchObject({
-      type: "number",
-      exclusiveMinimum: 0,
+    await withConfiguredPdfTool(async (tool) => {
+      const schema = tool.parameters as {
+        type?: string;
+        properties?: Record<string, { type?: string; exclusiveMinimum?: number }>;
+      };
+      expect(schema.type).toBe("object");
+      expect(schema).toHaveProperty("properties");
+      expect(schema.properties).toHaveProperty("prompt");
+      expect(schema.properties).toHaveProperty("pdf");
+      expect(schema.properties).toHaveProperty("pdfs");
+      expect(schema.properties).toHaveProperty("pages");
+      expect(schema.properties).toHaveProperty("password");
+      expect(schema.properties).toHaveProperty("model");
+      expect(schema.properties).toHaveProperty("maxBytesMb");
+      expect(schema.properties?.maxBytesMb).toMatchObject({
+        type: "number",
+        exclusiveMinimum: 0,
+      });
     });
   });
 });

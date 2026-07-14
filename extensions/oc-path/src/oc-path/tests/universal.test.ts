@@ -485,6 +485,23 @@ describe("setOcPath — jsonc insertion", () => {
       });
     }
   });
+
+  it("preserves comments, trailing commas, and CRLF", () => {
+    const ast = parseJsonc(
+      '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n  },\r\n}\r\n',
+    ).ast;
+    const r = setOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"), '"new-tok"');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(emitJsonc(r.ast as Parameters<typeof emitJsonc>[0])).toBe(
+        '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n    "gitlab": "new-tok",\r\n  },\r\n}\r\n',
+      );
+      expectLeaf(resolveOcPath(r.ast, parseOcPath("oc://config/plugins/gitlab")), {
+        leafType: "string",
+        valueText: "new-tok",
+      });
+    }
+  });
 });
 
 describe("setOcPath — jsonl insertion (session append)", () => {

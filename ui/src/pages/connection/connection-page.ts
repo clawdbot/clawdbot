@@ -3,7 +3,7 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -125,7 +125,6 @@ class ConnectionPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("connection")}</div>
-          <div class="page-sub">${subtitleForRoute("connection")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

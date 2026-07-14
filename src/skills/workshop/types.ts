@@ -7,6 +7,7 @@ export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as co
 export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
   "openclaw.skill-workshop.proposals-manifest.v1" as const;
 export const SKILL_WORKSHOP_ROLLBACK_SCHEMA = "openclaw.skill-workshop.rollback.v1" as const;
+export const MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS = 4096;
 
 type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
@@ -23,12 +24,37 @@ export type SkillProposalOrigin = {
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
+  /** Distinct proposal records successfully mutated by this run. */
+  completed?: number;
+  /** Successful persisted mutation calls, including repeated revisions. */
+  successfulMutations?: number;
+  /** Failed or incompletely checkpointed reservations in the current model run. */
+  failedMutations?: number;
+  /** Run-local identity set used to keep idea counts distinct. */
+  mutatedProposalIds?: Set<string>;
+};
+
+export type SkillWorkshopProposalReviewProgress = {
+  proposalIds: string[];
+  remaining: number;
+  successfulMutations: number;
+};
+
+/** Shared completion latch for proposal-only reviewers that require a durable final checkpoint. */
+export type SkillWorkshopProposalReviewCompletion = {
+  activeMutations?: Set<Promise<void>>;
+  completed: boolean;
+  complete: () => Promise<void>;
+  phase?: "open" | "completing" | "completed";
+  recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
 export type SkillWorkshopRunOptions = {
+  env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
+  proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
 };
 
 export type SkillProposalScan = {
@@ -68,6 +94,10 @@ export type SkillProposalRecord = {
   updatedAt: string;
   createdBy: SkillProposalSource;
   origin?: SkillProposalOrigin;
+  /** Immutable run attribution used to recover interrupted proposal-only reviews. */
+  originRunIds?: string[];
+  /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
+  originRunMutationCounts?: Record<string, number>;
   proposedVersion: string;
   draftFile: "PROPOSAL.md";
   draftHash: string;
@@ -126,6 +156,7 @@ export type SkillProposalSupportFileInput = {
 export type SkillProposalCreateInput = {
   workspaceDir: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   name: string;
   description: string;
   content: string;
@@ -139,6 +170,7 @@ export type SkillProposalCreateInput = {
 export type SkillProposalUpdateInput = {
   workspaceDir: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   skillName: string;
   description?: string;
   content: string;
@@ -152,6 +184,7 @@ export type SkillProposalUpdateInput = {
 export type SkillProposalReviseInput = {
   workspaceDir: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   proposalId: string;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
@@ -164,6 +197,7 @@ export type SkillProposalReviseInput = {
 export type SkillProposalActionInput = {
   workspaceDir: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   proposalId: string;
   reason?: string;
 };

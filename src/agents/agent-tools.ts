@@ -34,7 +34,6 @@ import {
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
-  assertRequiredParams,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
@@ -42,11 +41,9 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   wrapReadToolWithSkillContent,
-  getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
-  wrapToolParamValidation,
 } from "./agent-tools.read.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
@@ -270,14 +267,6 @@ function applyModelProviderToolPolicy(
 }
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
-
-/** Test-only access to internal tool assembly helpers. */
-export const testing = {
-  getToolParamsRecord,
-  wrapToolParamValidation,
-  assertRequiredParams,
-  applyModelProviderToolPolicy,
-} as const;
 
 /** Public options for building one plugin-owned agent tool surface. */
 type OpenClawCodingToolsOptions = {

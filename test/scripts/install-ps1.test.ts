@@ -213,6 +213,42 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "winget-node-delayed-path",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'winget') { return $true }",
+          "  return $null",
+          "}",
+          "function Join-Path {",
+          "  param([string]$Path, [string]$ChildPath)",
+          "  return \"$($Path.TrimEnd('\\'))\\$ChildPath\"",
+          "}",
+          "function Test-Path {",
+          "  param([string]$Path)",
+          "  return ($Path -eq 'C:\\Program Files\\nodejs\\node.exe')",
+          "}",
+          "filter Out-Host { }",
+          "$env:ProgramW6432 = 'C:\\Program Files'",
+          "$env:ProgramFiles = 'C:\\Program Files (x86)'",
+          "$env:Path = 'C:\\Windows\\System32'",
+          "function winget {",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'winget output'",
+          "}",
+          "function Check-Node {",
+          "  return (($env:Path -split ';') -contains 'C:\\Program Files\\nodejs')",
+          "}",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (($env:Path -split ';')[0] -ne 'C:\\Program Files\\nodejs') { throw \"Path=$env:Path\" }",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "chocolatey-node-upgrade",
         source: [
           scriptWithoutEntryPoint,
@@ -459,9 +495,20 @@ describe("install.ps1 failure handling", () => {
   });
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
+    expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
     expectBatchedPowerShellCase("scoop-node-update");
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
+  });
+
+  it("discovers a winget Node install before the machine PATH refreshes", () => {
+    const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
+    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
+    expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
+    expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
+    expect(addInstalledNodeBody).toContain("Add-ToProcessPath $nodeDir");
   });
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {

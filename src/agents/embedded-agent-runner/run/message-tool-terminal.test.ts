@@ -3,163 +3,171 @@
 // the run before the model can observe the tool result.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  installMessageToolOnlyTerminalHook,
-  isDeliveredMessageToolOnlySourceReply,
-} from "./message-tool-terminal.js";
+import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+
+async function recordsDeliveredSourceReply(params: {
+  sourceReplyDeliveryMode?: Parameters<
+    typeof installMessageToolOnlyTerminalHook
+  >[0]["sourceReplyDeliveryMode"];
+  context: AfterToolCallContext;
+  hookResult?: Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
+}): Promise<boolean> {
+  const agent = (params.hookResult
+    ? { afterToolCall: vi.fn(async () => params.hookResult) }
+    : {}) as unknown as Agent;
+  const onDeliveredSourceReply = vi.fn();
+  installMessageToolOnlyTerminalHook({
+    agent,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    onDeliveredSourceReply,
+  });
+  await agent.afterToolCall?.(params.context);
+  return onDeliveredSourceReply.mock.calls.length > 0;
+}
+
+type TerminalHookCase = {
+  label: string;
+  sourceReplyDeliveryMode?: Parameters<
+    typeof installMessageToolOnlyTerminalHook
+  >[0]["sourceReplyDeliveryMode"];
+  context: AfterToolCallContext;
+  hookResult?: Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
+  expected: boolean;
+};
 
 describe("message-tool-only source replies", () => {
-  it("marks successful message-tool-only sends as delivered source replies", () => {
-    // Direct send evidence can come from the tool result or hook result; either
-    // path means the source reply was delivered and no automatic reply is needed.
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-        }),
+  it.each([
+    {
+      label: "implicit successful send",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
       }),
-    ).toBe(true);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-          result: createDirectSendResult({ messageId: "discord-message-1" }),
-        }),
+      expected: true,
+    },
+    {
+      label: "direct send result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
+        result: createDirectSendResult({ messageId: "discord-message-1" }),
       }),
-    ).toBe(true);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-          result: createSuppressedSendResult(),
-        }),
-        hookResult: { details: { result: { messageId: "discord-message-2" } } },
+      expected: true,
+    },
+    {
+      label: "hook result delivery evidence",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
+        result: createSuppressedSendResult(),
       }),
-    ).toBe(true);
-  });
-
-  it("ignores automatic delivery, non-send actions, explicit routes, or failed sends", () => {
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "automatic",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-        }),
+      hookResult: { details: { result: { messageId: "discord-message-2" } } },
+      expected: true,
+    },
+    {
+      label: "automatic delivery mode",
+      sourceReplyDeliveryMode: "automatic",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "reaction", emoji: "thumbsup" },
-        }),
+      expected: false,
+    },
+    {
+      label: "non-send action",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "reaction", emoji: "thumbsup" },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", target: "channel:other", message: "cross-channel" },
-        }),
+      expected: false,
+    },
+    {
+      label: "explicit route",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", target: "channel:other", message: "cross-channel" },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "sessions_send",
-          args: { message: "internal delegation" },
-        }),
+      expected: false,
+    },
+    {
+      label: "different tool",
+      context: createAfterToolCallContext({
+        toolName: "sessions_send",
+        args: { message: "internal delegation" },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "failed reply" },
-          isError: true,
-        }),
+      expected: false,
+    },
+    {
+      label: "failed send",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "failed reply" },
+        isError: true,
       }),
-    ).toBe(false);
-  });
-
-  it("ignores dry-run or non-delivered sends", () => {
-    // Dry runs and suppressed sends are observable tool activity, not delivered
-    // replies, so they cannot close the turn.
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "preview reply", dryRun: true },
-        }),
+      expected: false,
+    },
+    {
+      label: "dry-run argument",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "preview reply", dryRun: true },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "preview reply" },
-          result: {
-            content: [{ type: "text", text: '{"ok":true}' }],
-            details: {
-              payload: {
-                deliveryStatus: "dry_run",
-                dryRun: true,
-              },
-            },
-          },
-        }),
+      expected: false,
+    },
+    {
+      label: "dry-run result payload",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "preview reply" },
+        result: {
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: { payload: { deliveryStatus: "dry_run", dryRun: true } },
+        },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "preview reply" },
-        }),
-        hookResult: { details: { deliveryStatus: "dry_run" } },
+      expected: false,
+    },
+    {
+      label: "dry-run hook result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "preview reply" },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "preview reply" },
-          result: {
-            content: [{ type: "text", text: '{"deliveryStatus":"dry_run","dryRun":true}' }],
-            details: { ok: true },
-          },
-        }),
+      hookResult: { details: { deliveryStatus: "dry_run" } },
+      expected: false,
+    },
+    {
+      label: "dry-run serialized result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "preview reply" },
+        result: {
+          content: [{ type: "text", text: '{"deliveryStatus":"dry_run","dryRun":true}' }],
+          details: { ok: true },
+        },
       }),
-    ).toBe(false);
-  });
-
-  it("ignores suppressed sends without delivery evidence", () => {
-    expect(
-      isDeliveredMessageToolOnlySourceReply({
-        sourceReplyDeliveryMode: "message_tool_only",
-        context: createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "suppressed reply" },
-          result: createSuppressedSendResult(),
-        }),
+      expected: false,
+    },
+    {
+      label: "suppressed send",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "suppressed reply" },
+        result: createSuppressedSendResult(),
       }),
-    ).toBe(false);
-  });
+      expected: false,
+    },
+  ] satisfies TerminalHookCase[])(
+    "records $label through the installed hook",
+    async ({ sourceReplyDeliveryMode, context, hookResult, expected }) => {
+      await expect(
+        recordsDeliveredSourceReply({
+          sourceReplyDeliveryMode: sourceReplyDeliveryMode ?? "message_tool_only",
+          context,
+          hookResult,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
 
   it("preserves existing after-tool-call output while recording delivered source replies", async () => {
     const previousAfterToolCall = vi.fn(async () => ({

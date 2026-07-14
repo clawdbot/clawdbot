@@ -186,79 +186,44 @@ it("renders a local avatar image when token auth is not active", async () => {
   }
 });
 
-it("opens a listbox with selection state and a default badge", async () => {
+it("renders the agent picker as a Web Awesome dropdown", async () => {
   const element = await createAgentSelect({ defaultId: "beta" });
 
   try {
-    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
-    await element.updateComplete;
-
-    const listbox = element.querySelector('[role="listbox"]');
+    const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
     const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>('.agent-select__option[role="option"]'),
+      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+        "wa-dropdown-item",
+      ),
     );
-    expect(listbox).not.toBeNull();
+    expect(dropdown).not.toBeNull();
     expect(options).toHaveLength(2);
-    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(options[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(options[0]?.checked).toBe(true);
+    expect(options[1]?.checked).toBe(false);
+    expect(options[0]?.value).toBe("alpha");
+    expect(options[1]?.value).toBe("beta");
     expect(options[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
-    expect(document.activeElement).toBe(options[0]);
+    expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
   } finally {
     element.remove();
   }
 });
 
-it("supports trigger and listbox keyboard navigation", async () => {
+it("uses Web Awesome to open and dismiss the dropdown", async () => {
   const element = await createAgentSelect();
 
   try {
     const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    await element.updateComplete;
+    const dropdown = element.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<boolean> }
+    >("wa-dropdown");
+    trigger?.click();
+    await dropdown?.updateComplete;
+    expect(dropdown?.open).toBe(true);
 
-    const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>(".agent-select__option"),
-    );
-    // Options are focused programmatically, never sequential tab stops.
-    expect(options.every((option) => option.tabIndex === -1)).toBe(true);
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
-    // Tab hands focus back to the trigger so sequential navigation continues.
-    expect(document.activeElement).toBe(trigger);
-  } finally {
-    element.remove();
-  }
-});
-
-it("jumps focus to a matching agent via printable-key type-ahead", async () => {
-  const element = await createAgentSelect();
-
-  try {
-    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
-    await element.updateComplete;
-    const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>(".agent-select__option"),
-    );
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    // Accumulated prefix keeps matching the same agent instead of cycling.
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    await dropdown?.updateComplete;
+    expect(dropdown?.open).toBe(false);
   } finally {
     element.remove();
   }
@@ -269,49 +234,28 @@ it("selects a different agent and ignores the already-selected agent", async () 
   const element = await createAgentSelect({ onSelect });
 
   try {
-    const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.click();
-    await element.updateComplete;
-    element.querySelector<HTMLButtonElement>('[data-agent-id="beta"]')?.click();
-    await element.updateComplete;
+    const beta = element.querySelector('[data-agent-id="beta"]');
+    const dropdown = element.querySelector("wa-dropdown");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: beta }, bubbles: true }),
+    );
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith("beta");
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
 
-    trigger?.click();
-    await element.updateComplete;
-    element.querySelector<HTMLButtonElement>('[data-agent-id="alpha"]')?.click();
-    await element.updateComplete;
+    const alpha = element.querySelector('[data-agent-id="alpha"]');
+    const repeatedSelection = new CustomEvent("wa-select", {
+      detail: { item: alpha },
+      bubbles: true,
+      cancelable: true,
+    });
+    (alpha as HTMLElement).focus();
+    dropdown?.dispatchEvent(repeatedSelection);
 
     expect(onSelect).toHaveBeenCalledOnce();
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
-  } finally {
-    element.remove();
-  }
-});
-
-it("closes on Escape or outside pointerdown and refocuses the trigger on Escape", async () => {
-  const element = await createAgentSelect();
-
-  try {
-    const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.click();
-    await element.updateComplete;
-    element
-      .querySelector(".agent-select__list")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
-
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-
-    trigger?.click();
-    await element.updateComplete;
-    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    await element.updateComplete;
-
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
+    expect(repeatedSelection.defaultPrevented).toBe(true);
+    expect((alpha as HTMLElement & { checked: boolean }).checked).toBe(true);
+    expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
   } finally {
     element.remove();
   }

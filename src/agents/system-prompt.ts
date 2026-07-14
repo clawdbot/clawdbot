@@ -320,7 +320,7 @@ function buildMemorySection(params: {
   });
 }
 
-export function buildAgentBootstrapSystemContext(params: {
+function buildAgentBootstrapSystemContext(params: {
   bootstrapMode?: BootstrapMode;
   hasBootstrapFileInProjectContext?: boolean;
 }): string[] {
@@ -350,7 +350,7 @@ export function buildAgentBootstrapSystemContext(params: {
   ];
 }
 
-export function buildAgentBootstrapSystemPromptSections(params: {
+function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
@@ -1555,7 +1555,7 @@ function buildActiveProcessSessionReferenceLines(
   ];
 }
 
-export function buildRuntimeLine(
+function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;
     sessionKey?: string;

@@ -1,4 +1,3 @@
-// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -27,6 +26,7 @@ import { runSetupModelAuthStep } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   readSetupConfigFileSnapshot,
+  readValidSetupConfigFile,
   requireRiskAcknowledgement,
   resolveQuickstartGatewayDefaults,
   writeWizardConfigFile,
@@ -295,6 +295,7 @@ async function runSetupWizardOnce(
       detections: migrationDetections,
       prompter,
       runtime,
+      readConfigFile: readValidSetupConfigFile,
       commitConfigFile: (cfg) => writeWizardConfigFile(cfg, { allowConfigSizeDrop: true }),
       continueOnboarding: true,
     });
@@ -611,7 +612,6 @@ async function runSetupWizardOnce(
     });
   }
 
-  // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({

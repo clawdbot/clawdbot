@@ -18,6 +18,7 @@ const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-tes
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: running ? "running" : "exited",
     running,
     labels: {
@@ -43,7 +44,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
   };
 }
 
-function containerMock(current = inspection()) {
+function containerMock(current: FleetContainerInspectResult = inspection()) {
   return {
     assertLocal: vi.fn(async () => undefined),
     inspect: vi.fn(async () => current),
@@ -305,6 +306,16 @@ describe("fleet restore runtime", () => {
     await expect(restoreFleetCell(restoreParams(running, archive))).rejects.toThrow(
       /pass --force/iu,
     );
+  });
+
+  it("gives a usable recovery sequence when the registered container is missing", async () => {
+    const archive = await createArchive();
+    const containers = containerMock({ kind: "missing", state: "missing" });
+
+    await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
+      /fleet rm acme --force.*fleet create acme --no-start --image <image>.*retry fleet restore/iu,
+    );
+    expect(containers.remove).not.toHaveBeenCalled();
   });
 
   it("rejects archives inside cell state and foreign cell networks before mutation", async () => {

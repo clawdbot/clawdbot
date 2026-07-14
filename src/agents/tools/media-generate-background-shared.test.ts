@@ -110,6 +110,86 @@ describe("shouldDetachMediaGenerationTask", () => {
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {
+  it("keeps a pending generated-media run fresh until scheduled work settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduled: Array<() => Promise<void>> = [];
+      let resolveRun:
+        | ((value: {
+            provider: string;
+            model: string;
+            count: number;
+            paths: string[];
+            wakeResult: string;
+          }) => void)
+        | undefined;
+      const runPromise = new Promise<{
+        provider: string;
+        model: string;
+        count: number;
+        paths: string[];
+        wakeResult: string;
+      }>((resolve) => {
+        resolveRun = resolve;
+      });
+      const lifecycle = {
+        createTaskRun: vi.fn(),
+        recordTaskProgress: vi.fn(),
+        completeTaskRun: vi.fn(),
+        failTaskRun: vi.fn(),
+        wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+      };
+
+      scheduleMediaGenerationTaskCompletion({
+        lifecycle,
+        handle: {
+          taskId: "task-image-123",
+          runId: "tool:image_generate:123",
+          requesterSessionKey: "agent:main:discord:channel:123",
+          taskLabel: "proof image",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        progressSummary: "Generating image",
+        toolName: "Image generation",
+        onWakeFailure: vi.fn(),
+        run: () => runPromise,
+      });
+
+      const task = scheduled[0]?.();
+      if (!task) {
+        throw new Error("expected scheduled media work");
+      }
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(detachedTaskRuntimeMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+        runId: "tool:image_generate:123",
+        runtime: "cli",
+        sessionKey: "agent:main:discord:channel:123",
+        lastEventAt: expect.any(Number),
+        progressSummary: "Generating image",
+        eventSummary: undefined,
+      });
+
+      resolveRun?.({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+      });
+      await task;
+      const callsAfterCompletion =
+        detachedTaskRuntimeMocks.recordTaskRunProgressByRunId.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(detachedTaskRuntimeMocks.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(
+        callsAfterCompletion,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a generated media task active until completion delivery finishes", async () => {
     // Mark completion only after the requester wake has been attempted; otherwise
     // task status can say done before the visible media reaches the requester.

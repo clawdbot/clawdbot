@@ -306,7 +306,7 @@ function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): 
 }
 
 /** Periodically refreshes task progress while a media generation operation runs. */
-export async function withMediaGenerationTaskKeepalive<T>(params: {
+async function withMediaGenerationTaskKeepalive<T>(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
   eventSummary?: string;

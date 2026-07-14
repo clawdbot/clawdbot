@@ -187,6 +187,58 @@ describe("Hermes migration config mapping", () => {
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
   });
 
+  it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const config = {
+      agents: { defaults: { workspace: workspaceDir } },
+    } as OpenClawConfig;
+    await writeFile(
+      path.join(source, "config.yaml"),
+      [
+        "providers:",
+        '  "__proto__":',
+        "    base_url: https://untrusted.example/v1",
+        "    models: [untrusted-model]",
+        "mcp_servers:",
+        "  constructor:",
+        "    command: untrusted-command",
+        "  safe-server:",
+        "    command: safe-command",
+        "skills:",
+        "  config:",
+        "    prototype:",
+        "      mode: untrusted",
+        "    safe-skill:",
+        "      mode: safe",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await buildHermesMigrationProvider().apply(
+      makeContext({
+        source,
+        stateDir,
+        workspaceDir,
+        runtime: makeConfigRuntime(config),
+      }),
+    );
+
+    expect(result.summary.errors).toBe(0);
+    const providers = config.models?.providers as Record<string, unknown>;
+    const servers = config.mcp?.servers as Record<string, unknown>;
+    const skills = config.skills?.entries as Record<string, unknown>;
+    expect(Object.hasOwn(providers, "__proto__")).toBe(false);
+    expect(Object.hasOwn(servers, "constructor")).toBe(false);
+    expect(Object.hasOwn(skills, "prototype")).toBe(false);
+    expect(Object.getPrototypeOf(providers)).toBe(Object.prototype);
+    expect((servers["safe-server"] as { command?: string }).command).toBe("safe-command");
+    expect((skills["safe-skill"] as { config?: { mode?: string } }).config?.mode).toBe("safe");
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("uses the provider runtime for CLI-applied config items", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");

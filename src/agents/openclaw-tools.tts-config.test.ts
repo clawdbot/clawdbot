@@ -1,7 +1,7 @@
 // Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing, createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -174,46 +174,36 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from config" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from config");
-      expect(ttsParams?.cfg).toBe(injectedConfig);
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from config" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from config");
+    expect(ttsParams?.cfg).toBe(injectedConfig);
   });
 
   it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    testing.setDepsForTest({ config: {} });
+    const tool = createOpenClawTools({
+      config: {},
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
-      expect(tool.description).toContain("never ordinary text reply");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
+    expect(tool.description).toContain("never ordinary text reply");
   });
 
   it("passes the resolved session agent id into the tts tool", async () => {
@@ -223,27 +213,22 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      agentSessionKey: "agent:reader:telegram:chat:123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        agentSessionKey: "agent:reader:telegram:chat:123",
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from reader" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from reader");
-      expect(ttsParams?.agentId).toBe("reader");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from reader" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from reader");
+    expect(ttsParams?.agentId).toBe("reader");
   });
 
   it("passes the active account id into the tts tool", async () => {
@@ -261,30 +246,25 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      agentChannel: "feishu",
+      agentAccountId: "feishu-main",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        agentChannel: "feishu",
-        agentAccountId: "feishu-main",
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from account" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from account");
-      expect(ttsParams?.cfg).toBe(injectedConfig);
-      expect(ttsParams?.channel).toBe("feishu");
-      expect(ttsParams?.accountId).toBe("feishu-main");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from account" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from account");
+    expect(ttsParams?.cfg).toBe(injectedConfig);
+    expect(ttsParams?.channel).toBe("feishu");
+    expect(ttsParams?.accountId).toBe("feishu-main");
   });
 });
 

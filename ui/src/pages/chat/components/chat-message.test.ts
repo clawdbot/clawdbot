@@ -1034,7 +1034,10 @@ describe("grouped chat rendering", () => {
   it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
-    render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
+      container,
+    );
 
     const group = container.querySelector(".chat-group.assistant");
     expect(group).not.toBeNull();
@@ -1042,6 +1045,10 @@ describe("grouped chat rendering", () => {
     // Working runs are pure claw: the avatar only arrives with stream text.
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Working…",
+    );
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
@@ -1051,7 +1058,7 @@ describe("grouped chat rendering", () => {
     render(
       renderStreamGroup([
         { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
-        { kind: "reading-indicator", key: "reading" },
+        { kind: "reading-indicator", key: "reading", startedAt: 10 },
       ]),
       container,
     );
@@ -1065,7 +1072,7 @@ describe("grouped chat rendering", () => {
   it("seeds a stable punch stance per reading-indicator key", () => {
     const stanceFor = (key: string) => {
       const container = document.createElement("div");
-      render(renderStreamGroup([{ kind: "reading-indicator", key }]), container);
+      render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
       const bubble = container.querySelector(".chat-reading-indicator");
       return [...(bubble?.classList ?? [])].filter((cls) =>
         cls.startsWith("chat-reading-indicator--"),

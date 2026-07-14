@@ -8,6 +8,7 @@ import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.isClawHubSkillInstalled
+import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -596,14 +597,16 @@ private fun ClawHubSkillSearchPanel(
   }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
-      val installed = isClawHubSkillInstalled(installedSkills, skill.slug)
+      val installed =
+        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.slug, version) }
+          ?: isClawHubSkillInstalled(installedSkills, skill.slug)
       ClawDetailRow(
         title = skill.displayName,
         subtitle = listOfNotNull(skill.summary, skill.version?.let { nativeString("Version \$it", it) }).joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },
         trailing = {
           val reviewing = state.reviewingSlug == skill.slug
-          val installing = skill.slug in state.installingSlugs
+          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.slug)
           ClawSecondaryButton(
             text =
               when {

@@ -16,6 +16,28 @@ const DEFAULT_INPUTS = {
   rerun_group: "all",
   reuse_evidence: "true",
 };
+const WORKFLOW_RUN_CHECK_SUITE_QUERY = `
+query($owner: String!, $repo: String!, $oid: GitObjectID!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    object(oid: $oid) {
+      ... on Commit {
+        checkSuites(first: 100, after: $after) {
+          nodes {
+            status
+            conclusion
+            workflowRun {
+              url
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+}`;
 
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
@@ -246,6 +268,91 @@ function findLatestRunId(branch, sha) {
   return match?.databaseId ? String(match.databaseId) : "";
 }
 
+export function selectWorkflowRunCheckSuite(nodes, parentRunId) {
+  if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
+    throw new Error("parent run ID must be a positive decimal");
+  }
+  const expectedUrl = `https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`;
+  return nodes.find((node) => node?.workflowRun?.url === expectedUrl);
+}
+
+function readWorkflowRunCheckSuite(parentRunId, workflowSha) {
+  let after;
+  for (let page = 0; page < 20; page += 1) {
+    const queryArgs = [
+      "api",
+      "graphql",
+      "-F",
+      "owner=openclaw",
+      "-F",
+      "repo=openclaw",
+      "-F",
+      `oid=${workflowSha}`,
+      "-f",
+      `query=${WORKFLOW_RUN_CHECK_SUITE_QUERY}`,
+    ];
+    if (after) {
+      queryArgs.push("-F", `after=${after}`);
+    }
+    const response = JSON.parse(run("gh", queryArgs));
+    const checkSuites = response?.data?.repository?.object?.checkSuites;
+    if (!checkSuites || !Array.isArray(checkSuites.nodes)) {
+      throw new Error("GraphQL response did not include commit check suites");
+    }
+    const match = selectWorkflowRunCheckSuite(checkSuites.nodes, parentRunId);
+    if (match) {
+      return match;
+    }
+    if (!checkSuites.pageInfo?.hasNextPage) {
+      return undefined;
+    }
+    after = checkSuites.pageInfo.endCursor;
+    if (!after) {
+      throw new Error("GraphQL check-suite pagination omitted its end cursor");
+    }
+  }
+  throw new Error("Full Release Validation check suite was not found within 20 pages");
+}
+
+function waitForWorkflowRun(parentRunId, workflowSha) {
+  let lastSummary = "";
+  let consecutiveErrors = 0;
+  for (let attempt = 0; attempt < 480; attempt += 1) {
+    let suite;
+    try {
+      suite = readWorkflowRunCheckSuite(parentRunId, workflowSha);
+      consecutiveErrors = 0;
+    } catch (error) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 3) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Parent run status query failed; retrying: ${message}`);
+    }
+
+    const summary = suite
+      ? `${String(suite.status).toLowerCase()}/${String(suite.conclusion ?? "pending").toLowerCase()}`
+      : "awaiting-check-suite";
+    if (summary !== lastSummary) {
+      console.log(`Parent run status: ${summary}`);
+      lastSummary = summary;
+    }
+    if (suite?.status === "COMPLETED") {
+      if (suite.conclusion === "SUCCESS") {
+        return;
+      }
+      throw new Error(
+        `Full Release Validation concluded ${String(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+      );
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 45_000);
+  }
+  throw new Error(
+    `Timed out waiting for Full Release Validation: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+  );
+}
+
 export function releaseEvidenceVerificationArgs(parentRunId) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
@@ -349,18 +456,7 @@ function main() {
     }
 
     console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-    const watch = runStatus(
-      "gh",
-      ["run", "watch", parentRunId, "--exit-status", "--interval", "30"],
-      {
-        stdio: "inherit",
-      },
-    );
-    if (watch.status !== 0) {
-      throw new Error(
-        `Full Release Validation failed: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-      );
-    }
+    waitForWorkflowRun(parentRunId, workflowSha);
     verifyReleaseEvidence(parentRunId, workflowSha);
   } finally {
     if (!args.keepBranch) {

@@ -203,12 +203,22 @@
 }
 
 .chat-divider__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 2px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.chat-divider__separator,
+.chat-divider__metric {
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: none;
 }
 
 .chat-divider__details {

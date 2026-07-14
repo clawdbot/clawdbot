@@ -11,7 +11,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -743,7 +743,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
-          <div class="page-sub">${subtitleForRoute("agents")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(

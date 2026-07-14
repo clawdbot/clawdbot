@@ -161,17 +161,18 @@ describeControlUiE2e("native link routing", () => {
 
     await link.click({ button: "right" });
     const menu = page.getByRole("menu", { name: "Link actions" });
+    const menuHost = page.locator("openclaw-native-link-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
     await expect.poll(() => replyMenu.count()).toBe(0);
     await expect
-      .poll(() => menu.locator(".session-menu__text").allTextContents())
+      .poll(() => page.locator("openclaw-native-link-menu .session-menu__text").allTextContents())
       .toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
     await page.screenshot({
       path: path.join(artifactDir, "01-native-link-menu-page.jpg"),
       type: "jpeg",
       quality: 60,
     });
-    await menu.getByRole("menuitem", { name: "Open in Default Browser" }).click();
+    await menuHost.getByRole("menuitem", { name: "Open in Default Browser" }).click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -187,7 +188,7 @@ describeControlUiE2e("native link routing", () => {
       ]);
 
     await link.click({ button: "right" });
-    await menu.getByRole("menuitem", { name: "Copy Link" }).click();
+    await menuHost.getByRole("menuitem", { name: "Copy Link" }).click();
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe("https://example.com/report");
@@ -218,13 +219,17 @@ describeControlUiE2e("native link routing", () => {
     await expect
       .poll(() =>
         page.locator("#native-link-routing-modal").evaluate((modal) => {
-          return modal.shadowRoot?.querySelector("dialog")?.open ?? false;
+          return (
+            modal.shadowRoot?.querySelector("wa-dialog")?.shadowRoot?.querySelector("dialog")
+              ?.open ?? false
+          );
         }),
       )
       .toBe(true);
     await modalLink.click({ button: "right" });
-    await expect.poll(() => menu.isVisible()).toBe(true);
-    await menu.getByRole("menuitem", { name: "Open in Sidebar" }).click();
+    const modalSidebarItem = menuHost.getByRole("menuitem", { name: "Open in Sidebar" });
+    await expect.poll(() => modalSidebarItem.isVisible()).toBe(true);
+    await modalSidebarItem.click();
     await expect
       .poll(() =>
         page.evaluate(

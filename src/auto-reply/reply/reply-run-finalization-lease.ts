@@ -1,6 +1,6 @@
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
-export const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
+const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 export type ReplyOperationStaleReason =
   | "terminal_unreleased"
   | "finalization_stalled"

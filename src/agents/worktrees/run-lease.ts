@@ -20,7 +20,7 @@ const log = createSubsystemLogger("agents/worktrees");
 
 const RELEASE_MAX_ATTEMPTS = 3;
 
-export type WorktreeRunLease = {
+type WorktreeRunLease = {
   id: string;
   token: string;
   release: () => Promise<void>;

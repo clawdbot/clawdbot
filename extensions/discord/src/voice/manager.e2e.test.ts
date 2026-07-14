@@ -321,7 +321,7 @@ function createClient() {
       id: guildId,
       name: "Guild One",
     })),
-    getPlugin: vi.fn(() => ({
+    getPlugin: vi.fn((_id?: string): unknown => ({
       getGatewayAdapterCreator: vi.fn(() => vi.fn()),
       getGateway: vi.fn(() => ({
         updateVoiceState: updateVoiceStateMock,
@@ -5998,6 +5998,85 @@ describe("DiscordVoiceManager", () => {
     const commandArgs = lastAgentCommandArgs() as { extraSystemPrompt?: string } | undefined;
 
     expect(commandArgs?.extraSystemPrompt).toBe("Use short voice replies.");
+  });
+
+  it("passes the live voice participant roster to agent turns", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Peter",
+      roles: [],
+      user: {
+        id: "u-owner",
+        username: "peter",
+        globalName: "Peter",
+        discriminator: "0",
+      },
+    });
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return {
+          listVoiceChannelStates: vi.fn(() => [
+            {
+              guild_id: "g1",
+              user_id: "u-owner",
+              channel_id: "1001",
+              member: {
+                nick: "Peter",
+                user: { id: "u-owner", username: "peter", global_name: "Peter" },
+              },
+            },
+            {
+              guild_id: "g1",
+              user_id: "u-friend",
+              channel_id: "1001",
+              member: {
+                nick: "Sam",
+                user: { id: "u-friend", username: "sam", global_name: "Sam" },
+              },
+            },
+            {
+              guild_id: "g1",
+              user_id: "bot-user",
+              channel_id: "1001",
+              member: {
+                nick: "Molty",
+                user: { id: "bot-user", username: "molty", global_name: "Molty" },
+              },
+            },
+          ]),
+        };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": { systemPrompt: "Use short voice replies." },
+            },
+          },
+        },
+      },
+      client,
+      { commands: { useAccessGroups: false } },
+    );
+    manager.setBotUserId("bot-user");
+
+    await processVoiceSegment(manager, "u-owner");
+
+    const commandArgs = lastAgentCommandArgs() as { extraSystemPrompt?: string } | undefined;
+    expect(commandArgs?.extraSystemPrompt).toContain("Use short voice replies.");
+    expect(commandArgs?.extraSystemPrompt).toContain('display_name="Peter"');
+    expect(commandArgs?.extraSystemPrompt).toContain('display_name="Sam"');
+    expect(commandArgs?.extraSystemPrompt).not.toContain("Molty");
+    expect(commandArgs?.extraSystemPrompt).toContain(
+      "Use this roster when asked who is currently present",
+    );
   });
 
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {

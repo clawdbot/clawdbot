@@ -1,6 +1,7 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   MigrationDetection,
   MigrationItem,
@@ -115,11 +116,40 @@ class MigrationConfigPatchConflictError extends Error {
   }
 }
 
+const MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH = "unsafe config patch path";
+
+function isSafeMigrationConfigPath(path: readonly string[]): boolean {
+  return (
+    path.length > 0 && path.every((segment) => segment.length > 0 && !isBlockedObjectKey(segment))
+  );
+}
+
+function cloneMigrationConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneMigrationConfigValue(entry));
+  }
+  if (!isRecord(value)) {
+    return structuredClone(value);
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    // Migration patches come from external tools. Drop prototype-bearing keys
+    // recursively before any value reaches a live config object.
+    if (!isBlockedObjectKey(key)) {
+      next[key] = cloneMigrationConfigValue(entry);
+    }
+  }
+  return next;
+}
+
 /** Reads a nested config value, returning undefined when a parent is not an object. */
 export function readMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
 ): unknown {
+  if (!isSafeMigrationConfigPath(path)) {
+    return undefined;
+  }
   let current: unknown = root;
   for (const segment of path) {
     if (!isRecord(current)) {
@@ -133,10 +163,13 @@ export function readMigrationConfigPath(
 /** Deep-merges object patches and replaces scalar/array values with a cloned target value. */
 export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
   if (!isRecord(left) || !isRecord(right)) {
-    return structuredClone(right);
+    return cloneMigrationConfigValue(right);
   }
   const next: Record<string, unknown> = { ...left };
   for (const [key, value] of Object.entries(right)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     next[key] = mergeMigrationConfigValue(next[key], value);
   }
   return next;
@@ -148,6 +181,9 @@ export function writeMigrationConfigPath(
   path: readonly string[],
   value: unknown,
 ): void {
+  if (!isSafeMigrationConfigPath(path)) {
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
+  }
   let current = root;
   for (const segment of path.slice(0, -1)) {
     const existing = current[segment];
@@ -158,7 +194,7 @@ export function writeMigrationConfigPath(
   }
   const leaf = path.at(-1);
   if (!leaf) {
-    return;
+    throw new Error(MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
   current[leaf] = mergeMigrationConfigValue(current[leaf], value);
 }
@@ -177,7 +213,10 @@ export function hasMigrationConfigPatchConflict(
   if (!isRecord(existing)) {
     return false;
   }
-  return Object.keys(value).some((key) => existing[key] !== undefined);
+  return Object.keys(value).some(
+    (key) =>
+      !isBlockedObjectKey(key) && Object.hasOwn(existing, key) && existing[key] !== undefined,
+  );
 }
 
 /** Builds a planned or conflicting config-merge migration item. */
@@ -250,6 +289,9 @@ export async function applyMigrationConfigPatchItem(
   const details = readMigrationConfigPatchDetails(item);
   if (!details) {
     return markMigrationItemError(item, "missing config patch");
+  }
+  if (!isSafeMigrationConfigPath(details.path)) {
+    return markMigrationItemError(item, MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
   const configApi = ctx.runtime?.config;
   if (!configApi?.current || !configApi.mutateConfigFile) {

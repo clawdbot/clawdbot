@@ -2,7 +2,7 @@
  * Test fixtures for embedded-run overflow compaction scenarios.
  */
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
-import { isCoreToolNameReplaySafe } from "../tool-replay-safety.js";
+import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -42,7 +42,7 @@ export function makeAttemptResult(
 ): EmbeddedRunAttemptResult {
   const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
     Object.assign({}, entry, {
-      replaySafe: entry.replaySafe ?? isCoreToolNameReplaySafe(entry.toolName),
+      replaySafe: entry.replaySafe ?? isAgentToolReplaySafe({ name: entry.toolName }),
     }),
   );
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;

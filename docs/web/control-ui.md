@@ -143,7 +143,12 @@ target the store directly with `/settings/plugins?tab=discover`.
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
 **Workshop** tab keeps the Skill Workshop board and Today review flow for
-[skill proposals](/tools/skill-workshop).
+[skill proposals](/tools/skill-workshop). **Find skill ideas** reviews a bounded
+window of substantial sessions from newest to oldest and leaves any results as
+pending proposals. The panel shows cumulative coverage; **Scan earlier work**
+continues from the persisted cursor, then becomes **Scan new work** after older
+history is exhausted. Manual history review works while autonomous self-learning
+is disabled and uses the selected agent's configured model.
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with
@@ -198,6 +203,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
     - Sessions (a settings page under **Agents & Tools**, `/settings/sessions`): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts. Rows show an unread dot for sessions with activity since their last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
+    - Import Memory (a settings page under **Agents & Tools**, `/settings/memory-import`): preview and copy local Codex consolidated memory or Claude Code auto-memory into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
@@ -252,6 +258,34 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
 
   </Accordion>
 </AccordionGroup>
+
+## Import assistant memory
+
+Open **Settings** → **Import Memory** to bring local Codex or Claude Code memory
+into an OpenClaw agent. The Gateway discovers supported local memory on its own
+host, so a remote Control UI imports from the Gateway computer rather than the
+browser computer.
+
+1. Choose the destination agent.
+2. Review the detected source collections and Markdown filenames. File contents
+   are not sent in the plan response or displayed in the page.
+3. Select the collections to import and confirm. Apply rebuilds the plan before
+   writing so stale selections fail safely.
+4. If files already exist, enable **Replace existing imports**, refresh the
+   preview, and confirm the replacement.
+
+Codex imports only its consolidated `MEMORY.md` and `memory_summary.md`. Claude
+Code imports Markdown from project auto-memory directories and a configured
+`autoMemoryDirectory`; it does not import sessions, settings, instructions, or
+credentials through this page. Files are copied below `memory/imports/` in the
+selected workspace, where the active memory plugin can index them. Sources are
+never changed.
+
+Planning and applying require `operator.admin`. Every apply creates a verified
+OpenClaw backup when state exists, writes a redacted migration report, and keeps
+item-level backups before replacing existing destination files. See
+[Memory overview](/concepts/memory#import-from-coding-assistants) for paths and
+recall behavior.
 
 ## MCP page
 
@@ -320,7 +354,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
-    - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. Detection runs server-side through `controlUi.sessionPullRequests`, which reuses the Gateway's `GH_TOKEN`/`GITHUB_TOKEN` when set. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work) — with a Create PR button that opens GitHub's new-pull-request page. The row appears once the pushed branch has commits to compare and hides itself while an open or draft PR exists. The branch row comes from local git only, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
+    - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. Detection runs server-side through `controlUi.sessionPullRequests`, which reuses the Gateway's `GH_TOKEN`/`GITHUB_TOKEN` when set. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). Once the pushed branch has commits to compare, the row adds a Create PR button that opens GitHub's new-pull-request page; before that, a session with changed files (committed, uncommitted, or untracked) still gets the row without the button. The row hides itself while an open or draft PR exists. The branch row comes from local git only, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
     - The session diff panel shows what a session's checkout actually changed: the branch button (in the workspace rail header, the split-pane header, or the floating button in single-pane chat) opens the detail panel with a per-file diff of branch, uncommitted, and untracked work against the checkout's default-branch merge base — status dot, rename arrow, per-file +/− counts, collapsible files, and "N unmodified lines" markers between hunks. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
     - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. A collapsed rail takes no space at all: reopen it with ⇧⌘B, the files toggle in the split-pane header, or the floating files button in single-pane chat (both carry a changed-file count badge). The separate file, tool, and Canvas detail panel is unaffected.
     - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in the workspace rail opens the file detail panel: a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them.

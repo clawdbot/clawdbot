@@ -38,7 +38,7 @@ import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-re
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
-export function formatTelegramInboundLogLine(params: {
+function formatTelegramInboundLogLine(params: {
   from: string;
   to: string;
   chatType: string;

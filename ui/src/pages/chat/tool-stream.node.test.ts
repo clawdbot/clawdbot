@@ -818,6 +818,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
 describe("app-tool-stream result blocks", () => {
   it("emits a result block for completed tools with empty output", () => {
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, {
@@ -839,6 +840,8 @@ describe("app-tool-stream result blocks", () => {
 
     const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
     expect(entry.resultReceived).toBe(true);
+    expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
+    expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
     const content = entry.message.content as Array<Record<string, unknown>>;
     // The empty-output result block marks the call as finished so the UI does
     // not keep it in a running state for the rest of the run.

@@ -45,12 +45,12 @@ import {
   type BrowserPageMetrics,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
@@ -96,17 +96,6 @@ const FORWARDED_KEYS = new Set([
   "PageUp",
   "PageDown",
 ]);
-
-function tabLabel(tab: BrowserPanelTab): string {
-  if (tab.title.trim()) {
-    return tab.title.trim();
-  }
-  try {
-    return new URL(tab.url).host || t("browser.untitledTab");
-  } catch {
-    return tab.url || t("browser.untitledTab");
-  }
-}
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -990,56 +979,19 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
   // --- render ---------------------------------------------------------------
 
   private renderTabStrip() {
-    return html`
-      <div class="bp-tabs" role="tablist">
-        ${this.tabs.map(
-          (tab) => html`
-            <div
-              class="bp-tab ${tab.id === this.activeTargetId ? "is-active" : ""}"
-              role="tab"
-              title=${tab.url}
-              aria-selected=${tab.id === this.activeTargetId ? "true" : "false"}
-              @click=${() => void this.selectTab(tab.id)}
-              @auxclick=${(event: MouseEvent) => {
-                if (event.button === 1) {
-                  event.preventDefault();
-                  void this.closeTab(tab.id);
-                }
-              }}
-            >
-              <span class="bp-tab__label">${tabLabel(tab)}</span>
-              <button
-                class="bp-tab__close"
-                type="button"
-                title=${t("browser.closeTab")}
-                aria-label=${t("browser.closeTab")}
-                @click=${(event: Event) => {
-                  event.stopPropagation();
-                  void this.closeTab(tab.id);
-                }}
-              >
-                ${CLOSE_GLYPH}
-              </button>
-            </div>
-          `,
-        )}
-        <button
-          class="bp-new"
-          type="button"
-          title=${t("browser.newTab")}
-          aria-label=${t("browser.newTab")}
-          @click=${() => {
-            this.pendingNewTab = true;
-            this.urlDraft = "";
-            void this.updateComplete.then(() =>
-              this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
-            );
-          }}
-        >
-          ${PLUS_GLYPH}
-        </button>
-      </div>
-    `;
+    return renderBrowserPanelTabs({
+      tabs: this.tabs,
+      activeTargetId: this.activeTargetId,
+      onSelect: (targetId) => void this.selectTab(targetId),
+      onClose: (targetId) => void this.closeTab(targetId),
+      onNew: () => {
+        this.pendingNewTab = true;
+        this.urlDraft = "";
+        void this.updateComplete.then(() =>
+          this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
+        );
+      },
+    });
   }
 
   private renderHeaderActions() {
@@ -1320,8 +1272,12 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
           : this.noticeText
             ? html`<div class="bp-note" role="status">${this.noticeText}</div>`
             : nothing}
-        <div
+        <wa-tab-panel
+          id="browser-tab-panel"
           class="bp-viewport"
+          name=${this.activeTargetId ?? "browser"}
+          active
+          aria-labelledby=${this.activeTargetId ? `browser-tab-${this.activeTargetId}` : nothing}
           tabindex="0"
           @wheel=${(event: WheelEvent) => this.handleWheel(event)}
           @keydown=${(event: KeyboardEvent) => this.handleViewportKeydown(event)}
@@ -1330,7 +1286,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
             ? html`<span class="bp-loading">${t("browser.loading")}</span>`
             : nothing}
           ${this.renderViewport()}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }

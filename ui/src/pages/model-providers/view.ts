@@ -119,8 +119,7 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-// formatTokens tops out at "M"; month-scale provider totals can cross a
-// billion tokens, which would render as e.g. "4132M".
+// formatTokens tops out at "M"; month-scale totals can cross a billion (e.g. "4132M").
 function formatTokenTotal(tokens: number): string {
   if (tokens >= 1_000_000_000) {
     const billions = tokens / 1_000_000_000;
@@ -399,6 +398,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
               <label class="field">
                 <span>${t("modelProviders.add.provider")}</span>
                 <select
+                  class="settings-select"
                   .value=${props.addProviderId}
                   @change=${(event: Event) =>
                     props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}

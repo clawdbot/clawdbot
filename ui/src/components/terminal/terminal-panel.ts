@@ -16,30 +16,20 @@ import {
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
-const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 
 type TerminalDock = DockPanelSide;
-type TerminalTabState = {
-  id: string;
-  sequence: number;
+type TerminalTabState = TerminalPanelTab & {
   gatewaySessionId: string;
-  /** Shell basename shown on the tab, e.g. "zsh". */
-  shellName: string | null;
-  agentId: string | null;
-  cwd: string | null;
   controller: GhosttyTerminalController;
   host: HTMLDivElement;
-  status: "live" | "exited";
-  exitReason?: string;
-  exitCode?: number | null;
   /** Why an in-flight open/attach must not adopt this disposed terminal. */
   cancelled?: "close" | "lifecycle";
 };
@@ -54,29 +44,6 @@ type TerminalOperation = {
 function shellBasename(shell: string): string {
   const base = shell.split(/[\\/]/).pop()?.trim();
   return base && base.length > 0 ? base : "shell";
-}
-
-function terminalTabLabel(tab: TerminalTabState): string {
-  return tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) });
-}
-
-function terminalTabHint(tab: TerminalTabState): string | null {
-  if (tab.agentId === null || tab.cwd === null) {
-    return null;
-  }
-  return t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd });
-}
-
-function terminalTabStatusLabel(tab: TerminalTabState): string | null {
-  if (tab.status !== "exited") {
-    return null;
-  }
-  if (tab.exitReason === "detached") {
-    return t("terminal.detached");
-  }
-  return tab.exitReason === "process_exit" && typeof tab.exitCode === "number"
-    ? t("terminal.exitedCode", { code: String(tab.exitCode) })
-    : t("terminal.exited");
 }
 
 const panelLayout = createDockPanelLayout({
@@ -839,51 +806,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
               aria-label=${t("terminal.resize")}
             ></div>`}
         <header class="tp-header">
-          <div class="tp-tabs" role="tablist">
-            ${this.tabs.map((tab) => {
-              const statusLabel = terminalTabStatusLabel(tab);
-              return html`
-                <div
-                  class="tp-tab ${tab.id === this.activeId ? "is-active" : ""} ${tab.status ===
-                  "exited"
-                    ? "is-exited"
-                    : ""}"
-                  role="tab"
-                  title=${terminalTabHint(tab) || nothing}
-                  aria-selected=${tab.id === this.activeId ? "true" : "false"}
-                  @click=${() => this.switchTo(tab.id)}
-                >
-                  <span class="tp-tab__icon" aria-hidden="true">${TERMINAL_GLYPH}</span>
-                  <span class="tp-tab__label">${terminalTabLabel(tab)}</span>
-                  ${statusLabel
-                    ? html`<span class="tp-tab__status">${statusLabel}</span>`
-                    : nothing}
-                  <button
-                    class="tp-tab__close"
-                    type="button"
-                    title=${t("terminal.closeSession")}
-                    aria-label=${t("terminal.closeSession")}
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this.closeTab(tab.id);
-                    }}
-                  >
-                    ${CLOSE_GLYPH}
-                  </button>
-                </div>
-              `;
-            })}
-            <button
-              class="tp-new"
-              type="button"
-              ?disabled=${this.booting}
-              title=${t("terminal.newSession")}
-              aria-label=${t("terminal.newSession")}
-              @click=${() => void this.openSession()}
-            >
-              ${PLUS_GLYPH}
-            </button>
-          </div>
+          ${renderTerminalPanelTabs({
+            tabs: this.tabs,
+            activeId: this.activeId,
+            booting: this.booting,
+            onSelect: (id) => this.switchTo(id),
+            onClose: (id) => this.closeTab(id),
+            onNew: () => void this.openSession(),
+          })}
           ${this.fullscreen
             ? nothing
             : html`<div class="tp-actions">
@@ -919,11 +849,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ${this.errorText
           ? html`<div class="tp-error" role="alert">${this.errorText}</div>`
           : nothing}
-        <div class="tp-viewport">
+        <wa-tab-panel
+          id="terminal-tab-panel"
+          class="tp-viewport"
+          name=${this.activeId ?? "terminal"}
+          active
+          aria-labelledby=${this.activeId ? `terminal-tab-${this.activeId}` : nothing}
+        >
           ${this.booting && this.tabs.length === 0
             ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
             : nothing}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }
@@ -1002,16 +938,23 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       min-height: 36px;
     }
     .tp-tabs {
+      --track-width: 0;
+      display: block;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tp-tabs::part(nav) {
       display: flex;
       align-items: stretch;
       gap: 1px;
-      overflow-x: auto;
-      scrollbar-width: none;
+    }
+    .tp-tabs::part(body) {
+      display: none;
     }
     .tp-tabs::-webkit-scrollbar {
       display: none;
     }
-    .tp-tab {
+    .tp-tab::part(base) {
       display: flex;
       align-items: center;
       gap: 7px;
@@ -1026,15 +969,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         color 0.12s ease,
         background 0.12s ease;
     }
-    .tp-tab:hover {
+    .tp-tab:hover::part(base) {
       color: var(--text, #d7dae0);
       background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
     }
-    .tp-tab.is-active {
+    .tp-tab[active]::part(base) {
       color: var(--text, #d7dae0);
       border-bottom-color: var(--accent, #ff5c5c);
     }
-    .tp-tab.is-exited {
+    .tp-tab.is-exited::part(base) {
       opacity: 0.55;
     }
     .tp-tab__icon {
@@ -1064,8 +1007,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border-radius: 4px;
       padding: 0;
     }
-    .tp-tab:hover .tp-tab__close,
-    .tp-tab.is-active .tp-tab__close {
+    .tp-tab:hover + .tp-tab__close,
+    .tp-tab[active] + .tp-tab__close,
+    .tp-tab__close:hover,
+    .tp-tab__close:focus-visible {
       opacity: 0.7;
     }
     .tp-new,

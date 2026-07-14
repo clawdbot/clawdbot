@@ -38,11 +38,12 @@ import {
   renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
-import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
+import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 // ── Types ──
@@ -375,23 +376,7 @@ function renderGeneralSection(props: QuickSettingsProps) {
   return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
     renderSettingsRow({
       title: t("quickSettings.language"),
-      control: html`
-        <select
-          class="settings-select"
-          aria-label=${t("quickSettings.language")}
-          .value=${props.locale}
-          @change=${(event: Event) => {
-            props.onLocaleChange((event.target as HTMLSelectElement).value as Locale);
-          }}
-        >
-          ${SUPPORTED_LOCALES.map((locale) => {
-            const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
-            return html`<option value=${locale} ?selected=${props.locale === locale}>
-              ${t(`languages.${key}`)}
-            </option>`;
-          })}
-        </select>
-      `,
+      control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);
 }
@@ -769,7 +754,7 @@ function renderAppearanceSection(props: QuickSettingsProps) {
     : t("quickSettings.appearance.import");
   const themeOptions: Array<{ value: ThemeName; label: string }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({ value: option.id, label: t(option.labelKey) })),
-    { value: "custom", label: importedThemeName },
+    ...(props.hasCustomTheme ? [{ value: "custom" as const, label: importedThemeName }] : []),
   ];
   return renderTargetSection(
     GENERAL_SETTINGS_TARGET_IDS.appearance,
@@ -778,20 +763,26 @@ function renderAppearanceSection(props: QuickSettingsProps) {
       renderSettingsRow({
         title: t("quickSettings.appearance.theme"),
         stacked: true,
-        control: renderSettingsSegmented<ThemeName>({
-          value: props.theme,
-          options: themeOptions,
-          onChange: (theme, event) => {
-            if (theme === "custom" && !props.hasCustomTheme) {
-              props.onOpenCustomThemeImport?.();
-              return;
-            }
-            if (theme !== props.theme) {
-              // Anchor the theme transition on the clicked segmented button.
-              props.setTheme(theme, { element: (event.currentTarget as HTMLElement) ?? undefined });
-            }
-          },
-        }),
+        control: html`
+          ${renderSettingsSegmented<ThemeName>({
+            value: props.theme,
+            options: themeOptions,
+            onChange: (theme, element) => {
+              if (theme !== props.theme) {
+                props.setTheme(theme, { element });
+              }
+            },
+          })}
+          ${props.hasCustomTheme
+            ? nothing
+            : html`<button
+                type="button"
+                class="btn btn--sm"
+                @click=${() => props.onOpenCustomThemeImport?.()}
+              >
+                ${importedThemeName}
+              </button>`}
+        `,
       }),
       renderSettingsRow({
         title: t("common.mode"),
@@ -801,10 +792,10 @@ function renderAppearanceSection(props: QuickSettingsProps) {
             value: mode,
             label: t(`common.${mode}`),
           })),
-          onChange: (mode, event) => {
+          onChange: (mode, element) => {
             if (mode !== props.themeMode) {
               props.setThemeMode(mode, {
-                element: (event.currentTarget as HTMLElement) ?? undefined,
+                element,
               });
             }
           },

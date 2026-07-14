@@ -494,6 +494,34 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
     );
+    expect(workflow).toContain("Stable closeout already complete for $tag.");
+    expect(workflow).toContain("allow_failed_publish_recovery:");
+    expect(workflow).toContain(
+      'const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";',
+    );
+    expect(workflow).toContain("Failed-publish recovery requires conclusion=failure");
+    expect(workflow).toContain(
+      '--require-complete-platform-assets "$ALLOW_FAILED_PUBLISH_RECOVERY"',
+    );
+    expect(workflow).toContain("verify_checksum_manifest OpenClaw-Android-SHA256SUMS.txt");
+    expect(workflow).toContain("verify_checksum_manifest OpenClawCompanion-SHA256SUMS.txt");
+    expect(workflow).toContain("actual=\"$(awk 'NF { name=$2;");
+    expect(workflow).toContain('sub(/^\\*/, "", name)');
+    expect(workflow).not.toContain('sub(/^\\\\*/, "", name)');
+    expect(workflow).toContain('sed \'s/\\r$//\' "$manifest" > "$normalized"');
+    expect(workflow).toContain('sha256sum --strict --check "$normalized"');
+    expect(workflow).toContain(
+      "Windows Node Release must contain one successful signed-installer promotion job.",
+    );
+    expect(workflow).toContain('"Verify Authenticode signatures"');
+    expect(workflow).toContain("EXPECTED_INSTALLER_DIGESTS:");
+    expect(workflow).toContain('--windows-node-release-run-id "${WINDOWS_NODE_RELEASE_RUN_ID:-}"');
+    expect(workflow).toContain(
+      '--windows-node-installer-digests "${WINDOWS_NODE_INSTALLER_DIGESTS:-}"',
+    );
+    expect(workflow).toContain(
+      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/android-release.yml"',
+    );
     expect(workflow).toContain(
       "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides.",
     );
@@ -3947,6 +3975,18 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
+  });
+
+  it("validates the macOS release handoff before the GitHub release page exists", () => {
+    const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
+    const validateJob = workflowJob(
+      ".github/workflows/macos-release.yml",
+      "validate_macos_release_request",
+    );
+    const stepNames = validateJob.steps?.map((step) => step.name) ?? [];
+
+    expect(stepNames).not.toContain("Ensure matching GitHub release exists");
+    expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
   });
 
   it("keeps every tracked repository skill visible to Git-aware syncs", () => {

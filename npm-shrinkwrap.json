@@ -31,7 +31,6 @@
         "clawpdf": "0.3.0",
         "commander": "15.0.0",
         "croner": "10.0.1",
-        "defu": "6.1.5",
         "diff": "9.0.0",
         "dotenv": "17.4.2",
         "entities": "8.0.0",
@@ -1118,12 +1117,6 @@
       "engines": {
         "node": ">=0.10.0"
       }
-    },
-    "node_modules/defu": {
-      "version": "6.1.5",
-      "resolved": "https://registry.npmjs.org/defu/-/defu-6.1.5.tgz",
-      "integrity": "sha512-pwdBJxJuJXmqrLO6s0VBmfbRz+G7FUzkjldAsdi9Yrv86mPyzq0ll1o8+8gB4Gsr6GJHbK1Lh3ngllgTInDCjA==",
-      "license": "MIT"
     },
     "node_modules/depd": {
       "version": "2.0.0",

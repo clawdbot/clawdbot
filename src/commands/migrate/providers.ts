@@ -57,6 +57,8 @@ export async function createMigrationPlan(
   const provider = resolveMigrationProvider(opts.provider, opts.configOverride);
   const ctx = buildMigrationContext({
     source: opts.source,
+    targetAgentId: opts.targetAgentId,
+    itemKinds: opts.itemKinds,
     includeSecrets: opts.includeSecrets,
     overwrite: opts.overwrite,
     configOverride: opts.configOverride,

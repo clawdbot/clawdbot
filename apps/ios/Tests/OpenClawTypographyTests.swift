@@ -185,6 +185,9 @@ struct OpenClawTypographyTests {
         let skills = try String(
             contentsOf: Self.sourceURL("Design/SettingsSkillsDestination.swift"),
             encoding: .utf8)
+        let automations = try String(
+            contentsOf: Self.sourceURL("Design/AgentAutomationDetailScreen.swift"),
+            encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
         let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
         let chatTypography = try String(
@@ -202,6 +205,14 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
             encoding: .utf8)
+
+        #expect(automations.contains(".font(OpenClawType.body)"))
+        #expect(automations.contains(".font(OpenClawType.headline)"))
+        #expect(automations.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(automations.contains(".font(OpenClawType.caption)"))
+        #expect(!automations.contains(".font(.body"))
+        #expect(!automations.contains(".font(.headline"))
+        #expect(!automations.contains(".font(.caption"))
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("primaryActionTitle.text"))

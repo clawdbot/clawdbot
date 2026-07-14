@@ -267,24 +267,11 @@
   accent-color: var(--accent);
 }
 
-.workboard-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  overflow: hidden;
-  overscroll-behavior: contain;
-  background: color-mix(in srgb, #000 60%, transparent);
-  backdrop-filter: blur(8px);
-}
-
 .workboard-draft {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
-  width: min(1120px, calc(100vw - 56px));
+  width: 100%;
   height: min(860px, calc(100vh - 56px));
   min-height: 0;
   overflow: hidden;
@@ -370,7 +357,7 @@
   min-width: 0;
 }
 
-.workboard-field span {
+.workboard-field > span {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 650;
@@ -384,9 +371,9 @@
 }
 
 .workboard-select {
-  position: relative;
   width: 100%;
   min-width: 0;
+  --wa-form-control-activated-color: var(--accent);
 }
 
 .workboard-select--toolbar {
@@ -399,72 +386,29 @@
   max-width: 236px;
 }
 
-.workboard-select > summary {
-  list-style: none;
+.workboard-select::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.workboard-select > summary::-webkit-details-marker {
-  display: none;
-}
-
-.workboard-select__trigger.input {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.workboard-select::part(combobox) {
   min-height: var(--workboard-control-height);
   width: 100%;
-  padding: 0 9px 0 10px;
-  user-select: none;
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text);
 }
 
-.workboard-select__value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workboard-select__chevron,
-.workboard-select__check {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.workboard-select__chevron,
-.workboard-select__chevron svg {
-  width: 16px;
-  height: 16px;
-}
-
-.workboard-select__check,
-.workboard-select__check svg {
-  width: 18px;
-  height: 18px;
-}
-
-.workboard-select[open] .workboard-select__trigger {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
-    0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.workboard-select[open] .workboard-select__chevron {
-  transform: rotate(180deg);
-}
-
-.workboard-select__menu {
-  position: fixed;
-  z-index: 1100;
-  top: var(--workboard-select-menu-top, 0);
-  left: var(--workboard-select-menu-left, 0);
-  display: none;
-  visibility: hidden;
-  gap: 2px;
-  width: var(--workboard-select-menu-width, 100%);
-  max-height: var(--workboard-select-menu-max-height, min(320px, calc(100vh - 220px)));
-  overflow: auto;
+.workboard-select::part(listbox) {
+  max-height: min(320px, calc(100vh - 48px));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
   border-radius: 8px;
@@ -474,44 +418,8 @@
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
 }
 
-.workboard-select[open] .workboard-select__menu {
-  display: grid;
-}
-
 .workboard-select__option {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
   color: var(--text);
-  font: inherit;
-  text-align: left;
-}
-
-.workboard-select__option:hover,
-.workboard-select__option:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: none;
-}
-
-.workboard-select__option.is-selected {
-  background: color-mix(in srgb, var(--accent) 17%, transparent);
-  color: var(--text);
-}
-
-.workboard-select__option:disabled {
-  cursor: not-allowed;
-  opacity: 0.46;
-}
-
-.workboard-select__option:disabled:hover {
-  background: transparent;
 }
 
 .workboard-select__label {
@@ -536,11 +444,6 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
-}
-
-.workboard-select--disabled .workboard-select__trigger {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .workboard-field--wide {
@@ -1336,13 +1239,10 @@
 }
 
 .workboard-detail-drawer {
-  position: fixed;
-  inset: 0 0 0 auto;
-  z-index: 900;
   display: flex;
   justify-content: flex-end;
-  width: min(460px, 100vw);
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
 }
 
 .workboard-detail {
@@ -1353,7 +1253,6 @@
   min-height: 0;
   padding: 16px;
   overflow: auto;
-  pointer-events: auto;
   border-left: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   background: color-mix(in srgb, var(--panel) 98%, var(--bg) 2%);
   box-shadow: var(--shadow-xl);
@@ -1519,13 +1418,8 @@
 }
 
 @media (max-width: 860px) {
-  .workboard-modal {
-    padding: 0;
-    place-items: stretch;
-  }
-
   .workboard-draft {
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     max-height: none;
     border: 0;
@@ -1562,8 +1456,8 @@
     max-width: none;
   }
 
-  .workboard-select__menu {
-    max-height: min(260px, var(--workboard-select-menu-max-height, 260px));
+  .workboard-select::part(listbox) {
+    max-height: min(260px, calc(100vh - 48px));
   }
 
   .workboard-draft__meta {
@@ -1608,8 +1502,7 @@
   }
 
   .workboard-detail-drawer {
-    inset: 0;
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     max-height: none;
   }

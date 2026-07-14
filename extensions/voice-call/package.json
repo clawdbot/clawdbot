@@ -8,7 +8,6 @@
   },
   "type": "module",
   "dependencies": {
-    "defu": "6.1.5",
     "typebox": "1.3.3",
     "ws": "8.21.0",
     "zod": "4.4.3"

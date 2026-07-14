@@ -135,7 +135,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 152,
+  compat: 160,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -159,7 +159,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-pairing": 1,
   "conversation-runtime": 4,
   "channel-send-result": 1,
-  "channel-policy": 8,
+  "channel-policy": 15,
   "channel-route": 5,
   "session-store-runtime": 4,
   "session-transcript-runtime": 2,
@@ -202,19 +202,22 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       327,
       env,
     ),
+    // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
+    // Its flat channel-groups builder adds one function, also mirrored by compat.
+    // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10664,
+      10682,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5364,
+      5376,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3290,
+      3299,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -200,7 +200,6 @@ class WorkboardPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("workboard")}</div>
-          <div class="page-sub">${subtitleForRoute("workboard")}</div>
         </div>
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],

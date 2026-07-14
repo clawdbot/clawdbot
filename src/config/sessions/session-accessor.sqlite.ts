@@ -79,6 +79,7 @@ import type {
   SessionEntryReplacementUpdate,
   SessionEntryStatus,
   SessionEntrySummary,
+  SessionTranscriptInstance,
   SessionEntryTargetPatchScope,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
@@ -94,11 +95,23 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
+import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
+import {
+  createFallbackSessionEntry,
+  normalizeSqliteChatType,
+  normalizeSqliteNumber,
+  normalizeSqliteText,
+} from "./session-accessor.sqlite-normalize.js";
+import {
+  bindSessionEntryProvenance,
+  resolveSessionEntryProvenanceRow,
+} from "./session-accessor.sqlite-provenance.js";
 import {
   normalizeSqliteStatus,
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
@@ -434,6 +447,23 @@ export function listSqliteSessionEntriesByStatus(
   return readSqliteSessionEntriesByStatus(database, statuses).filter(
     ({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey),
   );
+}
+
+/** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
+export function listSqliteSessionTranscriptInstances(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionTranscriptInstance[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const currentEntries = new Map(
+    listSqliteSessionEntries(scope).map((summary) => [summary.sessionKey, summary.entry]),
+  );
+  return listSqliteTranscriptInstancesFromDatabase({
+    agentId: resolved.agentId,
+    currentEntries,
+    database,
+    databasePath: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+  });
 }
 
 /** Reads a session activity timestamp from the additive SQLite session store. */
@@ -2481,15 +2511,6 @@ function normalizeSqliteSessionKey(sessionKey: string): string {
   return normalizeStoreSessionKey(sessionKey);
 }
 
-function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
-  const now = Date.now();
-  return {
-    sessionId: patch.sessionId ?? randomUUID(),
-    updatedAt: patch.updatedAt ?? now,
-    ...patch,
-  };
-}
-
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return structuredClone(entry);
 }
@@ -2652,45 +2673,6 @@ function emitCommittedLifecycleIdentityMutations(params: {
     current.set(upsert.sessionKey, upsert.entry);
   }
   emitCommittedSessionIdentityDiff(previous, current);
-}
-
-function preserveSqliteSameKeySessionRolloverLineage(params: {
-  next: SessionEntry;
-  previous: SessionEntry;
-  sessionKey: string;
-}): SessionEntry {
-  const previousSessionId = params.previous.sessionId.trim();
-  const nextSessionId = params.next.sessionId.trim();
-  if (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) {
-    return params.next;
-  }
-
-  return {
-    ...params.next,
-    usageFamilyKey:
-      params.next.usageFamilyKey ?? params.previous.usageFamilyKey ?? params.sessionKey,
-    usageFamilySessionIds: uniqueStrings([
-      ...(params.previous.usageFamilySessionIds ?? []),
-      previousSessionId,
-      ...(params.next.usageFamilySessionIds ?? []),
-      nextSessionId,
-    ]),
-  };
-}
-
-function normalizeSqliteText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function normalizeSqliteChatType(value: unknown): "direct" | "group" | "channel" | null {
-  if (value === "direct" || value === "group" || value === "channel") {
-    return value;
-  }
-  return null;
-}
-
-function normalizeSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
 }
 
 function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
@@ -4208,15 +4190,27 @@ function writeSessionEntry(
   const db = getSessionKysely(database.db);
   const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
+  const previousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   const transcriptObservedAt =
     readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
     updatedAt;
-  const sessionRow = {
-    ...bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt }),
+  const boundSessionRoot = bindSqliteSessionRoot({
+    entry: normalizedEntry,
+    sessionKey,
+    updatedAt,
+  });
+  const boundSessionRow = {
+    ...boundSessionRoot,
     transcript_observed_at: transcriptObservedAt,
   };
+  const sessionRow = resolveSessionEntryProvenanceRow({
+    boundSessionRow,
+    database,
+    entry: normalizedEntry,
+    previousEntry,
+  });
   executeSqliteQuerySync(
     database.db,
     db
@@ -4227,6 +4221,10 @@ function writeSessionEntry(
           session_key: sessionKey,
           session_scope: sessionRow.session_scope,
           transcript_observed_at: transcriptObservedAt,
+          session_entry_provenance: sessionRow.session_entry_provenance,
+          acp_owned: sessionRow.acp_owned,
+          plugin_owner_id: sessionRow.plugin_owner_id,
+          hook_external_content_source: sessionRow.hook_external_content_source,
           updated_at: updatedAt,
           started_at: sessionRow.started_at,
           ended_at: sessionRow.ended_at,
@@ -4329,6 +4327,7 @@ function bindSqliteSessionRoot(params: {
     session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
     created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
+    ...bindSessionEntryProvenance(params.entry),
     started_at: finiteSqliteNumber(params.entry.startedAt),
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeSqliteStatus(params.entry.status),

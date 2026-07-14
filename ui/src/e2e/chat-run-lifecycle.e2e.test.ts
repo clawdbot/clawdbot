@@ -38,6 +38,42 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await server?.close();
   });
 
+  it("shows compaction savings and live working time", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await currentPage.clock.install();
+    const gateway = await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "system",
+          timestamp: Date.now() - 1_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "compact-entry-1",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        },
+      ],
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+    await currentPage.locator(".agent-chat__input textarea").fill("keep working");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    await gateway.waitForRequest("chat.send");
+    await currentPage.locator(".chat-working-indicator").waitFor();
+
+    await currentPage.clock.runFor(177_000);
+
+    await expect
+      .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
+      .toBe("2m 57s");
+    await currentPage.getByText("Working…", { exact: true }).waitFor();
+  });
+
   it("clears shared session activity when chat final arrives first", async () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });

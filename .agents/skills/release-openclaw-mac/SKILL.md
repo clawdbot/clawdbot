@@ -64,6 +64,11 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 
 ## Dispatch
 
+The public handoff workflow validates the tag, source, build, and package
+metadata before publication. It does not require a GitHub release page because
+it does not upload assets. Keep this validation before the real publish
+workflow; the publisher owns draft creation and final undraft.
+
 Public handoff validation:
 
 ```bash

@@ -114,14 +114,14 @@
       "translated": "Aktif"
     },
     {
-      "id": "native.android.9f31cc0fcf527ed2",
-      "source": "Cron job is not due yet.",
-      "translated": "Waktu tugas Cron belum tiba."
+      "id": "native.android.198617f355636373",
+      "source": "Automation is not due yet.",
+      "translated": "Automasi belum waktunya dijalankan."
     },
     {
-      "id": "native.android.fc2c0e26482b32cd",
-      "source": "Cron job is already running.",
-      "translated": "Tugas Cron sudah berjalan."
+      "id": "native.android.68d8213dbeaf4480",
+      "source": "Automation is already running.",
+      "translated": "Automasi sudah berjalan."
     },
     {
       "id": "native.android.e1bb423a2260ee6d",
@@ -129,9 +129,9 @@
       "translated": "Pemulihan setelah mulai ulang Gateway masih berlangsung."
     },
     {
-      "id": "native.android.341ad86c38a5d3d5",
-      "source": "Cron job has an invalid configuration.",
-      "translated": "Cron job memiliki konfigurasi yang tidak valid."
+      "id": "native.android.7f330978f4d02d88",
+      "source": "Automation has an invalid configuration.",
+      "translated": "Automasi memiliki konfigurasi yang tidak valid."
     },
     {
       "id": "native.android.83640045de441512",
@@ -139,24 +139,24 @@
       "translated": "Penjadwal Cron dihentikan."
     },
     {
-      "id": "native.android.df0b9434fa41904f",
-      "source": "Cron run finished.",
-      "translated": "Proses Cron selesai."
+      "id": "native.android.5b73964f29df42a7",
+      "source": "Automation run finished.",
+      "translated": "Proses automasi selesai."
     },
     {
-      "id": "native.android.c709d0617063c061",
-      "source": "Cron run skipped.",
-      "translated": "Proses Cron dilewati."
+      "id": "native.android.37a3fea89f09fd4f",
+      "source": "Automation run skipped.",
+      "translated": "Proses automasi dilewati."
     },
     {
-      "id": "native.android.b9f5c536c5a42514",
-      "source": "Cron run failed.",
-      "translated": "Proses Cron gagal."
+      "id": "native.android.b257b623a2508db3",
+      "source": "Automation run failed.",
+      "translated": "Proses automasi gagal."
     },
     {
-      "id": "native.android.a42d3ae97bf79bbe",
-      "source": "Cron run finished with an unknown status.",
-      "translated": "Proses Cron selesai dengan status yang tidak diketahui."
+      "id": "native.android.fe6882d37530dbb3",
+      "source": "Automation run finished with an unknown status.",
+      "translated": "Proses automasi selesai dengan status yang tidak diketahui."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -524,49 +524,49 @@
       "translated": "Terhubung (operator: $operator)"
     },
     {
-      "id": "native.android.5fe7f7afb77851ff",
-      "source": "This cron job already has a queued run.",
-      "translated": "Cron job ini sudah memiliki proses yang mengantre."
+      "id": "native.android.d21aada33a4f9af2",
+      "source": "This automation already has a queued run.",
+      "translated": "Automasi ini sudah memiliki proses dalam antrean."
     },
     {
-      "id": "native.android.1ebef3822941cdb6",
-      "source": "Cron job started.",
-      "translated": "Cron job dimulai."
+      "id": "native.android.d6f67c67daa0cf8b",
+      "source": "Automation run queued.",
+      "translated": "Proses automasi masuk antrean."
     },
     {
-      "id": "native.android.d8ba5136a17f7618",
-      "source": "Cron run queued.",
-      "translated": "Cron run masuk antrean."
+      "id": "native.android.33a3252703380d25",
+      "source": "Automation started.",
+      "translated": "Automasi dimulai."
     },
     {
-      "id": "native.android.9bc7e4ad0b917a5f",
-      "source": "Gateway rejected the cron run.",
-      "translated": "Gateway menolak proses cron."
+      "id": "native.android.2366805fa2d53539",
+      "source": "Gateway rejected the automation run.",
+      "translated": "Gateway menolak proses automasi."
     },
     {
-      "id": "native.android.8a758d2851f3db17",
-      "source": "Cron job disabled.",
-      "translated": "Cron job dinonaktifkan."
+      "id": "native.android.f2afad6e17c1e4f5",
+      "source": "Automation enabled.",
+      "translated": "Automasi diaktifkan."
     },
     {
-      "id": "native.android.fda9390dc0d4bdea",
-      "source": "Cron job enabled.",
-      "translated": "Cron job diaktifkan."
+      "id": "native.android.e9523d30c1f4484c",
+      "source": "Automation paused.",
+      "translated": "Automasi dijeda."
     },
     {
-      "id": "native.android.a9aa7171558f8412",
-      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
-      "translated": "Cron job ini berubah di Gateway. Tinjau versi terbaru sebelum menyimpannya lagi."
+      "id": "native.android.ee1570aa6c242586",
+      "source": "This automation changed on the gateway. Review the latest version before saving again.",
+      "translated": "Automasi ini telah berubah di Gateway. Tinjau versi terbaru sebelum menyimpan lagi."
     },
     {
-      "id": "native.android.4562b415164529af",
-      "source": "Cron job updated.",
-      "translated": "Cron job diperbarui."
+      "id": "native.android.c8b760a913d0cb66",
+      "source": "Automation updated.",
+      "translated": "Automasi diperbarui."
     },
     {
-      "id": "native.android.937a9a77deeef115",
-      "source": "Cron job deleted.",
-      "translated": "Cron job dihapus."
+      "id": "native.android.1c494df0976b57ed",
+      "source": "Automation deleted.",
+      "translated": "Automasi dihapus."
     },
     {
       "id": "native.android.9c4af565f4ffe18c",
@@ -634,34 +634,34 @@
       "translated": "Model penyedia telah dimuat, tetapi status kesiapan tidak tersedia."
     },
     {
-      "id": "native.android.0e1e5786e4cfc894",
-      "source": "Could not load cron jobs.",
-      "translated": "Tidak dapat memuat tugas cron."
+      "id": "native.android.76a4ea6fbd0e9ec9",
+      "source": "Could not load automations.",
+      "translated": "Tidak dapat memuat automasi."
     },
     {
-      "id": "native.android.5288d0e2cd5ab8e6",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Hubungkan Gateway untuk memeriksa tugas cron."
+      "id": "native.android.38e0abd9a93954ee",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Hubungkan Gateway untuk memeriksa automasi."
     },
     {
-      "id": "native.android.09ac6b21e791abb2",
-      "source": "Gateway returned an invalid cron job.",
-      "translated": "Gateway mengembalikan tugas cron yang tidak valid."
+      "id": "native.android.c90da365e3dae626",
+      "source": "Gateway returned an invalid automation.",
+      "translated": "Gateway mengembalikan automasi yang tidak valid."
     },
     {
-      "id": "native.android.db2fbde400d1e692",
-      "source": "Could not load cron job.",
-      "translated": "Tidak dapat memuat tugas cron."
+      "id": "native.android.d6714e6f74a2cb86",
+      "source": "Could not load automation.",
+      "translated": "Tidak dapat memuat automasi."
     },
     {
-      "id": "native.android.1c986c7849e0094a",
-      "source": "Connect the gateway to inspect cron run history.",
-      "translated": "Hubungkan Gateway untuk memeriksa riwayat eksekusi cron."
+      "id": "native.android.892451834e038518",
+      "source": "Connect the gateway to inspect automation run history.",
+      "translated": "Hubungkan Gateway untuk memeriksa riwayat eksekusi otomatisasi."
     },
     {
-      "id": "native.android.5de73d7e34c4dfda",
-      "source": "Could not load cron run history.",
-      "translated": "Tidak dapat memuat riwayat eksekusi cron."
+      "id": "native.android.c25d29539ca8e4ff",
+      "source": "Could not load automation run history.",
+      "translated": "Tidak dapat memuat riwayat eksekusi otomatisasi."
     },
     {
       "id": "native.android.153ffc5ce4132479",
@@ -669,9 +669,9 @@
       "translated": "Perubahan cron memerlukan akses operator.admin."
     },
     {
-      "id": "native.android.31b0570face9a32e",
-      "source": "Connect the gateway to manage cron jobs.",
-      "translated": "Hubungkan Gateway untuk mengelola tugas cron."
+      "id": "native.android.74e54edba88f9531",
+      "source": "Connect the gateway to manage automations.",
+      "translated": "Hubungkan Gateway untuk mengelola otomatisasi."
     },
     {
       "id": "native.android.c050b799c39b1fd9",
@@ -1544,24 +1544,24 @@
       "translated": "Batal"
     },
     {
-      "id": "native.android.ec06722578a6027e",
-      "source": "Delete cron job?",
-      "translated": "Hapus cron job?"
+      "id": "native.android.0e3e55624d2b9cc7",
+      "source": "Delete automation?",
+      "translated": "Hapus otomatisasi?"
     },
     {
-      "id": "native.android.362073d4e1e4624d",
-      "source": "This permanently removes the scheduled job from the gateway.",
-      "translated": "Ini menghapus job terjadwal secara permanen dari gateway."
+      "id": "native.android.a239813fcaf37275",
+      "source": "This permanently removes the automation and its schedule from the gateway.",
+      "translated": "Tindakan ini akan menghapus otomatisasi dan jadwalnya secara permanen dari Gateway."
     },
     {
-      "id": "native.android.a3fcfa20dc395b87",
-      "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "Tugas ini berubah saat Anda mengeditnya. Kembalikan ke versi gateway terbaru sebelum menyimpan."
+      "id": "native.android.dfbb2ffdd097891e",
+      "source": "This automation changed while you were editing. Revert to the latest gateway version before saving.",
+      "translated": "Otomatisasi ini berubah saat Anda mengeditnya. Kembalikan ke versi Gateway terbaru sebelum menyimpan."
     },
     {
-      "id": "native.android.db9f08d611b4c508",
-      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Simpan atau batalkan perubahan Anda sebelum menjalankan, mengaktifkan, menonaktifkan, menghapus, atau menyegarkan tugas ini."
+      "id": "native.android.35f50ae04278c068",
+      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.",
+      "translated": "Simpan atau batalkan perubahan Anda sebelum menjalankan, mengaktifkan, menonaktifkan, menghapus, atau memuat ulang otomatisasi ini."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -1594,14 +1594,14 @@
       "translated": "Aktifkan"
     },
     {
-      "id": "native.android.1fed5d5912a9679c",
-      "source": "Delete Job",
-      "translated": "Hapus Job"
+      "id": "native.android.eb4763f9d83f71b5",
+      "source": "Delete Automation",
+      "translated": "Hapus Otomatisasi"
     },
     {
-      "id": "native.android.da9ecf342cbd7035",
-      "source": "Edit Job",
-      "translated": "Edit Tugas"
+      "id": "native.android.6cf371a6c39142be",
+      "source": "Edit Automation",
+      "translated": "Edit Otomatisasi"
     },
     {
       "id": "native.android.006f60922ae98063",
@@ -1609,9 +1609,9 @@
       "translated": "Diaktifkan"
     },
     {
-      "id": "native.android.8b967e5cba1edfd8",
-      "source": "Allow the scheduler to run this job.",
-      "translated": "Izinkan penjadwal menjalankan tugas ini."
+      "id": "native.android.cdfd111ea8c90d0f",
+      "source": "Allow the scheduler to run this automation.",
+      "translated": "Izinkan penjadwal menjalankan otomatisasi ini."
     },
     {
       "id": "native.android.f5fe0e769a9df4f8",
@@ -1619,14 +1619,14 @@
       "translated": "Hapus setelah dijalankan"
     },
     {
-      "id": "native.android.9ed8d09744263540",
-      "source": "Remove this job after a successful one-shot run.",
-      "translated": "Hapus tugas ini setelah eksekusi sekali jalan berhasil."
+      "id": "native.android.1a6d5883c1e661ba",
+      "source": "Remove this automation after a successful one-shot run.",
+      "translated": "Hapus otomatisasi ini setelah eksekusi satu kali berhasil."
     },
     {
-      "id": "native.android.8faa8ae2ea76fe52",
-      "source": "Job name",
-      "translated": "Nama tugas"
+      "id": "native.android.7681a20f499488a8",
+      "source": "Automation name",
+      "translated": "Nama otomatisasi"
     },
     {
       "id": "native.android.e3a12cf55b2caea3",
@@ -3874,34 +3874,39 @@
       "translated": "Batas penyedia akan muncul di sini saat gateway Anda melaporkannya."
     },
     {
-      "id": "native.android.962a15bdb26cb6e1",
-      "source": "Cron Jobs",
-      "translated": "Tugas Cron"
-    },
-    {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "Pekerjaan OpenClaw terjadwal dari gateway Anda."
     },
     {
-      "id": "native.android.f9a5f09bd7436aa6",
-      "source": "Jobs",
-      "translated": "Tugas"
+      "id": "native.android.31a5440e22667f02",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
-      "id": "native.android.3cd22006987fde12",
-      "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
-      "translated": "Buka pekerjaan untuk memeriksa konfigurasi dan riwayat prosesnya. Koneksi dengan cakupan admin juga dapat menjalankan, mengedit, mengaktifkan, menonaktifkan, atau menghapusnya."
+      "id": "native.android.6e803f5130583ef7",
+      "source": "Search automations",
+      "translated": "Cari otomatisasi"
     },
     {
-      "id": "native.android.9354a5bf1e4ce5a5",
-      "source": "Connect the gateway to load cron jobs.",
-      "translated": "Hubungkan gateway untuk memuat cron jobs."
+      "id": "native.android.ba3859394e1d84ad",
+      "source": "Search",
+      "translated": "Cari"
     },
     {
-      "id": "native.android.239e2598dab8a8b1",
-      "source": "No scheduled jobs.",
-      "translated": "Tidak ada pekerjaan terjadwal."
+      "id": "native.android.02b3c78b09d0bbf5",
+      "source": "Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
+      "translated": "Buka otomatisasi untuk memeriksa konfigurasi dan riwayat eksekusinya. Koneksi dengan cakupan admin juga dapat menjalankan, mengedit, mengaktifkan, menonaktifkan, atau menghapusnya."
+    },
+    {
+      "id": "native.android.93757bcd5a888e9b",
+      "source": "Connect the gateway to load automations.",
+      "translated": "Hubungkan Gateway untuk memuat otomatisasi."
+    },
+    {
+      "id": "native.android.64a9b78fdbb526db",
+      "source": "No automations yet.",
+      "translated": "Belum ada otomatisasi."
     },
     {
       "id": "native.android.bc88f537cd309fcb",
@@ -3909,29 +3914,34 @@
       "translated": "Pekerjaan terjadwal yang dibuat di gateway akan muncul di sini."
     },
     {
-      "id": "native.android.2fbb66cd888e9543",
-      "source": "Cron Job",
-      "translated": "Tugas Cron"
+      "id": "native.android.de64e737e58cc949",
+      "source": "No matching automations.",
+      "translated": "Tidak ada otomatisasi yang cocok."
     },
     {
-      "id": "native.android.f6dd71419863574c",
-      "source": "Inspect scheduled gateway work.",
-      "translated": "Periksa pekerjaan gateway terjadwal."
+      "id": "native.android.9e3164ae5cb0527a",
+      "source": "Automation",
+      "translated": "Otomatisasi"
     },
     {
-      "id": "native.android.e3a6337e3c28d3f5",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Hubungkan gateway untuk memeriksa cron job."
+      "id": "native.android.5d9806af18054700",
+      "source": "Inspect and manage scheduled gateway work.",
+      "translated": "Periksa dan kelola pekerjaan Gateway terjadwal."
     },
     {
-      "id": "native.android.2d3daa5032913461",
-      "source": "Cron job not loaded.",
-      "translated": "Cron job tidak dimuat."
+      "id": "native.android.c6faada8886de13f",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Hubungkan Gateway untuk memeriksa otomatisasi."
     },
     {
-      "id": "native.android.401993832e04f790",
-      "source": "Loading cron job…",
-      "translated": "Memuat cron job…"
+      "id": "native.android.4530f9bf73d3155f",
+      "source": "Automation not loaded.",
+      "translated": "Otomatisasi tidak dimuat."
+    },
+    {
+      "id": "native.android.ba65a945fa8b0fc5",
+      "source": "Loading automation…",
+      "translated": "Memuat otomatisasi…"
     },
     {
       "id": "native.android.0f33ca43db97b2a9",
@@ -4889,9 +4899,9 @@
       "translated": "Tinjau"
     },
     {
-      "id": "native.android.9664ff3f205c25d6",
-      "source": "Open cron job detail",
-      "translated": "Buka detail cron job"
+      "id": "native.android.bee982da282e0887",
+      "source": "Open automation detail",
+      "translated": "Buka detail otomatisasi"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
@@ -5127,6 +5137,21 @@
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+    },
+    {
+      "id": "native.android.ec82506ef939dc0e",
+      "source": "All",
+      "translated": "Semua"
+    },
+    {
+      "id": "native.android.f281f6a848fd8ff5",
+      "source": "Active",
+      "translated": "Aktif"
+    },
+    {
+      "id": "native.android.48080c472857781d",
+      "source": "Paused",
+      "translated": "Dijeda"
     },
     {
       "id": "native.android.c45aa61a985005d9",
@@ -5569,9 +5594,9 @@
       "translated": "Persetujuan"
     },
     {
-      "id": "native.android.dd2def654c56b026",
-      "source": "Cron Jobs",
-      "translated": "Tugas Cron"
+      "id": "native.android.9cb21c6f0cbc9adc",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.android.20833251ed61ca65",
@@ -8049,6 +8074,691 @@
       "translated": "permintaan tersebut"
     },
     {
+      "id": "native.apple.1696cec8c3c6a511",
+      "source": "Settings",
+      "translated": "Pengaturan"
+    },
+    {
+      "id": "native.apple.d66c2f42a01fdcc6",
+      "source": "History",
+      "translated": "Riwayat"
+    },
+    {
+      "id": "native.apple.18f4b0e25c9ca42f",
+      "source": "Automation",
+      "translated": "Otomatisasi"
+    },
+    {
+      "id": "native.apple.f8791c06b9eea7c9",
+      "source": "Close",
+      "translated": "Tutup"
+    },
+    {
+      "id": "native.apple.35f5bb05688e822d",
+      "source": "Refresh automation",
+      "translated": "Segarkan otomatisasi"
+    },
+    {
+      "id": "native.apple.725e459c8dd8ba4c",
+      "source": "Delete this automation?",
+      "translated": "Hapus otomatisasi ini?"
+    },
+    {
+      "id": "native.apple.50255322e1b2c13b",
+      "source": "Delete Automation",
+      "translated": "Hapus Otomatisasi"
+    },
+    {
+      "id": "native.apple.d4cb0f4dc6c1058f",
+      "source": "Cancel",
+      "translated": "Batal"
+    },
+    {
+      "id": "native.apple.ff9d5755b4f93f5d",
+      "source": "This permanently removes the automation and its schedule from the Gateway.",
+      "translated": "Tindakan ini akan menghapus otomatisasi dan jadwalnya secara permanen dari Gateway."
+    },
+    {
+      "id": "native.apple.881fc358341a1df5",
+      "source": "active",
+      "translated": "aktif"
+    },
+    {
+      "id": "native.apple.4bc22f0f6856a7c5",
+      "source": "paused",
+      "translated": "dijeda"
+    },
+    {
+      "id": "native.apple.8fb3a1cb0aeb5dfe",
+      "source": "Next run",
+      "translated": "Eksekusi berikutnya"
+    },
+    {
+      "id": "native.apple.57e96e8d8fd5c342",
+      "source": "Last run",
+      "translated": "Eksekusi terakhir"
+    },
+    {
+      "id": "native.apple.cb17c8f476ef9637",
+      "source": "Automation detail",
+      "translated": "Detail otomatisasi"
+    },
+    {
+      "id": "native.apple.125f2fbe90c80642",
+      "source": "Editing unavailable",
+      "translated": "Pengeditan tidak tersedia"
+    },
+    {
+      "id": "native.apple.aa17216c6a622bcc",
+      "source": "Details",
+      "translated": "Detail"
+    },
+    {
+      "id": "native.apple.adba197735c909a7",
+      "source": "Name",
+      "translated": "Nama"
+    },
+    {
+      "id": "native.apple.1de7b0cbc64f235e",
+      "source": "Automation name",
+      "translated": "Nama otomatisasi"
+    },
+    {
+      "id": "native.apple.22c0b187b1d0ed60",
+      "source": "Description",
+      "translated": "Deskripsi"
+    },
+    {
+      "id": "native.apple.ea1c2fa8bee66cde",
+      "source": "Optional context",
+      "translated": "Konteks opsional"
+    },
+    {
+      "id": "native.apple.555170e9a9b3c867",
+      "source": "Schedule",
+      "translated": "Jadwal"
+    },
+    {
+      "id": "native.apple.23ffc415d7625e1d",
+      "source": "Delete after successful run",
+      "translated": "Hapus setelah berhasil dijalankan"
+    },
+    {
+      "id": "native.apple.9fe4b2423471d0f1",
+      "source": "Useful for one-time automations.",
+      "translated": "Berguna untuk otomatisasi satu kali."
+    },
+    {
+      "id": "native.apple.84cd065063e9703c",
+      "source": "ISO date and time",
+      "translated": "Tanggal dan waktu ISO"
+    },
+    {
+      "id": "native.apple.23830e2ba37b8769",
+      "source": "2030-01-15T09:00:00Z",
+      "translated": "2030-01-15T09:00:00Z"
+    },
+    {
+      "id": "native.apple.e1399c7c254d8dbb",
+      "source": "Interval (milliseconds)",
+      "translated": "Interval (milidetik)"
+    },
+    {
+      "id": "native.apple.74aa65bb399fb736",
+      "source": "Anchor (milliseconds)",
+      "translated": "Titik acuan (milidetik)"
+    },
+    {
+      "id": "native.apple.bcafe4b14750497b",
+      "source": "Cron expression",
+      "translated": "Ekspresi Cron"
+    },
+    {
+      "id": "native.apple.a16790dec1a5f2b4",
+      "source": "Time zone",
+      "translated": "Zona waktu"
+    },
+    {
+      "id": "native.apple.c2c5bed70319ae16",
+      "source": "America/Los_Angeles",
+      "translated": "America/Los_Angeles"
+    },
+    {
+      "id": "native.apple.9336c989fdd5d6fa",
+      "source": "Stagger (milliseconds)",
+      "translated": "Jeda bertahap (milidetik)"
+    },
+    {
+      "id": "native.apple.e03877d6332b324c",
+      "source": "Command to watch",
+      "translated": "Perintah yang akan dipantau"
+    },
+    {
+      "id": "native.apple.9fe4c10ddbf241e2",
+      "source": "pnpm build",
+      "translated": "pnpm build"
+    },
+    {
+      "id": "native.apple.585f47ef8c7223e1",
+      "source": "Action",
+      "translated": "Tindakan"
+    },
+    {
+      "id": "native.apple.6260eb77ea71ba28",
+      "source": "Event text",
+      "translated": "Teks peristiwa"
+    },
+    {
+      "id": "native.apple.2878cb40276871ce",
+      "source": "What should the agent know?",
+      "translated": "Apa yang perlu diketahui agen?"
+    },
+    {
+      "id": "native.apple.364fc52b3c80ff57",
+      "source": "Message",
+      "translated": "Pesan"
+    },
+    {
+      "id": "native.apple.feac3b85bf40c7af",
+      "source": "What should the agent do?",
+      "translated": "Apa yang harus dilakukan agen?"
+    },
+    {
+      "id": "native.apple.ab59900232a65c71",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.8a9349d85eeb22d2",
+      "source": "Thinking",
+      "translated": "Penalaran"
+    },
+    {
+      "id": "native.apple.7450fbb4246506d1",
+      "source": "Gateway default",
+      "translated": "Default Gateway"
+    },
+    {
+      "id": "native.apple.9e19b04a68638b23",
+      "source": "Arguments (JSON array)",
+      "translated": "Argumen (array JSON)"
+    },
+    {
+      "id": "native.apple.cdde064f118b68ea",
+      "source": "Working directory",
+      "translated": "Direktori kerja"
+    },
+    {
+      "id": "native.apple.20547b640f816b97",
+      "source": "Optional",
+      "translated": "Opsional"
+    },
+    {
+      "id": "native.apple.4ff623573733f360",
+      "source": "Execution",
+      "translated": "Eksekusi"
+    },
+    {
+      "id": "native.apple.d93a77ec4f005d00",
+      "source": "Session target",
+      "translated": "Target sesi"
+    },
+    {
+      "id": "native.apple.71ee518c108734d5",
+      "source": "main, isolated, current, or session:<id>",
+      "translated": "main, isolated, current, atau session:<id>"
+    },
+    {
+      "id": "native.apple.34106ad50c7b87e8",
+      "source": "Wake mode",
+      "translated": "Mode bangun"
+    },
+    {
+      "id": "native.apple.0f5ba1612a172b31",
+      "source": "now or next-heartbeat",
+      "translated": "now atau next-heartbeat"
+    },
+    {
+      "id": "native.apple.2314f13a102a3e2c",
+      "source": "Delivery and failure routing remain visible and editable in the Control UI.",
+      "translated": "Perutean pengiriman dan kegagalan tetap terlihat dan dapat diedit di Control UI."
+    },
+    {
+      "id": "native.apple.c52518b79660be2e",
+      "source": "Manage",
+      "translated": "Kelola"
+    },
+    {
+      "id": "native.apple.61cf5b73d3be8b9e",
+      "source": "Admin scope is required to change, run, or delete automations.",
+      "translated": "Cakupan admin diperlukan untuk mengubah, menjalankan, atau menghapus otomatisasi."
+    },
+    {
+      "id": "native.apple.63450040c4cdc79d",
+      "source": "Save",
+      "translated": "Simpan"
+    },
+    {
+      "id": "native.apple.4e4304768b282ed0",
+      "source": "Run Now",
+      "translated": "Jalankan Sekarang"
+    },
+    {
+      "id": "native.apple.4b893a030daf831b",
+      "source": "Running",
+      "translated": "Sedang Berjalan"
+    },
+    {
+      "id": "native.apple.252a740ded4f5747",
+      "source": "Enable",
+      "translated": "Aktifkan"
+    },
+    {
+      "id": "native.apple.b0394e53e163e4d0",
+      "source": "Pause",
+      "translated": "Jeda"
+    },
+    {
+      "id": "native.apple.03266f8398b57057",
+      "source": "Delete",
+      "translated": "Hapus"
+    },
+    {
+      "id": "native.apple.4dcf36018847481d",
+      "source": "Save or discard edits before running, pausing, or enabling this automation.",
+      "translated": "Simpan atau buang perubahan sebelum menjalankan, menjeda, atau mengaktifkan otomatisasi ini."
+    },
+    {
+      "id": "native.apple.9fb34a87dc5dd407",
+      "source": "Recent runs",
+      "translated": "Eksekusi terbaru"
+    },
+    {
+      "id": "native.apple.3f31602868b5d915",
+      "source": "Loading",
+      "translated": "Memuat"
+    },
+    {
+      "id": "native.apple.eff430620ea4d6e0",
+      "source": "Refresh",
+      "translated": "Segarkan"
+    },
+    {
+      "id": "native.apple.522ed52c5d6f2cf6",
+      "source": "No runs yet",
+      "translated": "Belum ada eksekusi"
+    },
+    {
+      "id": "native.apple.a0b71e211aa932c5",
+      "source": "Completed runs and delivery outcomes will appear here.",
+      "translated": "Eksekusi yang selesai dan hasil pengiriman akan muncul di sini."
+    },
+    {
+      "id": "native.apple.4cb9a754ceb21346",
+      "source": "Schedule configured",
+      "translated": "Jadwal dikonfigurasi"
+    },
+    {
+      "id": "native.apple.592cd2b7c16fa91f",
+      "source": "One time",
+      "translated": "Satu kali"
+    },
+    {
+      "id": "native.apple.fde9e0a6a8b23b7d",
+      "source": "Every %@",
+      "translated": "Setiap %@"
+    },
+    {
+      "id": "native.apple.ed053c0e3d827ba3",
+      "source": "Interval",
+      "translated": "Interval"
+    },
+    {
+      "id": "native.apple.fe7237d5293453ff",
+      "source": "After command exits",
+      "translated": "Setelah perintah selesai"
+    },
+    {
+      "id": "native.apple.439c8dea4cc485bb",
+      "source": "Unsaved changes",
+      "translated": "Perubahan belum disimpan"
+    },
+    {
+      "id": "native.apple.81846df87f4be1be",
+      "source": "Save or close this automation before refreshing.",
+      "translated": "Simpan atau tutup otomatisasi ini sebelum menyegarkan."
+    },
+    {
+      "id": "native.apple.1be30cb60c21d3fe",
+      "source": "Edits preserved",
+      "translated": "Perubahan dipertahankan"
+    },
+    {
+      "id": "native.apple.8d87d696c6e912dd",
+      "source": "Gateway data changed while you edited. Save will validate the current revision.",
+      "translated": "Data Gateway berubah saat Anda mengedit. Penyimpanan akan memvalidasi revisi saat ini."
+    },
+    {
+      "id": "native.apple.d5c62307493aacbc",
+      "source": "Could not load automation",
+      "translated": "Tidak dapat memuat otomatisasi"
+    },
+    {
+      "id": "native.apple.ce3928fc379e2daf",
+      "source": "Could not load run history",
+      "translated": "Tidak dapat memuat riwayat eksekusi"
+    },
+    {
+      "id": "native.apple.e84cad019bdb54c0",
+      "source": "Saving automation",
+      "translated": "Menyimpan otomatisasi"
+    },
+    {
+      "id": "native.apple.0e8f64ab2aae550c",
+      "source": "Automation saved",
+      "translated": "Otomatisasi disimpan"
+    },
+    {
+      "id": "native.apple.a237e22c861da698",
+      "source": "The Gateway accepted the latest revision.",
+      "translated": "Gateway menerima revisi terbaru."
+    },
+    {
+      "id": "native.apple.b74b1f32135775e7",
+      "source": "Enabling automation",
+      "translated": "Mengaktifkan otomatisasi"
+    },
+    {
+      "id": "native.apple.5d2466224b7f83cd",
+      "source": "Pausing automation",
+      "translated": "Menjeda otomatisasi"
+    },
+    {
+      "id": "native.apple.d2b1cc3738a2d411",
+      "source": "Automation enabled",
+      "translated": "Otomatisasi diaktifkan"
+    },
+    {
+      "id": "native.apple.1755a139d97def18",
+      "source": "Automation paused",
+      "translated": "Otomatisasi dijeda"
+    },
+    {
+      "id": "native.apple.92fd1af6e77e2b7d",
+      "source": "Future runs are active.",
+      "translated": "Eksekusi mendatang aktif."
+    },
+    {
+      "id": "native.apple.1429ded16eab70ba",
+      "source": "Future scheduled runs are paused.",
+      "translated": "Eksekusi terjadwal mendatang dijeda."
+    },
+    {
+      "id": "native.apple.93b93b980c47d0ac",
+      "source": "Queueing run",
+      "translated": "Mengantrekan eksekusi"
+    },
+    {
+      "id": "native.apple.e15e1406fcc112fb",
+      "source": "Run queued",
+      "translated": "Eksekusi masuk antrean"
+    },
+    {
+      "id": "native.apple.6a6c77e2f6d11ec9",
+      "source": "Refresh History to follow the result.",
+      "translated": "Segarkan Riwayat untuk mengikuti hasilnya."
+    },
+    {
+      "id": "native.apple.9482a1efdfc47e7f",
+      "source": "This run stays tracked until its exact result appears.",
+      "translated": "Eksekusi ini tetap dilacak hingga hasil pastinya muncul."
+    },
+    {
+      "id": "native.apple.7586bdc989075ffd",
+      "source": "Run still pending",
+      "translated": "Eksekusi masih tertunda"
+    },
+    {
+      "id": "native.apple.8f764528fa10c8eb",
+      "source": "The Gateway has not reported a result yet. Refresh History later.",
+      "translated": "Gateway belum melaporkan hasil. Segarkan Riwayat nanti."
+    },
+    {
+      "id": "native.apple.3120beddc3ef9928",
+      "source": "Run finished",
+      "translated": "Eksekusi selesai"
+    },
+    {
+      "id": "native.apple.7bf6ec0bc48196b0",
+      "source": "History now shows the completed result.",
+      "translated": "Riwayat kini menampilkan hasil yang telah selesai."
+    },
+    {
+      "id": "native.apple.421eedc59a44514c",
+      "source": "Run skipped",
+      "translated": "Eksekusi dilewati"
+    },
+    {
+      "id": "native.apple.a0bf404e9bcb5ba3",
+      "source": "The Gateway skipped this run. History shows the result.",
+      "translated": "Gateway melewati eksekusi ini. Riwayat menampilkan hasilnya."
+    },
+    {
+      "id": "native.apple.2e2f77f95cff0717",
+      "source": "Run failed",
+      "translated": "Eksekusi gagal"
+    },
+    {
+      "id": "native.apple.4932b01670c6bb36",
+      "source": "History shows the failure details.",
+      "translated": "Riwayat menampilkan detail kegagalan."
+    },
+    {
+      "id": "native.apple.af47a77871426a34",
+      "source": "Run result available",
+      "translated": "Hasil eksekusi tersedia"
+    },
+    {
+      "id": "native.apple.b3aa40fc12a403ef",
+      "source": "History shows the Gateway result.",
+      "translated": "Riwayat menampilkan hasil Gateway."
+    },
+    {
+      "id": "native.apple.2a8eb4abb58e4c6a",
+      "source": "Deleting automation",
+      "translated": "Menghapus otomatisasi"
+    },
+    {
+      "id": "native.apple.dd3271c4e94641a2",
+      "source": "Automation action failed",
+      "translated": "Tindakan otomatisasi gagal"
+    },
+    {
+      "id": "native.apple.32e3f08284bb3007",
+      "source": "This automation is not due yet.",
+      "translated": "Otomatisasi ini belum waktunya dijalankan."
+    },
+    {
+      "id": "native.apple.5927a803625f5dbb",
+      "source": "This automation is already running.",
+      "translated": "Otomatisasi ini sudah berjalan."
+    },
+    {
+      "id": "native.apple.4aad892e27b4ddd1",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Pemulihan setelah Gateway dimulai ulang masih berlangsung."
+    },
+    {
+      "id": "native.apple.81308ff798cb8ff3",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Otomatisasi ini memiliki konfigurasi yang tidak valid."
+    },
+    {
+      "id": "native.apple.a88f71792ad4beaa",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Penjadwal otomatisasi dihentikan."
+    },
+    {
+      "id": "native.apple.11923296a8287615",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway tidak memulai otomatisasi ini."
+    },
+    {
+      "id": "native.apple.0c744cad13a3927f",
+      "source": "not scheduled",
+      "translated": "tidak dijadwalkan"
+    },
+    {
+      "id": "native.apple.0bece6f361967bb7",
+      "source": "Could not track queued run",
+      "translated": "Tidak dapat melacak eksekusi dalam antrean"
+    },
+    {
+      "id": "native.apple.fcc8d9fb5363552a",
+      "source": "One time",
+      "translated": "Satu kali"
+    },
+    {
+      "id": "native.apple.e36565ab0cbc27fc",
+      "source": "Interval",
+      "translated": "Interval"
+    },
+    {
+      "id": "native.apple.4e409ac7b3902ef1",
+      "source": "Cron expression",
+      "translated": "Ekspresi cron"
+    },
+    {
+      "id": "native.apple.17b0f1a44e8b54f8",
+      "source": "On command exit",
+      "translated": "Saat perintah selesai"
+    },
+    {
+      "id": "native.apple.681114b86c1b4fc7",
+      "source": "System event",
+      "translated": "Peristiwa sistem"
+    },
+    {
+      "id": "native.apple.11ac31e919c88aaf",
+      "source": "Agent turn",
+      "translated": "Giliran agen"
+    },
+    {
+      "id": "native.apple.9f1a73fdf9e6fb74",
+      "source": "Command",
+      "translated": "Perintah"
+    },
+    {
+      "id": "native.apple.78e698f721570440",
+      "source": "This automation uses fields this app cannot edit safely.",
+      "translated": "Automasi ini menggunakan bidang yang tidak dapat diedit dengan aman oleh aplikasi ini."
+    },
+    {
+      "id": "native.apple.01a8e1daa343aa0c",
+      "source": "Update the Gateway before saving automation changes from iOS.",
+      "translated": "Perbarui Gateway sebelum menyimpan perubahan automasi dari iOS."
+    },
+    {
+      "id": "native.apple.eedad26d49890fd0",
+      "source": "No automation changes to save.",
+      "translated": "Tidak ada perubahan automasi untuk disimpan."
+    },
+    {
+      "id": "native.apple.468285718bc65cf9",
+      "source": "Automation name is required.",
+      "translated": "Nama automasi wajib diisi."
+    },
+    {
+      "id": "native.apple.3b2cf513983fd309",
+      "source": "Session target must be main, isolated, current, or session:<id>.",
+      "translated": "Target sesi harus berupa main, isolated, current, atau session:<id>."
+    },
+    {
+      "id": "native.apple.097835fd2547d9d3",
+      "source": "Wake mode must be now or next-heartbeat.",
+      "translated": "Mode bangun harus berupa now atau next-heartbeat."
+    },
+    {
+      "id": "native.apple.cf32f85b7d927b14",
+      "source": "The connected Gateway changed. Refresh Automations and try again.",
+      "translated": "Gateway yang terhubung telah berubah. Muat ulang Automasi dan coba lagi."
+    },
+    {
+      "id": "native.apple.6e9fc11db7a84ccd",
+      "source": "The Gateway changed after the request was sent. Check current state before retrying.",
+      "translated": "Gateway berubah setelah permintaan dikirim. Periksa status saat ini sebelum mencoba lagi."
+    },
+    {
+      "id": "native.apple.8334ace07b5a8769",
+      "source": "The Gateway returned an unexpected automation response.",
+      "translated": "Gateway mengembalikan respons automasi yang tidak terduga."
+    },
+    {
+      "id": "native.apple.d15e02f352f095b5",
+      "source": "One-time automations need an ISO time.",
+      "translated": "Automasi satu kali memerlukan waktu ISO."
+    },
+    {
+      "id": "native.apple.217ae5784e8a790c",
+      "source": "Interval must be a positive number of milliseconds.",
+      "translated": "Interval harus berupa jumlah milidetik positif."
+    },
+    {
+      "id": "native.apple.5d1437fb94b0c2fd",
+      "source": "Anchor must be a non-negative number of milliseconds.",
+      "translated": "Jangkar harus berupa jumlah milidetik nonnegatif."
+    },
+    {
+      "id": "native.apple.74979b1b3f3fd0cb",
+      "source": "Cron expression is required.",
+      "translated": "Ekspresi cron wajib diisi."
+    },
+    {
+      "id": "native.apple.d674e9211880efdd",
+      "source": "Stagger must be a non-negative number of milliseconds.",
+      "translated": "Jeda harus berupa jumlah milidetik nonnegatif."
+    },
+    {
+      "id": "native.apple.ecf986d82e845e3d",
+      "source": "On-exit automations need a command.",
+      "translated": "Automasi saat keluar memerlukan perintah."
+    },
+    {
+      "id": "native.apple.f9a8e11940df3708",
+      "source": "Changing schedule type is available in the Control UI.",
+      "translated": "Perubahan jenis jadwal tersedia di Control UI."
+    },
+    {
+      "id": "native.apple.15d3d90d9e55055c",
+      "source": "System event text is required.",
+      "translated": "Teks peristiwa sistem wajib diisi."
+    },
+    {
+      "id": "native.apple.f9e96a64787cfd1e",
+      "source": "Agent message is required.",
+      "translated": "Pesan agen wajib diisi."
+    },
+    {
+      "id": "native.apple.866cd35476800bb0",
+      "source": "Command arguments must be a JSON array of non-empty strings.",
+      "translated": "Argumen perintah harus berupa array JSON yang berisi string tidak kosong."
+    },
+    {
+      "id": "native.apple.62a94efde347e48b",
+      "source": "The Gateway can change this command path but cannot clear it.",
+      "translated": "Gateway dapat mengubah jalur perintah ini, tetapi tidak dapat mengosongkannya."
+    },
+    {
+      "id": "native.apple.80a46289c6ed4e6f",
+      "source": "Changing action type is available in the Control UI.",
+      "translated": "Pengubahan jenis tindakan tersedia di Control UI."
+    },
+    {
+      "id": "native.apple.d848c7c83ca56e87",
+      "source": "Could not encode automation changes.",
+      "translated": "Tidak dapat mengodekan perubahan otomatisasi."
+    },
+    {
       "id": "native.apple.6507fad2526215fc",
       "source": "Promoted Entries",
       "translated": "Entri yang Dipromosikan"
@@ -8514,9 +9224,44 @@
       "translated": "Berikutnya"
     },
     {
-      "id": "native.apple.265fe9a6fd48774a",
-      "source": "Jobs",
-      "translated": "Pekerjaan"
+      "id": "native.apple.0716c9afeacc4d94",
+      "source": "Automations",
+      "translated": "Otomatisasi"
+    },
+    {
+      "id": "native.apple.afaf94d79c41f401",
+      "source": "Search automations",
+      "translated": "Cari otomatisasi"
+    },
+    {
+      "id": "native.apple.873168b1830c60c8",
+      "source": "Automation status",
+      "translated": "Status otomatisasi"
+    },
+    {
+      "id": "native.apple.0147a12ccae4382f",
+      "source": "No automations yet",
+      "translated": "Belum ada otomatisasi"
+    },
+    {
+      "id": "native.apple.904fc50cb40466e6",
+      "source": "No matching automations",
+      "translated": "Tidak ada otomatisasi yang cocok"
+    },
+    {
+      "id": "native.apple.e114f7974019ead5",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Pekerjaan terjadwal yang dibuat di Gateway akan muncul di sini."
+    },
+    {
+      "id": "native.apple.50668445ecd01096",
+      "source": "Try another search or status filter.",
+      "translated": "Coba pencarian atau filter status lain."
+    },
+    {
+      "id": "native.apple.d3df6fbbaafcc29f",
+      "source": "Edit",
+      "translated": "Edit"
     },
     {
       "id": "native.apple.e8964650f824c877",
@@ -8534,9 +9279,14 @@
       "translated": "Jeda"
     },
     {
-      "id": "native.apple.7323dffbc056bdcd",
-      "source": "Queued %@.",
-      "translated": "%@ dimasukkan ke antrean."
+      "id": "native.apple.bdd438ba675d7562",
+      "source": "Tracking %@ in run history.",
+      "translated": "Melacak %@ dalam riwayat eksekusi."
+    },
+    {
+      "id": "native.apple.a3cfbe05c4013cac",
+      "source": "Ran %@. Open Edit for run history.",
+      "translated": "Menjalankan %@. Buka Edit untuk melihat riwayat eksekusi."
     },
     {
       "id": "native.apple.424e352a747453ed",
@@ -8549,6 +9299,36 @@
       "translated": "%@ dijeda."
     },
     {
+      "id": "native.apple.1b3a26abc61c570d",
+      "source": "This automation is not due yet.",
+      "translated": "Otomatisasi ini belum waktunya dijalankan."
+    },
+    {
+      "id": "native.apple.c77dec246ca2f051",
+      "source": "This automation is already running.",
+      "translated": "Otomatisasi ini sudah berjalan."
+    },
+    {
+      "id": "native.apple.2a91173216fc13a0",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Pemulihan setelah Gateway dimulai ulang masih berlangsung."
+    },
+    {
+      "id": "native.apple.9d416b662fe79a2d",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Otomatisasi ini memiliki konfigurasi yang tidak valid."
+    },
+    {
+      "id": "native.apple.74db101b9d066f9b",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Penjadwal otomatisasi dihentikan."
+    },
+    {
+      "id": "native.apple.a68b3d18073f246f",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway tidak memulai otomatisasi ini."
+    },
+    {
       "id": "native.apple.a373bf2332f0ab6a",
       "source": "Search agents",
       "translated": "Cari agent"
@@ -8559,9 +9339,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.45c3f045dd9a3507",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.bed79f8c977be1cd",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.apple.4bee0220d011ab53",
@@ -8674,9 +9454,9 @@
       "translated": "Bermimpi"
     },
     {
-      "id": "native.apple.4999264d74844f21",
-      "source": "Scheduled Work",
-      "translated": "Pekerjaan Terjadwal"
+      "id": "native.apple.22a5389054110057",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.apple.13245a5075869f14",
@@ -8689,19 +9469,19 @@
       "translated": "Memilih agen ini"
     },
     {
-      "id": "native.apple.4f053bb46f35a802",
-      "source": "No scheduled jobs",
-      "translated": "Tidak ada pekerjaan terjadwal"
+      "id": "native.apple.e0a5458b9b128e21",
+      "source": "No automations yet",
+      "translated": "Belum ada otomatisasi"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron tidak tersedia"
+      "id": "native.apple.b2e8f8831767ae0e",
+      "source": "Automations unavailable",
+      "translated": "Otomatisasi tidak tersedia"
     },
     {
-      "id": "native.apple.0cd04bacdbcd8fa5",
-      "source": "The gateway has no visible cron jobs.",
-      "translated": "Gateway tidak memiliki cron job yang terlihat."
+      "id": "native.apple.36277ae5feb079fd",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Pekerjaan terjadwal yang dibuat di Gateway akan muncul di sini."
     },
     {
       "id": "native.apple.ae4aa2339b285164",
@@ -9199,11 +9979,6 @@
       "translated": "Diblokir"
     },
     {
-      "id": "native.apple.c1520bfdcd827e55",
-      "source": "All",
-      "translated": "Semua"
-    },
-    {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
       "translated": "Online"
@@ -9212,6 +9987,21 @@
       "id": "native.apple.a97cdae7c8e13f0e",
       "source": "Ready",
       "translated": "Siap"
+    },
+    {
+      "id": "native.apple.c1520bfdcd827e55",
+      "source": "All",
+      "translated": "Semua"
+    },
+    {
+      "id": "native.apple.6761fe33fbf18cb3",
+      "source": "Active",
+      "translated": "Aktif"
+    },
+    {
+      "id": "native.apple.c10177d9487a27d5",
+      "source": "Paused",
+      "translated": "Dijeda"
     },
     {
       "id": "native.apple.9c4e8b82edf0b324",
@@ -10499,9 +11289,9 @@
       "translated": "Penggunaan"
     },
     {
-      "id": "native.apple.9eb33a11fb81796b",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.f21bf1e3b5ec896c",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.apple.57587fec1ca582ec",
@@ -12454,6 +13244,16 @@
       "translated": "Perlu Disiapkan"
     },
     {
+      "id": "native.apple.0c8eb8bda0a17689",
+      "source": "Any binary: %@",
+      "translated": "Biner apa pun: %@"
+    },
+    {
+      "id": "native.apple.5242f6eeb0ffe658",
+      "source": "OS: %@",
+      "translated": "OS: %@"
+    },
+    {
       "id": "native.apple.113dacafa42bb62e",
       "source": "Missing: %@",
       "translated": "Tidak ada: %@"
@@ -13167,6 +13967,11 @@
       "id": "native.apple.c86f7ba5b3762eb7",
       "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
       "translated": "Setelah Anda mengaktifkan Ringkasan Kesehatan, OpenClaw membaca langkah, tidur, detak jantung saat istirahat, dan olahraga untuk membagikan data agregat yang diminta kepada penyedia AI yang Anda konfigurasikan."
+    },
+    {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw tidak menulis atau mengubah data Health. Health Summaries membaca langkah, tidur, detak jantung istirahat, dan latihan untuk membagikan agregat yang diminta ke penyedia AI yang Anda konfigurasikan."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -14109,9 +14914,9 @@
       "translated": "Penggunaan"
     },
     {
-      "id": "native.apple.db0d9af6d0855d18",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.8c4e07b06e938527",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.apple.20f4753fc51c5341",
@@ -14219,9 +15024,9 @@
       "translated": "Penggunaan"
     },
     {
-      "id": "native.apple.0b4e807d2449e93f",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.fca6a390e072ada9",
+      "source": "Automations",
+      "translated": "Otomatisasi"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",
@@ -20114,6 +20919,11 @@
       "translated": "Binary yang hilang: \\(self.missingBins.joined(separator: \", \"))"
     },
     {
+      "id": "native.apple.98ac6e8935a9fee5",
+      "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
+      "translated": "Memerlukan salah satu biner: \\(self.missingAnyBins.joined(separator: \", \"))"
+    },
+    {
       "id": "native.apple.1ffd9ad47f1dd74a",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "translated": "Env tidak ada: \\(self.missingEnv.joined(separator: \", \"))"
@@ -20122,6 +20932,11 @@
       "id": "native.apple.c9ef14276ce395c1",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "translated": "Memerlukan config: \\(self.missingConfig.joined(separator: \", \"))"
+    },
+    {
+      "id": "native.apple.1f939d96ce8464dc",
+      "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
+      "translated": "Memerlukan OS: \\(self.missingOS.joined(separator: \", \"))"
     },
     {
       "id": "native.apple.c588ae10b9fae52b",

@@ -1,6 +1,6 @@
 // Telegram tests cover bot.fetch abort plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
+import { isTelegramPollingNetworkError } from "./network-errors.js";
 
 const { botCtorSpy, telegramBotDepsForTest, telegramBotRuntimeForTest } =
   await import("./bot.create-telegram-bot.test-harness.js");
@@ -90,10 +90,7 @@ describe("createTelegramBot fetch abort", () => {
     await expect(clientFetch("https://api.telegram.org/bot123456:ABC/getUpdates")).rejects.toBe(
       fetchError,
     );
-    expect(getTelegramNetworkErrorOrigin(fetchError)).toEqual({
-      method: "getupdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
+    expect(isTelegramPollingNetworkError(fetchError)).toBe(true);
   });
 
   it("aborts wrapped getUpdates fetch after the hard polling timeout", async () => {
@@ -316,7 +313,7 @@ describe("createTelegramBot fetch abort", () => {
     await expect(clientFetch("https://api.telegram.org/bot123456:ABC/getUpdates")).rejects.toBe(
       frozenError,
     );
-    expect(getTelegramNetworkErrorOrigin(frozenError)).toBeNull();
+    expect(isTelegramPollingNetworkError(frozenError)).toBe(false);
   });
 });
 

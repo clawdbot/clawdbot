@@ -510,7 +510,7 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                headerTitle: "Cron Jobs",
+                headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .terminal:

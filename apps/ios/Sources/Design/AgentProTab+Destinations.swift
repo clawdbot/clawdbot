@@ -111,11 +111,11 @@ extension AgentProTab {
                 VStack(alignment: .leading, spacing: 16) {
                     self.directHeader(
                         for: .cron,
-                        title: "Cron Jobs",
+                        title: "Automations",
                         subtitle: self.cronDetail)
                     self.detailSummaryCard(
                         icon: "clock.arrow.circlepath",
-                        title: "Cron Jobs",
+                        title: "Automations",
                         value: self.cronValue,
                         detail: self.cronDetail,
                         color: self.cronColor)
@@ -130,7 +130,7 @@ extension AgentProTab {
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Cron Jobs")
+        .navigationTitle("Automations")
         .navigationBarTitleDisplayMode(.inline)
     }
 

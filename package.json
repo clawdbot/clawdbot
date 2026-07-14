@@ -2024,7 +2024,6 @@
     "clawpdf": "0.3.0",
     "commander": "15.0.0",
     "croner": "10.0.1",
-    "defu": "6.1.5",
     "diff": "9.0.0",
     "dotenv": "17.4.2",
     "entities": "8.0.0",

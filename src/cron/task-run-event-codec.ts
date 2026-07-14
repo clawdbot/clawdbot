@@ -8,7 +8,7 @@ import type { CronEvent } from "./service/state.js";
 type CronFinishedEvent = CronEvent & { action: "finished" };
 
 /** Uses execution timing for one timestamp shared by ledger and legacy dual-write paths. */
-export function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): number {
+function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): number {
   if (
     typeof event.runAtMs === "number" &&
     Number.isFinite(event.runAtMs) &&

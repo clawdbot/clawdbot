@@ -70,7 +70,7 @@ type ResolvedCliBackendLiveTest = {
 };
 
 /** Binding between a model provider and the CLI runtime that serves it. */
-export type CliRuntimeModelBackendBinding = {
+type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
   pluginId?: string;

@@ -223,10 +223,10 @@ class CronJobManagementTest {
   @Test
   fun queuedRunCompletionNoticeMatchesTerminalHistoryStatus() {
     listOf(
-      Triple("ok", "Cron run finished.", GatewayCronNoticeKind.Success),
-      Triple("skipped", "Cron run skipped.", GatewayCronNoticeKind.Warning),
-      Triple("error", "Cron run failed.", GatewayCronNoticeKind.Error),
-      Triple(null, "Cron run finished with an unknown status.", GatewayCronNoticeKind.Warning),
+      Triple("ok", "Automation run finished.", GatewayCronNoticeKind.Success),
+      Triple("skipped", "Automation run skipped.", GatewayCronNoticeKind.Warning),
+      Triple("error", "Automation run failed.", GatewayCronNoticeKind.Error),
+      Triple(null, "Automation run finished with an unknown status.", GatewayCronNoticeKind.Warning),
     ).forEach { (status, message, kind) ->
       assertEquals(
         GatewayCronActionState.Notice(id = "job", message = message, kind = kind),
@@ -395,7 +395,7 @@ class CronJobManagementTest {
     val success =
       GatewayCronActionState.Notice(
         id = original.id,
-        message = "Cron job updated.",
+        message = "Automation updated.",
         kind = GatewayCronNoticeKind.Success,
       )
 
@@ -447,6 +447,48 @@ class CronJobManagementTest {
     guard.invalidate()
     assertFalse(guard.publishIfCurrent(current) { published = "invalidated" })
     assertEquals("current", published)
+  }
+
+  @Test
+  fun cronJobsPaginationFollowsEveryGatewayPage() {
+    assertEquals(
+      200,
+      nextCronJobsPageOffset(
+        objectJson("""{"total":450,"offset":0,"hasMore":true,"nextOffset":200}"""),
+        requestedOffset = 0,
+        pageCount = 200,
+      ),
+    )
+    assertEquals(
+      400,
+      nextCronJobsPageOffset(
+        objectJson("""{"total":450,"offset":200,"hasMore":true}"""),
+        requestedOffset = 200,
+        pageCount = 200,
+      ),
+    )
+    assertEquals(
+      null,
+      nextCronJobsPageOffset(
+        objectJson("""{"total":450,"offset":400,"hasMore":false,"nextOffset":null}"""),
+        requestedOffset = 400,
+        pageCount = 50,
+      ),
+    )
+  }
+
+  @Test
+  fun cronJobsPaginationRejectsNonAdvancingGatewayPages() {
+    val error =
+      runCatching {
+        nextCronJobsPageOffset(
+          objectJson("""{"total":450,"offset":200,"hasMore":true,"nextOffset":200}"""),
+          requestedOffset = 200,
+          pageCount = 200,
+        )
+      }.exceptionOrNull()
+
+    assertEquals("Gateway returned a non-advancing cron jobs page.", error?.message)
   }
 
   private fun objectJson(raw: String) = Json.parseToJsonElement(raw).jsonObject

@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -352,15 +352,19 @@ class SkillsPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header content-header--page plugins-content-header">
         <div>
-          <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-sub">${subtitleForRoute("skills")}</div>
+          <h1 class="page-title">${titleForRoute("skills")}</h1>
         </div>
       </section>
       ${renderSettingsWorkspace(html`
         <div class="plugins-hub-tabs-row">
           ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
         </div>
-        <div id="plugins-hub-panel" role="tabpanel" aria-labelledby="plugins-tab-skills">
+        <wa-tab-panel
+          id="plugins-hub-panel"
+          name="skills"
+          active
+          aria-labelledby="plugins-tab-skills"
+        >
           ${renderSkills({
             connected: this.connected,
             loading: this.skillsLoading || this.agentsLoading,
@@ -411,7 +415,7 @@ class SkillsPage extends OpenClawLightDomElement {
             onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
               void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
           })}
-        </div>
+        </wa-tab-panel>
       `)}
     `;
   }

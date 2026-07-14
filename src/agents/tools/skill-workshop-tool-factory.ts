@@ -20,6 +20,7 @@ export function createConfiguredSkillWorkshopTool(params: {
   return createSkillWorkshopTool({
     workspaceDir: params.workspaceDir,
     config: params.config,
+    env: params.run?.env,
     agentId: params.agentId,
     origin:
       params.run?.origin ??
@@ -33,5 +34,6 @@ export function createConfiguredSkillWorkshopTool(params: {
     proposalMutationBudget:
       params.run?.proposalMutationBudget ??
       (params.run?.proposalOnly ? { remaining: 1 } : undefined),
+    proposalReviewCompletion: params.run?.proposalReviewCompletion,
   });
 }

@@ -26,7 +26,6 @@ export type ImageContent = {
   data: string;
   mimeType: string;
 };
-export type { AgentStreamParams } from "./shared-types.js";
 
 /** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {

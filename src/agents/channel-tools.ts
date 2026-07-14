@@ -10,7 +10,6 @@ import {
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
-  testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
 import {
   channelPluginHasNativeApprovalPromptUi,
@@ -174,10 +173,3 @@ export function resolveChannelReactionGuidance(params: {
     channel: resolved.channelLabel?.trim() || channelId,
   };
 }
-
-/** Test-only utilities for channel tool discovery state. */
-export const testing = {
-  resetLoggedListActionErrors() {
-    messageActionTesting.resetLoggedMessageActionErrors();
-  },
-};

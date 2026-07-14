@@ -186,6 +186,13 @@ const sessionTabRegistryMocks = vi.hoisted(() => ({
 vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
+  fetchBrowserJson: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+      ok: true,
+      running: true,
+      source: "gateway-host",
+    }),
+  ),
   imageResultFromFile: vi.fn(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
@@ -233,6 +240,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     ...configMocks,
     ...gatewayMocks,
     ...sessionTabRegistryMocks,
+    fetchBrowserJson: toolCommonMocks.fetchBrowserJson,
     getRuntimeConfig: configMocks.loadConfig,
     resolveRuntimeImageSanitization: () => {
       const configured = configMocks.loadConfig().agents?.defaults?.imageMaxDimensionPx;
@@ -330,6 +338,11 @@ function resetBrowserToolMocks() {
   toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
     "/tmp/openclaw-media/outbound/share.png",
   );
+  toolCommonMocks.fetchBrowserJson.mockResolvedValue({
+    ok: true,
+    running: true,
+    source: "gateway-host",
+  });
 }
 
 function setResolvedBrowserProfiles(
@@ -997,6 +1010,136 @@ describe("browser tool snapshot maxChars", () => {
     expect(request.params?.timeoutMs).toBe(20_000);
     expect(request.params?.errorEnvelope).toBe("browser-v1");
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the Gateway host when an auto-selected node has no browser host", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error(
+        "Browser control host is not reachable on 127.0.0.1:18791. Start the local OpenClaw browser control host.",
+      ),
+    );
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", { action: "status" });
+
+    expect(result?.details).toMatchObject({ source: "gateway-host" });
+    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenCalledWith("/", {
+      method: "GET",
+      body: undefined,
+      timeoutMs: undefined,
+    });
+  });
+
+  it("tracks tabs opened after automatic host fallback", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+    );
+    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
+      targetId: "host-tab-opened",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "host-tab-opened",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("touches tabs used after automatic host fallback", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+    );
+    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
+      targetId: "host-tab-used",
+      url: "https://example.com/next",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com/next",
+      targetId: "host-tab-used",
+    });
+
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "host-tab-used",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("untracks tabs closed after automatic host fallback", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+    );
+    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "close", targetId: "host-tab-closed" });
+
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "host-tab-closed",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
+
+  it.each([
+    ["an explicit node target", { target: "node" }],
+    ["an explicit node pin", { node: "node-1" }],
+  ])("does not host-fallback for %s", async (_label, route) => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+    );
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status", ...route })).rejects.toThrow(
+      /Browser control host is not reachable/,
+    );
+    expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+  });
+
+  it("does not host-fallback after an ambiguous node failure", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(new Error("node invoke timed out"));
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status" })).rejects.toThrow(
+      /node invoke timed out/,
+    );
+    expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+  });
+
+  it("does not host-fallback for a browser-service error with similar wording", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        error: {
+          status: 503,
+          body: { error: "Browser control host is not reachable during this action" },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status" })).rejects.toMatchObject({
+      name: "BrowserServiceError",
+      status: 503,
+    });
+    expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
   });
 
   it.each([

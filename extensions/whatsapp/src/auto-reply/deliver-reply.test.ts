@@ -5,7 +5,6 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
@@ -36,16 +35,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     ...actual,
     shouldLogVerbose: vi.fn(() => true),
     logVerbose: vi.fn(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-utility-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-utility-runtime")>(
-    "openclaw/plugin-sdk/text-utility-runtime",
-  );
-  return {
-    ...actual,
-    sleep: vi.fn(async () => {}),
   };
 });
 
@@ -189,6 +178,18 @@ function mockSecondReplySuccess(msg: AdmittedWebInboundMessage) {
   (
     msg.platform.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }
   ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
+}
+
+async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const promise = run();
+    await vi.runAllTimersAsync();
+    return await promise;
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 }
 
 const replyLogger = {
@@ -406,17 +407,18 @@ describe("deliverWebReply", () => {
       mockFirstReplyFailure(msg, errorMessage);
       mockSecondReplySuccess(msg);
 
-      await deliverWebReply({
-        replyResult: { text: "hi" },
-        msg,
-        maxMediaBytes: 1024 * 1024,
-        textLimit: 200,
-        replyLogger,
-        skipLog: true,
-      });
+      await runWithFakeTimers(() =>
+        deliverWebReply({
+          replyResult: { text: "hi" },
+          msg,
+          maxMediaBytes: 1024 * 1024,
+          textLimit: 200,
+          replyLogger,
+          skipLog: true,
+        }),
+      );
 
       expect(msg.platform.reply).toHaveBeenCalledTimes(2);
-      expect(sleep).toHaveBeenCalledWith(500);
     },
   );
 
@@ -425,23 +427,23 @@ describe("deliverWebReply", () => {
     mockFirstReplyFailureWithWrappedError(msg, "connection closed");
     mockSecondReplySuccess(msg);
 
-    await deliverWebReply({
-      replyResult: { text: "hi" },
-      msg,
-      maxMediaBytes: 1024 * 1024,
-      textLimit: 200,
-      replyLogger,
-      skipLog: true,
-    });
+    await runWithFakeTimers(() =>
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    );
 
     expect(msg.platform.reply).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
   });
 
   it("does not retry terminal socket operation timeouts", async () => {
     const msg = makeMsg();
     const timeout = new WhatsAppSocketOperationTimeoutError("sendMessage", 60_000);
-    (sleep as unknown as { mockClear: () => void }).mockClear();
     (
       msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
     ).mockRejectedValueOnce(timeout);
@@ -458,7 +460,6 @@ describe("deliverWebReply", () => {
     ).rejects.toBe(timeout);
 
     expect(msg.platform.reply).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("sends image media with caption and then remaining text", async () => {
@@ -586,17 +587,18 @@ describe("deliverWebReply", () => {
       msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
     ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "media-retry-2"));
 
-    await deliverWebReply({
-      replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
-      msg,
-      maxMediaBytes: 1024 * 1024,
-      textLimit: 200,
-      replyLogger,
-      skipLog: true,
-    });
+    await runWithFakeTimers(() =>
+      deliverWebReply({
+        replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    );
 
     expect(msg.platform.sendMedia).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
   });
 
   it("falls back to text-only when the first media send fails", async () => {
@@ -706,6 +708,41 @@ describe("deliverWebReply", () => {
     expect(msg.platform.reply).toHaveBeenCalledTimes(1);
     expect(replyText(msg)).toContain("⚠️ Media failed");
     expect(replyText(msg)).not.toContain("boom");
+  });
+
+  it.each([
+    {
+      name: "prefers trimmed, deduplicated mediaUrls over legacy mediaUrl",
+      mediaUrl: " http://example.com/legacy.jpg ",
+      mediaUrls: [" http://example.com/preferred.jpg ", "http://example.com/preferred.jpg", "   "],
+      expectedMediaUrl: "http://example.com/preferred.jpg",
+    },
+    {
+      name: "falls back to trimmed legacy mediaUrl when mediaUrls are whitespace-only",
+      mediaUrl: " http://example.com/legacy.jpg ",
+      mediaUrls: ["   ", "\t"],
+      expectedMediaUrl: "http://example.com/legacy.jpg",
+    },
+  ])("$name during auto-reply delivery", async ({ mediaUrl, mediaUrls, expectedMediaUrl }) => {
+    vi.clearAllMocks();
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+
+    await deliverWebReply({
+      replyResult: { text: "caption", mediaUrl, mediaUrls },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    expect(loadWebMedia).toHaveBeenCalledWith(expectedMediaUrl, {
+      maxBytes: 1024 * 1024,
+      localRoots: undefined,
+    });
+    expect(msg.platform.sendMedia).toHaveBeenCalledTimes(1);
   });
 
   it("notifies user when a non-first media send fails instead of dropping silently", async () => {

@@ -7,7 +7,11 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { createDiscordOpusPlaybackStream } from "./audio.js";
-import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
+import {
+  type DiscordVoiceIngressContext,
+  resolveDiscordVoiceIngressContext,
+  runDiscordVoiceAgentTurn,
+} from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
@@ -34,6 +38,8 @@ export async function processDiscordVoiceSegment(params: {
   ownerAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
+  ingressContext?: DiscordVoiceIngressContext;
+  resolveIngressContext?: () => Promise<DiscordVoiceIngressContext | null>;
   transcripts?: VoiceSessionEntry["transcripts"];
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 }) {
@@ -41,16 +47,20 @@ export async function processDiscordVoiceSegment(params: {
   logVoiceVerbose(
     `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
   );
-  const ingress = await resolveDiscordVoiceIngressContext({
-    entry,
-    userId,
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    ownerAllowFrom: params.ownerAllowFrom,
-    ownerAllowAll: params.ownerAllowAll,
-    fetchGuildName: params.fetchGuildName,
-    speakerContext: params.speakerContext,
-  });
+  const ingress =
+    params.ingressContext ??
+    (params.resolveIngressContext
+      ? await params.resolveIngressContext()
+      : await resolveDiscordVoiceIngressContext({
+          entry,
+          userId,
+          cfg: params.cfg,
+          discordConfig: params.discordConfig,
+          ownerAllowFrom: params.ownerAllowFrom,
+          ownerAllowAll: params.ownerAllowAll,
+          fetchGuildName: params.fetchGuildName,
+          speakerContext: params.speakerContext,
+        }));
   if (!ingress) {
     logVoiceVerbose(
       `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,

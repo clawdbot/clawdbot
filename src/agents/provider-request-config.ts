@@ -358,7 +358,7 @@ export function sanitizeConfiguredModelProviderRequest(
 }
 
 /** Merges provider request overrides with later entries taking precedence. */
-export function mergeProviderRequestOverrides(
+function mergeProviderRequestOverrides(
   ...overrides: Array<ProviderRequestTransportOverrides | undefined>
 ): ProviderRequestTransportOverrides | undefined {
   const merged: ProviderRequestTransportOverrides = {};
@@ -531,7 +531,7 @@ function resolveAuthOverride(params: {
 }
 
 /** Sanitizes runtime-only provider request overrides for auth request paths. */
-export function sanitizeRuntimeProviderRequestOverrides(
+function sanitizeRuntimeProviderRequestOverrides(
   request: ProviderRequestTransportOverrides | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   if (!request) {

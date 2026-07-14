@@ -8,12 +8,7 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import {
-  buildAgentBootstrapSystemContext,
-  buildAgentBootstrapSystemPromptSections,
-  buildAgentSystemPrompt,
-  buildRuntimeLine,
-} from "./system-prompt.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
@@ -603,9 +598,39 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Bootstrap Pending");
     expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
+    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
+    expect(prompt).toContain("brief blocker");
+    expect(prompt).toContain("simplest next step");
+    expect(prompt).toContain("Never claim completion early");
     expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md");
     expect(prompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(prompt).toContain("Ask who I am.");
+    expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
+    expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
+  });
+
+  it("uses limited bootstrap wording for constrained user-facing runs", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapMode: "limited",
+    });
+
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("cannot safely finish full BOOTSTRAP.md");
+    expect(prompt).toContain("Never claim complete");
+    expect(prompt).toContain("no generic first greeting");
+    expect(prompt).toContain("primary interactive run with normal workspace access");
+  });
+
+  it("omits bootstrap instructions when bootstrap is not pending", () => {
+    for (const bootstrapMode of ["none", undefined] as const) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        ...(bootstrapMode ? { bootstrapMode } : {}),
+      });
+
+      expect(prompt).not.toContain("## Bootstrap Pending");
+    }
   });
 
   it("includes bootstrap truncation notice in system prompt without raw diagnostics", () => {
@@ -1316,8 +1341,9 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("builds runtime line with agent and channel details", () => {
-    const line = buildRuntimeLine(
-      {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
         agentId: "work",
         sessionKey: "agent:main:subagent:runtime-check",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
@@ -1329,59 +1355,65 @@ describe("buildAgentSystemPrompt", () => {
         model: "anthropic/claude",
         defaultModel: "anthropic/claude-opus-4-5",
         activeNode: "mac-123",
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
       },
-      "telegram",
-      ["inlineButtons"],
-      "low",
-    );
+      defaultThinkLevel: "low",
+    });
 
-    expect(line).toContain("agent=work");
-    expect(line).toContain("session=agent:main:subagent:runtime-check");
-    expect(line).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
-    expect(line).toContain("host=host");
-    expect(line).toContain("repo=/repo");
-    expect(line).toContain("os=macOS (arm64)");
-    expect(line).toContain("node=v20");
-    expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
-    expect(line).toContain("active_node=mac-123");
-    expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlinebuttons");
-    expect(line).toContain("thinking=low");
+    expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("session=agent:main:subagent:runtime-check");
+    expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+    expect(prompt).toContain("host=host");
+    expect(prompt).toContain("repo=/repo");
+    expect(prompt).toContain("os=macOS (arm64)");
+    expect(prompt).toContain("node=v20");
+    expect(prompt).toContain("model=anthropic/claude");
+    expect(prompt).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(prompt).toContain("active_node=mac-123");
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).toContain("capabilities=inlinebuttons");
+    expect(prompt).toContain("thinking=low");
   });
 
   it("keeps the runtime line cache-stable across isolated cron runs", () => {
     // Isolated cron run-scoped keys carry a fresh per-run id every run (forceNew). Rendering it
     // verbatim re-busts byte-exact prefix caching for the tool catalog after it (#96677 / #43148).
     const buildForRun = (runId: string) =>
-      buildRuntimeLine({
-        agentId: "work",
-        sessionKey: `agent:work:cron:nightly-job:run:${runId}`,
-        sessionId: runId,
-        host: "host",
-        os: "linux",
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        runtimeInfo: {
+          agentId: "work",
+          sessionKey: `agent:work:cron:nightly-job:run:${runId}`,
+          sessionId: runId,
+          host: "host",
+          os: "linux",
+        },
       });
-    const lineA = buildForRun("11111111-1111-1111-1111-111111111111");
-    const lineB = buildForRun("22222222-2222-2222-2222-222222222222");
+    const promptA = buildForRun("11111111-1111-1111-1111-111111111111");
+    const promptB = buildForRun("22222222-2222-2222-2222-222222222222");
 
-    expect(lineA).toContain("session=agent:work:cron:nightly-job");
-    expect(lineA).not.toContain(":run:");
-    expect(lineA).not.toContain("sessionId=");
+    expect(promptA).toContain("session=agent:work:cron:nightly-job");
+    expect(promptA).not.toContain(":run:");
+    expect(promptA).not.toContain("sessionId=");
     // Two runs of the same job render identical bytes, so the cached prefix is reused.
-    expect(lineA).toBe(lineB);
+    expect(promptA).toBe(promptB);
   });
 
   it("preserves a stable session id that is not the run-scope id", () => {
-    const line = buildRuntimeLine({
-      agentId: "work",
-      sessionKey: "agent:work:cron:nightly-job:run:run-id",
-      sessionId: "stable-session-id",
-      host: "host",
-      os: "linux",
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "work",
+        sessionKey: "agent:work:cron:nightly-job:run:run-id",
+        sessionId: "stable-session-id",
+        host: "host",
+        os: "linux",
+      },
     });
 
-    expect(line).toContain("session=agent:work:cron:nightly-job");
-    expect(line).toContain("sessionId=stable-session-id");
+    expect(prompt).toContain("session=agent:work:cron:nightly-job");
+    expect(prompt).toContain("sessionId=stable-session-id");
   });
 
   it("renders extra system prompt exactly once", () => {
@@ -1520,55 +1552,6 @@ describe("buildAgentSystemPrompt", () => {
     for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
       expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
     }
-  });
-});
-
-describe("buildAgentBootstrapSystemContext", () => {
-  it("uses friendly full bootstrap wording that is truthful about completion blockers", () => {
-    const prompt = buildAgentBootstrapSystemContext({
-      bootstrapMode: "full",
-      hasBootstrapFileInProjectContext: true,
-    }).join("\n");
-
-    expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
-    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
-    expect(prompt).toContain("brief blocker");
-    expect(prompt).toContain("simplest next step");
-    expect(prompt).toContain("Never claim completion early");
-    expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md");
-  });
-
-  it("uses limited bootstrap wording for constrained user-facing runs", () => {
-    const prompt = buildAgentBootstrapSystemContext({ bootstrapMode: "limited" }).join("\n");
-
-    expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("cannot safely finish full BOOTSTRAP.md");
-    expect(prompt).toContain("Never claim complete");
-    expect(prompt).toContain("no generic first greeting");
-    expect(prompt).toContain("primary interactive run with normal workspace access");
-  });
-
-  it("returns nothing when bootstrap is not pending", () => {
-    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toStrictEqual([]);
-    expect(buildAgentBootstrapSystemContext({})).toStrictEqual([]);
-  });
-});
-
-describe("buildAgentBootstrapSystemPromptSections", () => {
-  it("can render bootstrap guidance without duplicating Project Context", () => {
-    const sections = buildAgentBootstrapSystemPromptSections({
-      bootstrapMode: "full",
-      bootstrapTruncationNotice: "Bootstrap context was truncated.",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-    }).join("\n");
-
-    expect(sections).toContain("## Bootstrap Pending");
-    expect(sections).toContain("BOOTSTRAP.md below; follow before normal reply.");
-    expect(sections).toContain("## Bootstrap Context Notice");
-    expect(sections).toContain("Bootstrap context was truncated.");
-    expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
-    expect(sections).not.toContain("Ask who I am.");
   });
 });
 

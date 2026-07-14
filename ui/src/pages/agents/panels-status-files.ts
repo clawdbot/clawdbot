@@ -12,6 +12,8 @@ import type {
   CronStatus,
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import {
   renderSettingsEmpty,
@@ -31,6 +33,7 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 
 function countWords(text: string) {
   const normalized = text.trim();
@@ -83,17 +86,6 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
-}
-
-function setPreviewExpandButtonState(button: Element | null | undefined, isFullscreen: boolean) {
-  if (!(button instanceof HTMLElement)) {
-    return;
-  }
-  const label = isFullscreen ? t("agents.files.collapsePreview") : t("agents.files.expandPreview");
-  button.classList.toggle("is-fullscreen", isFullscreen);
-  button.setAttribute("aria-pressed", String(isFullscreen));
-  button.setAttribute("aria-label", label);
-  button.setAttribute("title", label);
 }
 
 function renderAgentContextSection(
@@ -492,12 +484,10 @@ export function renderAgentFiles(params: {
                             class="btn btn--sm"
                             @click=${(e: Event) => {
                               const btn = e.currentTarget as HTMLElement;
-                              const dialog = btn
+                              btn
                                 .closest(".settings-group")
-                                ?.querySelector("dialog");
-                              if (dialog) {
-                                dialog.showModal();
-                              }
+                                ?.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")
+                                ?.show();
                             }}
                           >
                             ${icons.eye} ${t("agents.files.preview")}
@@ -533,24 +523,12 @@ export function renderAgentFiles(params: {
                             )}
                         ></textarea>
                       </label>
-                      <dialog
-                        class="md-preview-dialog"
-                        aria-labelledby=${previewTitleId}
-                        @click=${(e: Event) => {
-                          const dialog = e.currentTarget as HTMLDialogElement;
-                          if (e.target === dialog) {
-                            dialog.close();
-                          }
-                        }}
-                        @close=${(e: Event) => {
-                          const dialog = e.currentTarget as HTMLElement;
-                          dialog
-                            .querySelector(".md-preview-dialog__panel")
-                            ?.classList.remove("fullscreen");
-                          setPreviewExpandButtonState(
-                            dialog.querySelector(".md-preview-expand-btn"),
-                            false,
-                          );
+                      <openclaw-modal-dialog
+                        manual
+                        label=${activeEntry.name}
+                        style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
+                        @modal-cancel=${(e: Event) => {
+                          resetAgentFilePreview(e.currentTarget as HTMLElement);
                         }}
                       >
                         <div class="md-preview-dialog__panel">
@@ -587,6 +565,9 @@ export function renderAgentFiles(params: {
                                       return;
                                     }
                                     const isFullscreen = panel.classList.toggle("fullscreen");
+                                    btn
+                                      .closest("openclaw-modal-dialog")
+                                      ?.classList.toggle("fullscreen", isFullscreen);
                                     setPreviewExpandButtonState(btn, isFullscreen);
                                   }}
                                 >
@@ -603,7 +584,13 @@ export function renderAgentFiles(params: {
                                   class="btn btn--sm md-preview-icon-btn"
                                   aria-label=${t("agents.files.editFile")}
                                   @click=${(e: Event) => {
-                                    (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                    const modal = (e.currentTarget as HTMLElement).closest(
+                                      "openclaw-modal-dialog",
+                                    ) as OpenClawModalDialog | null;
+                                    modal?.hide();
+                                    if (modal) {
+                                      resetAgentFilePreview(modal);
+                                    }
                                     const textarea =
                                       document.querySelector<HTMLElement>(".agent-file-textarea");
                                     textarea?.focus();
@@ -618,7 +605,13 @@ export function renderAgentFiles(params: {
                                   class="btn btn--sm md-preview-icon-btn"
                                   aria-label=${t("agents.files.closePreview")}
                                   @click=${(e: Event) => {
-                                    (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                    const modal = (e.currentTarget as HTMLElement).closest(
+                                      "openclaw-modal-dialog",
+                                    ) as OpenClawModalDialog | null;
+                                    modal?.hide();
+                                    if (modal) {
+                                      resetAgentFilePreview(modal);
+                                    }
                                   }}
                                 >
                                   <span aria-hidden="true">${icons.x}</span>
@@ -651,7 +644,7 @@ export function renderAgentFiles(params: {
                             </article>
                           </div>
                         </div>
-                      </dialog>
+                      </openclaw-modal-dialog>
                     `}
               </div>
             `,

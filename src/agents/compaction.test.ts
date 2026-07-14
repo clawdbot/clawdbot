@@ -5,15 +5,45 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import "./test-helpers/agent-session-token-mock.js";
 
-let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
-let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+let estimateMessagesTokens: typeof import("./compaction-planning.js").estimateMessagesTokens;
+let buildHistoryPrunePlan: typeof import("./compaction-planning.js").buildHistoryPrunePlan;
+let buildStageSplitPlan: typeof import("./compaction-planning.js").buildStageSplitPlan;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
-    await import("./compaction.js"));
+  ({ buildHistoryPrunePlan, buildStageSplitPlan, estimateMessagesTokens } =
+    await import("./compaction-planning.js"));
 });
+
+function splitMessagesByTokenShare(messages: AgentMessage[], parts: number): AgentMessage[][] {
+  const plan = buildStageSplitPlan({
+    messages,
+    maxChunkTokens: 0,
+    parts,
+    minMessagesForSplit: 2,
+  });
+  return plan.mode === "split" ? plan.chunks : [messages];
+}
+
+function pruneHistoryForContextShare(params: {
+  messages: AgentMessage[];
+  maxContextTokens: number;
+  maxHistoryShare?: number;
+  parts?: number;
+}) {
+  const plan = buildHistoryPrunePlan({
+    messagesToSummarize: params.messages,
+    turnPrefixMessages: [],
+    tokensBefore: Number.MAX_SAFE_INTEGER,
+    contextWindowTokens: params.maxContextTokens,
+    maxHistoryShare: params.maxHistoryShare ?? 0.5,
+    parts: params.parts,
+  });
+  if (!plan.pruned) {
+    throw new Error("expected history prune planning to run");
+  }
+  return plan.pruned;
+}
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {

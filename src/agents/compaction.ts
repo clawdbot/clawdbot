@@ -13,14 +13,11 @@ import {
 } from "./compaction-planning-worker.js";
 import {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
@@ -31,14 +28,11 @@ import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
 export {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 };
 

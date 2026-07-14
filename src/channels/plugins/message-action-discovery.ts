@@ -447,9 +447,3 @@ export function channelSupportsMessageCapabilityForChannel(
 ): boolean {
   return listChannelMessageCapabilitiesForChannel(params).includes(capability);
 }
-
-export const testing = {
-  resetLoggedMessageActionErrors() {
-    loggedMessageActionErrors.clear();
-  },
-};

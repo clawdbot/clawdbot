@@ -153,7 +153,8 @@ function formatDiffCount(value: number): string {
 /**
  * The pre-PR "Create PR" row must not invite a duplicate PR, so live PRs
  * (even dismissed ones) hide it — decided on the undismissed PR list. The
- * gateway already omits branches with nothing to open a PR from.
+ * gateway already omits branches with neither a creatable PR nor local
+ * changed files.
  */
 export function createPullRequestBranch(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -209,8 +210,10 @@ function renderRateLimitWarning() {
 }
 
 // Pre-PR state: the branch row mirrors the PR chips (repo, branch, diff
-// stats, staleness warning) and offers GitHub's create-PR page. While rate
-// limited, "no PR found" is unreliable, so the warning stays visible here.
+// stats, staleness warning) and offers GitHub's create-PR page. While the
+// branch is unpushed the gateway omits createUrl — the row then just reports
+// the session's local changed files. While rate limited, "no PR found" is
+// unreliable, so the warning stays visible here.
 function renderBranchRow(branch: ControlUiSessionBranch, rateLimited: boolean) {
   return html`
     <article class="chat-pr" data-state="branch">
@@ -221,15 +224,19 @@ function renderBranchRow(branch: ControlUiSessionBranch, rateLimited: boolean) {
       </span>
       <span class="chat-pr__meta">
         ${renderDiffStats(branch)} ${rateLimited ? renderRateLimitWarning() : nothing}
-        <a
-          class="chat-pr__create"
-          href=${branch.createUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label=${t("chat.pullRequests.createPrLabel", { branch: branch.branch })}
-        >
-          ${t("chat.pullRequests.createPr")}
-        </a>
+        ${branch.createUrl
+          ? html`
+              <a
+                class="chat-pr__create"
+                href=${branch.createUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label=${t("chat.pullRequests.createPrLabel", { branch: branch.branch })}
+              >
+                ${t("chat.pullRequests.createPr")}
+              </a>
+            `
+          : nothing}
       </span>
     </article>
   `;

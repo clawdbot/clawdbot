@@ -1,7 +1,10 @@
 // Telegram tests cover bot message context.reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 

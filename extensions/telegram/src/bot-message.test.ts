@@ -40,15 +40,13 @@ vi.mock("./bot-message-dispatch.js", () => ({
 }));
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
-let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
 let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
-      await import("./bot-message.js"));
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
     ({
       createTelegramSpooledReplayDeferredParticipant,
       runWithTelegramUpdateProcessingFrame,
@@ -99,6 +97,7 @@ describe("telegram bot message processor", () => {
     turnContext?: Partial<import("./bot-message.js").TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
     options: Parameters<typeof processMessage>[4] = {},
+    allMedia: Parameters<typeof processMessage>[1] = [],
   ) {
     return await processMessage(
       {
@@ -108,7 +107,7 @@ describe("telegram bot message processor", () => {
         },
         ...primaryCtxOverrides,
       } as unknown as Parameters<typeof processMessage>[0],
-      [],
+      allMedia,
       [],
       {
         ...turnContext,
@@ -281,24 +280,28 @@ describe("telegram bot message processor", () => {
     expect(telegramInboundInfo).not.toHaveBeenCalled();
   });
 
-  it("formats Telegram inbound summaries without message content", () => {
-    expect(
-      formatTelegramInboundLogLine({
-        from: "telegram:123",
-        to: "@openclaw_bot",
-        chatType: "direct",
-        body: "secret message",
+  it("logs media summaries without message content through the message processor", async () => {
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        ctxPayload: {
+          From: "telegram:group:-100",
+          To: "telegram:group:-100",
+          ChatType: "group",
+          RawBody: "<media:image>",
+        },
       }),
-    ).toBe("Inbound message telegram:123 -> @openclaw_bot (direct, 14 chars)");
-    expect(
-      formatTelegramInboundLogLine({
-        from: "telegram:group:-100",
-        to: "@openclaw_bot",
-        chatType: "group",
-        body: "<media:image>",
-        mediaType: "image/jpeg",
-      }),
-    ).toBe("Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)");
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(
+      processSampleMessage(processMessage, undefined, {}, {}, [
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg" },
+      ]),
+    ).resolves.toEqual({ kind: "completed" });
+
+    expect(telegramInboundInfo).toHaveBeenCalledWith(
+      "Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)",
+    );
   });
 
   it("keeps dispatch running when the early typing cue fails", async () => {

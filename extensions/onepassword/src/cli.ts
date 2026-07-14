@@ -1,4 +1,5 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AuditRow } from "./broker.js";
 import type { OnePasswordConfig } from "./config.js";
 import type { OpClient } from "./op-client.js";
@@ -30,7 +31,7 @@ function parseLimit(value: unknown): number {
 }
 
 function truncateReason(reason: string): string {
-  return reason.length <= 80 ? reason : `${reason.slice(0, 77)}...`;
+  return reason.length <= 80 ? reason : `${truncateUtf16Safe(reason, 77)}...`;
 }
 
 async function buildStatus(

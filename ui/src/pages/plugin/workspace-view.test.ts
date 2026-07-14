@@ -109,7 +109,9 @@ describe("renderWorkspace", () => {
     try {
       render(renderWorkspace({ host, client: null, connected: false }), host);
       expect(state.activeSlug).toBe("empty");
-      host.querySelector<HTMLButtonElement>('[data-ws="main"]')?.click();
+      host
+        .querySelector<HTMLElement>("wa-tab-group")
+        ?.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: "main" } }));
       expect(new URLSearchParams(window.location.search).get("ws")).toBe("main");
       expect(onPopState).toHaveBeenCalledOnce();
     } finally {

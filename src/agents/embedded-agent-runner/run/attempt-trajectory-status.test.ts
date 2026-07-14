@@ -4,8 +4,11 @@ import {
   NON_DELIVERABLE_TERMINAL_TURN_REASON,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
-  type ResolveAttemptTrajectoryTerminalParams,
 } from "./attempt-trajectory-status.js";
+
+type ResolveAttemptTrajectoryTerminalParams = Parameters<
+  typeof resolveAttemptTrajectoryTerminal
+>[0];
 
 function baseParams(
   overrides: Partial<ResolveAttemptTrajectoryTerminalParams> = {},

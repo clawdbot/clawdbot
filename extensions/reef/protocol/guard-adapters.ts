@@ -1,3 +1,4 @@
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   admitGuardAdapter,
   assertPinnedModel,
@@ -151,10 +152,9 @@ function attachProviderModel(value: unknown, model: string): unknown {
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (text.length > 256 * 1024) {
-    throw new Error("guard response too large");
-  }
+  const text = await readProviderTextResponse(response, "Reef guard response", {
+    maxBytes: 256 * 1024,
+  });
   return parseStrictJson(text);
 }
 

@@ -235,7 +235,7 @@ extension AgentProTab {
 
     var cronSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Scheduled Work")
+            ProSectionHeader(title: "Automations")
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
                 let jobs = self.recentCronJobs
                 if jobs.isEmpty {
@@ -458,11 +458,11 @@ extension AgentProTab {
             ProIconBadge(systemName: "clock.badge.questionmark", color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(self.gatewayConnected
-                    ? LocalizedStringKey("No scheduled jobs")
-                    : LocalizedStringKey("Cron unavailable"))
+                    ? LocalizedStringKey("No automations yet")
+                    : LocalizedStringKey("Automations unavailable"))
                     .font(OpenClawType.subheadSemiBold)
                 Text(self.gatewayConnected
-                    ? "The gateway has no visible cron jobs."
+                    ? "Scheduled work created on the gateway will appear here."
                     : "Connect a gateway to load scheduled work.")
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
@@ -578,6 +578,7 @@ extension AgentProTab {
         [
             self.gatewayConnected ? "connected" : "offline",
             appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
+            appModel.connectedGatewayID ?? "no-gateway",
             self.activeAgentID,
             scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")

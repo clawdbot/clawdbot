@@ -4,6 +4,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
+import "./web-awesome-tabs.ts";
 
 export type PluginsHubTab = "installed" | "discover" | "skills" | "workshop";
 
@@ -14,6 +15,7 @@ const HUB_TABS: readonly PluginsHubTab[] = ["installed", "discover", "skills", "
 // Time-bounded so an aborted navigation cannot steal focus much later.
 const PENDING_FOCUS_WINDOW_MS = 2000;
 let pendingFocus: { tab: PluginsHubTab; at: number } | null = null;
+let pointerActivation = false;
 
 type PluginsHubTabsProps = {
   active: PluginsHubTab;
@@ -37,50 +39,15 @@ function hubTabLabel(tab: PluginsHubTab): string {
   }
 }
 
-/**
- * Manual-activation tablist: arrows and Home/End only move focus. Activating
- * a tab can navigate to another route, so activation stays on click/Enter and
- * arrowing must never unmount the strip under the user's focus.
- */
-function handleHubTabKeydown(event: KeyboardEvent, tab: PluginsHubTab) {
-  const currentIndex = HUB_TABS.indexOf(tab);
-  let nextIndex: number;
-  switch (event.key) {
-    case "ArrowRight":
-      nextIndex = (currentIndex + 1) % HUB_TABS.length;
-      break;
-    case "ArrowLeft":
-      nextIndex = (currentIndex - 1 + HUB_TABS.length) % HUB_TABS.length;
-      break;
-    case "Home":
-      nextIndex = 0;
-      break;
-    case "End":
-      nextIndex = HUB_TABS.length - 1;
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  const nextTab = HUB_TABS[nextIndex];
-  const tablist = (event.currentTarget as HTMLElement).closest('[role="tablist"]');
-  const next = tablist?.querySelector<HTMLElement>(`#plugins-tab-${nextTab}`);
-  if (!next) {
-    return;
-  }
-  (event.currentTarget as HTMLElement).tabIndex = -1;
-  next.tabIndex = 0;
-  next.focus();
-}
-
-function selectHubTab(event: MouseEvent, tab: PluginsHubTab, props: PluginsHubTabsProps) {
-  // detail === 0 means the click came from the keyboard (Enter/Space); only
-  // then should the destination strip pull focus after the route swap. Skip
+function selectHubTab(tab: PluginsHubTab, props: PluginsHubTabsProps) {
+  // Keyboard activation unmounts the focused strip; only then should the
+  // destination strip pull focus after the route swap. Skip
   // same-tab activation: it does not navigate, and a lingering entry would
   // let a later re-render steal focus from whatever the user moved on to.
-  if (event.detail === 0 && tab !== props.active) {
+  if (!pointerActivation && tab !== props.active) {
     pendingFocus = { tab, at: Date.now() };
   }
+  pointerActivation = false;
   props.onSelect(tab);
 }
 
@@ -93,13 +60,13 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
   if (Date.now() - pending.at > PENDING_FOCUS_WINDOW_MS) {
     return;
   }
-  // The ref fires while the strip is still inside lit's template fragment;
-  // focus only works once the rendered tree is connected to the document.
-  queueMicrotask(() => {
+  // The ref fires while the strip is still inside lit's template fragment.
+  // A task lets both Lit and Web Awesome finish connecting before focus moves.
+  window.setTimeout(() => {
     if (element.isConnected) {
       (element as HTMLElement).focus();
     }
-  });
+  }, 0);
 }
 
 /**
@@ -110,32 +77,43 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
  */
 export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
   return html`
-    <div
-      class="settings-segmented plugins-hub-tabs"
-      role="tablist"
+    <wa-tab-group
+      class="settings-segmented plugins-hub-tabs plugins-tabs"
       aria-label=${t("pluginsPage.hubTablistLabel")}
+      .active=${props.active}
+      activation="manual"
+      without-scroll-controls
+      @wa-tab-show=${(event: CustomEvent<{ name: PluginsHubTab }>) =>
+        selectHubTab(event.detail.name, props)}
     >
       ${HUB_TABS.map((tab) => {
         const selected = props.active === tab;
         const count = tab === "installed" ? (props.installedCount ?? null) : null;
         return html`
-          <button
+          <wa-tab
             id=${`plugins-tab-${tab}`}
-            type="button"
-            role="tab"
-            aria-selected=${selected ? "true" : "false"}
+            panel=${tab}
             aria-controls="plugins-hub-panel"
-            .tabIndex=${selected ? 0 : -1}
             class="settings-segmented__btn ${selected ? "settings-segmented__btn--active" : ""}"
+            ?active=${selected}
+            @click=${(event: MouseEvent) => {
+              // Trusted pointer clicks carry a click count. Keyboard and AT
+              // synthesized clicks use detail=0 and need focus recovery.
+              pointerActivation = event.detail > 0;
+            }}
+            @keydown=${() => {
+              // Any keyboard interaction supersedes a prior pointer click.
+              // This also clears clicks on the already-active tab, which do
+              // not emit wa-tab-show and would otherwise leave stale state.
+              pointerActivation = false;
+            }}
             ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
-            @click=${(event: MouseEvent) => selectHubTab(event, tab, props)}
-            @keydown=${(event: KeyboardEvent) => handleHubTabKeydown(event, tab)}
           >
             ${hubTabLabel(tab)}
             ${count === null ? nothing : html`<span class="settings-count">${count}</span>`}
-          </button>
+          </wa-tab>
         `;
       })}
-    </div>
+    </wa-tab-group>
   `;
 }

@@ -20,6 +20,7 @@ const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-doctor-" }
 function healthyInspection(): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: {

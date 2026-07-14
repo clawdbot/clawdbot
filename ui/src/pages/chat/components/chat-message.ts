@@ -62,6 +62,7 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
+import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -564,50 +565,6 @@ type StreamGroupOptions = {
   authToken?: string | null;
 };
 
-// One salt per page load so each run's fighter rerolls between visits while
-// re-renders within a load stay stable for a given item key (same trick as
-// the lobster pet's LOAD_SALT).
-const PUNCH_SALT = Math.trunc(Math.random() * 0xffffffff);
-
-// Weighted fighting styles for the working claw; class suffixes map to the
-// stance variants in styles/chat/tool-cards.css. Orthodox is the unmarked
-// default; southpaw mirrors, flurry speeds the combo up, haymaker is the
-// rare slow heavyweight with the big pow.
-const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
-  ["", 47],
-  ["chat-reading-indicator--southpaw", 35],
-  ["chat-reading-indicator--flurry", 12],
-  ["chat-reading-indicator--haymaker", 6],
-];
-
-function punchStanceClass(key: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  const total = PUNCH_STANCES.reduce((sum, [, weight]) => sum + weight, 0);
-  let roll = ((((hash ^ PUNCH_SALT) >>> 0) % 1000) / 1000) * total;
-  for (const [stance, weight] of PUNCH_STANCES) {
-    roll -= weight;
-    if (roll <= 0) {
-      return stance;
-    }
-  }
-  return "";
-}
-
-function renderReadingIndicatorBubble(key: string) {
-  // Working claw: the brand pincer shadowboxes where the reply will
-  // materialize - jab, jab, cross with a pow on impact. The stance is seeded
-  // per item key so each run fights its own style but re-renders never
-  // flicker. aria-hidden; the composer sr-only run-status announces.
-  const stance = punchStanceClass(key);
-  return html`
-    <div class="chat-bubble chat-reading-indicator ${stance}" aria-hidden="true">${icons.claw}</div>
-  `;
-}
-
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
@@ -632,7 +589,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble(part.key)
+            ? renderChatWorkingIndicator(part)
             : renderGroupedMessage(
                 {
                   role: "assistant",

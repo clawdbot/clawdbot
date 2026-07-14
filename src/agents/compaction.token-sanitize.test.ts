@@ -18,8 +18,11 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
   };
 });
 
-import { sanitizeCompactionMessages } from "./compaction-planning.js";
-import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
+import {
+  buildStageSplitPlan,
+  buildSummaryChunks,
+  sanitizeCompactionMessages,
+} from "./compaction-planning.js";
 
 describe("compaction token accounting sanitization", () => {
   it("does not pass toolResult.details into per-message token estimates", () => {
@@ -42,8 +45,8 @@ describe("compaction token accounting sanitization", () => {
       },
     ];
 
-    splitMessagesByTokenShare(messages, 2);
-    chunkMessagesByMaxTokens(messages, 16);
+    buildStageSplitPlan({ messages, maxChunkTokens: 0, parts: 2, minMessagesForSplit: 2 });
+    buildSummaryChunks({ messages, maxChunkTokens: 16 });
 
     const calledWithDetails = agentSessionMocks.estimateTokens.mock.calls.some((call) => {
       const message = call[0] as { details?: unknown } | undefined;

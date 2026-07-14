@@ -2,7 +2,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
 
@@ -127,7 +126,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 </div>
 
                 <div class="device-pair-setup__meta">
-                  ${renderSettingsStatus({ kind: "accent", label: setup.auth })}
+                  <span class="settings-status settings-status--accent">
+                    <span class="settings-status__dot"></span>
+                    ${setup.auth}
+                  </span>
                   <div class="device-pair-setup__gateways">
                     ${gatewayUrls.map(
                       (gatewayUrl) => html`

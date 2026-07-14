@@ -57,13 +57,7 @@ import {
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import {
-  asyncBrowserRoute,
-  jsonError,
-  runProfileRouteOperation,
-  toBoolean,
-  toStringOrEmpty,
-} from "./utils.js";
+import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
@@ -318,250 +312,169 @@ export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
-  app.post(
-    "/navigate",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const url = toStringOrEmpty(body.url);
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      if (!url) {
-        return jsonError(res, 400, "url is required");
-      }
-      await withRouteTabContext({
-        req,
-        res,
-        ctx,
-        targetId,
-        run: async ({ profileCtx, tab, cdpUrl, signal }) => {
-          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
-            const result = await navigateChromeMcpPage({
-              profileName: profileCtx.profile.name,
-              profile: profileCtx.profile,
-              targetId: tab.targetId,
-              url,
-              signal,
-            });
-            await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
-            return res.json({ ok: true, targetId: tab.targetId, ...result });
-          }
-          const pw = await requirePwAi(res, "navigate");
-          if (!pw) {
-            return;
-          }
-          const result = await pw.navigateViaPlaywright({
-            cdpUrl,
+  app.post("/navigate", async (req, res) => {
+    const body = readBody(req);
+    const url = toStringOrEmpty(body.url);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    if (!url) {
+      return jsonError(res, 400, "url is required");
+    }
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+          const result = await navigateChromeMcpPage({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
             targetId: tab.targetId,
             url,
-            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            signal,
           });
-          const currentTargetId = await resolveTargetIdAfterNavigate({
-            oldTargetId: tab.targetId,
-            navigatedUrl: result.url,
-            listTabs: () => profileCtx.listTabs(),
-          });
-          res.json({ ok: true, targetId: currentTargetId, ...result });
-        },
-      });
-    }),
-  );
+          await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
+          return res.json({ ok: true, targetId: tab.targetId, ...result });
+        }
+        const pw = await requirePwAi(res, "navigate");
+        if (!pw) {
+          return;
+        }
+        const result = await pw.navigateViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+          url,
+          ...browserNavigationPolicyForProfile(ctx, profileCtx),
+        });
+        const currentTargetId = await resolveTargetIdAfterNavigate({
+          oldTargetId: tab.targetId,
+          navigatedUrl: result.url,
+          listTabs: () => profileCtx.listTabs(),
+        });
+        res.json({ ok: true, targetId: currentTargetId, ...result });
+      },
+    });
+  });
 
-  app.post(
-    "/pdf",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const profileCtx = resolveProfileContext(req, res, ctx);
-      if (!profileCtx) {
-        return;
-      }
-      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-        return jsonError(res, 501, EXISTING_SESSION_LIMITS.snapshot.pdfUnsupported);
-      }
-      await withPlaywrightRouteContext({
-        req,
-        res,
-        ctx,
-        profileCtx,
-        targetId,
-        feature: "pdf",
-        enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw }) => {
-          const pdf = await pw.pdfViaPlaywright({
-            cdpUrl,
+  app.post("/pdf", async (req, res) => {
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+      return jsonError(res, 501, EXISTING_SESSION_LIMITS.snapshot.pdfUnsupported);
+    }
+    await withPlaywrightRouteContext({
+      req,
+      res,
+      ctx,
+      profileCtx,
+      targetId,
+      feature: "pdf",
+      enforceCurrentUrlAllowed: true,
+      run: async ({ cdpUrl, tab, pw }) => {
+        const pdf = await pw.pdfViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+        });
+        await saveBrowserMediaResponse({
+          res,
+          buffer: pdf.buffer,
+          contentType: "application/pdf",
+          maxBytes: pdf.buffer.byteLength,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
+      },
+    });
+  });
+
+  app.post("/screenshot", async (req, res) => {
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const fullPage = toBoolean(body.fullPage) ?? false;
+    const ref = toStringOrEmpty(body.ref) || undefined;
+    const element = toStringOrEmpty(body.element) || undefined;
+    const labels = toBoolean(body.labels) ?? false;
+    const type = body.type === "jpeg" ? "jpeg" : "png";
+    let timeoutMs: number;
+    try {
+      const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+      timeoutMs =
+        timeoutMsRaw !== undefined
+          ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
+          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
+
+    if (fullPage && (ref || element)) {
+      return jsonError(res, 400, "fullPage is not supported for element screenshots");
+    }
+
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      enforceCurrentUrlAllowed: true,
+      run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const operation: ChromeMcpSnapshotOperation = {
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
             targetId: tab.targetId,
-          });
-          await saveBrowserMediaResponse({
-            res,
-            buffer: pdf.buffer,
-            contentType: "application/pdf",
-            maxBytes: pdf.buffer.byteLength,
-            targetId: tab.targetId,
-            url: tab.url,
-          });
-        },
-      });
-    }),
-  );
-
-  app.post(
-    "/screenshot",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const fullPage = toBoolean(body.fullPage) ?? false;
-      const ref = toStringOrEmpty(body.ref) || undefined;
-      const element = toStringOrEmpty(body.element) || undefined;
-      const labels = toBoolean(body.labels) ?? false;
-      const type = body.type === "jpeg" ? "jpeg" : "png";
-      let timeoutMs: number;
-      try {
-        const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
-        timeoutMs =
-          timeoutMsRaw !== undefined
-            ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
-            : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
-      } catch (err) {
-        return jsonError(res, 400, String(err instanceof Error ? err.message : err));
-      }
-
-      if (fullPage && (ref || element)) {
-        return jsonError(res, 400, "fullPage is not supported for element screenshots");
-      }
-
-      await withRouteTabContext({
-        req,
-        res,
-        ctx,
-        targetId,
-        enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, tab, cdpUrl, signal }) => {
-          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            const operation: ChromeMcpSnapshotOperation = {
-              profileName: profileCtx.profile.name,
-              profile: profileCtx.profile,
-              targetId: tab.targetId,
-              timeoutMs,
-              signal,
-            };
-            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (ssrfPolicyOpts.ssrfPolicy) {
-              await assertBrowserNavigationResultAllowed({
-                url: tab.url,
-                ...ssrfPolicyOpts,
-              });
-            }
-            if (element) {
-              return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
-            }
-            if (labels) {
-              const snapshot = await takeChromeMcpSnapshot(operation);
-              const built = buildAiSnapshotFromChromeMcpSnapshot({ root: snapshot });
-              const labelResult = await renderChromeMcpLabels({
-                ...operation,
-                refs: Object.keys(built.refs),
-              });
-              try {
-                const buffer = await takeChromeMcpScreenshot({
-                  ...operation,
-                  fullPage,
-                  format: type,
-                });
-                await saveNormalizedScreenshotResponse({
-                  res,
-                  buffer,
-                  type,
-                  targetId: tab.targetId,
-                  url: tab.url,
-                  labels: true,
-                  labelsCount: labelResult.labels,
-                  labelsSkipped: labelResult.skipped,
-                });
-              } finally {
-                await clearChromeMcpOverlay(operation);
-              }
-              return;
-            }
-            const buffer = await takeChromeMcpScreenshot({
-              ...operation,
-              uid: ref,
-              fullPage,
-              format: type,
-            });
-            await saveNormalizedScreenshotResponse({
-              res,
-              buffer,
-              type,
-              targetId: tab.targetId,
+            timeoutMs,
+            signal,
+          };
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
               url: tab.url,
+              ...ssrfPolicyOpts,
             });
-            return;
           }
-
-          let buffer: Buffer;
-          const shouldUsePlaywright =
-            labels ||
-            shouldUsePlaywrightForScreenshot({
-              profile: profileCtx.profile,
-              wsUrl: tab.wsUrl,
-              ref,
-              element,
+          if (element) {
+            return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
+          }
+          if (labels) {
+            const snapshot = await takeChromeMcpSnapshot(operation);
+            const built = buildAiSnapshotFromChromeMcpSnapshot({ root: snapshot });
+            const labelResult = await renderChromeMcpLabels({
+              ...operation,
+              refs: Object.keys(built.refs),
             });
-          if (shouldUsePlaywright) {
-            const pw = await requirePwAi(res, "screenshot");
-            if (!pw) {
-              return;
-            }
-            if (labels) {
-              const snap = await pw.snapshotRoleViaPlaywright({
-                cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              });
-              const labeled = await pw.screenshotWithLabelsViaPlaywright({
-                cdpUrl,
-                targetId: tab.targetId,
-                refs: snap.refs,
-                type,
-                timeoutMs,
+            try {
+              const buffer = await takeChromeMcpScreenshot({
+                ...operation,
                 fullPage,
-                ref,
-                element,
+                format: type,
               });
               await saveNormalizedScreenshotResponse({
                 res,
-                buffer: labeled.buffer,
+                buffer,
                 type,
                 targetId: tab.targetId,
                 url: tab.url,
                 labels: true,
-                labelsCount: labeled.labels,
-                labelsSkipped: labeled.skipped,
-                annotations: labeled.annotations,
+                labelsCount: labelResult.labels,
+                labelsSkipped: labelResult.skipped,
               });
-              return;
+            } finally {
+              await clearChromeMcpOverlay(operation);
             }
-            const snap = await pw.takeScreenshotViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-              element,
-              fullPage,
-              type,
-              timeoutMs,
-            });
-            buffer = snap.buffer;
-          } else {
-            buffer = await captureScreenshot({
-              wsUrl: tab.wsUrl ?? "",
-              fullPage,
-              format: type,
-              quality: type === "jpeg" ? 85 : undefined,
-              timeoutMs,
-            });
+            return;
           }
-
+          const buffer = await takeChromeMcpScreenshot({
+            ...operation,
+            uid: ref,
+            fullPage,
+            format: type,
+          });
           await saveNormalizedScreenshotResponse({
             res,
             buffer,
@@ -569,246 +482,184 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             url: tab.url,
           });
-        },
-      });
-    }),
-  );
+          return;
+        }
 
-  app.get(
-    "/snapshot",
-    asyncBrowserRoute(async (req, res) => {
-      const profileCtx = resolveProfileContext(req, res, ctx);
-      if (!profileCtx) {
-        return;
-      }
-      const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-      const pwModule = await getPwAiModule();
-      const hasPlaywright = Boolean(pwModule);
-      const plan = resolveSnapshotPlan({
-        profile: profileCtx.profile,
-        query: req.query,
-        hasPlaywright,
-      });
-      const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
-      if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
-        return jsonError(res, 400, "labels/mode=efficient require format=ai");
-      }
-      if (usesChromeMcp && (plan.selectorValue || plan.frameSelectorValue)) {
-        return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
-      }
-
-      try {
-        await runProfileRouteOperation({
-          profileCtx,
-          signal: req.signal,
-          run: async (signal) => {
-            const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
-              allowPlaywrightFallback: hasPlaywright,
-              signal,
-              timeoutMs: plan.timeoutMs,
+        let buffer: Buffer;
+        const shouldUsePlaywright =
+          labels ||
+          shouldUsePlaywrightForScreenshot({
+            profile: profileCtx.profile,
+            wsUrl: tab.wsUrl,
+            ref,
+            element,
+          });
+        if (shouldUsePlaywright) {
+          const pw = await requirePwAi(res, "screenshot");
+          if (!pw) {
+            return;
+          }
+          if (labels) {
+            const snap = await pw.snapshotRoleViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
-            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (ssrfPolicyOpts.ssrfPolicy) {
-              await assertBrowserNavigationResultAllowed({
-                url: tab.url,
-                ...ssrfPolicyOpts,
-              });
-            }
-            let observedBrowserState: unknown;
-            if (!usesChromeMcp && pwModule) {
-              observedBrowserState = await pwModule
-                .getObservedBrowserStateViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                })
-                .catch(() => undefined);
-            }
-            if (usesChromeMcp) {
-              const operation: ChromeMcpSnapshotOperation = {
-                profileName: profileCtx.profile.name,
-                profile: profileCtx.profile,
-                targetId: tab.targetId,
-                timeoutMs: plan.timeoutMs,
-                signal,
-              };
-              const snapshot = await takeChromeMcpSnapshot(operation);
-              if (plan.format === "aria") {
-                return res.json({
-                  ok: true,
-                  format: "aria",
-                  targetId: tab.targetId,
-                  url: tab.url,
-                  nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
-                });
-              }
-              const built = buildAiSnapshotFromChromeMcpSnapshot({
-                root: snapshot,
-                options: {
-                  interactive: plan.interactive ?? undefined,
-                  compact: plan.compact ?? undefined,
-                  maxDepth: plan.depth ?? undefined,
-                },
-              });
-              const builtWithUrls = plan.urls
-                ? {
-                    ...built,
-                    snapshot: appendSnapshotUrls(
-                      built.snapshot,
-                      await collectChromeMcpSnapshotUrls(operation),
-                    ),
-                  }
-                : built;
-              const finalized = finalizeRoleSnapshot({
-                ...builtWithUrls,
-                maxChars: plan.resolvedMaxChars,
-              });
-              if (plan.labels) {
-                const refs = Object.keys(finalized.refs);
-                const labelResult = await renderChromeMcpLabels({
-                  ...operation,
-                  refs,
-                });
-                try {
-                  const labeled = await takeChromeMcpScreenshot({
-                    ...operation,
-                    format: "png",
-                  });
-                  const normalized = await normalizeBrowserScreenshot(labeled, {
-                    maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-                    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-                  });
-                  await ensureMediaDir();
-                  const saved = await saveMediaBuffer(
-                    normalized.buffer,
-                    normalized.contentType ?? "image/png",
-                    "browser",
-                    DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-                  );
-                  return res.json({
-                    ok: true,
-                    format: "ai",
-                    targetId: tab.targetId,
-                    url: tab.url,
-                    labels: true,
-                    labelsCount: labelResult.labels,
-                    labelsSkipped: labelResult.skipped,
-                    imagePath: path.resolve(saved.path),
-                    imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
-                    ...finalized,
-                  });
-                } finally {
-                  await clearChromeMcpOverlay(operation);
-                }
-              }
-              return res.json({
-                ok: true,
-                format: "ai",
-                targetId: tab.targetId,
-                url: tab.url,
-                ...finalized,
-              });
-            }
-            if (hasPendingDialogs(observedBrowserState)) {
-              return res.json({
-                ok: true,
-                format: plan.format,
-                targetId: tab.targetId,
-                url: tab.url,
-                blockedByDialog: true,
-                ...browserStateResponseFields(observedBrowserState),
-                ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
-              });
-            }
-            if (plan.format === "ai") {
-              const roleSnapshotArgs = {
+            const labeled = await pw.screenshotWithLabelsViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              refs: snap.refs,
+              type,
+              timeoutMs,
+              fullPage,
+              ref,
+              element,
+            });
+            await saveNormalizedScreenshotResponse({
+              res,
+              buffer: labeled.buffer,
+              type,
+              targetId: tab.targetId,
+              url: tab.url,
+              labels: true,
+              labelsCount: labeled.labels,
+              labelsSkipped: labeled.skipped,
+              annotations: labeled.annotations,
+            });
+            return;
+          }
+          const snap = await pw.takeScreenshotViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+            element,
+            fullPage,
+            type,
+            timeoutMs,
+          });
+          buffer = snap.buffer;
+        } else {
+          buffer = await captureScreenshot({
+            wsUrl: tab.wsUrl ?? "",
+            fullPage,
+            format: type,
+            quality: type === "jpeg" ? 85 : undefined,
+            timeoutMs,
+          });
+        }
+
+        await saveNormalizedScreenshotResponse({
+          res,
+          buffer,
+          type,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
+      },
+    });
+  });
+
+  app.get("/snapshot", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const pwModule = await getPwAiModule();
+    const hasPlaywright = Boolean(pwModule);
+    const plan = resolveSnapshotPlan({
+      profile: profileCtx.profile,
+      query: req.query,
+      hasPlaywright,
+    });
+    const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
+    if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
+      return jsonError(res, 400, "labels/mode=efficient require format=ai");
+    }
+    if (usesChromeMcp && (plan.selectorValue || plan.frameSelectorValue)) {
+      return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
+    }
+
+    try {
+      await runProfileRouteOperation({
+        profileCtx,
+        signal: req.signal,
+        run: async (signal) => {
+          const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
+            allowPlaywrightFallback: hasPlaywright,
+            signal,
+            timeoutMs: plan.timeoutMs,
+          });
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...ssrfPolicyOpts,
+            });
+          }
+          let observedBrowserState: unknown;
+          if (!usesChromeMcp && pwModule) {
+            observedBrowserState = await pwModule
+              .getObservedBrowserStateViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                selector: plan.selectorValue,
-                frameSelector: plan.frameSelectorValue,
-                refsMode: plan.refsMode,
                 ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                urls: plan.urls,
-                timeoutMs: plan.timeoutMs,
-                maxChars: plan.resolvedMaxChars,
-                options: {
-                  interactive: plan.interactive ?? undefined,
-                  compact: plan.compact ?? undefined,
-                  maxDepth: plan.depth ?? undefined,
-                },
-              };
-
-              const cdpRoleSnapshot = async () => {
-                if (!tab.wsUrl) {
-                  return null;
+              })
+              .catch(() => undefined);
+          }
+          if (usesChromeMcp) {
+            const operation: ChromeMcpSnapshotOperation = {
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              timeoutMs: plan.timeoutMs,
+              signal,
+            };
+            const snapshot = await takeChromeMcpSnapshot(operation);
+            if (plan.format === "aria") {
+              return res.json({
+                ok: true,
+                format: "aria",
+                targetId: tab.targetId,
+                url: tab.url,
+                nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
+              });
+            }
+            const built = buildAiSnapshotFromChromeMcpSnapshot({
+              root: snapshot,
+              options: {
+                interactive: plan.interactive ?? undefined,
+                compact: plan.compact ?? undefined,
+                maxDepth: plan.depth ?? undefined,
+              },
+            });
+            const builtWithUrls = plan.urls
+              ? {
+                  ...built,
+                  snapshot: appendSnapshotUrls(
+                    built.snapshot,
+                    await collectChromeMcpSnapshotUrls(operation),
+                  ),
                 }
-                if (plan.selectorValue || plan.frameSelectorValue) {
-                  return null;
-                }
-                return await snapshotRoleViaCdp({
-                  wsUrl: tab.wsUrl,
-                  urls: plan.urls,
-                  timeoutMs: plan.timeoutMs,
-                  maxChars: plan.resolvedMaxChars,
-                  options: {
-                    interactive: plan.interactive ?? undefined,
-                    compact: plan.compact ?? undefined,
-                    maxDepth: plan.depth ?? undefined,
-                  },
+              : built;
+            const finalized = finalizeRoleSnapshot({
+              ...builtWithUrls,
+              maxChars: plan.resolvedMaxChars,
+            });
+            if (plan.labels) {
+              const refs = Object.keys(finalized.refs);
+              const labelResult = await renderChromeMcpLabels({
+                ...operation,
+                refs,
+              });
+              try {
+                const labeled = await takeChromeMcpScreenshot({
+                  ...operation,
+                  format: "png",
                 });
-              };
-
-              const pw = await getPwAiModule();
-              const snap = plan.wantsRoleSnapshot
-                ? pw
-                  ? await pw
-                      .snapshotRoleViaPlaywright(roleSnapshotArgs)
-                      .catch(async (err: unknown) => {
-                        const fallback = await cdpRoleSnapshot();
-                        if (fallback) {
-                          return fallback;
-                        }
-                        throw err;
-                      })
-                  : await cdpRoleSnapshot()
-                : pw
-                  ? await pw.snapshotAiViaPlaywright({
-                      cdpUrl: profileCtx.profile.cdpUrl,
-                      targetId: tab.targetId,
-                      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                      urls: plan.urls,
-                      timeoutMs: plan.timeoutMs,
-                      ...(typeof plan.resolvedMaxChars === "number"
-                        ? { maxChars: plan.resolvedMaxChars }
-                        : {}),
-                    })
-                  : await cdpRoleSnapshot();
-              if (!snap) {
-                await requirePwAi(res, "ai snapshot");
-                return;
-              }
-              if (plan.labels) {
-                if (!pw) {
-                  return jsonError(res, 501, "Snapshot labels require Playwright.");
-                }
-                const labeled = await pw.screenshotWithLabelsViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
-                  refs: "refs" in snap ? snap.refs : {},
-                  type: "png",
-                  timeoutMs: plan.timeoutMs,
-                });
-                const originalMeta = labeled.annotations.length
-                  ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
-                  : undefined;
-                const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
+                const normalized = await normalizeBrowserScreenshot(labeled, {
                   maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
                   maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-                });
-                const scaledAnnotations = await rescaleAnnotationsForNormalization({
-                  annotations: labeled.annotations,
-                  originalMeta,
-                  normalizedBuffer: normalized.buffer,
                 });
                 await ensureMediaDir();
                 const saved = await saveMediaBuffer(
@@ -817,86 +668,217 @@ export function registerBrowserAgentSnapshotRoutes(
                   "browser",
                   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
                 );
-                const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
                 return res.json({
                   ok: true,
-                  format: plan.format,
+                  format: "ai",
                   targetId: tab.targetId,
                   url: tab.url,
-                  ...browserStateResponseFields(observedBrowserState),
                   labels: true,
-                  labelsCount: labeled.labels,
-                  labelsSkipped: labeled.skipped,
-                  ...(scaledAnnotations && scaledAnnotations.length > 0
-                    ? { annotations: scaledAnnotations }
-                    : {}),
+                  labelsCount: labelResult.labels,
+                  labelsSkipped: labelResult.skipped,
                   imagePath: path.resolve(saved.path),
-                  imageType,
-                  ...snap,
+                  imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
+                  ...finalized,
                 });
+              } finally {
+                await clearChromeMcpOverlay(operation);
               }
+            }
+            return res.json({
+              ok: true,
+              format: "ai",
+              targetId: tab.targetId,
+              url: tab.url,
+              ...finalized,
+            });
+          }
+          if (hasPendingDialogs(observedBrowserState)) {
+            return res.json({
+              ok: true,
+              format: plan.format,
+              targetId: tab.targetId,
+              url: tab.url,
+              blockedByDialog: true,
+              ...browserStateResponseFields(observedBrowserState),
+              ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
+            });
+          }
+          if (plan.format === "ai") {
+            const roleSnapshotArgs = {
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              selector: plan.selectorValue,
+              frameSelector: plan.frameSelectorValue,
+              refsMode: plan.refsMode,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              urls: plan.urls,
+              timeoutMs: plan.timeoutMs,
+              maxChars: plan.resolvedMaxChars,
+              options: {
+                interactive: plan.interactive ?? undefined,
+                compact: plan.compact ?? undefined,
+                maxDepth: plan.depth ?? undefined,
+              },
+            };
 
+            const cdpRoleSnapshot = async () => {
+              if (!tab.wsUrl) {
+                return null;
+              }
+              if (plan.selectorValue || plan.frameSelectorValue) {
+                return null;
+              }
+              return await snapshotRoleViaCdp({
+                wsUrl: tab.wsUrl,
+                urls: plan.urls,
+                timeoutMs: plan.timeoutMs,
+                maxChars: plan.resolvedMaxChars,
+                options: {
+                  interactive: plan.interactive ?? undefined,
+                  compact: plan.compact ?? undefined,
+                  maxDepth: plan.depth ?? undefined,
+                },
+              });
+            };
+
+            const pw = await getPwAiModule();
+            const snap = plan.wantsRoleSnapshot
+              ? pw
+                ? await pw
+                    .snapshotRoleViaPlaywright(roleSnapshotArgs)
+                    .catch(async (err: unknown) => {
+                      const fallback = await cdpRoleSnapshot();
+                      if (fallback) {
+                        return fallback;
+                      }
+                      throw err;
+                    })
+                : await cdpRoleSnapshot()
+              : pw
+                ? await pw.snapshotAiViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                    urls: plan.urls,
+                    timeoutMs: plan.timeoutMs,
+                    ...(typeof plan.resolvedMaxChars === "number"
+                      ? { maxChars: plan.resolvedMaxChars }
+                      : {}),
+                  })
+                : await cdpRoleSnapshot();
+            if (!snap) {
+              await requirePwAi(res, "ai snapshot");
+              return;
+            }
+            if (plan.labels) {
+              if (!pw) {
+                return jsonError(res, 501, "Snapshot labels require Playwright.");
+              }
+              const labeled = await pw.screenshotWithLabelsViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                refs: "refs" in snap ? snap.refs : {},
+                type: "png",
+                timeoutMs: plan.timeoutMs,
+              });
+              const originalMeta = labeled.annotations.length
+                ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
+                : undefined;
+              const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
+                maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+                maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+              });
+              const scaledAnnotations = await rescaleAnnotationsForNormalization({
+                annotations: labeled.annotations,
+                originalMeta,
+                normalizedBuffer: normalized.buffer,
+              });
+              await ensureMediaDir();
+              const saved = await saveMediaBuffer(
+                normalized.buffer,
+                normalized.contentType ?? "image/png",
+                "browser",
+                DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+              );
+              const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
               return res.json({
                 ok: true,
                 format: plan.format,
                 targetId: tab.targetId,
                 url: tab.url,
                 ...browserStateResponseFields(observedBrowserState),
+                labels: true,
+                labelsCount: labeled.labels,
+                labelsSkipped: labeled.skipped,
+                ...(scaledAnnotations && scaledAnnotations.length > 0
+                  ? { annotations: scaledAnnotations }
+                  : {}),
+                imagePath: path.resolve(saved.path),
+                imageType,
                 ...snap,
               });
             }
 
-            const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
-              profile: profileCtx.profile,
-              wsUrl: tab.wsUrl,
-            });
-            const snap = usePlaywrightAriaSnapshot
-              ? (() => {
-                  // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-                  // Also covers cases where wsUrl is missing/unusable.
-                  return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                    if (!pw) {
-                      return null;
-                    }
-                    return await pw.snapshotAriaViaPlaywright({
-                      cdpUrl: profileCtx.profile.cdpUrl,
-                      targetId: tab.targetId,
-                      limit: plan.limit,
-                      timeoutMs: plan.timeoutMs,
-                      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                    });
-                  });
-                })()
-              : snapshotAria({
-                  wsUrl: tab.wsUrl ?? "",
-                  limit: plan.limit,
-                  timeoutMs: plan.timeoutMs,
-                });
-
-            const resolved = await Promise.resolve(snap);
-            if (!resolved) {
-              return;
-            }
-            if (!usePlaywrightAriaSnapshot) {
-              await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                nodes: resolved.nodes,
-              });
-            }
             return res.json({
               ok: true,
               format: plan.format,
               targetId: tab.targetId,
               url: tab.url,
               ...browserStateResponseFields(observedBrowserState),
-              ...resolved,
+              ...snap,
             });
-          },
-        });
-      } catch (err) {
-        handleRouteError(ctx, res, err);
-      }
-    }),
-  );
+          }
+
+          const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
+            profile: profileCtx.profile,
+            wsUrl: tab.wsUrl,
+          });
+          const snap = usePlaywrightAriaSnapshot
+            ? (() => {
+                // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
+                // Also covers cases where wsUrl is missing/unusable.
+                return requirePwAi(res, "aria snapshot").then(async (pw) => {
+                  if (!pw) {
+                    return null;
+                  }
+                  return await pw.snapshotAriaViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    limit: plan.limit,
+                    timeoutMs: plan.timeoutMs,
+                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  });
+                });
+              })()
+            : snapshotAria({
+                wsUrl: tab.wsUrl ?? "",
+                limit: plan.limit,
+                timeoutMs: plan.timeoutMs,
+              });
+
+          const resolved = await Promise.resolve(snap);
+          if (!resolved) {
+            return;
+          }
+          if (!usePlaywrightAriaSnapshot) {
+            await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              nodes: resolved.nodes,
+            });
+          }
+          return res.json({
+            ok: true,
+            format: plan.format,
+            targetId: tab.targetId,
+            url: tab.url,
+            ...browserStateResponseFields(observedBrowserState),
+            ...resolved,
+          });
+        },
+      });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
 }

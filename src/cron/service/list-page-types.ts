@@ -33,6 +33,8 @@ export type CronListPageOptions = {
 /** Offset-page result returned by cron listPage callers. */
 export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
   jobs: TJobs;
+  /** Opaque revision for the complete filtered, sorted result set. */
+  snapshotRevision: string;
   total: number;
   offset: number;
   limit: number;

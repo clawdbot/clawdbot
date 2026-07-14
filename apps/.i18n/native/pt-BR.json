@@ -114,14 +114,14 @@
       "translated": "Ativado"
     },
     {
-      "id": "native.android.9f31cc0fcf527ed2",
-      "source": "Cron job is not due yet.",
-      "translated": "A tarefa Cron ainda não está pronta para ser executada."
+      "id": "native.android.198617f355636373",
+      "source": "Automation is not due yet.",
+      "translated": "A automação ainda não está programada para ser executada."
     },
     {
-      "id": "native.android.fc2c0e26482b32cd",
-      "source": "Cron job is already running.",
-      "translated": "A tarefa Cron já está em execução."
+      "id": "native.android.68d8213dbeaf4480",
+      "source": "Automation is already running.",
+      "translated": "A automação já está em execução."
     },
     {
       "id": "native.android.e1bb423a2260ee6d",
@@ -129,9 +129,9 @@
       "translated": "A recuperação da reinicialização do Gateway ainda está em andamento."
     },
     {
-      "id": "native.android.341ad86c38a5d3d5",
-      "source": "Cron job has an invalid configuration.",
-      "translated": "A tarefa cron tem uma configuração inválida."
+      "id": "native.android.7f330978f4d02d88",
+      "source": "Automation has an invalid configuration.",
+      "translated": "A automação tem uma configuração inválida."
     },
     {
       "id": "native.android.83640045de441512",
@@ -139,24 +139,24 @@
       "translated": "O agendador cron está parado."
     },
     {
-      "id": "native.android.df0b9434fa41904f",
-      "source": "Cron run finished.",
-      "translated": "A execução cron foi concluída."
+      "id": "native.android.5b73964f29df42a7",
+      "source": "Automation run finished.",
+      "translated": "A execução da automação foi concluída."
     },
     {
-      "id": "native.android.c709d0617063c061",
-      "source": "Cron run skipped.",
-      "translated": "A execução cron foi ignorada."
+      "id": "native.android.37a3fea89f09fd4f",
+      "source": "Automation run skipped.",
+      "translated": "A execução da automação foi ignorada."
     },
     {
-      "id": "native.android.b9f5c536c5a42514",
-      "source": "Cron run failed.",
-      "translated": "A execução cron falhou."
+      "id": "native.android.b257b623a2508db3",
+      "source": "Automation run failed.",
+      "translated": "Falha na execução da automação."
     },
     {
-      "id": "native.android.a42d3ae97bf79bbe",
-      "source": "Cron run finished with an unknown status.",
-      "translated": "A execução cron foi concluída com um status desconhecido."
+      "id": "native.android.fe6882d37530dbb3",
+      "source": "Automation run finished with an unknown status.",
+      "translated": "A execução da automação foi concluída com um status desconhecido."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -524,49 +524,49 @@
       "translated": "Conectado (operador: $operator)"
     },
     {
-      "id": "native.android.5fe7f7afb77851ff",
-      "source": "This cron job already has a queued run.",
-      "translated": "Esta tarefa cron já tem uma execução na fila."
+      "id": "native.android.d21aada33a4f9af2",
+      "source": "This automation already has a queued run.",
+      "translated": "Esta automação já tem uma execução na fila."
     },
     {
-      "id": "native.android.1ebef3822941cdb6",
-      "source": "Cron job started.",
-      "translated": "Tarefa cron iniciada."
+      "id": "native.android.d6f67c67daa0cf8b",
+      "source": "Automation run queued.",
+      "translated": "Execução da automação adicionada à fila."
     },
     {
-      "id": "native.android.d8ba5136a17f7618",
-      "source": "Cron run queued.",
-      "translated": "Execução cron na fila."
+      "id": "native.android.33a3252703380d25",
+      "source": "Automation started.",
+      "translated": "A automação foi iniciada."
     },
     {
-      "id": "native.android.9bc7e4ad0b917a5f",
-      "source": "Gateway rejected the cron run.",
-      "translated": "O Gateway rejeitou a execução cron."
+      "id": "native.android.2366805fa2d53539",
+      "source": "Gateway rejected the automation run.",
+      "translated": "O Gateway rejeitou a execução da automação."
     },
     {
-      "id": "native.android.8a758d2851f3db17",
-      "source": "Cron job disabled.",
-      "translated": "Tarefa cron desativada."
+      "id": "native.android.f2afad6e17c1e4f5",
+      "source": "Automation enabled.",
+      "translated": "A automação foi ativada."
     },
     {
-      "id": "native.android.fda9390dc0d4bdea",
-      "source": "Cron job enabled.",
-      "translated": "Tarefa cron ativada."
+      "id": "native.android.e9523d30c1f4484c",
+      "source": "Automation paused.",
+      "translated": "A automação foi pausada."
     },
     {
-      "id": "native.android.a9aa7171558f8412",
-      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
-      "translated": "Esta tarefa cron foi alterada no Gateway. Revise a versão mais recente antes de salvar novamente."
+      "id": "native.android.ee1570aa6c242586",
+      "source": "This automation changed on the gateway. Review the latest version before saving again.",
+      "translated": "Esta automação foi alterada no Gateway. Revise a versão mais recente antes de salvar novamente."
     },
     {
-      "id": "native.android.4562b415164529af",
-      "source": "Cron job updated.",
-      "translated": "Tarefa cron atualizada."
+      "id": "native.android.c8b760a913d0cb66",
+      "source": "Automation updated.",
+      "translated": "A automação foi atualizada."
     },
     {
-      "id": "native.android.937a9a77deeef115",
-      "source": "Cron job deleted.",
-      "translated": "Tarefa cron excluída."
+      "id": "native.android.1c494df0976b57ed",
+      "source": "Automation deleted.",
+      "translated": "A automação foi excluída."
     },
     {
       "id": "native.android.9c4af565f4ffe18c",
@@ -634,34 +634,34 @@
       "translated": "Os modelos do provedor foram carregados, mas a disponibilidade não está acessível."
     },
     {
-      "id": "native.android.0e1e5786e4cfc894",
-      "source": "Could not load cron jobs.",
-      "translated": "Não foi possível carregar as tarefas cron."
+      "id": "native.android.76a4ea6fbd0e9ec9",
+      "source": "Could not load automations.",
+      "translated": "Não foi possível carregar as automações."
     },
     {
-      "id": "native.android.5288d0e2cd5ab8e6",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Conecte o Gateway para inspecionar as tarefas cron."
+      "id": "native.android.38e0abd9a93954ee",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Conecte o Gateway para inspecionar as automações."
     },
     {
-      "id": "native.android.09ac6b21e791abb2",
-      "source": "Gateway returned an invalid cron job.",
-      "translated": "O Gateway retornou uma tarefa cron inválida."
+      "id": "native.android.c90da365e3dae626",
+      "source": "Gateway returned an invalid automation.",
+      "translated": "O Gateway retornou uma automação inválida."
     },
     {
-      "id": "native.android.db2fbde400d1e692",
-      "source": "Could not load cron job.",
-      "translated": "Não foi possível carregar a tarefa cron."
+      "id": "native.android.d6714e6f74a2cb86",
+      "source": "Could not load automation.",
+      "translated": "Não foi possível carregar a automação."
     },
     {
-      "id": "native.android.1c986c7849e0094a",
-      "source": "Connect the gateway to inspect cron run history.",
-      "translated": "Conecte o Gateway para inspecionar o histórico de execuções cron."
+      "id": "native.android.892451834e038518",
+      "source": "Connect the gateway to inspect automation run history.",
+      "translated": "Conecte o Gateway para consultar o histórico de execuções da automação."
     },
     {
-      "id": "native.android.5de73d7e34c4dfda",
-      "source": "Could not load cron run history.",
-      "translated": "Não foi possível carregar o histórico de execuções cron."
+      "id": "native.android.c25d29539ca8e4ff",
+      "source": "Could not load automation run history.",
+      "translated": "Não foi possível carregar o histórico de execuções da automação."
     },
     {
       "id": "native.android.153ffc5ce4132479",
@@ -669,9 +669,9 @@
       "translated": "Alterações de cron exigem acesso operator.admin."
     },
     {
-      "id": "native.android.31b0570face9a32e",
-      "source": "Connect the gateway to manage cron jobs.",
-      "translated": "Conecte o Gateway para gerenciar as tarefas cron."
+      "id": "native.android.74e54edba88f9531",
+      "source": "Connect the gateway to manage automations.",
+      "translated": "Conecte o Gateway para gerenciar automações."
     },
     {
       "id": "native.android.c050b799c39b1fd9",
@@ -1544,24 +1544,24 @@
       "translated": "Cancelar"
     },
     {
-      "id": "native.android.ec06722578a6027e",
-      "source": "Delete cron job?",
-      "translated": "Excluir tarefa cron?"
+      "id": "native.android.0e3e55624d2b9cc7",
+      "source": "Delete automation?",
+      "translated": "Excluir automação?"
     },
     {
-      "id": "native.android.362073d4e1e4624d",
-      "source": "This permanently removes the scheduled job from the gateway.",
-      "translated": "Isso remove permanentemente a tarefa agendada do gateway."
+      "id": "native.android.a239813fcaf37275",
+      "source": "This permanently removes the automation and its schedule from the gateway.",
+      "translated": "Isso remove permanentemente a automação e seu agendamento do Gateway."
     },
     {
-      "id": "native.android.a3fcfa20dc395b87",
-      "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "Este trabalho foi alterado enquanto você o editava. Reverta para a versão mais recente do Gateway antes de salvar."
+      "id": "native.android.dfbb2ffdd097891e",
+      "source": "This automation changed while you were editing. Revert to the latest gateway version before saving.",
+      "translated": "Esta automação foi alterada enquanto você a editava. Reverta para a versão mais recente do Gateway antes de salvar."
     },
     {
-      "id": "native.android.db9f08d611b4c508",
-      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Salve ou reverta suas edições antes de executar, habilitar, desabilitar, excluir ou atualizar este trabalho."
+      "id": "native.android.35f50ae04278c068",
+      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.",
+      "translated": "Salve ou reverta suas edições antes de executar, ativar, desativar, excluir ou atualizar esta automação."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -1594,14 +1594,14 @@
       "translated": "Ativar"
     },
     {
-      "id": "native.android.1fed5d5912a9679c",
-      "source": "Delete Job",
-      "translated": "Excluir Tarefa"
+      "id": "native.android.eb4763f9d83f71b5",
+      "source": "Delete Automation",
+      "translated": "Excluir automação"
     },
     {
-      "id": "native.android.da9ecf342cbd7035",
-      "source": "Edit Job",
-      "translated": "Editar Tarefa"
+      "id": "native.android.6cf371a6c39142be",
+      "source": "Edit Automation",
+      "translated": "Editar automação"
     },
     {
       "id": "native.android.006f60922ae98063",
@@ -1609,9 +1609,9 @@
       "translated": "Ativado"
     },
     {
-      "id": "native.android.8b967e5cba1edfd8",
-      "source": "Allow the scheduler to run this job.",
-      "translated": "Permitir que o agendador execute este job."
+      "id": "native.android.cdfd111ea8c90d0f",
+      "source": "Allow the scheduler to run this automation.",
+      "translated": "Permita que o agendador execute esta automação."
     },
     {
       "id": "native.android.f5fe0e769a9df4f8",
@@ -1619,14 +1619,14 @@
       "translated": "Excluir após execução"
     },
     {
-      "id": "native.android.9ed8d09744263540",
-      "source": "Remove this job after a successful one-shot run.",
-      "translated": "Remover este job após uma execução única bem-sucedida."
+      "id": "native.android.1a6d5883c1e661ba",
+      "source": "Remove this automation after a successful one-shot run.",
+      "translated": "Remova esta automação após uma execução única bem-sucedida."
     },
     {
-      "id": "native.android.8faa8ae2ea76fe52",
-      "source": "Job name",
-      "translated": "Nome do job"
+      "id": "native.android.7681a20f499488a8",
+      "source": "Automation name",
+      "translated": "Nome da automação"
     },
     {
       "id": "native.android.e3a12cf55b2caea3",
@@ -3874,34 +3874,39 @@
       "translated": "Os limites do provedor aparecerão aqui quando seu Gateway os informar."
     },
     {
-      "id": "native.android.962a15bdb26cb6e1",
-      "source": "Cron Jobs",
-      "translated": "Tarefas Cron"
-    },
-    {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "Trabalho agendado do OpenClaw a partir do seu gateway."
     },
     {
-      "id": "native.android.f9a5f09bd7436aa6",
-      "source": "Jobs",
-      "translated": "Tarefas"
+      "id": "native.android.31a5440e22667f02",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
-      "id": "native.android.3cd22006987fde12",
-      "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
-      "translated": "Abra um job para inspecionar sua configuração e histórico de execuções. Conexões com escopo de administrador também podem executá-lo, editá-lo, ativá-lo, desativá-lo ou excluí-lo."
+      "id": "native.android.6e803f5130583ef7",
+      "source": "Search automations",
+      "translated": "Pesquisar automações"
     },
     {
-      "id": "native.android.9354a5bf1e4ce5a5",
-      "source": "Connect the gateway to load cron jobs.",
-      "translated": "Conecte o Gateway para carregar tarefas cron."
+      "id": "native.android.ba3859394e1d84ad",
+      "source": "Search",
+      "translated": "Pesquisar"
     },
     {
-      "id": "native.android.239e2598dab8a8b1",
-      "source": "No scheduled jobs.",
-      "translated": "Nenhuma tarefa agendada."
+      "id": "native.android.02b3c78b09d0bbf5",
+      "source": "Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
+      "translated": "Abra uma automação para consultar sua configuração e seu histórico de execuções. Conexões com escopo de administrador também podem executá-la, editá-la, ativá-la, desativá-la ou excluí-la."
+    },
+    {
+      "id": "native.android.93757bcd5a888e9b",
+      "source": "Connect the gateway to load automations.",
+      "translated": "Conecte o Gateway para carregar as automações."
+    },
+    {
+      "id": "native.android.64a9b78fdbb526db",
+      "source": "No automations yet.",
+      "translated": "Ainda não há automações."
     },
     {
       "id": "native.android.bc88f537cd309fcb",
@@ -3909,29 +3914,34 @@
       "translated": "O trabalho agendado criado no gateway aparecerá aqui."
     },
     {
-      "id": "native.android.2fbb66cd888e9543",
-      "source": "Cron Job",
-      "translated": "Tarefa Cron"
+      "id": "native.android.de64e737e58cc949",
+      "source": "No matching automations.",
+      "translated": "Nenhuma automação correspondente."
     },
     {
-      "id": "native.android.f6dd71419863574c",
-      "source": "Inspect scheduled gateway work.",
-      "translated": "Inspecione o trabalho agendado do gateway."
+      "id": "native.android.9e3164ae5cb0527a",
+      "source": "Automation",
+      "translated": "Automação"
     },
     {
-      "id": "native.android.e3a6337e3c28d3f5",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Conecte o Gateway para inspecionar tarefas cron."
+      "id": "native.android.5d9806af18054700",
+      "source": "Inspect and manage scheduled gateway work.",
+      "translated": "Inspecione e gerencie tarefas agendadas do Gateway."
     },
     {
-      "id": "native.android.2d3daa5032913461",
-      "source": "Cron job not loaded.",
-      "translated": "Tarefa cron não carregada."
+      "id": "native.android.c6faada8886de13f",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Conecte o Gateway para inspecionar as automações."
     },
     {
-      "id": "native.android.401993832e04f790",
-      "source": "Loading cron job…",
-      "translated": "Carregando tarefa cron…"
+      "id": "native.android.4530f9bf73d3155f",
+      "source": "Automation not loaded.",
+      "translated": "Automação não carregada."
+    },
+    {
+      "id": "native.android.ba65a945fa8b0fc5",
+      "source": "Loading automation…",
+      "translated": "Carregando automação…"
     },
     {
       "id": "native.android.0f33ca43db97b2a9",
@@ -4889,9 +4899,9 @@
       "translated": "Revisar"
     },
     {
-      "id": "native.android.9664ff3f205c25d6",
-      "source": "Open cron job detail",
-      "translated": "Abrir detalhes da tarefa cron"
+      "id": "native.android.bee982da282e0887",
+      "source": "Open automation detail",
+      "translated": "Abrir detalhes da automação"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
@@ -5127,6 +5137,21 @@
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+    },
+    {
+      "id": "native.android.ec82506ef939dc0e",
+      "source": "All",
+      "translated": "Todas"
+    },
+    {
+      "id": "native.android.f281f6a848fd8ff5",
+      "source": "Active",
+      "translated": "Ativas"
+    },
+    {
+      "id": "native.android.48080c472857781d",
+      "source": "Paused",
+      "translated": "Pausadas"
     },
     {
       "id": "native.android.c45aa61a985005d9",
@@ -5569,9 +5594,9 @@
       "translated": "Aprovações"
     },
     {
-      "id": "native.android.dd2def654c56b026",
-      "source": "Cron Jobs",
-      "translated": "Tarefas Cron"
+      "id": "native.android.9cb21c6f0cbc9adc",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.android.20833251ed61ca65",
@@ -8049,6 +8074,691 @@
       "translated": "essa solicitação"
     },
     {
+      "id": "native.apple.1696cec8c3c6a511",
+      "source": "Settings",
+      "translated": "Configurações"
+    },
+    {
+      "id": "native.apple.d66c2f42a01fdcc6",
+      "source": "History",
+      "translated": "Histórico"
+    },
+    {
+      "id": "native.apple.18f4b0e25c9ca42f",
+      "source": "Automation",
+      "translated": "Automação"
+    },
+    {
+      "id": "native.apple.f8791c06b9eea7c9",
+      "source": "Close",
+      "translated": "Fechar"
+    },
+    {
+      "id": "native.apple.35f5bb05688e822d",
+      "source": "Refresh automation",
+      "translated": "Atualizar automação"
+    },
+    {
+      "id": "native.apple.725e459c8dd8ba4c",
+      "source": "Delete this automation?",
+      "translated": "Excluir esta automação?"
+    },
+    {
+      "id": "native.apple.50255322e1b2c13b",
+      "source": "Delete Automation",
+      "translated": "Excluir automação"
+    },
+    {
+      "id": "native.apple.d4cb0f4dc6c1058f",
+      "source": "Cancel",
+      "translated": "Cancelar"
+    },
+    {
+      "id": "native.apple.ff9d5755b4f93f5d",
+      "source": "This permanently removes the automation and its schedule from the Gateway.",
+      "translated": "Isso removerá permanentemente a automação e seu agendamento do Gateway."
+    },
+    {
+      "id": "native.apple.881fc358341a1df5",
+      "source": "active",
+      "translated": "ativa"
+    },
+    {
+      "id": "native.apple.4bc22f0f6856a7c5",
+      "source": "paused",
+      "translated": "pausada"
+    },
+    {
+      "id": "native.apple.8fb3a1cb0aeb5dfe",
+      "source": "Next run",
+      "translated": "Próxima execução"
+    },
+    {
+      "id": "native.apple.57e96e8d8fd5c342",
+      "source": "Last run",
+      "translated": "Última execução"
+    },
+    {
+      "id": "native.apple.cb17c8f476ef9637",
+      "source": "Automation detail",
+      "translated": "Detalhes da automação"
+    },
+    {
+      "id": "native.apple.125f2fbe90c80642",
+      "source": "Editing unavailable",
+      "translated": "Edição indisponível"
+    },
+    {
+      "id": "native.apple.aa17216c6a622bcc",
+      "source": "Details",
+      "translated": "Detalhes"
+    },
+    {
+      "id": "native.apple.adba197735c909a7",
+      "source": "Name",
+      "translated": "Nome"
+    },
+    {
+      "id": "native.apple.1de7b0cbc64f235e",
+      "source": "Automation name",
+      "translated": "Nome da automação"
+    },
+    {
+      "id": "native.apple.22c0b187b1d0ed60",
+      "source": "Description",
+      "translated": "Descrição"
+    },
+    {
+      "id": "native.apple.ea1c2fa8bee66cde",
+      "source": "Optional context",
+      "translated": "Contexto opcional"
+    },
+    {
+      "id": "native.apple.555170e9a9b3c867",
+      "source": "Schedule",
+      "translated": "Agendamento"
+    },
+    {
+      "id": "native.apple.23ffc415d7625e1d",
+      "source": "Delete after successful run",
+      "translated": "Excluir após execução bem-sucedida"
+    },
+    {
+      "id": "native.apple.9fe4b2423471d0f1",
+      "source": "Useful for one-time automations.",
+      "translated": "Útil para automações de execução única."
+    },
+    {
+      "id": "native.apple.84cd065063e9703c",
+      "source": "ISO date and time",
+      "translated": "Data e hora ISO"
+    },
+    {
+      "id": "native.apple.23830e2ba37b8769",
+      "source": "2030-01-15T09:00:00Z",
+      "translated": "2030-01-15T09:00:00Z"
+    },
+    {
+      "id": "native.apple.e1399c7c254d8dbb",
+      "source": "Interval (milliseconds)",
+      "translated": "Intervalo (milissegundos)"
+    },
+    {
+      "id": "native.apple.74aa65bb399fb736",
+      "source": "Anchor (milliseconds)",
+      "translated": "Âncora (milissegundos)"
+    },
+    {
+      "id": "native.apple.bcafe4b14750497b",
+      "source": "Cron expression",
+      "translated": "Expressão cron"
+    },
+    {
+      "id": "native.apple.a16790dec1a5f2b4",
+      "source": "Time zone",
+      "translated": "Fuso horário"
+    },
+    {
+      "id": "native.apple.c2c5bed70319ae16",
+      "source": "America/Los_Angeles",
+      "translated": "America/Los_Angeles"
+    },
+    {
+      "id": "native.apple.9336c989fdd5d6fa",
+      "source": "Stagger (milliseconds)",
+      "translated": "Escalonamento (milissegundos)"
+    },
+    {
+      "id": "native.apple.e03877d6332b324c",
+      "source": "Command to watch",
+      "translated": "Comando a monitorar"
+    },
+    {
+      "id": "native.apple.9fe4c10ddbf241e2",
+      "source": "pnpm build",
+      "translated": "pnpm build"
+    },
+    {
+      "id": "native.apple.585f47ef8c7223e1",
+      "source": "Action",
+      "translated": "Ação"
+    },
+    {
+      "id": "native.apple.6260eb77ea71ba28",
+      "source": "Event text",
+      "translated": "Texto do evento"
+    },
+    {
+      "id": "native.apple.2878cb40276871ce",
+      "source": "What should the agent know?",
+      "translated": "O que o agente deve saber?"
+    },
+    {
+      "id": "native.apple.364fc52b3c80ff57",
+      "source": "Message",
+      "translated": "Mensagem"
+    },
+    {
+      "id": "native.apple.feac3b85bf40c7af",
+      "source": "What should the agent do?",
+      "translated": "O que o agente deve fazer?"
+    },
+    {
+      "id": "native.apple.ab59900232a65c71",
+      "source": "Model",
+      "translated": "Modelo"
+    },
+    {
+      "id": "native.apple.8a9349d85eeb22d2",
+      "source": "Thinking",
+      "translated": "Raciocínio"
+    },
+    {
+      "id": "native.apple.7450fbb4246506d1",
+      "source": "Gateway default",
+      "translated": "Padrão do Gateway"
+    },
+    {
+      "id": "native.apple.9e19b04a68638b23",
+      "source": "Arguments (JSON array)",
+      "translated": "Argumentos (array JSON)"
+    },
+    {
+      "id": "native.apple.cdde064f118b68ea",
+      "source": "Working directory",
+      "translated": "Diretório de trabalho"
+    },
+    {
+      "id": "native.apple.20547b640f816b97",
+      "source": "Optional",
+      "translated": "Opcional"
+    },
+    {
+      "id": "native.apple.4ff623573733f360",
+      "source": "Execution",
+      "translated": "Execução"
+    },
+    {
+      "id": "native.apple.d93a77ec4f005d00",
+      "source": "Session target",
+      "translated": "Destino da sessão"
+    },
+    {
+      "id": "native.apple.71ee518c108734d5",
+      "source": "main, isolated, current, or session:<id>",
+      "translated": "main, isolated, current ou session:<id>"
+    },
+    {
+      "id": "native.apple.34106ad50c7b87e8",
+      "source": "Wake mode",
+      "translated": "Modo de ativação"
+    },
+    {
+      "id": "native.apple.0f5ba1612a172b31",
+      "source": "now or next-heartbeat",
+      "translated": "now ou next-heartbeat"
+    },
+    {
+      "id": "native.apple.2314f13a102a3e2c",
+      "source": "Delivery and failure routing remain visible and editable in the Control UI.",
+      "translated": "O roteamento de entrega e falhas permanece visível e editável na Control UI."
+    },
+    {
+      "id": "native.apple.c52518b79660be2e",
+      "source": "Manage",
+      "translated": "Gerenciar"
+    },
+    {
+      "id": "native.apple.61cf5b73d3be8b9e",
+      "source": "Admin scope is required to change, run, or delete automations.",
+      "translated": "O escopo de administrador é necessário para alterar, executar ou excluir automações."
+    },
+    {
+      "id": "native.apple.63450040c4cdc79d",
+      "source": "Save",
+      "translated": "Salvar"
+    },
+    {
+      "id": "native.apple.4e4304768b282ed0",
+      "source": "Run Now",
+      "translated": "Executar agora"
+    },
+    {
+      "id": "native.apple.4b893a030daf831b",
+      "source": "Running",
+      "translated": "Em execução"
+    },
+    {
+      "id": "native.apple.252a740ded4f5747",
+      "source": "Enable",
+      "translated": "Ativar"
+    },
+    {
+      "id": "native.apple.b0394e53e163e4d0",
+      "source": "Pause",
+      "translated": "Pausar"
+    },
+    {
+      "id": "native.apple.03266f8398b57057",
+      "source": "Delete",
+      "translated": "Excluir"
+    },
+    {
+      "id": "native.apple.4dcf36018847481d",
+      "source": "Save or discard edits before running, pausing, or enabling this automation.",
+      "translated": "Salve ou descarte as alterações antes de executar, pausar ou ativar esta automação."
+    },
+    {
+      "id": "native.apple.9fb34a87dc5dd407",
+      "source": "Recent runs",
+      "translated": "Execuções recentes"
+    },
+    {
+      "id": "native.apple.3f31602868b5d915",
+      "source": "Loading",
+      "translated": "Carregando"
+    },
+    {
+      "id": "native.apple.eff430620ea4d6e0",
+      "source": "Refresh",
+      "translated": "Atualizar"
+    },
+    {
+      "id": "native.apple.522ed52c5d6f2cf6",
+      "source": "No runs yet",
+      "translated": "Nenhuma execução ainda"
+    },
+    {
+      "id": "native.apple.a0b71e211aa932c5",
+      "source": "Completed runs and delivery outcomes will appear here.",
+      "translated": "As execuções concluídas e os resultados das entregas aparecerão aqui."
+    },
+    {
+      "id": "native.apple.4cb9a754ceb21346",
+      "source": "Schedule configured",
+      "translated": "Agendamento configurado"
+    },
+    {
+      "id": "native.apple.592cd2b7c16fa91f",
+      "source": "One time",
+      "translated": "Uma vez"
+    },
+    {
+      "id": "native.apple.fde9e0a6a8b23b7d",
+      "source": "Every %@",
+      "translated": "A cada %@"
+    },
+    {
+      "id": "native.apple.ed053c0e3d827ba3",
+      "source": "Interval",
+      "translated": "Intervalo"
+    },
+    {
+      "id": "native.apple.fe7237d5293453ff",
+      "source": "After command exits",
+      "translated": "Após o término do comando"
+    },
+    {
+      "id": "native.apple.439c8dea4cc485bb",
+      "source": "Unsaved changes",
+      "translated": "Alterações não salvas"
+    },
+    {
+      "id": "native.apple.81846df87f4be1be",
+      "source": "Save or close this automation before refreshing.",
+      "translated": "Salve ou feche esta automação antes de atualizar."
+    },
+    {
+      "id": "native.apple.1be30cb60c21d3fe",
+      "source": "Edits preserved",
+      "translated": "Edições preservadas"
+    },
+    {
+      "id": "native.apple.8d87d696c6e912dd",
+      "source": "Gateway data changed while you edited. Save will validate the current revision.",
+      "translated": "Os dados do Gateway foram alterados durante a edição. Ao salvar, a revisão atual será validada."
+    },
+    {
+      "id": "native.apple.d5c62307493aacbc",
+      "source": "Could not load automation",
+      "translated": "Não foi possível carregar a automação"
+    },
+    {
+      "id": "native.apple.ce3928fc379e2daf",
+      "source": "Could not load run history",
+      "translated": "Não foi possível carregar o histórico de execuções"
+    },
+    {
+      "id": "native.apple.e84cad019bdb54c0",
+      "source": "Saving automation",
+      "translated": "Salvando automação"
+    },
+    {
+      "id": "native.apple.0e8f64ab2aae550c",
+      "source": "Automation saved",
+      "translated": "Automação salva"
+    },
+    {
+      "id": "native.apple.a237e22c861da698",
+      "source": "The Gateway accepted the latest revision.",
+      "translated": "O Gateway aceitou a revisão mais recente."
+    },
+    {
+      "id": "native.apple.b74b1f32135775e7",
+      "source": "Enabling automation",
+      "translated": "Ativando automação"
+    },
+    {
+      "id": "native.apple.5d2466224b7f83cd",
+      "source": "Pausing automation",
+      "translated": "Pausando automação"
+    },
+    {
+      "id": "native.apple.d2b1cc3738a2d411",
+      "source": "Automation enabled",
+      "translated": "Automação ativada"
+    },
+    {
+      "id": "native.apple.1755a139d97def18",
+      "source": "Automation paused",
+      "translated": "Automação pausada"
+    },
+    {
+      "id": "native.apple.92fd1af6e77e2b7d",
+      "source": "Future runs are active.",
+      "translated": "As execuções futuras estão ativas."
+    },
+    {
+      "id": "native.apple.1429ded16eab70ba",
+      "source": "Future scheduled runs are paused.",
+      "translated": "As execuções agendadas futuras estão pausadas."
+    },
+    {
+      "id": "native.apple.93b93b980c47d0ac",
+      "source": "Queueing run",
+      "translated": "Adicionando execução à fila"
+    },
+    {
+      "id": "native.apple.e15e1406fcc112fb",
+      "source": "Run queued",
+      "translated": "Execução adicionada à fila"
+    },
+    {
+      "id": "native.apple.6a6c77e2f6d11ec9",
+      "source": "Refresh History to follow the result.",
+      "translated": "Atualize o histórico para acompanhar o resultado."
+    },
+    {
+      "id": "native.apple.9482a1efdfc47e7f",
+      "source": "This run stays tracked until its exact result appears.",
+      "translated": "Esta execução continuará sendo acompanhada até que o resultado exato apareça."
+    },
+    {
+      "id": "native.apple.7586bdc989075ffd",
+      "source": "Run still pending",
+      "translated": "Execução ainda pendente"
+    },
+    {
+      "id": "native.apple.8f764528fa10c8eb",
+      "source": "The Gateway has not reported a result yet. Refresh History later.",
+      "translated": "O Gateway ainda não informou um resultado. Atualize o histórico mais tarde."
+    },
+    {
+      "id": "native.apple.3120beddc3ef9928",
+      "source": "Run finished",
+      "translated": "Execução concluída"
+    },
+    {
+      "id": "native.apple.7bf6ec0bc48196b0",
+      "source": "History now shows the completed result.",
+      "translated": "O histórico agora mostra o resultado concluído."
+    },
+    {
+      "id": "native.apple.421eedc59a44514c",
+      "source": "Run skipped",
+      "translated": "Execução ignorada"
+    },
+    {
+      "id": "native.apple.a0bf404e9bcb5ba3",
+      "source": "The Gateway skipped this run. History shows the result.",
+      "translated": "O Gateway ignorou esta execução. O histórico mostra o resultado."
+    },
+    {
+      "id": "native.apple.2e2f77f95cff0717",
+      "source": "Run failed",
+      "translated": "Falha na execução"
+    },
+    {
+      "id": "native.apple.4932b01670c6bb36",
+      "source": "History shows the failure details.",
+      "translated": "O histórico mostra os detalhes da falha."
+    },
+    {
+      "id": "native.apple.af47a77871426a34",
+      "source": "Run result available",
+      "translated": "Resultado da execução disponível"
+    },
+    {
+      "id": "native.apple.b3aa40fc12a403ef",
+      "source": "History shows the Gateway result.",
+      "translated": "O histórico mostra o resultado do Gateway."
+    },
+    {
+      "id": "native.apple.2a8eb4abb58e4c6a",
+      "source": "Deleting automation",
+      "translated": "Excluindo automação"
+    },
+    {
+      "id": "native.apple.dd3271c4e94641a2",
+      "source": "Automation action failed",
+      "translated": "Falha na ação de automação"
+    },
+    {
+      "id": "native.apple.32e3f08284bb3007",
+      "source": "This automation is not due yet.",
+      "translated": "Esta automação ainda não está programada para ser executada."
+    },
+    {
+      "id": "native.apple.5927a803625f5dbb",
+      "source": "This automation is already running.",
+      "translated": "Esta automação já está em execução."
+    },
+    {
+      "id": "native.apple.4aad892e27b4ddd1",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "A recuperação da reinicialização do Gateway ainda está em andamento."
+    },
+    {
+      "id": "native.apple.81308ff798cb8ff3",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Esta automação tem uma configuração inválida."
+    },
+    {
+      "id": "native.apple.a88f71792ad4beaa",
+      "source": "The automation scheduler is stopped.",
+      "translated": "O agendador de automações está parado."
+    },
+    {
+      "id": "native.apple.11923296a8287615",
+      "source": "The Gateway did not start this automation.",
+      "translated": "O Gateway não iniciou esta automação."
+    },
+    {
+      "id": "native.apple.0c744cad13a3927f",
+      "source": "not scheduled",
+      "translated": "não agendada"
+    },
+    {
+      "id": "native.apple.0bece6f361967bb7",
+      "source": "Could not track queued run",
+      "translated": "Não foi possível acompanhar a execução na fila"
+    },
+    {
+      "id": "native.apple.fcc8d9fb5363552a",
+      "source": "One time",
+      "translated": "Uma vez"
+    },
+    {
+      "id": "native.apple.e36565ab0cbc27fc",
+      "source": "Interval",
+      "translated": "Intervalo"
+    },
+    {
+      "id": "native.apple.4e409ac7b3902ef1",
+      "source": "Cron expression",
+      "translated": "Expressão cron"
+    },
+    {
+      "id": "native.apple.17b0f1a44e8b54f8",
+      "source": "On command exit",
+      "translated": "Ao encerrar o comando"
+    },
+    {
+      "id": "native.apple.681114b86c1b4fc7",
+      "source": "System event",
+      "translated": "Evento do sistema"
+    },
+    {
+      "id": "native.apple.11ac31e919c88aaf",
+      "source": "Agent turn",
+      "translated": "Turno do agente"
+    },
+    {
+      "id": "native.apple.9f1a73fdf9e6fb74",
+      "source": "Command",
+      "translated": "Comando"
+    },
+    {
+      "id": "native.apple.78e698f721570440",
+      "source": "This automation uses fields this app cannot edit safely.",
+      "translated": "Esta automação usa campos que este app não pode editar com segurança."
+    },
+    {
+      "id": "native.apple.01a8e1daa343aa0c",
+      "source": "Update the Gateway before saving automation changes from iOS.",
+      "translated": "Atualize o Gateway antes de salvar alterações de automação no iOS."
+    },
+    {
+      "id": "native.apple.eedad26d49890fd0",
+      "source": "No automation changes to save.",
+      "translated": "Não há alterações de automação para salvar."
+    },
+    {
+      "id": "native.apple.468285718bc65cf9",
+      "source": "Automation name is required.",
+      "translated": "O nome da automação é obrigatório."
+    },
+    {
+      "id": "native.apple.3b2cf513983fd309",
+      "source": "Session target must be main, isolated, current, or session:<id>.",
+      "translated": "O destino da sessão deve ser main, isolated, current ou session:<id>."
+    },
+    {
+      "id": "native.apple.097835fd2547d9d3",
+      "source": "Wake mode must be now or next-heartbeat.",
+      "translated": "O modo de ativação deve ser now ou next-heartbeat."
+    },
+    {
+      "id": "native.apple.cf32f85b7d927b14",
+      "source": "The connected Gateway changed. Refresh Automations and try again.",
+      "translated": "O Gateway conectado foi alterado. Atualize as Automações e tente novamente."
+    },
+    {
+      "id": "native.apple.6e9fc11db7a84ccd",
+      "source": "The Gateway changed after the request was sent. Check current state before retrying.",
+      "translated": "O Gateway foi alterado após o envio da solicitação. Verifique o estado atual antes de tentar novamente."
+    },
+    {
+      "id": "native.apple.8334ace07b5a8769",
+      "source": "The Gateway returned an unexpected automation response.",
+      "translated": "O Gateway retornou uma resposta de automação inesperada."
+    },
+    {
+      "id": "native.apple.d15e02f352f095b5",
+      "source": "One-time automations need an ISO time.",
+      "translated": "Automações de execução única precisam de um horário ISO."
+    },
+    {
+      "id": "native.apple.217ae5784e8a790c",
+      "source": "Interval must be a positive number of milliseconds.",
+      "translated": "O intervalo deve ser um número positivo de milissegundos."
+    },
+    {
+      "id": "native.apple.5d1437fb94b0c2fd",
+      "source": "Anchor must be a non-negative number of milliseconds.",
+      "translated": "A âncora deve ser um número não negativo de milissegundos."
+    },
+    {
+      "id": "native.apple.74979b1b3f3fd0cb",
+      "source": "Cron expression is required.",
+      "translated": "A expressão cron é obrigatória."
+    },
+    {
+      "id": "native.apple.d674e9211880efdd",
+      "source": "Stagger must be a non-negative number of milliseconds.",
+      "translated": "A defasagem deve ser um número não negativo de milissegundos."
+    },
+    {
+      "id": "native.apple.ecf986d82e845e3d",
+      "source": "On-exit automations need a command.",
+      "translated": "Automações ao encerrar precisam de um comando."
+    },
+    {
+      "id": "native.apple.f9a8e11940df3708",
+      "source": "Changing schedule type is available in the Control UI.",
+      "translated": "A alteração do tipo de agendamento está disponível na Control UI."
+    },
+    {
+      "id": "native.apple.15d3d90d9e55055c",
+      "source": "System event text is required.",
+      "translated": "O texto do evento do sistema é obrigatório."
+    },
+    {
+      "id": "native.apple.f9e96a64787cfd1e",
+      "source": "Agent message is required.",
+      "translated": "A mensagem do agente é obrigatória."
+    },
+    {
+      "id": "native.apple.866cd35476800bb0",
+      "source": "Command arguments must be a JSON array of non-empty strings.",
+      "translated": "Os argumentos do comando devem ser um array JSON de strings não vazias."
+    },
+    {
+      "id": "native.apple.62a94efde347e48b",
+      "source": "The Gateway can change this command path but cannot clear it.",
+      "translated": "O Gateway pode alterar o caminho deste comando, mas não pode removê-lo."
+    },
+    {
+      "id": "native.apple.80a46289c6ed4e6f",
+      "source": "Changing action type is available in the Control UI.",
+      "translated": "A alteração do tipo de ação está disponível na Control UI."
+    },
+    {
+      "id": "native.apple.d848c7c83ca56e87",
+      "source": "Could not encode automation changes.",
+      "translated": "Não foi possível codificar as alterações da automação."
+    },
+    {
       "id": "native.apple.6507fad2526215fc",
       "source": "Promoted Entries",
       "translated": "Entradas promovidas"
@@ -8514,9 +9224,44 @@
       "translated": "Próximo"
     },
     {
-      "id": "native.apple.265fe9a6fd48774a",
-      "source": "Jobs",
-      "translated": "Tarefas"
+      "id": "native.apple.0716c9afeacc4d94",
+      "source": "Automations",
+      "translated": "Automações"
+    },
+    {
+      "id": "native.apple.afaf94d79c41f401",
+      "source": "Search automations",
+      "translated": "Pesquisar automações"
+    },
+    {
+      "id": "native.apple.873168b1830c60c8",
+      "source": "Automation status",
+      "translated": "Status da automação"
+    },
+    {
+      "id": "native.apple.0147a12ccae4382f",
+      "source": "No automations yet",
+      "translated": "Nenhuma automação ainda"
+    },
+    {
+      "id": "native.apple.904fc50cb40466e6",
+      "source": "No matching automations",
+      "translated": "Nenhuma automação correspondente"
+    },
+    {
+      "id": "native.apple.e114f7974019ead5",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "As tarefas agendadas criadas no Gateway aparecerão aqui."
+    },
+    {
+      "id": "native.apple.50668445ecd01096",
+      "source": "Try another search or status filter.",
+      "translated": "Tente outra pesquisa ou outro filtro de status."
+    },
+    {
+      "id": "native.apple.d3df6fbbaafcc29f",
+      "source": "Edit",
+      "translated": "Editar"
     },
     {
       "id": "native.apple.e8964650f824c877",
@@ -8534,9 +9279,14 @@
       "translated": "Pausar"
     },
     {
-      "id": "native.apple.7323dffbc056bdcd",
-      "source": "Queued %@.",
-      "translated": "%@ adicionado à fila."
+      "id": "native.apple.bdd438ba675d7562",
+      "source": "Tracking %@ in run history.",
+      "translated": "Acompanhando %@ no histórico de execuções."
+    },
+    {
+      "id": "native.apple.a3cfbe05c4013cac",
+      "source": "Ran %@. Open Edit for run history.",
+      "translated": "%@ foi executada. Abra Editar para ver o histórico de execuções."
     },
     {
       "id": "native.apple.424e352a747453ed",
@@ -8549,6 +9299,36 @@
       "translated": "%@ pausado."
     },
     {
+      "id": "native.apple.1b3a26abc61c570d",
+      "source": "This automation is not due yet.",
+      "translated": "Esta automação ainda não está programada para ser executada."
+    },
+    {
+      "id": "native.apple.c77dec246ca2f051",
+      "source": "This automation is already running.",
+      "translated": "Esta automação já está em execução."
+    },
+    {
+      "id": "native.apple.2a91173216fc13a0",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "A recuperação após a reinicialização do Gateway ainda está em andamento."
+    },
+    {
+      "id": "native.apple.9d416b662fe79a2d",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Esta automação tem uma configuração inválida."
+    },
+    {
+      "id": "native.apple.74db101b9d066f9b",
+      "source": "The automation scheduler is stopped.",
+      "translated": "O agendador de automações está parado."
+    },
+    {
+      "id": "native.apple.a68b3d18073f246f",
+      "source": "The Gateway did not start this automation.",
+      "translated": "O Gateway não iniciou esta automação."
+    },
+    {
       "id": "native.apple.a373bf2332f0ab6a",
       "source": "Search agents",
       "translated": "Buscar agentes"
@@ -8559,9 +9339,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.45c3f045dd9a3507",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.bed79f8c977be1cd",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.apple.4bee0220d011ab53",
@@ -8674,9 +9454,9 @@
       "translated": "Sonhando"
     },
     {
-      "id": "native.apple.4999264d74844f21",
-      "source": "Scheduled Work",
-      "translated": "Trabalho agendado"
+      "id": "native.apple.22a5389054110057",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.apple.13245a5075869f14",
@@ -8689,19 +9469,19 @@
       "translated": "Seleciona este agente"
     },
     {
-      "id": "native.apple.4f053bb46f35a802",
-      "source": "No scheduled jobs",
-      "translated": "Nenhum trabalho agendado"
+      "id": "native.apple.e0a5458b9b128e21",
+      "source": "No automations yet",
+      "translated": "Nenhuma automação ainda"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron indisponível"
+      "id": "native.apple.b2e8f8831767ae0e",
+      "source": "Automations unavailable",
+      "translated": "Automações indisponíveis"
     },
     {
-      "id": "native.apple.0cd04bacdbcd8fa5",
-      "source": "The gateway has no visible cron jobs.",
-      "translated": "O gateway não tem trabalhos cron visíveis."
+      "id": "native.apple.36277ae5feb079fd",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Os trabalhos agendados criados no gateway aparecerão aqui."
     },
     {
       "id": "native.apple.ae4aa2339b285164",
@@ -9199,11 +9979,6 @@
       "translated": "Bloqueado"
     },
     {
-      "id": "native.apple.c1520bfdcd827e55",
-      "source": "All",
-      "translated": "Todos"
-    },
-    {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
       "translated": "Online"
@@ -9212,6 +9987,21 @@
       "id": "native.apple.a97cdae7c8e13f0e",
       "source": "Ready",
       "translated": "Pronto"
+    },
+    {
+      "id": "native.apple.c1520bfdcd827e55",
+      "source": "All",
+      "translated": "Todos"
+    },
+    {
+      "id": "native.apple.6761fe33fbf18cb3",
+      "source": "Active",
+      "translated": "Ativas"
+    },
+    {
+      "id": "native.apple.c10177d9487a27d5",
+      "source": "Paused",
+      "translated": "Pausadas"
     },
     {
       "id": "native.apple.9c4e8b82edf0b324",
@@ -10499,9 +11289,9 @@
       "translated": "Uso"
     },
     {
-      "id": "native.apple.9eb33a11fb81796b",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.f21bf1e3b5ec896c",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.apple.57587fec1ca582ec",
@@ -12454,6 +13244,16 @@
       "translated": "Requer configuração"
     },
     {
+      "id": "native.apple.0c8eb8bda0a17689",
+      "source": "Any binary: %@",
+      "translated": "Qualquer binário: %@"
+    },
+    {
+      "id": "native.apple.5242f6eeb0ffe658",
+      "source": "OS: %@",
+      "translated": "SO: %@"
+    },
+    {
       "id": "native.apple.113dacafa42bb62e",
       "source": "Missing: %@",
       "translated": "Ausente: %@"
@@ -13167,6 +13967,11 @@
       "id": "native.apple.c86f7ba5b3762eb7",
       "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
       "translated": "Depois que você ativa os Resumos de Saúde, o OpenClaw lê passos, sono, frequência cardíaca em repouso e exercícios para compartilhar os dados agregados solicitados com o provedor de IA configurado."
+    },
+    {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "O OpenClaw não grava nem altera dados de Saúde. Os Resumos de Saúde leem passos, sono, frequência cardíaca em repouso e treinos para compartilhar os agregados solicitados com o provedor de IA configurado."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -14109,9 +14914,9 @@
       "translated": "Uso"
     },
     {
-      "id": "native.apple.db0d9af6d0855d18",
-      "source": "Cron Jobs",
-      "translated": "Tarefas Cron"
+      "id": "native.apple.8c4e07b06e938527",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.apple.20f4753fc51c5341",
@@ -14219,9 +15024,9 @@
       "translated": "Uso"
     },
     {
-      "id": "native.apple.0b4e807d2449e93f",
-      "source": "Cron Jobs",
-      "translated": "Tarefas Cron"
+      "id": "native.apple.fca6a390e072ada9",
+      "source": "Automations",
+      "translated": "Automações"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",
@@ -20114,6 +20919,11 @@
       "translated": "Binários ausentes: \\(self.missingBins.joined(separator: \", \"))"
     },
     {
+      "id": "native.apple.98ac6e8935a9fee5",
+      "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
+      "translated": "Precisa de qualquer binário: \\(self.missingAnyBins.joined(separator: \", \"))"
+    },
+    {
       "id": "native.apple.1ffd9ad47f1dd74a",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "translated": "Env ausente: \\(self.missingEnv.joined(separator: \", \"))"
@@ -20122,6 +20932,11 @@
       "id": "native.apple.c9ef14276ce395c1",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "translated": "Requer configuração: \\(self.missingConfig.joined(separator: \", \"))"
+    },
+    {
+      "id": "native.apple.1f939d96ce8464dc",
+      "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
+      "translated": "Requer SO: \\(self.missingOS.joined(separator: \", \"))"
     },
     {
       "id": "native.apple.c588ae10b9fae52b",

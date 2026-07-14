@@ -89,7 +89,7 @@ describe("exec security floor", () => {
     tempRoot = undefined;
     envSnapshot.restore();
     if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 

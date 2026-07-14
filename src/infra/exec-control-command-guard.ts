@@ -78,7 +78,7 @@ function stripOpenClawPackageRunner(argv: string[]): string[] {
   return argv;
 }
 
-export function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
+function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   const argv = splitShellArgs(raw);
   if (!argv) {
     return false;

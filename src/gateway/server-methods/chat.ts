@@ -101,9 +101,10 @@ import {
 } from "./chat-history-budget.js";
 import {
   capChatHistoryAroundMessage,
+  enrichChatHistoryCompactionMarkers,
+  readChatHistoryPage,
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
-  readChatHistoryPage,
 } from "./chat-history-pages.js";
 import {
   hasGatewayAdminScope,
@@ -562,10 +563,8 @@ async function handleChatHistoryRequest({
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-  const hardMax = 1000;
-  const defaultLimit = 200;
-  const requested = typeof limit === "number" ? limit : defaultLimit;
-  const max = Math.min(hardMax, requested);
+  const requested = typeof limit === "number" ? limit : 200;
+  const max = Math.min(1000, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
   const historyPage = await readChatHistoryPage({
@@ -581,7 +580,7 @@ async function handleChatHistoryRequest({
     offset,
     messageId,
   });
-  const normalized = historyPage.messages;
+  const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
   const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = replaceOversizedChatHistoryMessages({
     messages: normalized,

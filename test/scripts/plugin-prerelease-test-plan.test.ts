@@ -365,6 +365,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       type: "string",
     });
     expect(manifestEnv).toEqual({
+      OPENCLAW_CI_CHANGED_PATHS_JSON:
+        "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}",

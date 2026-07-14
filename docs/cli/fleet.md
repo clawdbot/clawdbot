@@ -10,7 +10,7 @@ title: "Fleet"
 
 `openclaw fleet` manages complete OpenClaw instances called **cells**. Each cell has its own Gateway, state, credentials, channel accounts, container, and loopback-only host port. Use one cell for each tenant trust boundary; do not use one shared Gateway as a hostile multi-tenant boundary.
 
-Fleet is **experimental**. Command names, flags, output shapes, and the container profile can change between releases without a deprecation window while the surface settles.
+Fleet is **experimental**. Command names, flags, output shapes, and the container profile can change between releases without a deprecation window.
 
 Fleet supports Docker and Podman. The default image is `ghcr.io/openclaw/openclaw:latest`.
 
@@ -86,7 +86,7 @@ Automatic allocation selects the first unused registry port at or above `19100`.
 
 Image references are passed as one container-runtime argument. Empty references and values beginning with `-` are rejected so an image cannot be interpreted as a Docker or Podman option.
 
-The selected Docker or Podman endpoint must be local. Fleet rejects remote Docker contexts, `DOCKER_HOST` endpoints, and remote Podman services before reserving a port or creating local state; remote cell hosts need a separate storage and endpoint contract and are deferred from this MVP.
+The selected Docker or Podman endpoint must be local. Fleet rejects remote Docker contexts, `DOCKER_HOST` endpoints, and remote Podman services before reserving a port or creating local state. Remote cell hosts are not supported.
 
 When Fleet starts a new cell, create waits up to about a minute for its Gateway to answer `/healthz`. If the cell does not become healthy, Fleet leaves its container and registry row intact for `fleet status`, `fleet logs`, or explicit removal. `--no-start` skips this health gate. The generated Gateway token of an unhealthy new cell is not lost - it remains in the container environment (`docker|podman inspect`), and because the cell has served no traffic yet, `fleet rm --force` followed by a fresh create is always a safe alternative.
 
@@ -166,7 +166,7 @@ openclaw fleet logs acme --tail 200
 openclaw fleet logs acme --since 10m
 ```
 
-Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
+Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. The stream is pinned to that inspected container ID, so a concurrent replacement cannot redirect it to a newer generation. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
 
 `fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
 
@@ -218,6 +218,8 @@ openclaw fleet restore acme --from ./acme.tgz
 ```
 
 These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
+
+Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `fleet rm <tenant> --force` without `--purge-data`, recreate the cell with the intended image and `--no-start`, then retry restore. The first removal keeps both tenant data directories intact.
 
 Both commands accept `--max-bytes <bytes>` to bound archived or extracted file data, and both apply the same fixed one-million budget of archive path segments so metadata-only archive bombs cannot exhaust host inodes and every accepted backup stays restorable. Backup accepts `--out <path>` and both commands support `--json`.
 

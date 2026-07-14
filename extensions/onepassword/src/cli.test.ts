@@ -127,4 +127,37 @@ describe("1Password CLI output", () => {
     expect(rows[0]?.reason).toHaveLength(80);
     expect(JSON.stringify(rows)).not.toContain(["fixture", "value"].join("-"));
   });
+
+  it("preserves complete surrogate pairs at the audit reason boundary", async () => {
+    const store = new MemoryKeyedStore<AuditRow>();
+    await store.register("split", {
+      timestampMs: 1000,
+      agentId: "agent-a",
+      sessionKey: "session-a",
+      toolCallId: "call-a",
+      slug: "alpha",
+      reason: `${"x".repeat(76)}\u{1f600}tail`,
+      outcome: "auto",
+    });
+    await store.register("fits", {
+      timestampMs: 2000,
+      agentId: "agent-a",
+      sessionKey: "session-a",
+      toolCallId: "call-b",
+      slug: "alpha",
+      reason: `${"x".repeat(75)}\u{1f600}tail`,
+      outcome: "auto",
+    });
+    const { onepassword, write } = setupCommands(store);
+
+    await onepassword.child("audit").run({ limit: "2" });
+    const output = String(write.mock.calls[0]?.[0]);
+    expect(output).not.toContain("\\ud83d");
+    const rows = JSON.parse(output) as Array<Record<string, unknown>>;
+
+    expect(rows.map((row) => row.reason)).toEqual([
+      `${"x".repeat(75)}\u{1f600}...`,
+      `${"x".repeat(76)}...`,
+    ]);
+  });
 });

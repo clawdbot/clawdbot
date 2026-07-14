@@ -13,6 +13,7 @@ import {
   parseArgs,
   prepareBundledAiRuntimePackage,
   runCommandForTest,
+  writePackageInventoryForDocker,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -173,6 +174,32 @@ describe("package-openclaw-for-docker", () => {
     } finally {
       fs.rmSync(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it("writes inventory for a frozen source checkout without the trusted helper", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-frozen-source-");
+    fs.mkdirSync(path.join(sourceDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(path.join(sourceDir, "dist", "entry.js"), "export {};\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+      [
+        'import fs from "node:fs";',
+        'fs.writeFileSync("dist/postinstall-inventory.json", JSON.stringify(["dist/entry.js"]));',
+      ].join("\n"),
+    );
+
+    await writePackageInventoryForDocker(sourceDir);
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(sourceDir, "dist", "postinstall-inventory.json"), "utf8"),
+      ),
+    ).toEqual(["dist/entry.js"]);
+    expect(fs.existsSync(path.join(sourceDir, "scripts", "lib", "package-dist-inventory.ts"))).toBe(
+      false,
+    );
   });
 
   it("rejects pnpm pack with npm metadata output", () => {

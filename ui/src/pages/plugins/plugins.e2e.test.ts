@@ -516,8 +516,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await moreButton.click();
       }
       const workboardMenuItem = sidebar
-        .getByRole("menu", { exact: true, name: "More" })
-        .getByRole("menuitem", { exact: true, name: "Workboard" });
+        .locator("wa-dropdown.sidebar-more-menu")
+        .locator('wa-dropdown-item[value="workboard"] a');
       await workboardMenuItem.waitFor({ state: "visible" });
       expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {

@@ -53,6 +53,7 @@ import {
   renderBackgroundTasksStatusRow,
   type BackgroundTasksProps,
 } from "./chat-background-tasks.ts";
+import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -791,6 +792,9 @@ export function renderChatThread(props: ChatThreadProps) {
   const locale = i18n.getLocale();
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
+    runId:
+      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
+        ?.activeRunIds?.[0] ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -976,38 +980,7 @@ export function renderChatThread(props: ChatThreadProps) {
               (item) => item.key,
               guardChatRenderItems(state, (item) => {
                 if (item.kind === "divider") {
-                  return html`
-                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                        <span class="chat-divider__line"></span>
-                        <span class="chat-divider__label">${item.label}</span>
-                        <span class="chat-divider__line"></span>
-                      </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `;
+                  return renderChatDivider(item, props.onOpenSessionCheckpoints);
                 }
                 if (item.kind === "stream-run") {
                   return renderStreamGroup(item.parts, {

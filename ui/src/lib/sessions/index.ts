@@ -5,7 +5,6 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type {
-  FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionRunStatus,
@@ -29,6 +28,7 @@ import {
 } from "./create.ts";
 import { readSessionCustomGroupNames } from "./custom-groups.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
+import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -90,18 +90,7 @@ export type SessionRunTerminal = {
   endedAt: number;
 };
 
-export type SessionPatch = {
-  label?: string | null;
-  category?: string | null;
-  model?: string | null;
-  thinkingLevel?: string | null;
-  fastMode?: FastMode | null;
-  verboseLevel?: string | null;
-  reasoningLevel?: string | null;
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-};
+export type { SessionPatch } from "./patch.ts";
 
 type SessionDeleteOptions = {
   agentId?: string;
@@ -189,11 +178,7 @@ export type SessionCapability = {
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  patch: (
-    key: string,
-    patch: SessionPatch,
-    options?: { agentId?: string },
-  ) => Promise<SessionsPatchResult | null>;
+  patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
@@ -1041,7 +1026,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const patch = async (
     key: string,
     patchParams: SessionPatch,
-    options: { agentId?: string } = {},
+    options: SessionPatchOptions = {},
   ): Promise<SessionsPatchResult | null> => {
     const scope = captureConnection();
     if (!scope) {
@@ -1069,6 +1054,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       setModelOverride(key, previousModelOverride);
     };
     try {
+      if (options.waitFor) {
+        await options.waitFor;
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
+      }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!isCurrentConnection(scope)) {
         restoreModelOverride();

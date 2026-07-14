@@ -3,7 +3,7 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { createCronToolSchema } from "./cron-tool.js";
+import { createCronTool } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -29,11 +29,12 @@ function propertyAt(
 }
 
 describe("createCronToolSchema", () => {
-  const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
-  const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
+  const schema = createCronTool().parameters;
+  const schemaRecord = schema as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(schema, {
     modelProvider: "gemini",
   }) as unknown as Record<string, unknown>;
-  const jjccGeminiSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
+  const jjccGeminiSchemaRecord = normalizeToolParameterSchema(schema, {
     modelProvider: "jjcc",
     modelId: "gemini-3.1-pro-preview",
   }) as unknown as Record<string, unknown>;
@@ -208,17 +209,17 @@ describe("createCronToolSchema", () => {
     const jobProps = root?.job?.properties as
       | Record<string, { type?: unknown; description?: string }>
       | undefined;
-    const schema = jobProps?.failureAlert;
+    const failureAlertSchema = jobProps?.failureAlert;
     // Must be a plain "object" type — not a type array — so providers that
     // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot) accept it.
-    expect(schema?.type).toBe("object");
+    expect(failureAlertSchema?.type).toBe("object");
     // The description must mention "false" so LLMs know they can disable alerts.
-    expect(schema?.description).toMatch(/false/i);
+    expect(failureAlertSchema?.description).toMatch(/false/i);
   });
 
   it("accepts nullable cron patch clears in the runtime schema", () => {
     expect(
-      Value.Check(createCronToolSchema(), {
+      Value.Check(schema, {
         action: "update",
         jobId: "job-1",
         patch: {
@@ -235,7 +236,7 @@ describe("createCronToolSchema", () => {
 
   it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
     expect(
-      Value.Check(createCronToolSchema(), {
+      Value.Check(schema, {
         action: "update",
         jobId: "job-1",
         patch: {

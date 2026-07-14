@@ -31,13 +31,20 @@ function focusTrigger(trigger: HTMLElement) {
 }
 
 function hoverTrigger(trigger: HTMLElement) {
-  const event = new MouseEvent("pointermove", { bubbles: true, buttons: 0 });
+  const event = new MouseEvent("pointerenter", { bubbles: true, buttons: 0 });
   Object.defineProperty(event, "pointerType", { value: "mouse" });
   trigger.dispatchEvent(event);
 }
 
-function expectPortalCount(count: number) {
-  expect(document.body.querySelectorAll(".openclaw-tooltip")).toHaveLength(count);
+function webAwesomeTooltip(tooltip: TooltipElement) {
+  return tooltip.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip");
+}
+
+function expectOpenCount(count: number) {
+  const open = [...document.querySelectorAll<TooltipElement>("openclaw-tooltip")].filter(
+    (tooltip) => webAwesomeTooltip(tooltip)?.open,
+  );
+  expect(open).toHaveLength(count);
 }
 
 describe("openclaw-tooltip", () => {
@@ -59,15 +66,15 @@ describe("openclaw-tooltip", () => {
     await tooltip.updateComplete;
 
     focusTrigger(trigger);
-    expectPortalCount(1);
+    expectOpenCount(1);
 
     provider.remove();
-    expectPortalCount(0);
+    expectOpenCount(0);
     document.body.append(provider);
     await tooltip.updateComplete;
 
     focusTrigger(trigger);
-    expectPortalCount(1);
+    expectOpenCount(1);
   });
 
   it("keeps show reentry idempotent", async () => {
@@ -80,8 +87,8 @@ describe("openclaw-tooltip", () => {
     focusTrigger(trigger);
     focusTrigger(trigger);
 
-    expectPortalCount(1);
-    expect(document.body.querySelector(".openclaw-tooltip")?.textContent).toBe("Single portal");
+    expectOpenCount(1);
+    expect(webAwesomeTooltip(tooltip)?.textContent).toBe("Single portal");
   });
 
   it("restores the normal hover delay after the provider reconnects", async () => {
@@ -93,17 +100,17 @@ describe("openclaw-tooltip", () => {
     await tooltip.updateComplete;
 
     focusTrigger(trigger);
-    expectPortalCount(1);
+    expectOpenCount(1);
     provider.remove();
-    expectPortalCount(0);
+    expectOpenCount(0);
 
     document.body.append(provider);
     await tooltip.updateComplete;
     hoverTrigger(trigger);
     vi.advanceTimersByTime(39);
-    expectPortalCount(0);
+    expectOpenCount(0);
     vi.advanceTimersByTime(1);
-    expectPortalCount(1);
+    expectOpenCount(1);
   });
 
   it("suppresses a tooltip that repeats fully visible trigger text", async () => {
@@ -114,10 +121,10 @@ describe("openclaw-tooltip", () => {
     await tooltip.updateComplete;
 
     focusTrigger(trigger);
-    expectPortalCount(0);
+    expectOpenCount(0);
     hoverTrigger(trigger);
     vi.runAllTimers();
-    expectPortalCount(0);
+    expectOpenCount(0);
   });
 
   it("keeps a repeated-label tooltip when the trigger clips its text", async () => {
@@ -130,7 +137,52 @@ describe("openclaw-tooltip", () => {
     await tooltip.updateComplete;
 
     focusTrigger(trigger);
-    expectPortalCount(1);
+    expectOpenCount(1);
+  });
+
+  it("keeps a repeated-label tooltip when a nested label clips", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
+    const label = document.createElement("span");
+    label.textContent = "Claude Opus 4.7 Anthropic";
+    Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
+    Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
+    trigger.append(label);
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+  });
+
+  it("does not reopen from pointer-origin focus", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Pointer tooltip");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+    const pointerDown = new MouseEvent("pointerdown", { bubbles: true });
+    Object.defineProperty(pointerDown, "pointerType", { value: "mouse" });
+    trigger.dispatchEvent(pointerDown);
+    focusTrigger(trigger);
+
+    expectOpenCount(0);
+  });
+
+  it("keeps the accessible description in the trigger document tree", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Accessible tooltip");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    const descriptionId = trigger.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
   });
 
   it("releases the active provider reference when an open tooltip is removed", async () => {
@@ -143,9 +195,9 @@ describe("openclaw-tooltip", () => {
     await first.tooltip.updateComplete;
 
     focusTrigger(first.trigger);
-    expectPortalCount(1);
+    expectOpenCount(1);
     first.tooltip.remove();
-    expectPortalCount(0);
+    expectOpenCount(0);
     vi.advanceTimersByTime(20);
 
     const second = createTooltip("Second tooltip");
@@ -153,8 +205,8 @@ describe("openclaw-tooltip", () => {
     await second.tooltip.updateComplete;
     hoverTrigger(second.trigger);
     vi.advanceTimersByTime(39);
-    expectPortalCount(0);
+    expectOpenCount(0);
     vi.advanceTimersByTime(1);
-    expectPortalCount(1);
+    expectOpenCount(1);
   });
 });

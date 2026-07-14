@@ -4,6 +4,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import type { AgentsRouteData } from "./agents/agents-page.ts";
 import { page as agentsPage } from "./agents/route.ts";
+import type { ModelProvidersRouteData } from "./model-providers/model-providers-page.ts";
+import { page as modelProvidersPage } from "./model-providers/route.ts";
 import type { NodesRouteData } from "./nodes/nodes-page.ts";
 import { page as nodesPage } from "./nodes/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
@@ -133,6 +135,26 @@ describe("route preload gateway provenance", () => {
 
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
+  });
+
+  it("keeps model providers provenance from before its lazy module load", async () => {
+    const originalRequest = vi.fn(async () => ({}));
+    const originalClient = { request: originalRequest } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacementClient = {
+      request: replacementRequest,
+    } as unknown as GatewayBrowserClient;
+    const mutable = mutableGateway(snapshot(originalClient, true));
+    const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
+      gateway: mutable.gateway,
+    } as unknown as ApplicationContext);
+
+    mutable.replaceSnapshot(snapshot(replacementClient, true));
+    const data = await request;
+
+    expect(data.client).toBe(originalClient);
+    expect(originalRequest).toHaveBeenCalled();
+    expect(replacementRequest).not.toHaveBeenCalled();
   });
 
   it("keeps skills provenance from before its async preload", async () => {

@@ -17,6 +17,11 @@ on:
         description: UTC date of the private rollback drill in YYYY-MM-DD form; must be within 90 days
         required: false
         type: string
+      allow_failed_publish_recovery:
+        description: Accept a failed Release Publish parent only after every stable platform asset was repaired and published
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -295,6 +300,11 @@ jobs:
             echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it." >&2
             exit 1
           fi
+          if [[ "$EVENT_NAME" == "push" && -f "$closeout_checksum_path" ]]; then
+            echo "Stable closeout already complete for $tag."
+            echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "::warning::Stable closeout skipped: rollback drill repository variables are missing; manual dispatch remains required to complete closeout."
@@ -391,6 +401,7 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
+          ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/github-api-backoff.sh"
@@ -414,7 +425,7 @@ jobs:
           }
           NODE
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion \
+            --json workflowName,event,status,conclusion,headSha \
             > "$RUNNER_TEMP/release-publish-run.json"
           node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
           import { readFileSync } from "node:fs";
@@ -423,13 +434,123 @@ jobs:
             ["workflowName", "OpenClaw Release Publish"],
             ["event", "workflow_dispatch"],
             ["status", "completed"],
-            ["conclusion", "success"],
           ]) {
             if (run[key] !== expected) {
               throw new Error(`OpenClaw Release Publish must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
             }
           }
+          const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";
+          if (recoveryRequested && run.conclusion !== "failure") {
+            throw new Error(
+              `Failed-publish recovery requires conclusion=failure, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          const failedRecovery = recoveryRequested && run.conclusion === "failure";
+          if (run.conclusion !== "success" && !failedRecovery) {
+            throw new Error(
+              `OpenClaw Release Publish must have conclusion=success, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          if (failedRecovery) {
+            console.log("Accepting failed Release Publish parent under explicit complete-platform recovery.");
+          }
           NODE
+
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            parent_log="$RUNNER_TEMP/release-publish-run.log"
+            gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --log \
+              > "$parent_log"
+            mapfile -t windows_node_run_ids < <(
+              sed -nE '/Dispatched windows-node-release\.yml/ { s#.*https://github\.com/openclaw/openclaw/actions/runs/([1-9][0-9]*).*#\1#p; }' "$parent_log" |
+                LC_ALL=C sort -u
+            )
+            if [[ "${#windows_node_run_ids[@]}" != "1" ]]; then
+              echo "Failed-publish recovery requires exactly one Windows Node Release run dispatched by the parent; found ${#windows_node_run_ids[@]}." >&2
+              exit 1
+            fi
+            windows_node_run_id="${windows_node_run_ids[0]}"
+            windows_node_run_json="$RUNNER_TEMP/windows-node-release-run.json"
+            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" \
+              --json workflowName,event,status,conclusion,headSha,url,jobs \
+              > "$windows_node_run_json"
+            parent_head_sha="$(jq -r '.headSha // empty' "$RUNNER_TEMP/release-publish-run.json")"
+            PARENT_HEAD_SHA="$parent_head_sha" \
+              node --input-type=module - "$windows_node_run_json" <<'NODE'
+            import { readFileSync } from "node:fs";
+            const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+            for (const [key, expected] of [
+              ["workflowName", "Windows Node Release"],
+              ["event", "workflow_dispatch"],
+              ["status", "completed"],
+              ["conclusion", "success"],
+              ["headSha", process.env.PARENT_HEAD_SHA],
+            ]) {
+              if (run[key] !== expected) {
+                throw new Error(`Windows Node Release must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+              }
+            }
+            const jobs = (run.jobs ?? []).filter(
+              (job) => job.name === "Promote signed Windows installers" && job.conclusion === "success",
+            );
+            if (jobs.length !== 1) {
+              throw new Error("Windows Node Release must contain one successful signed-installer promotion job.");
+            }
+            for (const name of [
+              "Validate inputs",
+              "Verify Authenticode signatures",
+              "Upload to OpenClaw release",
+              "Verify promoted release asset contract",
+            ]) {
+              const steps = (jobs[0].steps ?? []).filter(
+                (step) => step.name === name && step.conclusion === "success",
+              );
+              if (steps.length !== 1) {
+                throw new Error(`Windows Node Release is missing successful step: ${name}.`);
+              }
+            }
+            NODE
+            windows_node_log="$RUNNER_TEMP/windows-node-release-run.log"
+            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" --log \
+              > "$windows_node_log"
+            windows_node_installer_digests="$(node --input-type=module - "$windows_node_log" <<'NODE'
+            import { readFileSync } from "node:fs";
+            const log = readFileSync(process.argv[2], "utf8");
+            const marker = "EXPECTED_INSTALLER_DIGESTS:";
+            const names = [
+              "OpenClawCompanion-Setup-arm64.exe",
+              "OpenClawCompanion-Setup-x64.exe",
+            ];
+            const contracts = new Set();
+            for (const line of log.split(/\r?\n/u)) {
+              const markerIndex = line.indexOf(marker);
+              if (markerIndex === -1) continue;
+              const candidate = line.slice(markerIndex + marker.length).trim();
+              let parsed;
+              try {
+                parsed = JSON.parse(candidate);
+              } catch {
+                continue;
+              }
+              const keys = Object.keys(parsed).toSorted((left, right) => left.localeCompare(right));
+              if (
+                JSON.stringify(keys) !== JSON.stringify(names) ||
+                !names.every((name) => /^sha256:[0-9a-f]{64}$/u.test(parsed[name] ?? ""))
+              ) {
+                continue;
+              }
+              contracts.add(JSON.stringify(Object.fromEntries(names.map((name) => [name, parsed[name]]))));
+            }
+            if (contracts.size !== 1) {
+              throw new Error(`Windows Node Release logs must contain exactly one candidate-approved digest contract, got ${contracts.size}.`);
+            }
+            process.stdout.write([...contracts][0]);
+            NODE
+            )"
+            {
+              echo "WINDOWS_NODE_RELEASE_RUN_ID=$windows_node_run_id"
+              echo "WINDOWS_NODE_INSTALLER_DIGESTS=$windows_node_installer_digests"
+            } >> "$GITHUB_ENV"
+          fi
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -476,6 +597,7 @@ jobs:
           ROLLBACK_DRILL_ID: ${{ needs.resolve.outputs.rollback_drill_id }}
           ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
           REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}
+          ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
           CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
         run: |
           set -euo pipefail
@@ -484,6 +606,44 @@ jobs:
           gh_with_retry release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,assets \
             > "$CLOSEOUT_DIR/github-release.json"
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            recovery_dir="$CLOSEOUT_DIR/platform-recovery"
+            mkdir -p "$recovery_dir"
+            gh_with_retry release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern OpenClaw-Android.apk \
+              --pattern OpenClaw-Android-SHA256SUMS.txt \
+              --pattern OpenClawCompanion-Setup-arm64.exe \
+              --pattern OpenClawCompanion-Setup-x64.exe \
+              --pattern OpenClawCompanion-SHA256SUMS.txt \
+              --dir "$recovery_dir"
+            (
+              cd "$recovery_dir"
+              verify_checksum_manifest() {
+                local manifest="$1" actual expected normalized
+                shift
+                normalized="${manifest}.normalized"
+                sed 's/\r$//' "$manifest" > "$normalized"
+                expected="$(printf '%s\n' "$@" | LC_ALL=C sort)"
+                actual="$(awk 'NF { name=$2; sub(/^\*/, "", name); print name }' "$normalized" | LC_ALL=C sort)"
+                if [[ "$actual" != "$expected" ]]; then
+                  echo "$manifest must list exactly: $*" >&2
+                  exit 1
+                fi
+                sha256sum --strict --check "$normalized"
+                rm -f "$normalized"
+              }
+              verify_checksum_manifest OpenClaw-Android-SHA256SUMS.txt \
+                OpenClaw-Android.apk
+              verify_checksum_manifest OpenClawCompanion-SHA256SUMS.txt \
+                OpenClawCompanion-Setup-arm64.exe \
+                OpenClawCompanion-Setup-x64.exe
+            )
+            gh_with_retry attestation verify "$recovery_dir/OpenClaw-Android.apk" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/android-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --deny-self-hosted-runners
+          fi
           node scripts/verify-stable-main-closeout.mjs \
             --tag "$RELEASE_TAG" \
             --main-dir "$GITHUB_WORKSPACE" \
@@ -495,6 +655,9 @@ jobs:
             --rollback-drill-id "$ROLLBACK_DRILL_ID" \
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
             --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
+            --require-complete-platform-assets "$ALLOW_FAILED_PUBLISH_RECOVERY" \
+            --windows-node-release-run-id "${WINDOWS_NODE_RELEASE_RUN_ID:-}" \
+            --windows-node-installer-digests "${WINDOWS_NODE_INSTALLER_DIGESTS:-}" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
           release_version="${RELEASE_TAG#v}"
           sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \

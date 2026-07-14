@@ -59,7 +59,7 @@ export {
   type EmbeddedAgentQueueMessageOptions,
 } from "./run-state.js";
 
-export type EmbeddedAgentQueueFailureReason =
+type EmbeddedAgentQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
   | "stale_run"

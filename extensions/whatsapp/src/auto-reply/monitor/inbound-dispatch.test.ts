@@ -687,6 +687,36 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    {
+      name: "prefers trimmed, deduplicated mediaUrls over legacy mediaUrl",
+      mediaUrl: " /tmp/legacy.jpg ",
+      mediaUrls: [" /tmp/preferred.jpg ", "/tmp/preferred.jpg", "   "],
+      expectedMediaUrl: "/tmp/preferred.jpg",
+    },
+    {
+      name: "falls back to trimmed legacy mediaUrl when mediaUrls are whitespace-only",
+      mediaUrl: " /tmp/legacy.jpg ",
+      mediaUrls: ["   ", "\t"],
+      expectedMediaUrl: "/tmp/legacy.jpg",
+    },
+  ])("$name during inbound dispatch", async ({ mediaUrl, mediaUrls, expectedMediaUrl }) => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({ deliverReply });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+    await deliver?.({ text: "caption", mediaUrl, mediaUrls }, { kind: "block" });
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expectReplyResultFields(deliverReply, {
+      mediaUrl: expectedMediaUrl,
+      mediaUrls: [expectedMediaUrl],
+      text: "caption",
+    });
+  });
+
   it("queues final WhatsApp payloads through durable outbound delivery", async () => {
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
       status: "handled_visible",

@@ -275,6 +275,28 @@ describe("renderChatPullRequests", () => {
     expect(row?.querySelector(".chat-pr__dismiss")).toBeNull();
   });
 
+  it("hides the Create PR link while the branch has no createUrl", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        // Unpushed branch with local changed files: the gateway omits
+        // createUrl because GitHub's pull/new page would 404.
+        branch: sessionBranch({ createUrl: undefined, additions: 12, deletions: 3 }),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    expect(row?.querySelector(".chat-pr__branch")?.textContent).toBe(
+      "claude/cloud-workers-live-events",
+    );
+    expect(row?.querySelector(".chat-pr__additions")?.textContent).toBe("+12");
+    expect(row?.querySelector(".chat-pr__create")).toBeNull();
+  });
+
   it("marks the branch row stale when GitHub is rate limited", () => {
     render(
       renderChatPullRequests({

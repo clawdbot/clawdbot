@@ -7,7 +7,7 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -667,7 +667,6 @@ class UsagePage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("usage")}</div>
-          <div class="page-sub">${subtitleForRoute("usage")}</div>
         </div>
         ${renderAgentScopeControl({
           agents: this.context.agents.state.agentsList?.agents ?? [],

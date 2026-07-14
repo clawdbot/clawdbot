@@ -19,7 +19,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
-export type LocalAgentAvatarFailureReason =
+type LocalAgentAvatarFailureReason =
   | "missing"
   | "outside_workspace"
   | "too_large"

@@ -74,6 +74,8 @@ function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): vo
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
+  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);

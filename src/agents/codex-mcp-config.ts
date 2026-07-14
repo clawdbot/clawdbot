@@ -23,12 +23,6 @@ import type {
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
-export type {
-  CodexBundleMcpThreadConfig,
-  CodexMcpServersConfig,
-  LoadCodexBundleMcpThreadConfigParams,
-} from "./codex-mcp-config.types.js";
-
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
   return (
     name === "openclaw" &&

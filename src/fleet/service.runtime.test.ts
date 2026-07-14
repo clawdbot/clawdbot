@@ -33,6 +33,7 @@ function runningInspection(
 ): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: fleetLabels(),
@@ -88,6 +89,7 @@ function createContainerMock(
         running: start,
         labels: fleetLabels(profile.tenantId, profile.attemptId),
         environment: { ...profile.environment },
+        containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
         memory: profile.memory,
         cpus: profile.cpus,
@@ -546,7 +548,7 @@ describe("fleet service", () => {
     expect(containers[action]).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
   });
 
-  it("streams logs only after proving container ownership", async () => {
+  it("pins logs to the inspected container generation after proving ownership", async () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
@@ -556,7 +558,7 @@ describe("fleet service", () => {
       service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
     ).resolves.toBeUndefined();
 
-    expect(containers.logs).toHaveBeenCalledWith("docker", "openclaw-cell-acme", {
+    expect(containers.logs).toHaveBeenCalledWith("docker", "container-id", {
       follow: true,
       tail: 100,
       since: "10m",

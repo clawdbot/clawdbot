@@ -36,6 +36,7 @@ function runningInspection(
 ): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: fleetLabels(),
@@ -91,6 +92,7 @@ function createContainerMock(
         running: start,
         labels: fleetLabels(profile.tenantId, profile.attemptId),
         environment: { ...profile.environment },
+        containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
         memory: profile.memory,
         cpus: profile.cpus,

@@ -4,7 +4,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -838,7 +838,6 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
-          <div class="page-sub">${subtitleForRoute("plugins")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(html`

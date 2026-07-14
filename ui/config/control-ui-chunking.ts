@@ -11,7 +11,7 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
-export function controlUiManualChunk(id: string): string | undefined {
+export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   // These entry-and-route helpers must stay together; separate shared chunks
@@ -21,6 +21,10 @@ export function controlUiManualChunk(id: string): string | undefined {
     normalized.endsWith("/ui/src/lib/clipboard.ts")
   ) {
     return "control-ui-shared";
+  }
+
+  if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
+    return "gateway-runtime";
   }
 
   if (
@@ -59,3 +63,21 @@ export function controlUiManualChunk(id: string): string | undefined {
 
   return undefined;
 }
+
+export const controlUiCodeSplitting = {
+  includeDependenciesRecursively: false,
+  groups: [
+    {
+      name: (id: string) => controlUiStableChunkName(id) ?? null,
+      test: (id: string) => controlUiStableChunkName(id) !== undefined,
+      priority: 20,
+    },
+    {
+      name: (id: string) =>
+        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+      tags: ["$initial"] as ["$initial"],
+      priority: 10,
+      maxSize: 400 * 1024,
+    },
+  ],
+};

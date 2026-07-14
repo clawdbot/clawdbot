@@ -392,6 +392,7 @@ function Install-Node {
 
         # Refresh PATH
         Refresh-ProcessPath
+        Add-InstalledNodeToProcessPath | Out-Null
         if (Check-Node) {
             Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
             return $true
@@ -487,6 +488,20 @@ function Add-ToProcessPath {
     }
 
     $env:Path = "$PathEntry;$env:Path"
+}
+
+function Add-InstalledNodeToProcessPath {
+    foreach ($programFilesRoot in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        $nodeDir = Join-Path $programFilesRoot "nodejs"
+        if (Test-Path (Join-Path $nodeDir "node.exe")) {
+            Add-ToProcessPath $nodeDir
+            return $true
+        }
+    }
+    return $false
 }
 
 function Refresh-ProcessPath {

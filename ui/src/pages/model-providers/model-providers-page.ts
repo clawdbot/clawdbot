@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -586,7 +586,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("model-providers")}</div>
-          <div class="page-sub">${subtitleForRoute("model-providers")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

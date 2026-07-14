@@ -267,7 +267,6 @@ final class TalkModeManager: NSObject {
     private var voiceOverrideActive = false
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
-    private var activeTalkProvider: String = TalkModeManager.defaultTalkProvider
     private var executionMode: TalkModeExecutionMode = .native
     private var runtimeRoute: TalkModeRuntimeRoute = .localElevenLabs
     private var realtimeProvider: String?
@@ -798,7 +797,6 @@ final class TalkModeManager: NSObject {
     private func applyOpenAIRealtimeSelectionDefaults() {
         let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
             UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        self.activeTalkProvider = "openai"
         self.executionMode = .realtimeWebRTC
         self.runtimeRoute = .realtimeWebRTC
         self.realtimeProvider = "openai"
@@ -3987,7 +3985,6 @@ extension TalkModeManager {
             ? nil
             : parsed.realtimeVoiceId
         let realtimeVoiceId = realtimeVoiceOverride ?? parsedRealtimeVoiceId
-        self.activeTalkProvider = routing.activeProvider
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
@@ -4145,7 +4142,6 @@ extension TalkModeManager {
     }
 
     private func applyTalkConfigLoadFailureFallback() {
-        self.activeTalkProvider = Self.defaultTalkProvider
         self.executionMode = .native
         self.runtimeRoute = .localElevenLabs
         self.realtimeProvider = nil

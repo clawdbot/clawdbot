@@ -2,6 +2,9 @@
 // layout through these helpers so pages cannot drift back into bespoke
 // card/pill markup. Styles live in ui/src/styles/settings.css; rules in
 // ui/docs/settings-design.md.
+import "@awesome.me/webawesome/dist/components/radio/radio.js";
+import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "./icons.ts";
 
@@ -126,18 +129,17 @@ export function renderSettingsToggle(props: {
   ariaLabel: string;
 }): TemplateResult {
   return html`
-    <label class="settings-toggle">
-      <input
-        type="checkbox"
-        .checked=${props.checked}
-        ?disabled=${props.disabled ?? false}
-        aria-label=${props.ariaLabel}
-        @change=${(event: Event) => {
-          props.onChange((event.target as HTMLInputElement).checked);
-        }}
-      />
-      <span class="settings-toggle__track"></span>
-    </label>
+    <wa-switch
+      class="settings-toggle"
+      size="s"
+      .checked=${props.checked}
+      ?disabled=${props.disabled ?? false}
+      @change=${(event: Event) => {
+        props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+      }}
+    >
+      <span class="settings-control__sr-label">${props.ariaLabel}</span>
+    </wa-switch>
   `;
 }
 
@@ -151,7 +153,16 @@ export function renderSettingsToggleRow(props: {
   disabled?: boolean;
 }): TemplateResult {
   return html`
-    <label class="settings-row settings-row--toggle">
+    <div
+      class="settings-row settings-row--toggle"
+      @click=${(event: MouseEvent) => {
+        const target = event.target;
+        if (props.disabled || (target instanceof Element && target.closest("wa-switch") !== null)) {
+          return;
+        }
+        props.onChange(!props.checked);
+      }}
+    >
       <div class="settings-row__text">
         <span class="settings-row__title">${props.title}</span>
         ${props.description
@@ -159,49 +170,67 @@ export function renderSettingsToggleRow(props: {
           : nothing}
       </div>
       <div class="settings-row__control">
-        <span class="settings-toggle">
-          <input
-            type="checkbox"
-            .checked=${props.checked}
-            ?disabled=${props.disabled ?? false}
-            @change=${(event: Event) => {
-              props.onChange((event.target as HTMLInputElement).checked);
-            }}
-          />
-          <span class="settings-toggle__track"></span>
-        </span>
+        <wa-switch
+          class="settings-toggle"
+          size="s"
+          .checked=${props.checked}
+          ?disabled=${props.disabled ?? false}
+          @change=${(event: Event) => {
+            props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+          }}
+        >
+          <span class="settings-control__sr-label">${props.title}</span>
+        </wa-switch>
       </div>
-    </label>
+    </div>
   `;
 }
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
   options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
-  /** The clicked button is passed so callers can anchor transitions on it. */
-  onChange: (value: T, event: MouseEvent) => void;
+  /** The selected radio is passed so callers can anchor visual transitions. */
+  onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
 }): TemplateResult {
   return html`
-    <div class="settings-segmented" role="group" aria-label=${props.ariaLabel ?? nothing}>
+    <wa-radio-group
+      class="settings-segmented"
+      size="s"
+      orientation="horizontal"
+      .value=${props.value}
+      ?disabled=${props.disabled ?? false}
+      @change=${(event: Event) => {
+        const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+        if (value !== undefined) {
+          const group = event.currentTarget as HTMLElement;
+          const selected = [...group.querySelectorAll<HTMLElement>("wa-radio")].find(
+            (radio) => radio.getAttribute("value") === value,
+          );
+          props.onChange(value as T, selected ?? group);
+        }
+      }}
+    >
+      ${props.ariaLabel
+        ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
+        : nothing}
       ${props.options.map(
         (option) => html`
-          <button
-            type="button"
+          <wa-radio
             class="settings-segmented__btn ${option.value === props.value
               ? "settings-segmented__btn--active"
               : ""}"
-            aria-pressed=${option.value === props.value ? "true" : "false"}
+            appearance="button"
+            value=${option.value}
+            .checked=${option.value === props.value}
             title=${option.title ?? nothing}
-            ?disabled=${props.disabled ?? false}
-            @click=${(event: MouseEvent) => props.onChange(option.value, event)}
           >
             ${option.label}
-          </button>
+          </wa-radio>
         `,
       )}
-    </div>
+    </wa-radio-group>
   `;
 }
 

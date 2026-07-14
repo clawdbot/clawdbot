@@ -9,7 +9,7 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 
-export type CliExecutableFileIdentity = Readonly<{
+type CliExecutableFileIdentity = Readonly<{
   path: string;
   device: string;
   inode: string;

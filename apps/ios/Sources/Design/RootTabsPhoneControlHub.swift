@@ -216,7 +216,7 @@ struct RootTabsPhoneControlHub: View {
         case .cron:
             AgentProTab(
                 directRoute: .cron,
-                headerTitle: "Cron Jobs",
+                headerTitle: "Automations",
                 openSettings: { self.openGatewayDetail() })
         case .terminal:
             TerminalHubScreen(

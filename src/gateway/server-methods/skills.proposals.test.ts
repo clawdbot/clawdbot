@@ -210,6 +210,25 @@ describe("skills proposal gateway handlers", () => {
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });
 
+  it("reports empty historical scan coverage and validates scan direction", async () => {
+    const status = await callHandler("skills.proposals.historyStatus", {});
+    expect(status).toMatchObject({
+      ok: true,
+      response: {
+        schema: "openclaw.skill-workshop.history-scan.v1",
+        hasScanned: false,
+        reviewedSessions: 0,
+        ideasFound: 0,
+      },
+    });
+
+    const invalid = await callHandler("skills.proposals.historyScan", {
+      direction: "all-time",
+    });
+    expect(invalid.ok).toBe(false);
+    expect((invalid.error as { code?: string }).code).toBe("INVALID_REQUEST");
+  });
+
   it("starts revision chat turns with visible instructions and server-built context", async () => {
     const create = await callHandler("skills.proposals.create", {
       name: "Support File Sampler",

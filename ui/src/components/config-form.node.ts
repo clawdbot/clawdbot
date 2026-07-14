@@ -23,6 +23,7 @@ import {
 } from "./config-form.shared.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsSegmented,
   renderSettingsToggle,
   renderSettingsToggleRow,
 } from "./settings-ui.ts";
@@ -196,32 +197,27 @@ function renderSegmentedControl(params: {
   options: unknown[];
   resolvedValue: unknown;
   disabled: boolean;
+  ariaLabel: string;
   onSelect: (value: unknown) => void;
 }): TemplateResult {
-  return html`
-    <div class="settings-segmented" role="group">
-      ${params.options.map(
-        (option) => html`
-          <button
-            type="button"
-            class="settings-segmented__btn ${matchesComparablePrimitiveValue(
-              option,
-              params.resolvedValue,
-            )
-              ? "settings-segmented__btn--active"
-              : ""}"
-            aria-pressed=${matchesComparablePrimitiveValue(option, params.resolvedValue)
-              ? "true"
-              : "false"}
-            ?disabled=${params.disabled}
-            @click=${() => params.onSelect(option)}
-          >
-            ${formatUnknownText(option)}
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  const selectedIndex = params.options.findIndex((option) =>
+    matchesComparablePrimitiveValue(option, params.resolvedValue),
+  );
+  return renderSettingsSegmented({
+    value: selectedIndex < 0 ? "" : String(selectedIndex),
+    options: params.options.map((option, index) => ({
+      value: String(index),
+      label: formatUnknownText(option),
+    })),
+    disabled: params.disabled,
+    ariaLabel: params.ariaLabel,
+    onChange: (index) => {
+      const option = params.options[Number(index)];
+      if (option !== undefined) {
+        params.onSelect(option);
+      }
+    },
+  });
 }
 
 export function renderNode(params: {
@@ -300,6 +296,7 @@ export function renderNode(params: {
           options: literals,
           resolvedValue,
           disabled,
+          ariaLabel: label,
           onSelect: (literal) => onPatch(path, literal),
         }),
       });
@@ -365,6 +362,7 @@ export function renderNode(params: {
           options,
           resolvedValue,
           disabled,
+          ariaLabel: label,
           onSelect: (option) => onPatch(path, option),
         }),
       });

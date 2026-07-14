@@ -18,7 +18,7 @@ type AttemptTrajectoryTerminal = {
 };
 
 /** Signals that decide whether a completed run attempt has deliverable output. */
-export type ResolveAttemptTrajectoryTerminalParams = {
+type ResolveAttemptTrajectoryTerminalParams = {
   promptError?: unknown;
   aborted: boolean;
   externalAbort: boolean;

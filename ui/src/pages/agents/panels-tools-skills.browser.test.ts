@@ -290,7 +290,7 @@ describe("agents tools panel (browser)", () => {
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
-    const toggle = container.querySelector<HTMLInputElement>(".agent-tool-toggle input");
+    const toggle = container.querySelector(".agent-tool-toggle wa-switch");
 
     expect(tool?.open).toBe(false);
     expect(toggle?.closest(".agent-tool-summary")).toBe(summary);

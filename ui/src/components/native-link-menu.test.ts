@@ -6,6 +6,7 @@ import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
+type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
 // The non-isolated UI runner resets modules but not customElements. Register
 // the current class graph so instanceof and locale updates share one module.
@@ -47,7 +48,7 @@ async function mountMenu(options: {
 }
 
 function menuItems(menu: ParentNode): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  return [...menu.querySelectorAll<HTMLButtonElement>("wa-dropdown-item")];
 }
 
 describe("native link menu", () => {
@@ -59,6 +60,9 @@ describe("native link menu", () => {
     });
     const items = menuItems(menu);
 
+    await Promise.resolve();
+    expect(document.activeElement).toBe(items[0]);
+
     expect(
       items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
     ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
@@ -69,11 +73,19 @@ describe("native link menu", () => {
 
   it("rerenders open actions when the locale changes", async () => {
     const menu = await mountMenu({});
+    const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");
+    expect(dropdown).not.toBeNull();
+    await dropdown?.updateComplete;
 
     await i18n.setLocale("de");
     await menu.updateComplete;
 
-    expect(menu.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    expect(menu.querySelector("wa-dropdown")?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    await vi.waitFor(() =>
+      expect(dropdown?.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
+        "Link-Aktionen",
+      ),
+    );
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
     ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);
@@ -97,28 +109,42 @@ describe("native link menu", () => {
     expect(calls).toEqual(["close", "copy"]);
   });
 
-  it("closes on Escape and outside pointerdown while preserving trigger clicks", async () => {
+  it("closes on Escape without leaking the key to an underlying dialog", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
     containers.push(trigger);
     const onClose = vi.fn();
-    await mountMenu({ trigger, onClose });
+    const menu = await mountMenu({ trigger, onClose });
+    const escaped = vi.fn();
+    menu.addEventListener("keydown", escaped);
 
-    const escape = new KeyboardEvent("keydown", {
+    const keydown = new KeyboardEvent("keydown", {
       key: "Escape",
       bubbles: true,
       cancelable: true,
     });
-    document.dispatchEvent(escape);
+    menu.dispatchEvent(keydown);
+
+    expect(keydown.defaultPrevented).toBe(true);
+    expect(escaped).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(escape.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(trigger);
+  });
 
-    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    expect(onClose).toHaveBeenCalledTimes(2);
+  it("closes after Web Awesome hides without stealing focus", async () => {
+    const trigger = document.createElement("a");
+    trigger.href = "https://example.com";
+    document.body.append(trigger);
+    containers.push(trigger);
+    const onClose = vi.fn();
+    const menu = await mountMenu({ trigger, onClose });
 
-    trigger.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    expect(onClose).toHaveBeenCalledTimes(2);
+    menu
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(trigger);
   });
 });

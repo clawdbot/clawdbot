@@ -1039,10 +1039,10 @@
 }
 
 .sidebar-file-view__editor-menu {
-  position: absolute;
   z-index: var(--z-dropdown);
-  top: calc(100% + 6px);
-  right: 0;
+}
+
+.sidebar-file-view__editor-menu::part(menu) {
   min-width: 132px;
   padding: 5px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
@@ -1052,23 +1052,9 @@
 }
 
 .sidebar-file-view__editor-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 30px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 13px;
   text-align: left;
-}
-
-.sidebar-file-view__editor-item:hover,
-.sidebar-file-view__editor-item:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
 .file-view__search {

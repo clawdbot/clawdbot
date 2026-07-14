@@ -15,6 +15,7 @@ import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
+export * from "./session-history.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -40,7 +41,6 @@ import {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
-  listSqliteSessionEntriesByStatus,
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   forkSqliteSessionEntryFromParentTarget,
@@ -1124,14 +1124,6 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
     return openSessionEntryReadView(scope).entries();
   }
   return listSqliteSessionEntries(scope);
-}
-
-/** Lists entries selected by the indexed normalized session status. */
-export function listSessionEntriesByStatus(
-  scope: SessionEntryListScope,
-  statuses: readonly SessionEntryStatus[],
-): SessionEntrySummary[] {
-  return listSqliteSessionEntriesByStatus(scope, statuses);
 }
 
 /**

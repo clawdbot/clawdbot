@@ -1289,7 +1289,7 @@ function materializeTelegramRichLiteralWhitespace(segment: string): string {
 // as line breaks. Materialize inline newlines as <br> so multi-line prose and
 // bullet runs keep their breaks, while leaving newlines literal inside
 // code/pre/math and where they only separate block-level tags.
-export function materializeTelegramRichHtmlLineBreaks(html: string): string {
+function materializeTelegramRichHtmlLineBreaks(html: string): string {
   if (!html.includes("\n")) {
     return html;
   }

@@ -39,7 +39,7 @@ if (!isHighlightJs(highlightJsModule)) {
 const hljs = highlightJsModule;
 
 /** Formatter applied to highlighted text segments. */
-export type HighlightFormatter = (text: string) => string;
+type HighlightFormatter = (text: string) => string;
 /** Mapping from highlight.js scope names to text formatters. */
 type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 

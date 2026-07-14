@@ -41,8 +41,6 @@ type TaskCompletionPromptMode = "plain" | "protected";
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
-export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
-
 function sanitizeSingleLineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value)
     .replace(/\r?\n+/g, " ")

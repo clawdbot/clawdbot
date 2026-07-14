@@ -4,12 +4,15 @@ import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
-  materializeTelegramRichHtmlLineBreaks,
   normalizeTelegramOutboundRichHtml,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
+
+function normalizeRichLineBreaks(html: string): string {
+  return normalizeTelegramOutboundRichHtml(html).html;
+}
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -104,28 +107,24 @@ describe("markdownToTelegramHtml", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
     expect(
-      materializeTelegramRichHtmlLineBreaks(
-        "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
-      ),
+      normalizeRichLineBreaks("Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen"),
     ).toBe("Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen");
-    expect(materializeTelegramRichHtmlLineBreaks("Line one\nLine two")).toBe(
-      "Line one<br>Line two",
-    );
+    expect(normalizeRichLineBreaks("Line one\nLine two")).toBe("Line one<br>Line two");
     // Soft breaks inside an inline-styled block (blockquote) also collapse.
-    expect(materializeTelegramRichHtmlLineBreaks("<blockquote>one\ntwo</blockquote>")).toBe(
+    expect(normalizeRichLineBreaks("<blockquote>one\ntwo</blockquote>")).toBe(
       "<blockquote>one<br>two</blockquote>",
     );
-    expect(
-      materializeTelegramRichHtmlLineBreaks('<b>one</b>\n<a href="https://example.com">two</a>'),
-    ).toBe('<b>one</b><br><a href="https://example.com">two</a>');
+    expect(normalizeRichLineBreaks('<b>one</b>\n<a href="https://example.com">two</a>')).toBe(
+      '<b>one</b><br><a href="https://example.com">two</a>',
+    );
   });
 
   it("keeps newlines literal inside code, pre, and math", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("<pre><code>first\nsecond\n</code></pre>")).toBe(
+    expect(normalizeRichLineBreaks("<pre><code>first\nsecond\n</code></pre>")).toBe(
       "<pre><code>first\nsecond\n</code></pre>",
     );
-    expect(materializeTelegramRichHtmlLineBreaks("<code>a\nb</code>")).toBe("<code>a\nb</code>");
-    expect(materializeTelegramRichHtmlLineBreaks("<tg-math-block>x\ny</tg-math-block>")).toBe(
+    expect(normalizeRichLineBreaks("<code>a\nb</code>")).toBe("<code>a\nb</code>");
+    expect(normalizeRichLineBreaks("<tg-math-block>x\ny</tg-math-block>")).toBe(
       "<tg-math-block>x\ny</tg-math-block>",
     );
   });
@@ -134,16 +133,14 @@ describe("markdownToTelegramHtml", () => {
     // Block tags already break; a stray <br> would add a blank line or land as an
     // invalid container child. Mixed text hugging a block keeps its boundary \n too.
     const blocks = "<h2>Plan</h2>\n<table><tbody><tr><td>A</td></tr></tbody></table>";
-    expect(materializeTelegramRichHtmlLineBreaks(blocks)).toBe(blocks);
+    expect(normalizeRichLineBreaks(blocks)).not.toContain("<br>");
     expect(
-      materializeTelegramRichHtmlLineBreaks(
-        'A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB',
-      ),
-    ).toBe('A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB');
+      normalizeRichLineBreaks('A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB'),
+    ).not.toContain("<br>");
   });
 
   it("does not let a self-closing literal tag swallow later line breaks", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("<tg-math/>\na\nb")).toBe("<tg-math/><br>a<br>b");
+    expect(normalizeRichLineBreaks("<tg-math/>\na\nb")).toBe("&lt;tg-math/&gt;<br>a<br>b");
   });
 
   it("does not inject <br> into pretty-printed rich containers", () => {
@@ -152,18 +149,18 @@ describe("markdownToTelegramHtml", () => {
     // block-counting set omits thead/tbody/td/th/caption/figcaption/summary.
     const table =
       "<table>\n<thead>\n<tr><th>H</th></tr>\n</thead>\n<tbody>\n<tr><td>A</td></tr>\n</tbody>\n</table>";
-    expect(materializeTelegramRichHtmlLineBreaks(table)).toBe(table);
+    expect(normalizeRichLineBreaks(table)).not.toContain("<br>");
     const figure =
       '<figure>\n<img src="https://x/a.jpg"/>\n<figcaption>\nCap\n</figcaption>\n</figure>';
-    expect(materializeTelegramRichHtmlLineBreaks(figure)).toBe(figure);
+    expect(normalizeRichLineBreaks(figure)).not.toContain("<br>");
     const details = "<details>\n<summary>\nMore\n</summary>\nBody\n</details>";
-    expect(materializeTelegramRichHtmlLineBreaks(details)).toBe(details);
+    expect(normalizeRichLineBreaks(details)).not.toContain("<br>");
   });
 
   it("keeps existing <br> tags intact without doubling adjacent newlines", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("a<br>b\nc")).toBe("a<br>b<br>c");
+    expect(normalizeRichLineBreaks("a<br>b\nc")).toBe("a<br>b<br>c");
     // A newline hugging an existing <br> stays literal — the break already exists.
-    expect(materializeTelegramRichHtmlLineBreaks("line1<br>\nline2")).toBe("line1<br>\nline2");
+    expect(normalizeRichLineBreaks("line1<br>\nline2")).toBe("line1<br>\nline2");
   });
 
   it("preserves rich table, details, quote, checklist, anchor, and math HTML", () => {

@@ -455,7 +455,9 @@ scene_ready_text() {
     chat) printf '%s\n' "Ready when you are" ;;
     voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
-    gateway) printf '%s\n' "Add Gateway" ;;
+    # Connected fixtures can push Add Gateway below the composed viewport, so
+    # wait for the gateway detail's always-visible subtitle instead.
+    gateway) printf '%s\n' "Connection between this phone and OpenClaw." ;;
     *)
       echo "Unknown Android screenshot scene: $1" >&2
       return 1

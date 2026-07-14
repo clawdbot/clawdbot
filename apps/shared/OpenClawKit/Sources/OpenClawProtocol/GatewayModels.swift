@@ -116,6 +116,15 @@ public enum TaskSuggestionResolution: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public enum MemoryMigrationItemStatus: String, Codable, Sendable {
+    case planned = "planned"
+    case migrated = "migrated"
+    case skipped = "skipped"
+    case warning = "warning"
+    case conflict = "conflict"
+    case error = "error"
+}
+
 public enum ApprovalKind: String, Codable, Sendable {
     case exec = "exec"
     case plugin = "plugin"
@@ -1017,6 +1026,7 @@ public struct SystemInfoResult: Codable, Sendable {
     public let port: Int?
     public let nodeversion: String
     public let pid: Int
+    public let processinstanceid: String?
     public let uptimems: Int
     public let cpucount: Int
     public let cpumodel: String?
@@ -1038,6 +1048,7 @@ public struct SystemInfoResult: Codable, Sendable {
         port: Int? = nil,
         nodeversion: String,
         pid: Int,
+        processinstanceid: String? = nil,
         uptimems: Int,
         cpucount: Int,
         cpumodel: String? = nil,
@@ -1058,6 +1069,7 @@ public struct SystemInfoResult: Codable, Sendable {
         self.port = port
         self.nodeversion = nodeversion
         self.pid = pid
+        self.processinstanceid = processinstanceid
         self.uptimems = uptimems
         self.cpucount = cpucount
         self.cpumodel = cpumodel
@@ -1080,6 +1092,7 @@ public struct SystemInfoResult: Codable, Sendable {
         case port
         case nodeversion = "nodeVersion"
         case pid
+        case processinstanceid = "processInstanceId"
         case uptimems = "uptimeMs"
         case cpucount = "cpuCount"
         case cpumodel = "cpuModel"
@@ -9426,6 +9439,88 @@ public struct SkillsProposalsListResult: Codable, Sendable {
     }
 }
 
+public struct SkillsProposalHistoryStatusParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct SkillsProposalHistoryScanParams: Codable, Sendable {
+    public let agentid: String?
+    public let direction: AnyCodable?
+
+    public init(
+        agentid: String? = nil,
+        direction: AnyCodable? = nil)
+    {
+        self.agentid = agentid
+        self.direction = direction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case direction
+    }
+}
+
+public struct SkillsProposalHistoryScanResult: Codable, Sendable {
+    public let schema: String
+    public let hasscanned: Bool
+    public let reviewedsessions: Int
+    public let ideasfound: Int
+    public let hasmore: Bool
+    public let lastscanreviewed: Int
+    public let lastscanideas: Int
+    public let lastscanat: String?
+    public let oldestreviewedat: String?
+    public let newestreviewedat: String?
+
+    public init(
+        schema: String,
+        hasscanned: Bool,
+        reviewedsessions: Int,
+        ideasfound: Int,
+        hasmore: Bool,
+        lastscanreviewed: Int,
+        lastscanideas: Int,
+        lastscanat: String? = nil,
+        oldestreviewedat: String? = nil,
+        newestreviewedat: String? = nil)
+    {
+        self.schema = schema
+        self.hasscanned = hasscanned
+        self.reviewedsessions = reviewedsessions
+        self.ideasfound = ideasfound
+        self.hasmore = hasmore
+        self.lastscanreviewed = lastscanreviewed
+        self.lastscanideas = lastscanideas
+        self.lastscanat = lastscanat
+        self.oldestreviewedat = oldestreviewedat
+        self.newestreviewedat = newestreviewedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case hasscanned = "hasScanned"
+        case reviewedsessions = "reviewedSessions"
+        case ideasfound = "ideasFound"
+        case hasmore = "hasMore"
+        case lastscanreviewed = "lastScanReviewed"
+        case lastscanideas = "lastScanIdeas"
+        case lastscanat = "lastScanAt"
+        case oldestreviewedat = "oldestReviewedAt"
+        case newestreviewedat = "newestReviewedAt"
+    }
+}
+
 public struct SkillsProposalInspectParams: Codable, Sendable {
     public let agentid: String?
     public let proposalid: String
@@ -10435,6 +10530,260 @@ public struct LogsTailResult: Codable, Sendable {
         case lines
         case truncated
         case reset
+    }
+}
+
+public struct MemoryMigrationItem: Codable, Sendable {
+    public let id: String
+    public let status: MemoryMigrationItemStatus
+    public let source: String?
+    public let target: String?
+    public let message: String?
+    public let reason: String?
+    public let details: [String: AnyCodable]?
+
+    public init(
+        id: String,
+        status: MemoryMigrationItemStatus,
+        source: String? = nil,
+        target: String? = nil,
+        message: String? = nil,
+        reason: String? = nil,
+        details: [String: AnyCodable]? = nil)
+    {
+        self.id = id
+        self.status = status
+        self.source = source
+        self.target = target
+        self.message = message
+        self.reason = reason
+        self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case status
+        case source
+        case target
+        case message
+        case reason
+        case details
+    }
+}
+
+public struct MemoryMigrationSummary: Codable, Sendable {
+    public let total: Int
+    public let planned: Int
+    public let migrated: Int
+    public let skipped: Int
+    public let conflicts: Int
+    public let errors: Int
+    public let sensitive: Int
+
+    public init(
+        total: Int,
+        planned: Int,
+        migrated: Int,
+        skipped: Int,
+        conflicts: Int,
+        errors: Int,
+        sensitive: Int)
+    {
+        self.total = total
+        self.planned = planned
+        self.migrated = migrated
+        self.skipped = skipped
+        self.conflicts = conflicts
+        self.errors = errors
+        self.sensitive = sensitive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case planned
+        case migrated
+        case skipped
+        case conflicts
+        case errors
+        case sensitive
+    }
+}
+
+public struct MemoryMigrationProviderPlan: Codable, Sendable {
+    public let providerid: String
+    public let label: String
+    public let description: String?
+    public let planfingerprint: String?
+    public let found: Bool
+    public let source: String?
+    public let target: String?
+    public let confidence: AnyCodable?
+    public let message: String?
+    public let error: String?
+    public let summary: MemoryMigrationSummary
+    public let items: [MemoryMigrationItem]
+    public let warnings: [String]?
+
+    public init(
+        providerid: String,
+        label: String,
+        description: String? = nil,
+        planfingerprint: String? = nil,
+        found: Bool,
+        source: String? = nil,
+        target: String? = nil,
+        confidence: AnyCodable? = nil,
+        message: String? = nil,
+        error: String? = nil,
+        summary: MemoryMigrationSummary,
+        items: [MemoryMigrationItem],
+        warnings: [String]? = nil)
+    {
+        self.providerid = providerid
+        self.label = label
+        self.description = description
+        self.planfingerprint = planfingerprint
+        self.found = found
+        self.source = source
+        self.target = target
+        self.confidence = confidence
+        self.message = message
+        self.error = error
+        self.summary = summary
+        self.items = items
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerid = "providerId"
+        case label
+        case description
+        case planfingerprint = "planFingerprint"
+        case found
+        case source
+        case target
+        case confidence
+        case message
+        case error
+        case summary
+        case items
+        case warnings
+    }
+}
+
+public struct MigrationsMemoryPlanParams: Codable, Sendable {
+    public let agentid: String
+    public let overwrite: Bool?
+
+    public init(
+        agentid: String,
+        overwrite: Bool? = nil)
+    {
+        self.agentid = agentid
+        self.overwrite = overwrite
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case overwrite
+    }
+}
+
+public struct MigrationsMemoryPlanResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let providers: [MemoryMigrationProviderPlan]
+
+    public init(
+        agentid: String,
+        workspace: String,
+        providers: [MemoryMigrationProviderPlan])
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.providers = providers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case providers
+    }
+}
+
+public struct MigrationsMemoryApplyParams: Codable, Sendable {
+    public let idempotencykey: String
+    public let agentid: String
+    public let providerid: String
+    public let planfingerprint: String
+    public let itemids: [String]
+    public let overwrite: Bool?
+
+    public init(
+        idempotencykey: String,
+        agentid: String,
+        providerid: String,
+        planfingerprint: String,
+        itemids: [String],
+        overwrite: Bool? = nil)
+    {
+        self.idempotencykey = idempotencykey
+        self.agentid = agentid
+        self.providerid = providerid
+        self.planfingerprint = planfingerprint
+        self.itemids = itemids
+        self.overwrite = overwrite
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case idempotencykey = "idempotencyKey"
+        case agentid = "agentId"
+        case providerid = "providerId"
+        case planfingerprint = "planFingerprint"
+        case itemids = "itemIds"
+        case overwrite
+    }
+}
+
+public struct MigrationsMemoryApplyResult: Codable, Sendable {
+    public let providerid: String
+    public let source: String
+    public let target: String?
+    public let summary: MemoryMigrationSummary
+    public let items: [MemoryMigrationItem]
+    public let warnings: [String]?
+    public let backuppath: String?
+    public let reportdir: String?
+
+    public init(
+        providerid: String,
+        source: String,
+        target: String? = nil,
+        summary: MemoryMigrationSummary,
+        items: [MemoryMigrationItem],
+        warnings: [String]? = nil,
+        backuppath: String? = nil,
+        reportdir: String? = nil)
+    {
+        self.providerid = providerid
+        self.source = source
+        self.target = target
+        self.summary = summary
+        self.items = items
+        self.warnings = warnings
+        self.backuppath = backuppath
+        self.reportdir = reportdir
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerid = "providerId"
+        case source
+        case target
+        case summary
+        case items
+        case warnings
+        case backuppath = "backupPath"
+        case reportdir = "reportDir"
     }
 }
 

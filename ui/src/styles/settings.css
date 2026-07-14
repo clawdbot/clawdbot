@@ -1,3 +1,7 @@
+:root {
+  --settings-control-height: 32px;
+}
+
 /* ── Settings design language ──────────────────────────────────────────────
  *
  * One structural pattern for every settings surface:
@@ -180,11 +184,13 @@
 
 .settings-row__control {
   display: flex;
-  flex-wrap: wrap;
+  /* No wrap here: Chromium sizes a wrappable shrink-to-fit flex container to
+     its widest item, collapsing multi-control clusters. The <=640px block
+     gives the cluster a definite width and enables wrapping there. */
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 60%;
 }
@@ -225,7 +231,7 @@
   cursor: pointer;
 }
 
-.settings-row--toggle:has(input:disabled) {
+.settings-row--toggle:has(wa-switch[disabled]) {
   cursor: not-allowed;
 }
 
@@ -275,6 +281,40 @@
 
 /* ── Controls ── */
 
+/* One control height inside settings clusters. Buttons, inputs, selects, and
+   segmented controls share 32px so mixed rows never show ragged heights.
+   Multi-select list boxes and textareas keep their natural height. */
+.settings-row__control .btn,
+.settings-section__actions .btn,
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
+/* Segmented keeps its 2px track inset; the buttons fill the inner height.
+   min-height (not height) so many-option enums can still wrap to two lines. */
+.settings-segmented {
+  min-height: var(--settings-control-height);
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+.settings-segmented > .settings-segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  padding-block: 0;
+}
+
+.settings-row__control .btn--icon,
+.settings-section__actions .btn--icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding-inline: 0;
+}
+
 .settings-toggle {
   display: inline-flex;
   align-items: center;
@@ -282,56 +322,20 @@
   cursor: pointer;
 }
 
-.settings-toggle input {
+.settings-control__sr-label {
   position: absolute;
-  opacity: 0;
-  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.settings-toggle__track {
-  position: relative;
-  width: 38px;
-  height: 22px;
-  background: color-mix(in srgb, var(--bg) 70%, var(--border) 30%);
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-radius: var(--radius-full);
-  transition:
-    background var(--duration-normal) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.settings-toggle__track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: var(--muted);
-  border-radius: 50%;
-  transition:
-    transform var(--duration-normal) var(--ease-spring),
-    background var(--duration-normal) var(--ease-out);
-}
-
-.settings-toggle input:checked + .settings-toggle__track {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.settings-toggle input:checked + .settings-toggle__track::after {
-  transform: translateX(16px);
-  background: #fff;
-}
-
-.settings-toggle input:focus-visible + .settings-toggle__track {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.settings-toggle input:disabled + .settings-toggle__track {
-  opacity: 0.45;
-  cursor: not-allowed;
+wa-switch.settings-toggle {
+  flex: none;
 }
 
 .settings-segmented {
@@ -343,6 +347,20 @@
   border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   border-radius: var(--radius-md);
   padding: 2px;
+}
+
+wa-radio-group.settings-segmented::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+wa-radio-group.settings-segmented::part(radios) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .settings-segmented__btn {
@@ -526,6 +544,9 @@ textarea.settings-input {
   }
 
   .settings-row__control {
+    /* Definite width makes flex-wrap size lines correctly (see desktop note). */
+    width: 100%;
     max-width: 100%;
+    flex-wrap: wrap;
   }
 }

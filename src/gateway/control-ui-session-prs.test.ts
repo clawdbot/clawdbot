@@ -596,7 +596,7 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
-  it("omits the branch payload until the branch exists on origin", async () => {
+  it("reports local changes without createUrl until the branch exists on origin", async () => {
     await git("init", "--initial-branch=main", ".");
     await fs.writeFile(path.join(root, "a.txt"), "one\n");
     await git("add", "a.txt");
@@ -624,8 +624,53 @@ describe("session branch diff stats", () => {
       },
     );
 
-    // GitHub's pull/new page 404s for unpushed branches, so no Create PR row.
-    expect(result.branch).toBeUndefined();
+    // GitHub's pull/new page 404s for unpushed branches, so no Create PR
+    // link — but the session's changed files still get a row.
+    expect(result.branch).toEqual({
+      owner: "openclaw",
+      repo: "openclaw",
+      branch: "feature",
+      additions: 1,
+      deletions: 0,
+    });
+  });
+
+  it("reports uncommitted changes when the remote branch has nothing to compare", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await fs.appendFile(path.join(root, "a.txt"), "pending\n");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
+      },
+    );
+
+    // origin/feature == origin/main, so no Create PR link yet, but the dirty
+    // working tree is visible work the row must surface.
+    expect(result.branch).toEqual({
+      owner: "openclaw",
+      repo: "openclaw",
+      branch: "feature",
+      additions: 1,
+      deletions: 0,
+    });
   });
 
   it("omits the branch payload when the default branch is unknown", async () => {

@@ -204,7 +204,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         sortDir: "asc",
       });
 
-      await page.locator("details.cron-filter-popover > summary").click();
+      await page.locator(".cron-filter-popover__trigger").click();
       await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
       await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
 
@@ -374,6 +374,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       await expect
         .poll(() => activityTab.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await page.keyboard.press("Enter");
       await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
       await expect
         .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())

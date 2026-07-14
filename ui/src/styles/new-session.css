@@ -50,8 +50,7 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-/* Cursor-style quiet trigger row: each control is a <details> whose summary
-   reads as muted text with a chevron; the menu floats below the trigger. */
+/* Cursor-style quiet trigger row. Web Awesome owns popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;
@@ -74,6 +73,9 @@ openclaw-new-session-page {
   list-style: none;
   cursor: pointer;
   user-select: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
 }
 
 .new-session-page__trigger::-webkit-details-marker {
@@ -81,7 +83,7 @@ openclaw-new-session-page {
 }
 
 .new-session-page__trigger:hover,
-.new-session-page__select[open] > .new-session-page__trigger {
+.new-session-page__trigger[aria-expanded="true"] {
   color: var(--text);
 }
 
@@ -92,6 +94,11 @@ openclaw-new-session-page {
 
 .new-session-page__trigger--disabled:hover {
   color: var(--muted);
+}
+
+/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
+.new-session-page__trigger--hiding {
+  pointer-events: none;
 }
 
 .new-session-page__runtime {
@@ -140,11 +147,11 @@ openclaw-new-session-page {
 
 /* Menu panel anchored under its trigger; item rows reuse the shared
    .session-menu__* styles so every menu in the app reads the same. */
-.new-session-page__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 80;
+wa-popover.new-session-page__select {
+  --max-width: min(320px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__select::part(body) {
   min-width: 224px;
   max-width: min(320px, calc(100vw - 24px));
   padding: 6px;
@@ -194,11 +201,41 @@ openclaw-new-session-page {
 }
 
 /* The folder menu hosts the directory browser; wider than the list menus. */
-.new-session-page__menu--browser {
+wa-popover.new-session-page__select--folder::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
+}
+
+.new-session-page__browser-menu {
+  width: 100%;
+}
+
+.new-session-page__agent-select::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.new-session-page__agent-select::part(combobox) {
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.new-session-page__agent-select::part(display-input) {
+  font-size: 12px;
+  color: inherit;
 }
 
 .new-session-page__target-icon {
@@ -355,9 +392,7 @@ openclaw-new-session-page {
     position: static;
   }
 
-  .new-session-page__menu {
-    right: 0;
-    left: 0;
+  wa-popover.new-session-page__select::part(body) {
     width: auto;
     max-width: none;
   }

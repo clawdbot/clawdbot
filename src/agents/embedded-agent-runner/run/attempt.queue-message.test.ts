@@ -6,8 +6,11 @@ import {
   cancelQueuedSteeringMessage,
   steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
-  type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
+
+type EmbeddedAgentActiveSessionSteerTarget = Parameters<
+  typeof steerActiveSessionWithOptionalDeliveryWait
+>[0];
 
 describe("embedded OpenClaw queued steering cancellation", () => {
   it("forwards prepared transcript context with a queued steering message", async () => {

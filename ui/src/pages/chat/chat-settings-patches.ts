@@ -121,11 +121,12 @@ export function patchChatSessionSettings(
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
     // Model-dependent settings and sends share this canonical per-session tail.
-    // Later user intent still runs after a rejection and gets its own Gateway validation.
-    if (previous) {
-      await previous;
-    }
-    const result = await host.sessions.patch(sessionKey, patch, { agentId: options.agentId });
+    // The capability captures this route before waiting, so a reconnect cannot
+    // redirect queued intent to a replacement Gateway.
+    const result = await host.sessions.patch(sessionKey, patch, {
+      agentId: options.agentId,
+      waitFor: previous,
+    });
     if (result) {
       await options.reconcile?.(result);
     }

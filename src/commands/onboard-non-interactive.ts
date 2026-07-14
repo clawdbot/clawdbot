@@ -49,6 +49,13 @@ async function runNonInteractiveMigrationImport(params: {
         `Non-interactive migration import needs explicit flags before prompting: ${message}`,
     ),
     runtime: params.runtime,
+    async readConfigFile() {
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+      }
+      return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
+    },
     async commitConfigFile(config) {
       await replaceConfigFile({
         nextConfig: config,

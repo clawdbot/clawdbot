@@ -35,10 +35,11 @@ describe("type suppression inventory", () => {
         // @ts-expect-error invalid contract fixture
         consume({ invalid: true });
       `,
+      "src/plain.ts": "export const value = 1;",
     });
 
     const report = collectTypeSuppressionReport({
-      files: ["src/example.ts"],
+      files: ["src/example.ts", "src/plain.ts"],
       repoRoot: fixtureRoot,
     });
 
@@ -49,6 +50,7 @@ describe("type suppression inventory", () => {
         "expect-error": 1,
         "type-assertion-any": 1,
       },
+      scannedFileCount: 2,
       touchedFileCount: 1,
     });
   });

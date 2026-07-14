@@ -8,10 +8,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
-import {
-  beginReplyOperationFinalizationWork,
-  REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS,
-} from "./reply-run-finalization-lease.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   testing,
   abortActiveReplyRuns,
@@ -33,6 +30,8 @@ import {
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
+
+const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
 describe("reply run registry", () => {
   afterEach(() => {

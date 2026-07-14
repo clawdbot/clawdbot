@@ -4,7 +4,7 @@ import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -224,7 +224,6 @@ class DebugPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("debug")}</div>
-          <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

@@ -60,6 +60,17 @@ export type SessionEntrySummary = {
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+export type SessionTranscriptInstance = SessionEntrySummary & {
+  /** Stable transcript identity, including rotated history for one logical session key. */
+  sessionId: string;
+  /** True when this transcript instance was owned by an ACP runtime. */
+  acpOwned: boolean;
+  /** True when exclusion-sensitive session ownership was captured for this transcript id. */
+  provenanceKnown: boolean;
+  /** Activity timestamp for this transcript instance, not the current logical session row. */
+  updatedAtMs: number;
+};
+
 export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {

@@ -30,6 +30,7 @@ export type TypeSuppressionReport = {
 };
 
 const DEFAULT_SCAN_ROOTS = ["src", "test", "extensions", "packages", "ui", "scripts"];
+const TYPE_SUPPRESSION_CANDIDATE_PATTERN = /\bany\b|@ts-expect-error/u;
 const DEFAULT_SKIPPED_DIR_NAMES = new Set([
   ".artifacts",
   ".generated",
@@ -160,11 +161,16 @@ export function collectTypeSuppressionReport(params: {
       continue;
     }
     const source = fs.readFileSync(absolutePath, "utf8");
+    // Full AST parsing dominates the repository ratchet. Every reported construct
+    // contains one of these literal markers, so marker-free files are safe to skip.
+    if (!TYPE_SUPPRESSION_CANDIDATE_PATTERN.test(source)) {
+      continue;
+    }
     const sourceFile = ts.createSourceFile(
       file,
       source,
       ts.ScriptTarget.Latest,
-      true,
+      false,
       sourceKindForFile(file),
     );
     addAnyCastFindings(sourceFile, file, findings);

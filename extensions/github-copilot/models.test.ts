@@ -1,4 +1,5 @@
 // Github Copilot tests cover models plugin behavior.
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -360,6 +361,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
       domain: "github.com",
     });
 

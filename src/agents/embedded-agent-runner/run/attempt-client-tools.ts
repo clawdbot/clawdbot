@@ -175,13 +175,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
-    builtinToolNames,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
-    replaySafeToolNames,
     replaySafeTools,
     sessionToolAllowlist,
-    trustedLocalMediaToolNames,
+    subscriptionToolTrust: {
+      builtinToolNames,
+      replaySafeToolNames,
+      trustedLocalMediaToolNames,
+    },
   };
 }

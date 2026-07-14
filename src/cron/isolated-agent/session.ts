@@ -139,6 +139,7 @@ export function resolveCronSession(params: {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
   store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
@@ -230,6 +231,9 @@ export function resolveCronSession(params: {
           storePath,
         }).sessionStartedAt),
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
+    ...(params.hookExternalContentSource
+      ? { hookExternalContentSource: params.hookExternalContentSource }
+      : {}),
     systemSent,
   };
   return {

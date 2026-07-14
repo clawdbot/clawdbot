@@ -23,7 +23,7 @@ import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
   normalizeWhatsAppPayloadText,
   prepareWhatsAppOutboundMedia,
-  resolveWhatsAppOutboundMediaUrls,
+  resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
@@ -156,7 +156,7 @@ export async function sendMessageWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
-  const mediaUrls = resolveWhatsAppOutboundMediaUrls(options);
+  const mediaUrls = resolveAdditiveWhatsAppMediaUrls(options);
   const mediaPayload = options.mediaPayload;
   const primaryMediaUrl = mediaUrls[0] ?? mediaPayload?.fileName;
   const hasMedia = Boolean(mediaPayload || primaryMediaUrl);

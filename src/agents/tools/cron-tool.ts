@@ -346,7 +346,7 @@ function createCronPatchObjectSchema(): TSchema {
 }
 
 // Flattened schema: runtime validates per-action requirements.
-export function createCronToolSchema(): TSchema {
+function createCronToolSchema(): TSchema {
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),

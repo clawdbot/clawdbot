@@ -10,7 +10,7 @@ import {
   type ApprovalPresentation,
   type ApprovalResolveResult,
   type ApprovalSnapshot,
-} from "../../../../packages/gateway-protocol/src/index.js";
+} from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import {

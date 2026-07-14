@@ -22,6 +22,12 @@ vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({
   runNodeIdentityProbe: (params: NodeIdentityProbeParams) => probeMock(params),
 }));
 
+vi.mock("../skills/runtime/remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/remote.js")>()),
+  // Pairing coverage does not need the unrelated 5s connect-time bin refresh.
+  refreshRemoteNodeBins: vi.fn(async () => {}),
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 
 async function waitFor<T>(

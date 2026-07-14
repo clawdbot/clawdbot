@@ -6,6 +6,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-tabs.ts";
 import {
   loadWidgetManifestView,
   type CustomWidgetHostContext,
@@ -317,49 +319,6 @@ function gridMetrics(host: object): { width: number } {
 }
 
 /**
- * Close the hidden-tabs overflow `<details>` on Escape (#3). Native details close
- * on summary click but not on Escape, so wire it explicitly.
- */
-function onHiddenTabsKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Escape") {
-    return;
-  }
-  const details = (event.currentTarget as HTMLElement).closest("details");
-  if (details?.open) {
-    event.preventDefault();
-    details.open = false;
-    (details.querySelector("summary") as HTMLElement | null)?.focus();
-  }
-}
-
-/**
- * When the hidden-tabs overflow opens, arm a one-shot document pointerdown that
- * closes it on an outside click (#3); native details never dismiss on outside
- * click. Self-removing on close so no listener leaks.
- */
-function onHiddenTabsToggle(event: Event): void {
-  const details = event.currentTarget as HTMLDetailsElement;
-  if (!details.open) {
-    return;
-  }
-  const onOutside = (pointerEvent: PointerEvent) => {
-    if (pointerEvent.target instanceof Node && details.contains(pointerEvent.target)) {
-      return;
-    }
-    details.open = false;
-    document.removeEventListener("pointerdown", onOutside, true);
-  };
-  const onClosed = () => {
-    if (!details.open) {
-      document.removeEventListener("pointerdown", onOutside, true);
-      details.removeEventListener("toggle", onClosed);
-    }
-  };
-  document.addEventListener("pointerdown", onOutside, true);
-  details.addEventListener("toggle", onClosed);
-}
-
-/**
  * First-visit onboarding banner (#5) teaching the two ways to add a tab: ask the
  * agent (primary) or the CLI command (secondary). Dismissible; the flag persists
  * in localStorage. The zero-tabs onboarding card is kept separately.
@@ -404,18 +363,24 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
   const tabs = visibleTabs(workspace);
   const hidden = hiddenTabs(workspace);
   return html`
-    <nav class="workspace-tabs" role="tablist" aria-label=${t("workspaces.tabs.label")}>
+    <wa-tab-group
+      class="workspace-tabs"
+      aria-label=${t("workspaces.tabs.label")}
+      .active=${state.activeSlug}
+      activation="auto"
+      without-scroll-controls
+      @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+        navigateToWorkspaceTab(event.detail.name)}
+    >
       ${tabs.map((tab) => {
-        const active = tab.slug === state.activeSlug;
         return html`
-          <button
-            class="workspace-tab ${active ? "workspace-tab--active" : ""}"
-            type="button"
-            role="tab"
-            aria-selected=${active ? "true" : "false"}
+          <wa-tab
+            id=${`workspace-tab-${tab.slug}`}
+            class="workspace-tab"
+            panel=${tab.slug}
+            aria-controls="workspace-tab-panel"
             data-test-id="workspace-tab"
             data-ws=${tab.slug}
-            @click=${() => navigateToWorkspaceTab(tab.slug)}
           >
             ${tab.icon && Object.hasOwn(icons, tab.icon)
               ? html`<span class="workspace-tab__icon" aria-hidden="true"
@@ -423,40 +388,39 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
                 >`
               : nothing}
             <span class="workspace-tab__label">${tab.title}</span>
-          </button>
+          </wa-tab>
         `;
       })}
       ${hidden.length > 0
         ? html`
-            <details
+            <wa-dropdown
+              slot="nav"
               class="workspace-tabs__hidden"
-              @toggle=${onHiddenTabsToggle}
-              @keydown=${onHiddenTabsKeydown}
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                const slug = event.detail.item.value;
+                if (slug) {
+                  navigateToWorkspaceTab(slug);
+                }
+              }}
             >
-              <summary class="workspace-tab workspace-tab--overflow">
+              <button slot="trigger" class="workspace-tab workspace-tab--overflow" type="button">
                 <span class="workspace-tab__icon" aria-hidden="true">${icons.eyeOff}</span>
                 <span class="workspace-tab__label"
                   >${t("workspaces.tabs.hidden", { count: String(hidden.length) })}</span
                 >
-              </summary>
-              <div class="workspace-tabs__hidden-menu" role="menu">
-                ${hidden.map(
-                  (tab) => html`
-                    <button
-                      class="workspace-tabs__hidden-item"
-                      type="button"
-                      role="menuitem"
-                      @click=${() => navigateToWorkspaceTab(tab.slug)}
-                    >
-                      ${tab.title}
-                    </button>
-                  `,
-                )}
-              </div>
-            </details>
+              </button>
+              ${hidden.map(
+                (tab) => html`
+                  <wa-dropdown-item class="workspace-tabs__hidden-item" .value=${tab.slug}>
+                    ${tab.title}
+                  </wa-dropdown-item>
+                `,
+              )}
+            </wa-dropdown>
           `
         : nothing}
-    </nav>
+    </wa-tab-group>
   `;
 }
 
@@ -701,6 +665,10 @@ function makeCallbacks(
       }),
     onToggleMenu: (widget) => {
       viewState.openMenuWidgetId = viewState.openMenuWidgetId === widget.id ? null : widget.id;
+      requestUpdate();
+    },
+    onCloseMenu: () => {
+      viewState.openMenuWidgetId = null;
       requestUpdate();
     },
     onHide: (widget) => {
@@ -969,20 +937,27 @@ function renderBody(
   return html`
     ${renderWorkspacesHeader(tab)}
     ${renderOnboardingBanner(viewState, () => props.onRequestUpdate?.())}
-    ${renderTabStrip(state, workspace)} ${renderGrid(props, state, viewState, workspace, tab)}
+    ${renderTabStrip(state, workspace)}
+    <wa-tab-panel
+      id="workspace-tab-panel"
+      name=${tab.slug}
+      active
+      aria-labelledby=${`workspace-tab-${tab.slug}`}
+    >
+      ${renderGrid(props, state, viewState, workspace, tab)}
+    </wa-tab-panel>
   `;
 }
 
 /**
  * Page-header treatment for the Workspaces view (#7): the active workspace tab as
- * the title with a subtitle line, matching the app's .page-title / .page-sub
+ * the title, matching the app's .page-title header pattern
  * idiom used by the other top-level pages.
  */
 function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
       <div class="page-title">${tab.title}</div>
-      <div class="page-sub">${t("workspaces.header.subtitle")}</div>
     </div>
   `;
 }

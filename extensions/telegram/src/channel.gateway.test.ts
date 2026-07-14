@@ -17,7 +17,6 @@ import {
   resetTelegramPollingLeasesForTests,
 } from "./polling-lease.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
-import type { TelegramProbeFn } from "./runtime.types.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   resetTelegramStartupProbeLimiterForTests,
@@ -140,7 +139,9 @@ function installTelegramRuntime() {
     channel: {
       ...runtime.channel,
       telegram: {
-        probeTelegram: probeTelegram as TelegramProbeFn,
+        probeTelegram: probeTelegram as NonNullable<
+          NonNullable<TelegramRuntime["channel"]["telegram"]>["probeTelegram"]
+        >,
         monitorTelegramProvider: monitorTelegramProvider as TelegramMonitorFn,
         sendMessageTelegram,
       },

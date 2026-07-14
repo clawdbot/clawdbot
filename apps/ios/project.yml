@@ -182,6 +182,7 @@ targets:
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
         NSHealthShareUsageDescription: After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.
+        NSHealthUpdateUsageDescription: OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.
         NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.

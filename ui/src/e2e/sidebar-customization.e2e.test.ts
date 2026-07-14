@@ -217,7 +217,10 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const agentChip = sidebar.getByRole("button", { name: /Agent menu/ });
       const openSettingsFromChip = async () => {
         await agentChip.click();
-        await sidebar.getByRole("menuitem", { name: "Settings" }).click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-agent-menu")
+          .getByRole("menuitem", { exact: true, name: "Settings" })
+          .click();
       };
       await expect.poll(() => agentChip.isVisible()).toBe(true);
       await openSettingsFromChip();
@@ -298,6 +301,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .poll(() => trimmedTextContents(settingsLinks))
         .toEqual([
           "Infrastructure",
+          "Devices",
           "Worktrees",
           "Debug",
           "Logs",
@@ -358,8 +362,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.getByRole("button", { exact: true, name: "More" });
-      const moreMenu = sidebar.getByRole("menu", { exact: true, name: "More" });
+      const moreButton = sidebar.locator("button.nav-item--action");
+      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
@@ -373,7 +377,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .not.toContain("Workboard");
 
       await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
+      const menu = sidebar.locator(
+        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
+      );
       // The pin editor replaces the More menu in place.
       await expect.poll(() => moreMenu.count()).toBe(0);
       await expect
@@ -537,11 +543,11 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { exact: true, name: "More" }).click();
+      await sidebar.locator("button.nav-item--action").click();
       await expect
         .poll(() =>
           trimmedTextContents(
-            sidebar.getByRole("menu", { exact: true, name: "More" }).getByRole("menuitem"),
+            sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
           ),
         )
         .toContain("Workboard");
@@ -684,14 +690,16 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.getByRole("button", { exact: true, name: "More" });
+      const moreButton = sidebar.locator("button.nav-item--action");
       await moreButton.click();
       await sidebar
-        .getByRole("menu", { exact: true, name: "More" })
+        .locator("wa-dropdown.sidebar-more-menu")
         .getByRole("menuitem", { name: "Edit pinned items" })
         .click();
       const pinItems = sidebar
-        .getByRole("menu", { name: "Edit pinned items" })
+        .locator(
+          "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
+        )
         .locator('[role="menuitem"], [role="menuitemcheckbox"]');
       await page.keyboard.press("End");
       await expect
@@ -717,8 +725,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { exact: true, name: "More" }).click();
-      const moreMenu = sidebar.getByRole("menu", { exact: true, name: "More" });
+      await sidebar.locator("button.nav-item--action").click();
+      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect
         .poll(() =>
           moreMenu
@@ -728,11 +736,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toBe(true);
       await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
+      const menu = sidebar.locator(
+        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
+      );
       const menuItems = menu.locator('[role="menuitem"], [role="menuitemcheckbox"]');
       await expect
-        .poll(() => menuItems.evaluateAll((items) => items.every((item) => item.tabIndex === -1)))
-        .toBe(true);
+        .poll(() =>
+          menuItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
+        )
+        .toBe(1);
       await expect
         .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -751,6 +763,78 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
+      const sessionSortButton = sidebar.locator("button.sidebar-session-sort").first();
+      await expect
+        .poll(() => sessionSortButton.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reaches per-agent new-session actions with menu keys", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const agentsList = {
+      agents: [
+        { id: "main", identity: { name: "Main" }, name: "Main" },
+        { id: "research", identity: { name: "Research" }, name: "Research" },
+      ],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    };
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
+      const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
+      const researchNewSession = menu.getByRole("menuitem", {
+        name: "New session — Research",
+      });
+
+      // Web Awesome only includes direct light-DOM items in its roving focus model.
+      await expect
+        .poll(() =>
+          researchNewSession.evaluate(
+            (element) => element.parentElement?.matches("wa-dropdown.sidebar-agent-menu") ?? false,
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => researchNewSession.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      expect(new URL(page.url()).searchParams.get("agent")).toBe("research");
     } finally {
       await context.close();
     }

@@ -1,5 +1,6 @@
 // Voice Call plugin module implements telephony tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   parseTtsDirectives,
   type SpeechModelOverridePolicy,
@@ -8,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/speech";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
-import { deepMergeDefined } from "./deep-merge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 // Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
@@ -150,7 +150,7 @@ function mergeTtsConfig(
   if (!base) {
     return override;
   }
-  return deepMergeDefined(base, override) as VoiceCallTtsConfig;
+  return mergeDeep(base, override) as VoiceCallTtsConfig;
 }
 
 /** Resolve directive override policy for telephony synthesis. */

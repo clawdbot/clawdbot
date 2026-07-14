@@ -14,8 +14,6 @@ import {
 import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-export { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-
 /**
  * The capability profile is an authorization signal (group/sender policies can
  * widen bundled-tool availability), so callers MUST resolve it from

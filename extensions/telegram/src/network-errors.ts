@@ -177,7 +177,7 @@ export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErr
   });
 }
 
-export function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
+function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;

@@ -13,11 +13,11 @@ import {
 } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { formatAgentInternalEventsForPrompt } from "./internal-events.js";
 import {
-  formatAgentInternalEventsForPrompt,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-} from "./internal-events.js";
+} from "./internal-runtime-context.js";
 import { sanitizeToolCallId } from "./tool-call-id.js";
 
 describe("sanitizeUserFacingText", () => {

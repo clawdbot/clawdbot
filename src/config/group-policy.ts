@@ -330,7 +330,7 @@ export function resolveToolsBySender(
   return matchToolsBySenderPolicy(compiled, params);
 }
 
-function resolveChannelGroups(
+export function resolveChannelGroups(
   cfg: OpenClawConfig,
   channel: GroupPolicyChannel,
   accountId?: string | null,

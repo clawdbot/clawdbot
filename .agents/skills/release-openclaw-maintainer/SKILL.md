@@ -11,6 +11,25 @@ approved backport set for an extended-stable maintenance release. Load
 locators or private host topology. Keep ordinary development changes and
 GHSA-specific advisory work outside this skill.
 
+## Freeze the release state
+
+Before validation or publication, write one compact state record and keep it
+current:
+
+- goal and terminal success criteria
+- release version, tag, branch, cut SHA, Code SHA, and Release SHA
+- active Full Release Validation parent run id and attempt
+- npm preflight and publish parent run ids
+- completed phases and immutable child artifacts
+- approved backports or main changes
+- current phase, next action, and one precise blocker if stopped
+
+Use `references/release-handoff-template.md` when starting a release session,
+recovering after compaction, or handing the release to another operator.
+Completed phases stay complete. Reopen one only when a named event invalidates
+its evidence, such as a Code SHA change, a non-changelog Release SHA change, or
+a workflow fix that the existing parent run cannot consume.
+
 ## Respect release guardrails
 
 - Do not change version numbers without explicit operator approval.
@@ -31,23 +50,44 @@ GHSA-specific advisory work outside this skill.
   user-facing documentation contract changed.
 - Normal release work happens on a branch cut from `main`, not directly on
   `main`. Use `release/YYYY.M.PATCH` for the branch name.
+- Hold release scope from cut-SHA selection through publish and verification.
+  The active release is the work queue; moving `main` is only a trusted
+  workflow and provenance source unless the operator explicitly requests main
+  work.
+- Touch `main` during the active release only for an operator-requested change
+  or a critical main-owned blocker that prevents this release and cannot be
+  fixed or proven from the release branch. Examples include a live installer or
+  trusted workflow that is sourced only from `main`. A red unrelated `main`
+  check, baseline, refactor, cleanup, or later improvement is not a release
+  blocker.
+- Do not broaden a release-critical main fix to make moving `main` green. Keep
+  the change to the exact blocker, run focused proof, follow the required main
+  landing policy, then return immediately to the release branch. If unrelated
+  main health blocks that landing, report the blocker and continue independent
+  release work instead of adopting the failure.
+- Defer normal forward-ports and main closeout until after publication.
+  Forward-port before publish only when the operator requests it or `main`
+  itself owns the exact release-critical runtime or workflow surface.
 - If the operator asks for a release without saying stable/full, default to
   beta only. Continue from beta to stable only when the operator explicitly asks
   for the full release or an automated beta-and-stable train.
-- Before release branching, pull latest `main` and confirm current `main` CI is
-  green. Then branch from that commit so regular development can continue on
-  `main` while release validation runs.
-- Before release branching, commit any dirty files in coherent groups, push,
-  pull/rebase, and create the release branch from the intended `main` head.
+- Resolve the intended cut SHA once. If the operator supplies a SHA, use it
+  exactly; do not pull, rebase, or advance it to newer `main`. Otherwise fetch
+  `origin/main` once and record the selected full SHA plus its CI state. A red
+  unrelated main check does not authorize healing main.
+- Create a clean release worktree and `release/YYYY.M.PATCH` from that selected
+  SHA. Do not commit or absorb unrelated dirty files as release preparation.
   Finish version preparation plus any operator-selected backports,
-  release-only fixes, and required forward-ports. Backports are optional.
+  release-only fixes, and explicitly required pre-publish main changes.
+  Backports are optional.
   Freeze this product-complete tree as the **Code SHA** without changing the
   release changelog.
 - Full product validation belongs to the Code SHA. If validation finds a code
   defect, fix it, freeze a new Code SHA, and validate that SHA. If the failure
   belongs to trusted workflow tooling, the harness, credentials, or
-  infrastructure, repair that surface separately and rerun against the same
-  Code SHA. Never mutate the release candidate to satisfy newer tooling.
+  infrastructure, repair the smallest owning surface and rerun against the same
+  Code SHA. Touch `main` only under the active release scope lock above. Never
+  mutate the release candidate to satisfy newer tooling or heal unrelated main.
 - Generate `CHANGELOG.md` only after the Code SHA is green. The resulting
   **Release SHA** must be a descendant whose complete diff from the Code SHA is
   exactly `CHANGELOG.md`. Release-note checks, npm preflight/package bytes,
@@ -86,10 +126,11 @@ GHSA-specific advisory work outside this skill.
   against its exact bytes. If a product defect appears, return to a new Code
   SHA; if a release-tooling or publication child fails, repair/resume that child
   without changing the candidate. After a published beta needs a code fix,
-  forward-port it, increment the beta number, and repeat. A post-beta scan of
-  current `main` may suggest optional low-risk backports; it does not require
-  them. Operators may authorize up to 4 autonomous beta attempts; after 4
-  failed beta attempts, stop and report.
+  increment the beta number and repeat. Defer its forward-port until after
+  publication unless the operator requests it. Do not scan moving `main` for
+  extra fixes during an active release unless the operator explicitly asks for
+  that audit. Operators may authorize up to 4 autonomous beta attempts; after
+  4 failed beta attempts, stop and report.
 - As soon as the Code SHA exists, dispatch `OpenClaw Performance`
   with `target_ref=<code-sha>` in parallel with the other release work. Do
   not wait for full release validation to start the performance signal.
@@ -99,11 +140,13 @@ GHSA-specific advisory work outside this skill.
   or clawgrit reports. Report regressions explicitly. A major regression is a
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
-- Heal CI before changelog, tagging, or publishing. The exact Code SHA must have
-  green `Full Release Validation`, including the root Dockerfile/install-smoke path.
+- Heal release-owned CI before changelog, tagging, or publishing. The exact
+  Code SHA must have green `Full Release Validation`, including the root
+  Dockerfile/install-smoke path.
   Treat a red Docker, package, or release workflow lane as a release-branch
   defect until the smallest correct fix is landed and proven; do not waive it
-  because npm preflight or another sibling lane passed.
+  because npm preflight or another sibling lane passed. Unrelated moving-main
+  failures are not part of this gate.
 - Keep the canonical `scripts/pr` runner authoritative for prepare and merge
   artifacts. A release-gate policy change may use focused candidate tests and
   exact-SHA hosted CI for proof, but never route `prepare-*` or `merge-*`
@@ -233,7 +276,9 @@ on pinned current `main` as the exact command and validation contract.
 
 ## Close stable releases on main
 
-Stable publication is not complete until `main` carries the actual shipped release state.
+This gate starts only after stable publication. It is a narrow shipped-state
+closeout, not permission to heal broader `main`. Stable publication is not
+complete until `main` carries the actual shipped release state.
 
 1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
    forward-port real fixes that are absent from `main`. Do not blindly merge
@@ -567,9 +612,10 @@ pnpm test:install:smoke
   or packed-artifact failures to postpublish verification.
 - Before generating the changelog, require green CI for the exact Code SHA, not
   an earlier branch SHA. Heal every related red CI, release-check, packaging,
-  or root-Dockerfile lane on the release branch, forward-port product fixes to
-  `main`, and rerun the affected exact-SHA gates. Never waive a red Docker lane
-  because npm preflight passed.
+  or root-Dockerfile lane on the release branch and rerun the affected exact-SHA
+  gates. Defer product-fix forward-ports until after publication unless the
+  active release scope lock requires an exact main-owned blocker fix. Never
+  waive a red Docker lane because npm preflight passed.
 - Root Dockerfile proof is mandatory on the Code SHA before every beta and
   stable tag. The changelog-only Release SHA reuses that product proof, while
   exact Release SHA npm preflight and package/install acceptance prove the
@@ -921,14 +967,16 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    publish, or complete the named release as continuing authorization through
    publish and verification. Reconfirm only if the release identity, channel,
    publish scope, or material risk changes.
-2. Choose the exact target version and git tag.
-3. Commit any dirty files in coherent groups, push, pull/rebase, and verify the
-   worktree is clean.
-4. Pull latest `main` and confirm current `main` CI is green.
-5. Create `release/YYYY.M.PATCH` from the intended `main` commit.
+2. Choose the exact target version, git tag, and npm dist-tag (`beta` or
+   `latest`).
+3. Start from a clean release worktree. Do not absorb unrelated dirty files.
+4. Resolve the cut SHA once. Use an operator-supplied SHA exactly; otherwise
+   fetch `origin/main` once, record its full SHA and CI state, and do not chase a
+   newer moving head.
+5. Create `release/YYYY.M.PATCH` from that selected commit.
 6. Make every repo version location match the beta tag. Apply only explicitly
-   selected backports or release fixes, and forward-port fixes to `main` where
-   required. Freeze the result as the Code SHA.
+   selected backports or release fixes. Make a pre-publish main change only
+   under the active release scope lock. Freeze the result as the Code SHA.
 7. Immediately dispatch Actions > `OpenClaw Performance` from the pinned
    trusted workflow source with `target_ref=<code-sha>`, `profile=release`,
    `repeat=3`, deep profiling
@@ -1013,11 +1061,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     with the original child run IDs and an evidence output path before manually
     recreating the workflow's draft, dependency evidence asset, proof section,
     and publish step.
-27. Run the post-published beta verification roster. First scan current `main`
-    for critical fixes that landed after the release branch cut; backport only
-    operator-selected low-risk fixes before starting expensive lanes, or
-    increment to the next beta if the fix must change the already-published
-    package. If any
+27. Run the post-published beta verification roster. Do not scan current `main`
+    for extra fixes unless the operator explicitly requests a backport audit.
+    Apply only operator-selected backports, and increment to the next beta if a
+    selected fix must change the already-published package. If any
     lane fails after the beta package is published, fix, commit/push/pull,
     increment to the next beta tag, and rerun the affected beta evidence. Once
     the beta is live, start remote/manual rosters where they

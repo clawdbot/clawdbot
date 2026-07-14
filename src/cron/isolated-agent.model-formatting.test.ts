@@ -524,6 +524,44 @@ describe("cron model formatting and precedence edge cases", () => {
     });
   });
 
+  describe("Gmail hook model precedence", () => {
+    const gmailModel = {
+      provider: "openrouter",
+      model: "meta-llama/llama-3.3-70b:free",
+    };
+
+    it("keeps an allowed hook model ahead of a stored session override", async () => {
+      resolveHooksGmailModelMock.mockReturnValue(gmailModel);
+      getModelRefStatusMock.mockReturnValue({ allowed: true });
+
+      await expect(
+        selectModel({
+          isGmailHook: true,
+          sessionEntry: {
+            providerOverride: "anthropic",
+            modelOverride: "claude-opus-4-6",
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        ...gmailModel,
+        modelSource: "hook",
+      });
+    });
+
+    it("keeps the configured default when the hook model is not allowed", async () => {
+      resolveHooksGmailModelMock.mockReturnValue(gmailModel);
+      getModelRefStatusMock.mockReturnValue({ allowed: false });
+
+      await expect(selectModel({ isGmailHook: true })).resolves.toMatchObject({
+        ok: true,
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        modelSource: "default",
+      });
+    });
+  });
+
   describe("whitespace and empty model strings", () => {
     it("whitespace-only model treated as unset (falls to default)", async () => {
       await expectDefaultSelectedModel({

@@ -5,7 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createSlackWebClient } from "./client.js";
+import { createSlackLookupClient } from "./client.js";
 import { collectSlackCursorPages } from "./cursor-pages.js";
 
 export type SlackUserLookup = {
@@ -138,7 +138,7 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const client = params.client ?? createSlackWebClient(params.token);
+  const client = params.client ?? createSlackLookupClient(params.token);
   const users = await listSlackUsers(client);
   return resolveDirectoryAllowlistEntries<
     { id?: string; name?: string; email?: string },

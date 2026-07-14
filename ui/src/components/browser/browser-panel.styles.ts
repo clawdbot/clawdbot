@@ -65,17 +65,24 @@ export const browserPanelStyles = css`
     min-height: 36px;
   }
   .bp-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: 1px;
+    --track-width: 0;
+    display: block;
     overflow-x: auto;
     scrollbar-width: none;
     min-width: 0;
   }
+  .bp-tabs::part(nav) {
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
+  }
+  .bp-tabs::part(body) {
+    display: none;
+  }
   .bp-tabs::-webkit-scrollbar {
     display: none;
   }
-  .bp-tab {
+  .bp-tab::part(base) {
     display: flex;
     align-items: center;
     gap: 7px;
@@ -91,11 +98,11 @@ export const browserPanelStyles = css`
       color 0.12s ease,
       background 0.12s ease;
   }
-  .bp-tab:hover {
+  .bp-tab:hover::part(base) {
     color: var(--text, #d7dae0);
     background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
   }
-  .bp-tab.is-active {
+  .bp-tab[active]::part(base) {
     color: var(--text, #d7dae0);
     border-bottom-color: var(--accent, #ff5c5c);
   }
@@ -116,8 +123,10 @@ export const browserPanelStyles = css`
     border-radius: 4px;
     padding: 0;
   }
-  .bp-tab:hover .bp-tab__close,
-  .bp-tab.is-active .bp-tab__close {
+  .bp-tab:hover + .bp-tab__close,
+  .bp-tab[active] + .bp-tab__close,
+  .bp-tab__close:hover,
+  .bp-tab__close:focus-visible {
     opacity: 0.7;
   }
   .bp-new,

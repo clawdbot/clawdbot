@@ -18,6 +18,8 @@ export const SystemInfoResultSchema = closedObject({
   port: Type.Optional(Type.Integer()),
   nodeVersion: Type.String(),
   pid: Type.Integer(),
+  /** Process-start identity for invalidating work that cannot survive a Gateway restart. */
+  processInstanceId: Type.Optional(Type.String({ minLength: 1 })),
   uptimeMs: Type.Integer(),
   cpuCount: Type.Integer(),
   cpuModel: Type.Optional(Type.String()),

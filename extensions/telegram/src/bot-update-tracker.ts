@@ -42,7 +42,7 @@ type FinishUpdateOptions = {
   completed: boolean;
 };
 
-export type TelegramUpdateTrackerState = {
+type TelegramUpdateTrackerState = {
   highestAcceptedUpdateId: number | null;
   highestPersistedAcceptedUpdateId: number | null;
   highestCompletedUpdateId: number | null;

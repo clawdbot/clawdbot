@@ -22,8 +22,8 @@ import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
+  clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
-  testing as sessionPromptStateTesting,
 } from "./session-prompt-state.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
@@ -76,7 +76,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  sessionPromptStateTesting.reset();
+  clearEmbeddedSessionPromptStates(["session-99495", "session-99495-shrink"]);
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = undefined;

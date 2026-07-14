@@ -200,6 +200,23 @@ class SkillManagementTest {
   }
 
   @Test
+  fun ownerQualifiedInstallStaysActiveForBrowseSlug() {
+    assertTrue(isClawHubSkillOperationActive(setOf("@registry-owner/registry-slug"), "registry-slug"))
+    assertTrue(
+      isClawHubSkillOperationActive(
+        setOf("@registry-owner/registry-slug"),
+        "@registry-owner/registry-slug",
+      ),
+    )
+    assertFalse(
+      isClawHubSkillOperationActive(
+        setOf("@other-owner/registry-slug"),
+        "@registry-owner/registry-slug",
+      ),
+    )
+  }
+
+  @Test
   fun clawHubManagementRequiresEveryAdvertisedMethod() {
     assertTrue(supportsClawHubSkillManagement(CLAWHUB_SKILL_GATEWAY_METHODS))
     assertFalse(supportsClawHubSkillManagement(CLAWHUB_SKILL_GATEWAY_METHODS - "skills.detail"))

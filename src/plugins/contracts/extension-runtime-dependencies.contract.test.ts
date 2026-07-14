@@ -54,6 +54,13 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["@tloncorp/tlon-skill"]),
   ],
 ]);
+const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
+  [
+    "extensions/lobster",
+    // Keep Lobster external to the plugin bundle; its computed core import is resolved at runtime.
+    new Set(["@clawdbot/lobster"]),
+  ],
+]);
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
@@ -285,6 +292,20 @@ describe("extension runtime dependency manifests", () => {
     expect(manifest.dependencies?.json5).not.toBe("");
   });
 
+  for (const [extensionDir, dependencies] of COMPUTED_RUNTIME_DEPENDENCIES) {
+    it(`${extensionDir} declares every computed runtime dependency`, () => {
+      const manifest = readPackageManifest(path.join(extensionDir, "package.json"));
+      const declared = new Set([
+        ...Object.keys(manifest.dependencies ?? {}),
+        ...Object.keys(manifest.optionalDependencies ?? {}),
+      ]);
+
+      expect([...dependencies].filter((dependencyName) => !declared.has(dependencyName))).toEqual(
+        [],
+      );
+    });
+  }
+
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
     const extensionDir = toRepoPath(path.dirname(manifestPath));
 
@@ -322,6 +343,7 @@ describe("extension runtime dependency manifests", () => {
         ...Object.keys(manifest.optionalDependencies ?? {}),
       ].toSorted();
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
+      const allowedComputed = COMPUTED_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8"))
         .concat(readManifestText(extensionDir))
@@ -329,7 +351,9 @@ describe("extension runtime dependency manifests", () => {
 
       const unused = declared.filter(
         (dependencyName) =>
-          !allowedIndirect.has(dependencyName) && !runtimeText.includes(dependencyName),
+          !allowedIndirect.has(dependencyName) &&
+          !allowedComputed.has(dependencyName) &&
+          !runtimeText.includes(dependencyName),
       );
 
       expect(unused).toStrictEqual([]);

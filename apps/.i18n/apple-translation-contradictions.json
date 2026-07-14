@@ -202,11 +202,60 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Active",
+      "translations": [
+        "نشط",
+        "نشطة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Active",
+      "translations": [
+        "Activas",
+        "Activo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Active",
+      "translations": [
+        "Actif",
+        "Actives"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Active",
       "translations": [
         "Attiva",
+        "Attive",
         "Attivo"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Active",
+      "translations": [
+        "アクティブ",
+        "有効"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Active",
+      "translations": [
+        "Ativas",
+        "Ativo"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Active",
+      "translations": [
+        "Активно",
+        "Активные"
       ]
     },
     {
@@ -240,6 +289,7 @@
       "source": "Active",
       "translations": [
         "使用中",
+        "啟用中",
         "進行中"
       ]
     },
@@ -817,6 +867,46 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Automations",
+      "translations": [
+        "ऑटोमेशन",
+        "स्वचालन"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Automations",
+      "translations": [
+        "オートメーション",
+        "自動化"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Automations",
+      "translations": [
+        "Automationer",
+        "Automatiseringar"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Automations",
+      "translations": [
+        "การทำงานอัตโนมัติ",
+        "ระบบอัตโนมัติ"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Automations",
+      "translations": [
+        "Tác vụ tự động",
+        "Tự động hóa"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Blocked",
       "translations": [
@@ -1008,6 +1098,14 @@
       "translations": [
         "Chat",
         "聊天"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Command",
+      "translations": [
+        "命令",
+        "指令"
       ]
     },
     {
@@ -1494,119 +1592,27 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Cron Jobs",
+      "locale": "id",
+      "source": "Cron expression",
       "translations": [
-        "Cron Jobs",
-        "Cron-Jobs",
-        "Cronjobs"
+        "Ekspresi Cron",
+        "Ekspresi cron"
       ]
     },
     {
-      "locale": "es",
-      "source": "Cron Jobs",
+      "locale": "ru",
+      "source": "Cron expression",
       "translations": [
-        "Tareas cron",
-        "Trabajos cron"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Cron Jobs",
-      "translations": [
-        "وظایف Cron",
-        "کارهای Cron"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Job",
-        "Cron Jobs"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Cron ジョブ",
-        "Cronジョブ"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Cron 작업"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Cron-taken",
-        "Cronjobs"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Cron Jobs",
-      "translations": [
-        "Zadania Cron",
-        "Zadania cron"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Tarefas Cron"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "งาน Cron"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Cron İşleri"
+        "Cron-выражение",
+        "Выражение cron"
       ]
     },
     {
       "locale": "uk",
-      "source": "Cron Jobs",
+      "source": "Cron expression",
       "translations": [
-        "Cron Jobs",
-        "Завдання Cron"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Tác vụ Cron"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Cron Jobs",
-      "translations": [
-        "Cron Jobs",
-        "Cron 作业",
-        "定时任务"
+        "Cron-вираз",
+        "Вираз Cron"
       ]
     },
     {
@@ -1857,6 +1863,14 @@
       "translations": [
         "預設 agent",
         "預設代理程式"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Delete",
+      "translations": [
+        "मिटाएँ",
+        "हटाएँ"
       ]
     },
     {
@@ -3007,6 +3021,102 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway الافتراضي",
+        "الإعداد الافتراضي لـ Gateway"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Gateway default",
+      "translations": [
+        "Predeterminado de Gateway",
+        "Valor predeterminado de Gateway"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway پیش‌فرض",
+        "پیش‌فرض Gateway"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway デフォルト",
+        "Gatewayのデフォルト"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway standaard",
+        "Standaardinstelling van Gateway"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Gateway default",
+      "translations": [
+        "Domyślna Gateway",
+        "Domyślne ustawienie Gateway"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway по умолчанию",
+        "По умолчанию для Gateway"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway-standard",
+        "Standard för Gateway"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway เริ่มต้น",
+        "ค่าเริ่มต้นของ Gateway"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway за замовчуванням",
+        "Стандартний Gateway"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway mặc định",
+        "Mặc định của Gateway"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Gateway default",
+      "translations": [
+        "Gateway 預設",
+        "Gateway 預設值"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Gateway offline",
       "translations": [
@@ -3085,6 +3195,86 @@
       "translations": [
         "Gateway trực tuyến",
         "Gateway đang trực tuyến"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "لا تزال استعادة Gateway بعد إعادة التشغيل جارية.",
+        "لا تزال عملية الاسترداد بعد إعادة تشغيل Gateway جارية."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Die Wiederherstellung nach dem Neustart des Gateway läuft noch.",
+        "Die Wiederherstellung nach dem Neustart des Gateways läuft noch."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Gateway को पुनः आरंभ करने के बाद रिकवरी अभी भी जारी है।",
+        "Gateway रीस्टार्ट रिकवरी अभी भी जारी है।"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Gatewayの再起動後の復旧はまだ進行中です。",
+        "Gatewayの再起動後の復旧処理がまだ進行中です。"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Het herstel na de herstart van de Gateway is nog bezig.",
+        "Het herstel na het opnieuw opstarten van de Gateway is nog bezig."
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Odzyskiwanie po ponownym uruchomieniu Gateway nadal trwa.",
+        "Przywracanie po ponownym uruchomieniu Gateway nadal trwa."
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "A recuperação após a reinicialização do Gateway ainda está em andamento.",
+        "A recuperação da reinicialização do Gateway ainda está em andamento."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Восстановление после перезапуска Gateway всё ещё выполняется.",
+        "Восстановление после перезапуска Gateway ещё продолжается."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "การกู้คืนหลังจากรีสตาร์ท Gateway ยังคงดำเนินการอยู่",
+        "การกู้คืนหลังรีสตาร์ท Gateway ยังคงดำเนินอยู่"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Gateway restart recovery is still in progress.",
+      "translations": [
+        "Gateway yeniden başlatma kurtarma işlemi hâlâ devam ediyor.",
+        "Gateway'i yeniden başlatma kurtarma işlemi hâlâ devam ediyor."
       ]
     },
     {
@@ -3336,6 +3526,14 @@
       "translations": [
         "執行個體",
         "實例"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Interval",
+      "translations": [
+        "الفاصل الزمني",
+        "فاصل زمني"
       ]
     },
     {
@@ -3657,6 +3855,7 @@
       "source": "Loading",
       "translations": [
         "Loading",
+        "Wczytywanie",
         "Ładowanie"
       ]
     },
@@ -4063,6 +4262,174 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Manage",
+      "translations": [
+        "Управление",
+        "Управлять"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "الرسالة"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Nachricht"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Message",
+      "translations": [
+        "Mensaje",
+        "Message"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "پیام"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "संदेश"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Pesan"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Messaggio"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "メッセージ"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "메시지"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Message",
+      "translations": [
+        "Bericht",
+        "Message"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Wiadomość"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Message",
+      "translations": [
+        "Mensagem",
+        "Message"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Сообщение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Message",
+      "translations": [
+        "Meddelande",
+        "Message"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "ข้อความ"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Message",
+      "translations": [
+        "Mesaj",
+        "Message"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Повідомлення"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Tin nhắn"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "消息"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "訊息"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Missing %@",
       "translations": [
@@ -4359,6 +4726,54 @@
       "translations": [
         "Không có phiên nào đã lưu trữ",
         "Không có phiên đã lưu trữ"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "No automations yet",
+      "translations": [
+        "अभी कोई स्वचालन नहीं है",
+        "अभी तक कोई ऑटोमेशन नहीं है"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "No automations yet",
+      "translations": [
+        "オートメーションはまだありません",
+        "自動化はまだありません"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No automations yet",
+      "translations": [
+        "Inga automationer ännu",
+        "Inga automatiseringar ännu"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "No automations yet",
+      "translations": [
+        "ยังไม่มีการทำงานอัตโนมัติ",
+        "ยังไม่มีระบบอัตโนมัติ"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "No automations yet",
+      "translations": [
+        "Chưa có tác vụ tự động",
+        "Chưa có tác vụ tự động hóa"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "No automations yet",
+      "translations": [
+        "暂无自动化",
+        "暂无自动化任务"
       ]
     },
     {
@@ -5005,6 +5420,22 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "One time",
+      "translations": [
+        "1回のみ",
+        "1回限り"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "One time",
+      "translations": [
+        "一次",
+        "一次性"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Online",
       "translations": [
@@ -5456,6 +5887,70 @@
       "translations": [
         "配對",
         "配對中"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Pause",
+      "translations": [
+        "توقف موقت",
+        "مکث"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Pause",
+      "translations": [
+        "Mettre en pause",
+        "Suspendre"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Paused",
+      "translations": [
+        "متوقف مؤقتًا",
+        "متوقفة مؤقتًا"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Paused",
+      "translations": [
+        "일시 정지됨",
+        "일시 중지됨"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Paused",
+      "translations": [
+        "Wstrzymane",
+        "Wstrzymano"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Paused",
+      "translations": [
+        "Pausadas",
+        "Pausado"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Paused",
+      "translations": [
+        "Приостановленные",
+        "Приостановлено"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Paused",
+      "translations": [
+        "Призупинено",
+        "Призупинені"
       ]
     },
     {
@@ -6250,6 +6745,38 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "Running",
+      "translations": [
+        "Berjalan",
+        "Sedang Berjalan"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Running",
+      "translations": [
+        "Actief",
+        "Wordt uitgevoerd"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Running",
+      "translations": [
+        "Uruchomione",
+        "Uruchomiono"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Running",
+      "translations": [
+        "正在运行",
+        "运行中"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Same Machine (Dev)",
       "translations": [
@@ -6322,6 +6849,14 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "Save",
+      "translations": [
+        "Bewaar",
+        "Opslaan"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Scan QR",
       "translations": [
@@ -6361,6 +6896,118 @@
       "translations": [
         "Сканувати QR",
         "Сканувати QR-код"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "ستظهر هنا المهام المجدولة التي أُنشئت على Gateway.",
+        "سيظهر هنا العمل المجدول الذي تم إنشاؤه على Gateway."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "El trabajo programado creado en el Gateway aparecerá aquí.",
+        "El trabajo programado creado en el gateway aparecerá aquí."
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Le attività pianificate create sul Gateway appariranno qui.",
+        "Le attività pianificate create sul Gateway verranno visualizzate qui."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Gateway で作成されたスケジュール済みの作業がここに表示されます。",
+        "Gatewayで作成されたスケジュール済みの処理がここに表示されます。"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Gepland werk dat op de Gateway is aangemaakt, verschijnt hier.",
+        "Geplande taken die op de gateway zijn aangemaakt, worden hier weergegeven."
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "As tarefas agendadas criadas no Gateway aparecerão aqui.",
+        "Os trabalhos agendados criados no gateway aparecerão aqui."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Запланированные задачи, созданные на Gateway, появятся здесь.",
+        "Запланированные на Gateway задачи появятся здесь."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Schemalagda uppgifter som skapas på Gateway visas här.",
+        "Schemalagda uppgifter som skapas på gatewayen visas här."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "งานตามกำหนดเวลาที่สร้างบน Gateway จะปรากฏที่นี่",
+        "งานที่กำหนดเวลาไว้ซึ่งสร้างบน Gateway จะปรากฏที่นี่"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Gateway'de oluşturulan zamanlanmış işler burada görünecek.",
+        "Gateway'de oluşturulan zamanlanmış işler burada görünecektir."
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Заплановані завдання, створені на Gateway, з’являться тут.",
+        "Заплановані на Gateway завдання з’являться тут."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "Công việc theo lịch được tạo trên Gateway sẽ xuất hiện tại đây.",
+        "Công việc đã lên lịch được tạo trên Gateway sẽ xuất hiện tại đây."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "在 Gateway 上创建的计划任务将显示在此处。",
+        "在 Gateway 上创建的计划任务将显示在这里。"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translations": [
+        "在 Gateway 上建立的排程工作將顯示於此。",
+        "在 Gateway 上建立的排程工作會顯示於此。"
       ]
     },
     {
@@ -7274,6 +7921,86 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "The Gateway did not start this automation.",
+      "translations": [
+        "Gateway ने यह ऑटोमेशन शुरू नहीं किया।",
+        "Gateway ने यह स्वचालन शुरू नहीं किया।"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "The Gateway did not start this automation.",
+      "translations": [
+        "Gateway はこの自動化を開始しませんでした。",
+        "Gatewayはこの自動化を開始しませんでした。"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "The Gateway did not start this automation.",
+      "translations": [
+        "Gateway không khởi chạy tác vụ tự động hóa này.",
+        "Gateway không khởi chạy tác vụ tự động này."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "The Gateway did not start this automation.",
+      "translations": [
+        "Gateway 未启动此自动化。",
+        "Gateway 未启动此自动化任务。"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "ऑटोमेशन शेड्यूलर रुका हुआ है।",
+        "स्वचालन शेड्यूलर बंद है।"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "Il pianificatore delle automazioni è arrestato.",
+        "L'utilità di pianificazione delle automazioni è arrestata."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "Планировщик автоматизации остановлен.",
+        "Планировщик автоматизаций остановлен."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "ตัวกำหนดเวลาการทำงานอัตโนมัติหยุดทำงานอยู่",
+        "ตัวจัดกำหนดการทำงานอัตโนมัติหยุดทำงานอยู่"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "Планувальник автоматизацій зупинено.",
+        "Планувальник автоматизації зупинено."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "The automation scheduler is stopped.",
+      "translations": [
+        "Bộ lập lịch tự động hóa đã dừng.",
+        "Trình lập lịch tự động hóa đã dừng."
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Thinking",
       "translations": [
@@ -7285,8 +8012,41 @@
       "locale": "de",
       "source": "Thinking",
       "translations": [
+        "Denkprozess",
         "Denkt nach",
         "Nachdenken"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Thinking",
+      "translations": [
+        "Pensando",
+        "Razonamiento"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Thinking",
+      "translations": [
+        "تفکر",
+        "در حال فکر کردن"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Thinking",
+      "translations": [
+        "विचार प्रक्रिया",
+        "सोच रहा है"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Thinking",
+      "translations": [
+        "Berpikir",
+        "Penalaran"
       ]
     },
     {
@@ -7298,9 +8058,18 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Thinking",
+      "translations": [
+        "思考",
+        "思考中"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Thinking",
       "translations": [
+        "사고",
         "사고 중",
         "생각 중"
       ]
@@ -7310,7 +8079,56 @@
       "source": "Thinking",
       "translations": [
         "Aan het nadenken",
-        "Denken"
+        "Denken",
+        "Redeneren"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Thinking",
+      "translations": [
+        "Myślenie",
+        "Rozumowanie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Thinking",
+      "translations": [
+        "Pensando",
+        "Raciocínio"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Thinking",
+      "translations": [
+        "Размышление",
+        "Рассуждение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Thinking",
+      "translations": [
+        "Tänkande",
+        "Tänker"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Thinking",
+      "translations": [
+        "การคิด",
+        "กำลังคิด"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Thinking",
+      "translations": [
+        "Düşünme",
+        "Düşünüyor"
       ]
     },
     {
@@ -7318,15 +8136,169 @@
       "source": "Thinking",
       "translations": [
         "Мислення",
+        "Міркування",
         "Обмірковування"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Thinking",
+      "translations": [
+        "Suy luận",
+        "Đang suy nghĩ"
       ]
     },
     {
       "locale": "zh-CN",
       "source": "Thinking",
       "translations": [
+        "思考",
         "思考中",
         "正在思考"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Thinking",
+      "translations": [
+        "思考",
+        "思考中"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "Questa automazione ha una configurazione non valida.",
+        "Questa automazione presenta una configurazione non valida."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "このオートメーションの設定は無効です。",
+        "この自動化の設定は無効です。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "이 자동화의 구성이 올바르지 않습니다.",
+        "이 자동화의 구성이 잘못되었습니다."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "Den här automationen har en ogiltig konfiguration.",
+        "Den här automatiseringen har en ogiltig konfiguration."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "This automation has an invalid configuration.",
+      "translations": [
+        "การทำงานอัตโนมัตินี้มีการกำหนดค่าที่ไม่ถูกต้อง",
+        "ระบบอัตโนมัตินี้มีการกำหนดค่าที่ไม่ถูกต้อง"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "This automation is already running.",
+      "translations": [
+        "このオートメーションはすでに実行中です。",
+        "この自動化はすでに実行中です。"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "This automation is already running.",
+      "translations": [
+        "Den här automationen körs redan.",
+        "Den här automatiseringen körs redan."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "This automation is already running.",
+      "translations": [
+        "การทำงานอัตโนมัตินี้กำลังทำงานอยู่แล้ว",
+        "ระบบอัตโนมัตินี้กำลังทำงานอยู่แล้ว"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "Aún no es el momento de ejecutar esta automatización.",
+        "Esta automatización aún no debe ejecutarse."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "Cette automatisation n’est pas encore arrivée à échéance.",
+        "Cette automatisation n’est pas encore prévue."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "इस ऑटोमेशन का समय अभी नहीं आया है।",
+        "इस ऑटोमेशन का समय अभी नहीं हुआ है।"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "このオートメーションはまだ実行予定時刻になっていません。",
+        "この自動化はまだ実行予定時刻になっていません。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "이 자동화는 아직 실행 예정 시간이 되지 않았습니다.",
+        "이 자동화는 아직 실행할 시간이 아닙니다."
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "Nie nadszedł jeszcze czas uruchomienia tej automatyzacji.",
+        "Termin tej automatyzacji jeszcze nie nadszedł."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "Den här automationen ska inte köras ännu.",
+        "Den här automatiseringen ska inte köras ännu."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "การทำงานอัตโนมัตินี้ยังไม่ถึงกำหนด",
+        "ยังไม่ถึงกำหนดเรียกใช้ระบบอัตโนมัตินี้"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "This automation is not due yet.",
+      "translations": [
+        "Час виконання цієї автоматизації ще не настав.",
+        "Час запуску цієї автоматизації ще не настав."
       ]
     },
     {
@@ -8137,6 +9109,102 @@
       "translations": [
         "Çalışma Panosu",
         "Çalışma panosu"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "active",
+      "translations": [
+        "نشط",
+        "نشطة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "active",
+      "translations": [
+        "activa",
+        "activo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "active",
+      "translations": [
+        "actif",
+        "active"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "active",
+      "translations": [
+        "attiva",
+        "attivo"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "active",
+      "translations": [
+        "アクティブ",
+        "有効"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "active",
+      "translations": [
+        "aktywna",
+        "aktywne"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "active",
+      "translations": [
+        "ativa",
+        "ativo"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "active",
+      "translations": [
+        "активна",
+        "активно"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "active",
+      "translations": [
+        "aktif",
+        "etkin"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "active",
+      "translations": [
+        "активна",
+        "активно"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "active",
+      "translations": [
+        "已启用",
+        "活跃"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "active",
+      "translations": [
+        "使用中",
+        "啟用中"
       ]
     },
     {

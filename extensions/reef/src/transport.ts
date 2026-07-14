@@ -53,6 +53,12 @@ export class ReefTransportClient {
     );
   }
 
+  listOwnHandles(
+    session: string,
+  ): Promise<{ handles: Array<{ handle: string; key_epoch: number; request_policy: string }> }> {
+    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` });
+  }
+
   mintFriendCode(): Promise<{ code: string; expires: number }> {
     return this.signed("POST", "/v1/friend-codes");
   }

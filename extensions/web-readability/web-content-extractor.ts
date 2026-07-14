@@ -1,4 +1,5 @@
 // Web Readability plugin module implements web content extractor behavior.
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   WebContentExtractionRequest,
   WebContentExtractionResult,
@@ -30,65 +31,20 @@ const HTML_VOID_TAGS = new Set([
   "wbr",
 ]);
 
-type ParsedHtml = {
-  document: Document;
-};
-
-type ParseHtml = (html: string) => ParsedHtml;
-
-type ReadabilityResult = {
-  content?: string;
-  textContent?: string | null;
-  title?: string | null;
-};
-
-type ReadabilityInstance = {
-  parse(): ReadabilityResult | null;
-};
-
-type ReadabilityConstructor = new (
-  document: Document,
-  options: { charThreshold: number },
-) => ReadabilityInstance;
-
-type ReadabilityModule = {
-  Readability: ReadabilityConstructor;
-};
-
-type LinkedomModule = {
-  parseHTML: ParseHtml;
-};
-
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
 
-let readabilityDepsPromise:
-  | Promise<{
-      Readability: ReadabilityConstructor;
-      parseHTML: ParseHtml;
-    }>
-  | undefined;
-
-async function loadReadabilityDeps(): Promise<{
-  Readability: ReadabilityConstructor;
-  parseHTML: ParseHtml;
-}> {
-  if (!readabilityDepsPromise) {
-    readabilityDepsPromise = Promise.all([
-      import(READABILITY_MODULE) as Promise<ReadabilityModule>,
-      import(LINKEDOM_MODULE) as Promise<LinkedomModule>,
-    ]).then(([readability, linkedom]) => ({
-      Readability: readability.Readability,
-      parseHTML: linkedom.parseHTML,
-    }));
-  }
-  try {
-    return await readabilityDepsPromise;
-  } catch (error) {
-    readabilityDepsPromise = undefined;
-    throw error;
-  }
-}
+const loadReadabilityDeps = createLazyRuntimeSurface(
+  () =>
+    Promise.all([
+      import(READABILITY_MODULE) as Promise<typeof import("@mozilla/readability")>,
+      import(LINKEDOM_MODULE) as Promise<typeof import("linkedom")>,
+    ]),
+  ([readability, linkedom]) => ({
+    Readability: readability.Readability,
+    parseHTML: linkedom.parseHTML,
+  }),
+);
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
@@ -175,12 +131,7 @@ async function extractWithReadability(
   }
   try {
     const { Readability, parseHTML } = await loadReadabilityDeps();
-    const { document } = parseHTML(cleanHtml);
-    try {
-      (document as { baseURI?: string }).baseURI = request.url;
-    } catch {
-      // Best-effort base URI for relative links.
-    }
+    const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
     const reader = new Readability(document, { charThreshold: 0 });
     const parsed = reader.parse();
     if (!parsed?.content) {

@@ -33,11 +33,11 @@ import { resolveDiscordVoiceEnabled } from "./config.js";
 import {
   type DiscordVoiceIngressContext,
   resolveDiscordVoiceRealtimeBootstrapContext,
-  resolveDiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { resolveDiscordVoiceOwnerAccess } from "./owner-access.js";
+import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import {
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
@@ -82,7 +82,6 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "permission denied",
   "forbidden",
 ];
-
 function logFollowUserReconcileVerbose(reason: string, message: string): void {
   if (reason === "interval") {
     logger.trace(`discord voice: ${message}`);
@@ -1690,19 +1689,15 @@ export class DiscordVoiceManager {
     entry: VoiceSessionEntry,
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
-    return await resolveDiscordVoiceIngressContext({
+    return await resolveDiscordVoiceIngressContextWithParticipants({
+      client: this.params.client,
       entry,
       userId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       ownerAllowFrom: this.ownerAllowFrom,
       ownerAllowAll: this.ownerAllowAll,
-      fetchGuildName: async (guildId) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
+      botUserId: this.botUserId,
       speakerContext: this.speakerContext,
     });
   }
@@ -1767,6 +1762,8 @@ export class DiscordVoiceManager {
       ownerAllowAll: this.ownerAllowAll,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
+      resolveIngressContext: () =>
+        this.resolveDiscordVoiceIngressContext(params.entry, params.userId),
       transcripts: params.entry.transcripts,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);

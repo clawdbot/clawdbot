@@ -41,6 +41,29 @@ private func makeSkillStatus(
 @Suite(.serialized)
 @MainActor
 struct SkillsSettingsSmokeTests {
+    @Test func `alternative binaries and OS blockers remain visible requirements`() {
+        let alternatives = SkillMissing(
+            bins: [],
+            anyBins: ["rg", "grep"],
+            env: [],
+            config: [])
+        let platforms = SkillMissing(
+            bins: [],
+            env: [],
+            config: [],
+            os: ["linux"])
+
+        #expect(!SkillRequirementPresentation.requirementsMet(alternatives))
+        #expect(SkillRequirementPresentation.shouldShowSummary(alternatives, showMissingBins: false))
+        #expect(SkillRequirementPresentation.installOptions(
+            missing: alternatives,
+            options: [
+                SkillInstallOption(id: "brew", kind: "brew", label: "brew install ripgrep", bins: ["rg"]),
+            ]).map(\.id) == ["brew"])
+        #expect(!SkillRequirementPresentation.requirementsMet(platforms))
+        #expect(SkillRequirementPresentation.shouldShowSummary(platforms, showMissingBins: false))
+    }
+
     @Test func `skills settings builds body with skills remote`() {
         let model = SkillsSettingsModel()
         model.statusMessage = "Loaded"

@@ -1,18 +1,17 @@
-// Googlechat plugin module implements group policy behavior.
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
+import {
+  buildChannelGroupsScopeTree,
+  resolveScopeRequireMention,
+} from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 
-type GoogleChatGroupContext = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  groupId?: string | null;
-};
+type GroupContext = { cfg: OpenClawConfig; accountId?: string | null; groupId?: string | null };
+function resolveScopePath(params: GroupContext) {
+  return params.groupId ? [params.groupId] : [];
+}
 
-export function resolveGoogleChatGroupRequireMention(params: GoogleChatGroupContext): boolean {
-  return resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "googlechat",
-    groupId: params.groupId,
-    accountId: params.accountId,
+export function resolveGoogleChatGroupRequireMention(params: GroupContext): boolean {
+  return resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "googlechat", params.accountId),
+    path: resolveScopePath(params),
   });
 }

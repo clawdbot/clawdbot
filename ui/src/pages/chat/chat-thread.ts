@@ -5,7 +5,6 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -40,11 +39,19 @@ import {
   isToolCardError,
 } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  buildCompactionDividerItem,
+  clearWorkingStartedAt,
+  resetWorkingStartedAt,
+  resolveWorkingStartedAt,
+  shouldRenderQueuedSendInThread,
+} from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type BuildChatItemsProps = {
   sessionKey: string;
+  runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
@@ -83,6 +90,7 @@ const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 export function resetChatThreadState(): void {
   chatItemsBySession.clear();
+  resetWorkingStartedAt();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
@@ -978,17 +986,6 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
-function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
-  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
-  return (
-    sendStarted &&
-    (item.sendState === "waiting-model" ||
-      item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect")
-  );
-}
-
 function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
   if (content.length === 0) {
@@ -1311,20 +1308,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     const raw = asRecord(msg) ?? {};
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: t("chat.compaction.label"),
-        description: t("chat.compaction.description"),
-        action: {
-          kind: "session-checkpoints",
-          label: t("chat.compaction.openCheckpoints"),
-        },
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
+      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
 
@@ -1556,10 +1540,21 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
+  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
+    clearWorkingStartedAt(props.sessionKey);
+  }
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
       key: `stream:${props.sessionKey}:pending`,
+      startedAt: resolveWorkingStartedAt(
+        props.sessionKey,
+        props.runId ?? null,
+        props.streamStartedAt,
+        queuedSends,
+        segments,
+        tools,
+      ),
     });
   } else if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
@@ -1577,7 +1572,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
         });
       }
     } else if (props.stream.trim().length === 0) {
-      items.push({ kind: "reading-indicator", key });
+      items.push({ kind: "reading-indicator", key, startedAt });
     }
   }
 
@@ -1628,6 +1623,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "divider" &&
         previous.label === next.label &&
+        previous.metric === next.metric &&
         previous.description === next.description &&
         previous.timestamp === next.timestamp &&
         previous.action?.kind === next.action?.kind &&
@@ -1641,7 +1637,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.isStreaming === next.isStreaming
       );
     case "reading-indicator":
-      return previous.kind === "reading-indicator";
+      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
   }
   return false;
 }
@@ -1667,6 +1663,7 @@ function stabilizeChatItems(
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&

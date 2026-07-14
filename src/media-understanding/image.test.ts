@@ -12,11 +12,18 @@ import {
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
-  getApiKeyForModelMock: vi.fn(async () => ({
-    apiKey: "oauth-test", // pragma: allowlist secret
-    source: "test",
-    mode: "oauth",
-  })),
+  getApiKeyForModelMock: vi.fn(
+    async (): Promise<{
+      apiKey: string;
+      source: string;
+      mode: string;
+      profileId?: string;
+    }> => ({
+      apiKey: "oauth-test", // pragma: allowlist secret
+      source: "test",
+      mode: "oauth",
+    }),
+  ),
   resolveApiKeyForProviderMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
     source: "test",
@@ -31,6 +38,7 @@ const hoisted = vi.hoisted(() => ({
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const {
@@ -47,6 +55,7 @@ const {
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
   resolveCopilotApiTokenMock,
+  shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
 
@@ -58,6 +67,7 @@ type ResolveModelWithRegistryTestParams = {
 
 type AuthRequestCall = {
   profileId?: string;
+  preferredProfile?: string;
   store?: unknown;
 };
 
@@ -134,6 +144,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
     "../plugins/provider-runtime.js",
   )),
   prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+  shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
@@ -1331,7 +1342,7 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
-  it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
+  it("normalizes deprecated google flash ids and keeps profile model/auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
       expect(modelId).toBe("gemini-3-flash-preview");
@@ -1359,6 +1370,7 @@ describe("describeImageWithModel", () => {
       provider: "google",
       model: "gemini-3.1-flash-preview",
       profile: "google:default",
+      preferredProfile: "google:preferred",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
       mime: "image/png",
@@ -1371,8 +1383,17 @@ describe("describeImageWithModel", () => {
       model: "gemini-3-flash-preview",
     });
     expect(findMock).toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(
+        expect.objectContaining({
+          authProfileId: "google:default",
+          preferredProfile: "google:preferred",
+        }),
+      );
+    }
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
+    expect(authRequest?.preferredProfile).toBe("google:preferred");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
@@ -1419,6 +1440,73 @@ describe("describeImageWithModel", () => {
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("rematerializes profile-scoped image metadata after auth selects a backup profile", async () => {
+    const authStorage = { setRuntimeApiKey: setRuntimeApiKeyMock };
+    const modelRegistry = {};
+    const hintedModel = {
+      provider: "github-copilot",
+      id: "gpt-5.6-sol",
+      api: "openai-responses",
+      input: ["text", "image"],
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    };
+    const authoritativeModel = {
+      ...hintedModel,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    };
+    resolveModelAsyncMock
+      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "backup-profile-token",
+      source: "profile:github-copilot:backup",
+      mode: "token",
+      profileId: "github-copilot:backup",
+    });
+    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValueOnce(true);
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "github-copilot",
+      model: "gpt-5.6-sol",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "profile-scoped image ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gpt-5.6-sol",
+      profile: "github-copilot:preferred",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
+    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
+      expect.objectContaining({
+        authStorage,
+        modelRegistry,
+        authProfileId: "github-copilot:backup",
+      }),
+    );
+    const [completionModel] = requireFirstMockCall(completeMock, "complete");
+    expect(completionModel).toEqual(
+      expect.objectContaining({
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      }),
+    );
   });
 
   it("places image prompt in user content for github-copilot provider", async () => {

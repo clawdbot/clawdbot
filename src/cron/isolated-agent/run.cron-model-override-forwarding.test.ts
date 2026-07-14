@@ -439,6 +439,27 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(embeddedCall.thinkLevel).toBe("medium");
   });
 
+  it("passes the resolved default thinking level to the embedded agent runner", async () => {
+    resolveThinkingDefaultMock.mockReturnValue("low");
+    isThinkingLevelSupportedMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(resolveThinkingDefaultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        model: "gemini-2.0-flash",
+      }),
+    );
+    expect(firstMockArg(runEmbeddedAgentMock).thinkLevel).toBe("low");
+  });
+
   it("uses a stored cron-session thinking preference before configured defaults", async () => {
     resolveAllowedModelRefMock.mockReturnValue({
       ref: { provider: "openai", model: "gpt-5.6-luna" },

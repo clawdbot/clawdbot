@@ -75,6 +75,13 @@ is_locked_pr_command() {
   esac
 }
 
+is_main_only_pr_command() {
+  case "$1" in
+    prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_supervised_pr_process() {
   [ "${OPENCLAW_PR_DEDICATED_PROCESS_GROUP:-}" = "1" ] &&
     [ "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" = "3" ] &&
@@ -147,6 +154,17 @@ gh() {
   gh_plain "$@"
 }
 
+require_main_target_pr() {
+  local pr="$1"
+  local base
+  base=$(gh pr view "$pr" --json baseRefName --jq .baseRefName)
+  if [ "$base" != "main" ]; then
+    echo "scripts/pr prepare and merge commands only support PRs targeting main; PR #$pr targets $base." >&2
+    echo "Use the reviewed release-branch landing flow for non-main PRs." >&2
+    exit 1
+  fi
+}
+
 # shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/worktree.sh"
 # shellcheck disable=SC1091
@@ -205,6 +223,10 @@ main() {
   esac
 
   require_cmds
+
+  if is_main_only_pr_command "$cmd"; then
+    require_main_target_pr "${1-}"
+  fi
 
   if is_locked_pr_command "$cmd"; then
     local locked_pr="${1-}"

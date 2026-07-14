@@ -5,10 +5,10 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
+import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
-import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
+import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const WebSearchSchema = {
@@ -119,9 +119,3 @@ export function createWebSearchTool(options?: {
     },
   };
 }
-
-export const testing = {
-  SEARCH_CACHE,
-  resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
-    resolveWebSearchProviderId({ search }),
-};

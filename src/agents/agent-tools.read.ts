@@ -41,12 +41,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
-export {
-  REQUIRED_PARAM_GROUPS,
-  assertRequiredParams,
-  getToolParamsRecord,
-  wrapToolParamValidation,
-} from "./agent-tools.params.js";
+export { REQUIRED_PARAM_GROUPS } from "./agent-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.

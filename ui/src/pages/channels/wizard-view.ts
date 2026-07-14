@@ -1,5 +1,7 @@
 // Channel setup wizard modal: renders gateway wizard steps (note/select/text/
 // confirm/multiselect) plus the WhatsApp QR linking phase after config write.
+import "@awesome.me/webawesome/dist/components/radio/radio.js";
+import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
@@ -66,25 +68,38 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
 
 function renderSelectStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
   const options = step.options ?? [];
+  const selectedIndex = options.findIndex((option) => option.value === step.initialValue);
   return html`
-    <div class="channels-wizard__message">${step.message ?? ""}</div>
-    <div class="channels-wizard__options" role="listbox">
+    <wa-radio-group
+      class="channels-wizard__options"
+      label=${step.message ?? ""}
+      orientation="vertical"
+      .value=${selectedIndex >= 0 ? String(selectedIndex) : null}
+      @change=${(event: Event) => {
+        const rawIndex = (event.currentTarget as HTMLElement & { value?: string | number | null })
+          .value;
+        const option = options[Number(rawIndex)];
+        if (option) {
+          props.onAnswer(option.value);
+        }
+      }}
+    >
       ${options.map(
-        (option: ChannelWizardStepOption) => html`
-          <button
-            type="button"
+        (option: ChannelWizardStepOption, index) => html`
+          <wa-radio
             class="channels-wizard__option"
-            aria-pressed=${option.value === step.initialValue ? "true" : "false"}
-            @click=${() => props.onAnswer(option.value)}
+            appearance="button"
+            value=${String(index)}
+            .checked=${index === selectedIndex}
           >
             <span class="channels-wizard__option-label">${option.label}</span>
             ${option.hint
               ? html`<span class="channels-wizard__option-hint">${option.hint}</span>`
               : nothing}
-          </button>
+          </wa-radio>
         `,
       )}
-    </div>
+    </wa-radio-group>
   `;
 }
 

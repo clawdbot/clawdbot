@@ -68,8 +68,19 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       historyMessages: [
+        {
+          role: "system",
+          timestamp: Date.now() - 1_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "mantis-compaction-entry",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        },
         {
           content: [{ text: "Mantis web UI proof is ready.", type: "text" }],
           role: "assistant",
@@ -96,9 +107,16 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       const params = sendRequest.params as { idempotencyKey?: string };
       expect(params.idempotencyKey).toEqual(expect.any(String));
 
+      await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+      await page.locator(".chat-working-indicator").waitFor();
+      await page.clock.runFor(177_000);
+      await expect
+        .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
+        .toBe("2m 57s");
+      await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
+
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
       await page.getByText(reply).waitFor({ timeout: 10_000 });
-      await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
       await writeFile(
         path.join(artifactDir, "web-ui-chat-proof.json"),
         `${JSON.stringify(

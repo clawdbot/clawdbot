@@ -99,9 +99,3 @@ export function hasSessionUserTurnBeenSent(
     ? state.sentUserTurnIds.has(idempotencyKey)
     : undefined;
 }
-
-export const testing = {
-  reset() {
-    sessionPromptStates.clear();
-  },
-};

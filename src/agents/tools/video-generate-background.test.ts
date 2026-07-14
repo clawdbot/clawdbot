@@ -24,7 +24,6 @@ const {
   recordVideoGenerationTaskProgress,
   videoGenerationTaskLifecycle,
 } = await import("./video-generate-background.js");
-const { withMediaGenerationTaskKeepalive } = await import("./media-generate-background-shared.js");
 
 describe("video generate background helpers", () => {
   beforeEach(() => {
@@ -116,47 +115,6 @@ describe("video generate background helpers", () => {
     });
 
     expect(getAgentRunContext(handle.runId)).toBeUndefined();
-  });
-
-  it("keeps long-running media tasks fresh while provider work is pending", async () => {
-    // Provider video generation can outlive normal activity windows; keepalive
-    // progress prevents the detached task from looking stale while it waits.
-    vi.useFakeTimers();
-    let resolveRun: ((value: string) => void) | undefined;
-    const runPromise = new Promise<string>((resolve) => {
-      resolveRun = resolve;
-    });
-    const task = withMediaGenerationTaskKeepalive({
-      handle: {
-        taskId: "task-123",
-        runId: "tool:video_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        taskLabel: "friendly lobster surfing",
-      },
-      progressSummary: "Generating video",
-      run: () => runPromise,
-    });
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectRecordedTaskProgress({
-      taskExecutorMocks,
-      runId: "tool:video_generate:abc",
-      progressSummary: "Generating video",
-    });
-
-    if (!resolveRun) {
-      throw new Error("Expected video generation run resolver to be initialized");
-    }
-    resolveRun("done");
-    await expect(task).resolves.toBe("done");
-    const callsAfterCompletion = taskExecutorMocks.recordTaskRunProgressByRunId.mock.calls.length;
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(
-      callsAfterCompletion,
-    );
   });
 
   it("queues a completion event by default when direct send is disabled", async () => {

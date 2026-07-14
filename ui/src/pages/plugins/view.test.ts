@@ -134,7 +134,7 @@ describe("renderPlugins", () => {
     ];
     const container = mount(createProps({ result: createResult(plugins) }));
     const filterBar = container.querySelector(".settings-segmented");
-    expect(filterBar?.getAttribute("aria-label")).toBeTruthy();
+    expect(normalizedText(filterBar?.querySelector('[slot="label"]') ?? null)).toBeTruthy();
     expect(
       container.querySelector('[data-plugin-id="telegram"] h3.settings-row__title')?.textContent,
     ).toContain("Telegram");
@@ -154,11 +154,17 @@ describe("renderPlugins", () => {
     ];
     const onFilterChange = vi.fn();
     const container = mount(createProps({ result: createResult(plugins), onFilterChange }));
-    const chips = container.querySelectorAll<HTMLButtonElement>(
+    const chips = container.querySelectorAll<HTMLElement>(
       ".settings-segmented .settings-segmented__btn",
     );
     expect(chips).toHaveLength(4);
-    expectDefined(chips[3], "issues filter chip").click();
+    const issues = expectDefined(chips[3], "issues filter chip");
+    const group = issues.closest<HTMLElement & { value: string }>("wa-radio-group");
+    expect(group).not.toBeNull();
+    if (group) {
+      group.value = "issues";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
@@ -236,7 +242,7 @@ describe("renderPlugins", () => {
       }),
     );
     const detail = container.querySelector<HTMLElement>(".plugins-detail")!;
-    expect(detail.getAttribute("role")).toBe("dialog");
+    expect(detail.closest("openclaw-modal-dialog")?.getAttribute("label")).toBe("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__title"))).toContain("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__meta"))).toContain("workboard");
     detail.querySelectorAll<HTMLButtonElement>(".plugins-detail__actions button")[0]?.click();

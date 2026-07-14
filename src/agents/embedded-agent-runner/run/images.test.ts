@@ -9,17 +9,14 @@ import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
-import {
-  detectAndLoadPromptImages,
-  detectImageReferences,
-  loadImageFromRef,
-  mergePromptAttachmentImages,
-  modelSupportsImages,
-  splitPromptAndAttachmentRefs,
-} from "./images.js";
+import { detectAndLoadPromptImages, detectImageReferences, loadImageFromRef } from "./images.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const TINY_GIF_BUFFER = Buffer.from([
+  71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 0, 0, 0, 255, 255, 255, 33, 249, 4, 1, 0, 0, 0, 0,
+  44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1, 0, 59,
+]);
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
   expect(result.detectedRefs).toHaveLength(0);
@@ -388,28 +385,6 @@ what is this?`);
   });
 });
 
-describe("modelSupportsImages", () => {
-  it("returns true when model input includes image", () => {
-    const model = { input: ["text", "image"] };
-    expect(modelSupportsImages(model)).toBe(true);
-  });
-
-  it("returns false when model input does not include image", () => {
-    const model = { input: ["text"] };
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-
-  it("returns false when model input is undefined", () => {
-    const model = {};
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-
-  it("returns false when model input is empty", () => {
-    const model = { input: [] };
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-});
-
 describe("loadImageFromRef", () => {
   it("hydrates managed inbound media URIs before workspace path resolution", async () => {
     // Managed media URIs are canonical inbound attachment handles and should
@@ -586,47 +561,55 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.images).toEqual([image, image]);
   });
 
-  it("preserves attachment order when offloaded refs and inline images are mixed", () => {
-    // The model receives images in the user's attachment order, not grouped by
-    // storage mechanism.
-    const merged = mergePromptAttachmentImages({
-      imageOrder: ["offloaded", "inline"],
-      existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
-      offloadedImages: [{ type: "image", data: "large-a", mimeType: "image/jpeg" }],
-    });
-
-    expect(merged).toEqual([
-      { type: "image", data: "large-a", mimeType: "image/jpeg" },
-      { type: "image", data: "small-b", mimeType: "image/png" },
-    ]);
-  });
-
-  it("classifies trailing offloaded refs separately from prompt refs", () => {
+  it("classifies prompt and attachment refs while preserving mixed attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-order-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, "att-b.gif"), TINY_GIF_BUFFER);
+    await fs.writeFile(
+      path.join(inboundDir, "prompt-ref.png"),
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+    );
+    await fs.writeFile(path.join(stateDir, "prompt-b.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const prompt =
-      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.png]";
-    const refs = detectImageReferences(prompt);
+      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.gif]";
 
-    const split = splitPromptAndAttachmentRefs({
-      prompt,
-      refs,
-      imageOrder: ["inline", "offloaded"],
-    });
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt,
+        workspaceDir: stateDir,
+        model: { input: ["text", "image"] },
+        existingImages: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+        imageOrder: ["offloaded", "inline"],
+        workspaceOnly: true,
+      });
 
-    expect(split.promptRefs).toEqual([
-      {
-        raw: "media://inbound/prompt-ref.png",
-        type: "media-uri",
-        resolved: "media://inbound/prompt-ref.png",
-      },
-      { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
-    ]);
-    expect(split.attachmentRefs).toEqual([
-      {
-        raw: "media://inbound/att-b.png",
-        type: "media-uri",
-        resolved: "media://inbound/att-b.png",
-      },
-    ]);
+      expect(result.detectedRefs).toEqual([
+        {
+          raw: "media://inbound/prompt-ref.png",
+          type: "media-uri",
+          resolved: "media://inbound/prompt-ref.png",
+        },
+        {
+          raw: "media://inbound/att-b.gif",
+          type: "media-uri",
+          resolved: "media://inbound/att-b.gif",
+        },
+        { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
+      ]);
+      expect(result.loadedCount).toBe(3);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_GIF_BUFFER.toString("base64"), mimeType: "image/gif" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {

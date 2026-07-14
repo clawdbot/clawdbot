@@ -10,11 +10,11 @@ const KIB = 1024;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
-  startupJsRequests: 25,
+  startupJsRequests: 28,
   startupCssRequests: 1,
-  startupJsGzipBytes: 320 * KIB,
+  startupJsGzipBytes: 370 * KIB,
   startupCssGzipBytes: 42 * KIB,
-  largestJsGzipBytes: 205 * KIB,
+  largestJsGzipBytes: 215 * KIB,
   largestCssGzipBytes: 42 * KIB,
 });
 

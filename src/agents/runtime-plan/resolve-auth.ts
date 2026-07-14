@@ -4,6 +4,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { getApiKeyForModel } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
+import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -61,6 +62,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
     attempt: PreparedAgentRuntimeAuthAttempt;
     model: Model;
   }): Promise<{ plan: AgentRuntimeAuthPlan; auth: Auth }>;
+  forceCredentialScopedDirectModelResolve?: boolean;
   errorMessage: string;
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   let firstError: unknown;
@@ -90,6 +92,14 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       let model = await params.materializeModel({
         plan: attempt.plan,
         model: params.model,
+        forceResolve:
+          (params.forceCredentialScopedDirectModelResolve === true &&
+            attempt.kind === "direct" &&
+            Boolean(attempt.plan.selectedAuthMode)) ||
+          shouldForceDirectAuthFallbackModelResolve({
+            attempt,
+            priorProfileAttempted,
+          }),
       });
       if (
         attempt.kind === "profile" &&

@@ -15,6 +15,7 @@ import {
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
 } from "../lifecycle/workspace-skill-write.js";
+import { hasValidProposalOriginProvenance } from "./proposal-origin-validation.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -457,7 +458,7 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     typeof record.updatedAt !== "string" ||
     typeof record.draftHash !== "string" ||
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
-    !isValidProposalOrigin(record.origin) ||
+    !hasValidProposalOriginProvenance(record) ||
     !isValidSupportFileList(record.supportFiles) ||
     !record.target ||
     typeof record.target !== "object" ||
@@ -471,23 +472,6 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     return null;
   }
   return record;
-}
-
-function isValidProposalOrigin(value: unknown): boolean {
-  if (value === undefined) {
-    return true;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const origin = value as Record<string, unknown>;
-  for (const key of ["agentId", "sessionKey", "runId", "messageId"]) {
-    const item = origin[key];
-    if (item !== undefined && typeof item !== "string") {
-      return false;
-    }
-  }
-  return true;
 }
 
 function isValidSupportFileList(value: unknown): boolean {

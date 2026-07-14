@@ -3,7 +3,10 @@
   "name": "Reef",
   "description": "Guarded end-to-end encrypted claw channel",
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": [
+      "reef"
+    ]
   },
   "channels": [
     "reef"
@@ -267,5 +270,10 @@
         }
       }
     }
-  }
+  },
+  "commandAliases": [
+    {
+      "name": "reef"
+    }
+  ]
 }

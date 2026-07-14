@@ -124,6 +124,14 @@
   flex-wrap: wrap;
 }
 
+/* Toolbar buttons share the settings control height with the adjacent
+   segmented switches, search input, and filter selects. */
+.cron-toolbar .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
 .cron-search-box {
   position: relative;
   flex: 1 1 220px;
@@ -1053,4 +1061,36 @@
     max-width: none;
     flex-basis: 100%;
   }
+}
+
+/* Web Awesome popup surfaces own positioning, dismissal, and focus. */
+.cron-filter-popover {
+  --max-width: min(280px, calc(100vw - 48px));
+}
+
+.cron-filter-popover::part(body) {
+  padding: 0;
+}
+
+.cron-filter-popover .cron-filter-popover__panel {
+  position: static;
+  width: min(280px, calc(100vw - 48px));
+}
+
+.cron-job-menu::part(menu) {
+  min-width: 170px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: var(--space-1);
+  box-shadow: var(--shadow-lg);
+}
+
+.cron-filter-dropdown__details::part(menu) {
+  width: min(300px, calc(100vw - 48px));
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
 }

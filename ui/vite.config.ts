@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
-import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
+import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -420,9 +420,13 @@ export default function controlUiViteConfig(): UserConfig {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      rollupOptions: {
+      rolldownOptions: {
+        // Explicit groups do not absorb each other's dependencies. These settings
+        // preserve execution order while keeping the startup chunks bounded.
+        preserveEntrySignatures: "allow-extension",
         output: {
-          manualChunks: controlUiManualChunk,
+          codeSplitting: controlUiCodeSplitting,
+          strictExecutionOrder: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.

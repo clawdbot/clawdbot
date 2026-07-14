@@ -64,18 +64,29 @@ describeControlUiE2e("Control UI logs auto-follow mocked Gateway E2E", () => {
       await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
 
       const stream = page.locator(".log-stream");
-      const autoFollow = page.getByRole("checkbox", { name: "Auto-follow" });
+      const autoFollow = page.locator("wa-switch.settings-toggle").filter({
+        hasText: "Auto-follow",
+      });
       await expect
         .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
         .toBeGreaterThan(0);
-      await autoFollow.uncheck();
+      await expect
+        .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
+        .toBe(true);
+      await autoFollow.click();
+      await expect
+        .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
+        .toBe(false);
       await stream.evaluate((element) => {
         element.scrollTop = 0;
         element.dispatchEvent(new Event("scroll"));
       });
       await expect.poll(() => stream.evaluate((element) => element.scrollTop)).toBe(0);
 
-      await autoFollow.check();
+      await autoFollow.click();
+      await expect
+        .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
+        .toBe(true);
 
       await expect
         .poll(() =>

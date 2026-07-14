@@ -180,6 +180,11 @@
   gap: var(--space-2);
 }
 
+wa-radio-group.channels-wizard__options::part(radios) {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .channels-wizard__option {
   display: flex;
   flex-direction: column;
@@ -202,7 +207,9 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__option[aria-pressed="true"] {
+.channels-wizard__option[aria-pressed="true"],
+.channels-wizard__option[checked],
+.channels-wizard__option:state(checked) {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: var(--accent-subtle);
 }

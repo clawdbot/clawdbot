@@ -702,8 +702,6 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
-export type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
-
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
     replacements: new Map<string, AgentMessage>(),

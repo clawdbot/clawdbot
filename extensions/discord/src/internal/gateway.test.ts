@@ -343,6 +343,80 @@ describe("GatewayPlugin", () => {
     expect(dispatched.message?.content).toBe("hello");
   });
 
+  it("tracks the live voice roster across guild snapshots and voice updates", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    (gateway as unknown as { client: unknown }).client = {
+      dispatchGatewayEvent: vi.fn(async () => {}),
+      getPlugin: vi.fn(() => undefined),
+    };
+    const handleDispatch = (payload: { t: string; d: unknown }): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch(payload);
+
+    await handleDispatch({
+      t: GatewayDispatchEvents.GuildCreate,
+      d: {
+        id: "g1",
+        voice_states: [
+          { user_id: "u1", channel_id: "c1" },
+          { user_id: "u2", channel_id: "c1" },
+          { user_id: "u3", channel_id: "c2" },
+        ],
+      },
+    });
+
+    expect(gateway.listVoiceChannelStates("g1", "c1").map((state) => state.user_id)).toEqual([
+      "u1",
+      "u2",
+    ]);
+
+    await handleDispatch({
+      t: GatewayDispatchEvents.VoiceStateUpdate,
+      d: { guild_id: "g1", user_id: "u1", channel_id: "c2" },
+    });
+    await handleDispatch({
+      t: GatewayDispatchEvents.VoiceStateUpdate,
+      d: { guild_id: "g1", user_id: "u2", channel_id: null },
+    });
+
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c2").map((state) => state.user_id)).toEqual([
+      "u1",
+      "u3",
+    ]);
+
+    await handleDispatch({ t: GatewayDispatchEvents.GuildDelete, d: { id: "g1" } });
+    expect(gateway.listVoiceChannelStates("g1", "c2")).toEqual([]);
+  });
+
+  it("clears cached voice states when a fresh gateway session becomes ready", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    (gateway as unknown as { client: unknown }).client = {
+      dispatchGatewayEvent: vi.fn(async () => {}),
+      getPlugin: vi.fn(() => undefined),
+    };
+    const handleDispatch = (payload: { t: string; d: unknown }): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch(payload);
+
+    await handleDispatch({
+      t: GatewayDispatchEvents.GuildCreate,
+      d: { id: "g1", voice_states: [{ user_id: "u1", channel_id: "c1" }] },
+    });
+    await handleDispatch({
+      t: GatewayDispatchEvents.Ready,
+      d: { session_id: "session-2", resume_gateway_url: "wss://gateway.discord.gg" },
+    });
+
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
+  });
+
   it("marks successful gateway resumes connected", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     (gateway as unknown as { client: unknown }).client = {

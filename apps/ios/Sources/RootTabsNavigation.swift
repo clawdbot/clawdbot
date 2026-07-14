@@ -73,7 +73,7 @@ extension RootTabs {
             case .files: String(localized: "Files")
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")
-            case .cron: String(localized: "Cron Jobs")
+            case .cron: String(localized: "Automations")
             case .terminal: String(localized: "Terminal")
             case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")

@@ -13,7 +13,7 @@ import {
 } from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
-export interface ShellConfig {
+interface ShellConfig {
   shell: string;
   args: string[];
 }

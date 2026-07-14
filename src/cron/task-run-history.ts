@@ -30,7 +30,7 @@ export type ReadCronTaskRunHistoryPageOptions = {
   jobNameById?: Record<string, string>;
 };
 
-export type CronTaskRunHistoryPage = {
+type CronTaskRunHistoryPage = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;

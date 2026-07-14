@@ -187,12 +187,12 @@ function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
       <div class="chat-view-menu-wrapper">
-        <button class="chat-view-menu-trigger" type="button" aria-label="View">
-          ${iconSvg()}
-        </button>
-        <div class="chat-view-menu" role="menu" aria-label="View">
-          <button class="chat-view-menu__item" role="menuitemcheckbox">Reasoning</button>
-        </div>
+        <wa-dropdown class="chat-view-menu" aria-label="View">
+          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
+            ${iconSvg()}
+          </button>
+          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
+        </wa-dropdown>
       </div>
       <div class="chat-composer-model-control">
         <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
@@ -1770,10 +1770,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         await modelTrigger.click();
         await page.locator(".chat-view-menu").evaluate((node) => {
-          node.classList.add("chat-view-menu--open");
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-view-menu--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
@@ -1794,10 +1794,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         await page.locator(".chat-view-menu").evaluate((node) => {
-          node.classList.add("chat-view-menu--open");
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-view-menu--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);

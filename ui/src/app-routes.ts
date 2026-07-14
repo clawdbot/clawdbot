@@ -12,6 +12,7 @@ import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
+import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
@@ -48,6 +49,7 @@ const APP_ROUTE_TREE = [
   aboutPage,
   ...configPages,
   modelProvidersPage,
+  memoryImportPage,
   profilePage,
   workboardPage,
   worktreesPage,

@@ -30,6 +30,9 @@ export type ChangedTestTargetOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   broad?: boolean;
+  combineSiblingWithImportGraph?: boolean;
+  forceFullImportGraph?: boolean;
+  includeExtensionImpact?: boolean;
 };
 
 export type ChangedTestTargetPlan = {
@@ -93,6 +96,12 @@ export function resolveChangedTestTargetPlan(
   options?: ChangedTestTargetOptions,
 ): ChangedTestTargetPlan;
 
+export function hasImportGraphImpactOnTargets(
+  changedPaths: string[],
+  targetPaths: string[],
+  cwd?: string,
+): boolean;
+
 export function resolveChangedTestTargetPlanForArgs(
   args: string[],
   cwd?: string,
@@ -112,6 +121,8 @@ export function createVitestRunSpecs(
 ): VitestRunSpec[];
 
 export function createVitestPreflightPnpmArgs(config: string): string[] | null;
+
+export function isTestFileTarget(arg: string): boolean;
 
 export function findUnmatchedExplicitTestTargets(
   args: string[],

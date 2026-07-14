@@ -47,6 +47,8 @@ function makeContext(params: {
   workspaceDir: string;
   overwrite?: boolean;
   includeSecrets?: boolean;
+  targetAgentId?: string;
+  itemKinds?: readonly string[];
   verifyPluginApps?: boolean;
   providerOptions?: MigrationProviderContext["providerOptions"];
   reportDir?: string;
@@ -67,6 +69,8 @@ function makeContext(params: {
     source: params.source,
     stateDir: params.stateDir,
     includeSecrets: params.includeSecrets,
+    targetAgentId: params.targetAgentId,
+    itemKinds: params.itemKinds,
     overwrite: params.overwrite,
     providerOptions:
       params.providerOptions ?? (params.verifyPluginApps ? { verifyPluginApps: true } : undefined),
@@ -195,6 +199,139 @@ describe("buildCodexMigrationProvider", () => {
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });
+
+  it("plans and imports only consolidated Codex memory into the selected agent", async () => {
+    const fixture = await createCodexFixture();
+    const targetWorkspace = path.join(fixture.root, "workspace-research");
+    const reportDir = path.join(fixture.root, "report");
+    await writeFile(path.join(fixture.codexHome, "memories", "MEMORY.md"), "# Memory\n");
+    await writeFile(path.join(fixture.codexHome, "memories", "memory_summary.md"), "# Summary\n");
+    await writeFile(
+      path.join(fixture.codexHome, "memories", "rollout_summaries", "private.md"),
+      "# Raw rollout\n",
+    );
+    const config = {
+      agents: {
+        defaults: { workspace: fixture.workspaceDir },
+        list: [
+          { id: "main", default: true },
+          { id: "research", workspace: targetWorkspace },
+        ],
+      },
+    } as MigrationProviderContext["config"];
+    const context = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      reportDir,
+      config,
+      targetAgentId: "research",
+      itemKinds: ["memory"],
+      verifyPluginApps: true,
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(context);
+
+    expect(appServerRequest).not.toHaveBeenCalled();
+    expect(plan.items.map((item) => item.id)).toEqual([
+      "memory:codex:MEMORY.md",
+      "memory:codex:memory_summary.md",
+    ]);
+    expect(plan.items.every((item) => item.kind === "memory")).toBe(true);
+    expect(plan.items.every((item) => item.target?.startsWith(targetWorkspace))).toBe(true);
+
+    const result = await provider.apply(context, plan);
+
+    expect(result.summary).toMatchObject({ migrated: 2, errors: 0, conflicts: 0 });
+    await expect(
+      fs.readFile(path.join(targetWorkspace, "memory", "imports", "codex", "MEMORY.md"), "utf8"),
+    ).resolves.toBe("# Memory\n");
+    await expect(
+      fs.access(path.join(targetWorkspace, "memory", "imports", "codex", "private.md")),
+    ).rejects.toThrow();
+  });
+
+  it("skips unrelated Codex app-server preparation for memory-only imports", async () => {
+    const fixture = await createCodexFixture();
+    const provider = buildCodexMigrationProvider();
+    const preparation = provider.prepareApply?.(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(preparation).toBeUndefined();
+  });
+
+  it("rejects non-file Codex consolidated memory candidates", async () => {
+    const fixture = await createCodexFixture();
+    await fs.mkdir(path.join(fixture.codexHome, "memories", "MEMORY.md"), {
+      recursive: true,
+    });
+    const provider = buildCodexMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          itemKinds: ["memory"],
+        }),
+      ),
+    ).rejects.toThrow("must be a regular file");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked Codex consolidated memory candidates",
+    async () => {
+      const fixture = await createCodexFixture();
+      const actualMemory = path.join(fixture.root, "actual-memory.md");
+      const memoryPath = path.join(fixture.codexHome, "memories", "MEMORY.md");
+      await writeFile(actualMemory, "# Memory\n");
+      await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+      await fs.symlink(actualMemory, memoryPath);
+      const provider = buildCodexMigrationProvider();
+
+      await expect(
+        provider.plan(
+          makeContext({
+            source: fixture.codexHome,
+            stateDir: fixture.stateDir,
+            workspaceDir: fixture.workspaceDir,
+            itemKinds: ["memory"],
+          }),
+        ),
+      ).rejects.toThrow("must not be a symbolic link");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked import destination that resolves into Codex memory",
+    async () => {
+      const fixture = await createCodexFixture();
+      const memoryDir = path.join(fixture.codexHome, "memories");
+      await writeFile(path.join(memoryDir, "MEMORY.md"), "# Memory\n");
+      await fs.mkdir(fixture.workspaceDir, { recursive: true });
+      await fs.symlink(memoryDir, path.join(fixture.workspaceDir, "memory"));
+      const provider = buildCodexMigrationProvider();
+
+      await expect(
+        provider.plan(
+          makeContext({
+            source: fixture.codexHome,
+            stateDir: fixture.stateDir,
+            workspaceDir: fixture.workspaceDir,
+            itemKinds: ["memory"],
+          }),
+        ),
+      ).rejects.toThrow("destination must stay in the selected workspace");
+    },
+  );
 
   it("plans Codex skills while keeping plugins and native config explicit", async () => {
     const fixture = await createCodexFixture();

@@ -74,11 +74,11 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       expect(response?.status()).toBe(200);
 
       const modelCard = page.locator("#settings-general-model");
-      const lowButton = modelCard.getByRole("button", { name: "Low", exact: true });
+      const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
       await lowButton.waitFor();
-      expect(await lowButton.getAttribute("class")).toContain("settings-segmented__btn--active");
+      expect(await lowButton.getAttribute("aria-checked")).toBe("true");
 
-      await modelCard.getByRole("button", { name: "High", exact: true }).click();
+      await modelCard.getByRole("radio", { name: "High", exact: true }).click();
       await page.getByRole("button", { name: "Save", exact: true }).click();
 
       const raw = requestRaw(await gateway.waitForRequest("config.set"));
@@ -95,9 +95,9 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       await freshPage.goto(`${server.baseUrl}config`);
       const highButton = freshPage
         .locator("#settings-general-model")
-        .getByRole("button", { name: "High", exact: true });
+        .getByRole("radio", { name: "High", exact: true });
       await highButton.waitFor();
-      expect(await highButton.getAttribute("class")).toContain("settings-segmented__btn--active");
+      expect(await highButton.getAttribute("aria-checked")).toBe("true");
     } finally {
       await context.close();
     }

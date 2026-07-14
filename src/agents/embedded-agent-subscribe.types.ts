@@ -22,11 +22,7 @@ import type {
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
-export type {
-  BlockReplyChunking,
-  ToolProgressDetailMode,
-  ToolResultFormat,
-} from "./embedded-agent-subscribe.shared-types.js";
+export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
 type ReasoningStreamPayload = Pick<
   ReplyPayload,

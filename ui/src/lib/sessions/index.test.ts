@@ -645,6 +645,44 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("does not dispatch a queued patch on a replacement connection", async () => {
+    const priorPatch = deferred<void>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return { ok: true, path: "", key: "agent:main:main", entry: {} };
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const key = "agent:main:main";
+    sessions.setModelOverride(key, "openai/gpt-old");
+
+    const operation = sessions.patch(
+      key,
+      { model: "openai/gpt-new" },
+      { waitFor: priorPatch.promise },
+    );
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+
+    publish(false);
+    publish(true);
+    priorPatch.resolve();
+
+    await expect(operation).resolves.toBeNull();
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    sessions.dispose();
+  });
+
   it("passes transcript fork parameters to sessions.create", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {

@@ -1,9 +1,9 @@
 // Control UI tests cover workboard behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderWorkboard } from "./view.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
@@ -43,6 +43,16 @@ function dispatchKey(target: EventTarget, key: string, options: KeyboardEventIni
   });
   target.dispatchEvent(event);
   return event;
+}
+
+function changeWorkboardSelect(select: Element | null | undefined, value: string) {
+  const control = select as (HTMLElement & { value: string }) | null | undefined;
+  expect(control).not.toBeNull();
+  if (!control) {
+    return;
+  }
+  Object.defineProperty(control, "value", { configurable: true, value, writable: true });
+  control.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 describe("renderWorkboard", () => {
@@ -836,8 +846,8 @@ describe("renderWorkboard", () => {
     );
     const viewSelect = container.querySelector(".workboard-toolbar__filters .workboard-select");
     const runningOption = [
-      ...(viewSelect?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-    ].find((button) => button.textContent?.includes("Running"));
+      ...(viewSelect?.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-option") ?? []),
+    ].find((option) => option.textContent?.includes("Running"));
     expect(runningOption?.disabled).toBe(true);
     expect(runningOption?.textContent).toContain("0 cards");
   });
@@ -881,7 +891,7 @@ describe("renderWorkboard", () => {
     );
   });
 
-  it("uses the same custom dropdown control for Workboard toolbar filters", () => {
+  it("uses the same Web Awesome select control for Workboard toolbar filters", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -974,7 +984,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
   });
 
-  it("closes the previous Workboard dropdown when another one opens", () => {
+  it("uses labelled Web Awesome selects for Workboard filters", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -994,163 +1004,18 @@ describe("renderWorkboard", () => {
     );
 
     const selects = [
-      ...container.querySelectorAll<HTMLDetailsElement>(
-        ".workboard-toolbar__filters .workboard-select",
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        ".workboard-toolbar__filters > wa-select",
       ),
     ];
     expect(selects).toHaveLength(3);
-    const firstSelect = expectDefined(selects[0], "first workboard filter");
-    const secondSelect = expectDefined(selects[1], "second workboard filter");
-
-    firstSelect.open = true;
-    firstSelect.dispatchEvent(new Event("toggle"));
-    secondSelect.open = true;
-    secondSelect.dispatchEvent(new Event("toggle"));
-
-    expect(selects[0]?.open).toBe(false);
-    expect(selects[1]?.open).toBe(true);
-    expect(selects[2]?.open).toBe(false);
-  });
-
-  it("closes open Workboard dropdowns on outside pointer and Escape", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container
-        .querySelector(".workboard-toolbar__filters")
-        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
-        .item(1);
-      const board = container.querySelector<HTMLElement>(".workboard-board");
-      expect(select).toBeTruthy();
-      expect(board).toBeTruthy();
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-      expect(select?.open).toBe(false);
-
-      select!.open = true;
-      const escape = dispatchKey(select!, "Escape");
-      expect(escape.defaultPrevented).toBe(true);
-      expect(select?.open).toBe(false);
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("includes selected values in custom select accessible names", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
-
-    const selects = [
-      ...container.querySelectorAll<HTMLElement>(".workboard-toolbar__filters .workboard-select"),
-    ];
-    expect(selects).toHaveLength(3);
-    for (const select of selects) {
-      const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
-      const selectedLabel = trigger?.querySelector(".workboard-select__value")?.textContent?.trim();
-      const fieldLabel = menu?.getAttribute("aria-label");
-      expect(trigger?.getAttribute("aria-label")).toBe(`${fieldLabel}: ${selectedLabel}`);
-    }
-  });
-
-  it("supports keyboard navigation and restores dropdown trigger focus", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container
-        .querySelector(".workboard-toolbar__filters")
-        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
-        .item(1);
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const options = [
-        ...(select?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-      ];
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(options.length).toBeGreaterThan(2);
-      const firstOption = expectDefined(options[0], "first workboard filter option");
-      const disabledOption = expectDefined(options[1], "disabled workboard filter option");
-      const thirdOption = expectDefined(options[2], "third workboard filter option");
-      disabledOption.disabled = true;
-
-      trigger!.focus();
-      dispatchKey(trigger!, "ArrowDown");
-      expect(select?.open).toBe(true);
-      expect(document.activeElement).toBe(firstOption);
-
-      dispatchKey(firstOption, "ArrowDown");
-      expect(document.activeElement).toBe(thirdOption);
-
-      dispatchKey(thirdOption, "End");
-      expect(document.activeElement).toBe(options.at(-1));
-
-      dispatchKey(options.at(-1)!, "h");
-      expect(document.activeElement?.textContent).toContain("High");
-      expect(dispatchKey(document.activeElement!, " ").defaultPrevented).toBe(false);
-
-      (document.activeElement as HTMLButtonElement).click();
-      expect(select?.open).toBe(false);
-      expect(document.activeElement).toBe(trigger);
-
-      dispatchKey(trigger!, " ");
-      expect(select?.open).toBe(true);
-      dispatchKey(document.activeElement!, "Escape");
-      expect(select?.open).toBe(false);
-      expect(document.activeElement).toBe(trigger);
-    } finally {
-      container.remove();
-    }
+    expect(selects.map((select) => select.getAttribute("label"))).toEqual([
+      "Workboard view",
+      "All priorities",
+      "Filter by agent",
+    ]);
+    expect(selects.map((select) => select.getAttribute("value"))).toEqual(["all", "all", "all"]);
+    expect(container.querySelector(".workboard-select__trigger")).toBeNull();
   });
 
   it("can hide empty columns while keeping populated columns visible", () => {
@@ -1406,13 +1271,11 @@ describe("renderWorkboard", () => {
       launcher?.click();
       await nextFrame();
 
-      const modal = container.querySelector<HTMLElement>(".workboard-draft");
+      const modal = container.querySelector("openclaw-modal-dialog");
+      const { dialog } = await getRenderedModalDialog(container);
       const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-      const main = container.querySelector<HTMLElement>(".workboard-main");
-      expect(modal?.getAttribute("role")).toBe("dialog");
-      expect(modal?.getAttribute("aria-modal")).toBe("true");
-      expect(modal?.getAttribute("aria-labelledby")).toBe("workboard-card-modal-title");
-      expect(modal?.getAttribute("aria-describedby")).toBe("workboard-card-modal-description");
+      expect(modal?.getAttribute("label")).toBe("New card");
+      expect(dialog.open).toBe(true);
       expect(container.querySelector("#workboard-card-modal-title")?.textContent).toContain(
         "New card",
       );
@@ -1420,26 +1283,10 @@ describe("renderWorkboard", () => {
         "Queue work",
       );
       expect(document.activeElement).toBe(titleInput);
-      expect(main?.hasAttribute("inert")).toBe(true);
-      expect(main?.getAttribute("aria-hidden")).toBe("true");
 
-      const cancel = [...modal!.querySelectorAll<HTMLButtonElement>("button")].at(-1);
-      const close = modal!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
-      expect(cancel).toBeInstanceOf(HTMLButtonElement);
-      expect(close).toBeInstanceOf(HTMLButtonElement);
-      cancel?.focus();
-      const tab = dispatchKey(cancel!, "Tab");
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(close);
-
-      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
-      expect(shiftTab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(cancel);
-
-      dispatchKey(titleInput!, "Escape");
+      dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
       expect(container.querySelector(".workboard-draft")).toBeNull();
-      expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
     } finally {
       render(nothing, container);
@@ -1447,7 +1294,7 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("lets Escape close the card modal from a closed custom select", async () => {
+  it("lets Escape close the card modal from a closed Web Awesome select", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -1469,15 +1316,13 @@ describe("renderWorkboard", () => {
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
       await nextFrame();
 
-      const select = container.querySelector<HTMLDetailsElement>(
+      const select = container.querySelector<HTMLElement & { open: boolean }>(
         ".workboard-draft .workboard-select",
       );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
       expect(select?.open).toBe(false);
-      expect(trigger).toBeTruthy();
 
-      trigger!.focus();
-      dispatchKey(trigger!, "Escape");
+      select?.focus();
+      dispatchKey(select!, "Escape");
       await nextFrame();
 
       expect(container.querySelector(".workboard-draft")).toBeNull();
@@ -1526,40 +1371,19 @@ describe("renderWorkboard", () => {
       launcher?.click();
       await nextFrame();
 
-      const drawer = container.querySelector<HTMLElement>(".workboard-detail-drawer");
-      const main = container.querySelector<HTMLElement>(".workboard-main");
-      expect(drawer?.getAttribute("role")).toBe("dialog");
-      expect(drawer?.getAttribute("aria-modal")).toBe("true");
-      expect(drawer?.getAttribute("aria-labelledby")).toBe("workboard-card-detail-title");
-      expect(drawer?.getAttribute("aria-describedby")).toBe("workboard-card-detail-description");
+      const modal = container.querySelector("openclaw-modal-dialog");
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(modal?.getAttribute("label")).toBe("Inspect drawer focus");
+      expect(dialog.open).toBe(true);
       expect(container.querySelector("#workboard-card-detail-title")?.textContent).toContain(
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
         "Start or link a session",
       );
-      expect(document.activeElement).toBe(drawer);
-      expect(main?.hasAttribute("inert")).toBe(true);
-      expect(main?.getAttribute("aria-hidden")).toBe("true");
-
-      const close = drawer!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
-      const tab = dispatchKey(drawer!, "Tab");
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(close);
-
-      const lastFocusable = [
-        ...drawer!.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href]"),
-      ]
-        .toReversed()
-        .find((element) => !element.hasAttribute("disabled"));
-      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
-      expect(shiftTab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(lastFocusable);
-
-      dispatchKey(drawer!, "Escape");
+      dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
       expect(container.querySelector(".workboard-detail-drawer")).toBeNull();
-      expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
     } finally {
       render(nothing, container);
@@ -1646,10 +1470,6 @@ describe("renderWorkboard", () => {
       launcher?.focus();
       launcher?.click();
       await nextFrame();
-
-      expect(document.activeElement).toBe(
-        container.querySelector<HTMLElement>(".workboard-detail-drawer"),
-      );
 
       state.detailCardId = null;
       renderInto(container, props);
@@ -2452,7 +2272,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("New card");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain("New card");
     expect(container.querySelector('[aria-label="Card templates"]')?.textContent).toContain(
       "Bugfix",
     );
@@ -2741,10 +2561,7 @@ describe("renderWorkboard", () => {
     expect(agentFilter?.textContent).toContain("Unassigned (uses Main)");
     expect(agentFilter?.textContent).toContain("workboard-dispatcher (not configured)");
 
-    const opsOption = [
-      ...(agentFilter?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].find((button) => button.textContent?.includes("Ops"));
-    opsOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    changeWorkboardSelect(agentFilter, "ops");
     render(
       renderWorkboard({
         host,
@@ -2772,12 +2589,10 @@ describe("renderWorkboard", () => {
       "Ops",
     );
 
-    const dispatcherOption = [
-      ...(container
-        .querySelector(".workboard-select--toolbar-agent")
-        ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].find((button) => button.textContent?.includes("workboard-dispatcher"));
-    dispatcherOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    changeWorkboardSelect(
+      container.querySelector(".workboard-select--toolbar-agent"),
+      "workboard-dispatcher",
+    );
     render(
       renderWorkboard({
         host,
@@ -2896,180 +2711,30 @@ describe("renderWorkboard", () => {
     expect(body?.contains(footer as Node)).toBe(false);
   });
 
-  it("positions card modal dropdown menus as overlays", () => {
+  it("delegates modal select positioning and dismissal to Web Awesome", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.draftOpen = true;
     state.draftTitle = "New task";
     const container = document.createElement("div");
-    const innerWidth = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
 
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
 
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(menu).toBeTruthy();
-
-      Object.defineProperty(trigger, "getBoundingClientRect", {
-        value: () => ({
-          top: 120,
-          right: 420,
-          bottom: 156,
-          left: 180,
-          width: 240,
-          height: 36,
-          x: 180,
-          y: 120,
-          toJSON: () => ({}),
-        }),
-      });
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-left")).toBe("180px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
-      expect(menu?.style.visibility).toBe("visible");
-
-      select!.open = false;
-      select!.dispatchEvent(new Event("toggle"));
-      expect(menu?.style.visibility).toBe("hidden");
-    } finally {
-      innerWidth.mockRestore();
-    }
-  });
-
-  it("positions short dropdown menus against their trigger when opening above", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.draftOpen = true;
-    state.draftTitle = "New task";
-    const container = document.createElement("div");
-    const innerHeight = vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(menu).toBeTruthy();
-
-      Object.defineProperty(trigger, "getBoundingClientRect", {
-        value: () => ({
-          top: 700,
-          right: 420,
-          bottom: 736,
-          left: 180,
-          width: 240,
-          height: 36,
-          x: 180,
-          y: 700,
-          toJSON: () => ({}),
-        }),
-      });
-      Object.defineProperty(menu, "getBoundingClientRect", {
-        value: () => ({
-          top: 0,
-          right: 420,
-          bottom: 96,
-          left: 180,
-          width: 240,
-          height: 96,
-          x: 180,
-          y: 0,
-          toJSON: () => ({}),
-        }),
-      });
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("598px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
-    } finally {
-      innerHeight.mockRestore();
-    }
-  });
-
-  it("closes fixed dropdown menus when their anchor container scrolls or resizes", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.draftOpen = true;
-    state.draftTitle = "New task";
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const body = container.querySelector<HTMLElement>(".workboard-draft__body");
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      expect(body).toBeTruthy();
-      expect(select).toBeTruthy();
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      body!.dispatchEvent(new Event("scroll"));
-      expect(select?.open).toBe(false);
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      window.dispatchEvent(new Event("resize"));
-      expect(select?.open).toBe(false);
-    } finally {
-      container.remove();
-    }
+    const selects = container.querySelectorAll(".workboard-draft wa-select");
+    expect(selects.length).toBeGreaterThan(0);
+    expect(container.querySelector(".workboard-select__menu")).toBeNull();
   });
 
   it("preflights model-specific starts for ACP runtime agents", () => {
@@ -3324,8 +2989,10 @@ describe("renderWorkboard", () => {
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Edit card");
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Needs owner check");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain("Edit card");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "Needs owner check",
+    );
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -3352,10 +3019,7 @@ describe("renderWorkboard", () => {
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(1);
-    priority
-      ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option")
-      .item(2)
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    changeWorkboardSelect(priority, "high");
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -3372,7 +3036,7 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
 
     render(renderWorkboard(props), container);
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -3382,12 +3046,10 @@ describe("renderWorkboard", () => {
       "Renamed",
     );
     expect(
-      [
-        ...(container
-          .querySelector(".workboard-draft")
-          ?.querySelectorAll<HTMLElement>(".workboard-select__value") ?? []),
-      ].at(1)?.textContent,
-    ).toBe("High");
+      [...(container.querySelector(".workboard-draft")?.querySelectorAll("wa-select") ?? [])]
+        .at(1)
+        ?.getAttribute("value"),
+    ).toBe("high");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {
@@ -3595,10 +3257,10 @@ describe("renderWorkboard", () => {
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(3);
-    expect(sessionSelect?.querySelector(".workboard-select__value")?.textContent).toBe(
-      "agent:main:archived-session",
-    );
-    expect(sessionSelect?.querySelector('[aria-selected="true"]')).toBeNull();
+    expect(sessionSelect?.getAttribute("value")).toBe("agent:main:archived-session");
+    expect(
+      sessionSelect?.querySelector('wa-option[value="agent:main:archived-session"]'),
+    ).not.toBeNull();
   });
 
   it("does not offer synthetic heartbeat sessions when creating a card", () => {

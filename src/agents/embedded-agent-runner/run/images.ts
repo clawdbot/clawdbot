@@ -120,7 +120,7 @@ function isOpenClawCliImageCachePath(filePath: string): boolean {
  * existing inline images and offloaded attachments follow `imageOrder`, then
  * explicit prompt path/media refs are appended after attachment-owned images.
  */
-export function mergePromptAttachmentImages(params: {
+function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
   offloadedImages?: Array<ImageContent | null>;
@@ -265,7 +265,7 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
  * actually typed into the prompt. Attachment refs are already represented by
  * existing/offloaded image content and should not be loaded a second time.
  */
-export function splitPromptAndAttachmentRefs(params: {
+function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
   imageOrder?: PromptImageOrderEntry[];
@@ -543,7 +543,7 @@ export async function loadImageFromRef(
 }
 
 /** Returns whether the resolved model advertises native image input support. */
-export function modelSupportsImages(model: { input?: string[] }): boolean {
+function modelSupportsImages(model: { input?: string[] }): boolean {
   return model.input?.includes("image") ?? false;
 }
 

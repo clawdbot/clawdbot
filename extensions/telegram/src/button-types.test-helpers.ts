@@ -1,29 +1,31 @@
 // Telegram helper module supports button types helpers behavior.
 import { describe, expect, it } from "vitest";
-import { buildTelegramInteractiveButtons, resolveTelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 
 export function describeTelegramInteractiveButtonBehavior(): void {
   describe("buildTelegramInteractiveButtons", () => {
     it("maps shared buttons and selects into Telegram inline rows", () => {
       expect(
-        buildTelegramInteractiveButtons({
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                { label: "Approve", value: "approve", style: "success" },
-                { label: "Docs", url: "https://example.com/docs", style: "primary" },
-                { label: "Reject", value: "reject", style: "danger" },
-                { label: "Launch", webApp: { url: "https://example.com/app" } },
-                { label: "Later", value: "later" },
-                { label: "Archive", value: "archive" },
-              ],
-            },
-            {
-              type: "select",
-              options: [{ label: "Alpha", value: "alpha" }],
-            },
-          ],
+        resolveTelegramInlineButtons({
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Approve", value: "approve", style: "success" },
+                  { label: "Docs", url: "https://example.com/docs", style: "primary" },
+                  { label: "Reject", value: "reject", style: "danger" },
+                  { label: "Launch", webApp: { url: "https://example.com/app" } },
+                  { label: "Later", value: "later" },
+                  { label: "Archive", value: "archive" },
+                ],
+              },
+              {
+                type: "select",
+                options: [{ label: "Alpha", value: "alpha" }],
+              },
+            ],
+          },
         }),
       ).toEqual([
         [

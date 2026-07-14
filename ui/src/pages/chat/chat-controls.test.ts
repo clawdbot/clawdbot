@@ -55,7 +55,11 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
 }
 
 function menuItems(container: HTMLElement) {
-  return Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-view-menu__item"));
+  return Array.from(
+    container.querySelectorAll<HTMLElement & { checked: boolean; disabled: boolean }>(
+      ".chat-view-menu__item",
+    ),
+  );
 }
 
 describe("chat composer view menu", () => {
@@ -69,11 +73,7 @@ describe("chat composer view menu", () => {
       t("chat.view.toolCalls"),
       t("chat.view.commentary"),
     ]);
-    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual([
-      "true",
-      "true",
-      "false",
-    ]);
+    expect(items.map((item) => item.checked)).toEqual([true, true, false]);
   });
 
   it("toggles settings from the menu rows", () => {
@@ -82,15 +82,25 @@ describe("chat composer view menu", () => {
     render(renderChatControls(createProps({ onSettingsChange })), container);
 
     const [reasoning, toolCalls, commentary] = menuItems(container);
-    reasoning?.click();
+    const dropdown = container.querySelector("wa-dropdown");
+    const select = (item: HTMLElement) =>
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          detail: { item },
+        }),
+      );
+    select(reasoning!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowThinking: false }),
     );
-    toolCalls?.click();
+    select(toolCalls!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowToolCalls: false }),
     );
-    commentary?.click();
+    select(commentary!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatPersistCommentary: true }),
     );
@@ -104,12 +114,15 @@ describe("chat composer view menu", () => {
     const items = menuItems(container);
     expect(items.every((item) => item.disabled)).toBe(true);
     // Onboarding forces thinking hidden and tool calls visible.
-    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual([
-      "false",
-      "true",
-      "false",
-    ]);
-    items[0]?.click();
+    expect(items.map((item) => item.checked)).toEqual([false, true, false]);
+    container.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        detail: { item: items[0] },
+      }),
+    );
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
 

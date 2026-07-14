@@ -6,7 +6,11 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import {
+  resolveAllowedManagedMediaPath,
+  resolveSandboxedMediaSource,
+  resolveSandboxPath,
+} from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   // Real temp roots exercise path normalization and symlink/hardlink behavior.
@@ -85,6 +89,32 @@ async function withOutsideHardlinkInOpenClawTmp<T>(
     await fs.rm(outsideDir, { recursive: true, force: true });
   }
 }
+
+describe("resolveSandboxPath", () => {
+  it("keeps home-sibling roots absolute in escape diagnostics", async () => {
+    const home = path.join(os.homedir(), "test-home");
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      const root = path.resolve(`${home}-sibling`);
+      const outside = path.dirname(root);
+
+      expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
+        `Path escapes sandbox root (${root}): ${outside}`,
+      );
+    });
+  });
+
+  it("still shortens roots beneath the home directory", async () => {
+    const home = path.join(os.homedir(), "test-home");
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      const root = path.join(home, "openclaw-sandbox");
+      const outside = path.dirname(root);
+
+      expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
+        `Path escapes sandbox root (~${path.sep}openclaw-sandbox): ${outside}`,
+      );
+    });
+  });
+});
 
 describe("resolveSandboxedMediaSource", () => {
   const openClawTmpDir = resolvePreferredOpenClawTmpDir();

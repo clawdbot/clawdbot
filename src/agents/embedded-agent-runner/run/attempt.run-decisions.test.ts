@@ -1,5 +1,6 @@
 // Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
+import { resolveCredentialScopedAuthAttemptModelDecision } from "../../runtime-plan/credential-scoped-model.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -45,6 +46,37 @@ describe("resolveAttemptStreamAuthProfileId", () => {
         } as never,
       }),
     ).toBeUndefined();
+  });
+
+  describe("resolveCredentialScopedAuthAttemptModelDecision", () => {
+    const resolveDecision = (
+      plan: Record<string, unknown>,
+      requestedProfileId?: string,
+      providerUsesProfileScopedModelMetadata = false,
+    ) =>
+      resolveCredentialScopedAuthAttemptModelDecision({
+        attempt: { kind: "implicit", plan } as never,
+        priorProfileAttempted: false,
+        requestedProfileId,
+        providerUsesProfileScopedModelMetadata,
+      });
+
+    it("materializes route-less plans when a provider profile scopes model metadata", () => {
+      expect(resolveDecision({ forwardedAuthProfileId: "github-copilot:work" })).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+      });
+      expect(resolveDecision({}, "github-copilot:requested").shouldMaterialize).toBe(true);
+      expect(resolveDecision({ selectedAuthMode: "api-key" }, undefined, true)).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+        authRequirement: "api-key",
+      });
+      expect(
+        resolveDecision({ selectedAuthMode: "api-key" }, undefined, false).shouldMaterialize,
+      ).toBe(false);
+      expect(resolveDecision({}).shouldMaterialize).toBe(false);
+    });
   });
 });
 

@@ -16,6 +16,7 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown } from "./frontmatter.js";
 import {
   applySkillProposal,
+  getSkillProposalRunProgress,
   inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
@@ -407,6 +408,7 @@ describe("skill workshop proposals", () => {
     expect(revised.record.goal).toBe("Original goal");
     expect(revised.record.evidence).toBeUndefined();
     expect(revised.record.origin).toEqual({ runId: "revision-run" });
+    expect(revised.record.originRunIds).toEqual(["original-run", "revision-run"]);
     expect(revised.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/original.md",
     ]);
@@ -417,11 +419,31 @@ describe("skill workshop proposals", () => {
       workspaceDir,
       proposalId: proposal.record.id,
       content: "# Draftable\n\nFinal body.\n",
+      origin: { runId: "revision-run" },
       supportFiles: [],
     });
 
     expect(removedSupport.record.proposedVersion).toBe("v3");
     expect(removedSupport.record.origin).toEqual({ runId: "revision-run" });
+    expect(removedSupport.record.originRunIds).toEqual(["original-run", "revision-run"]);
+    expect(removedSupport.record.originRunMutationCounts?.["revision-run"]).toBe(2);
+
+    const laterRevision = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Draftable\n\nLater body.\n",
+      origin: { runId: "later-run" },
+      supportFiles: [],
+    });
+    expect(laterRevision.record.proposedVersion).toBe("v4");
+    expect(laterRevision.record.originRunIds).toEqual([
+      "original-run",
+      "revision-run",
+      "later-run",
+    ]);
+    await expect(
+      getSkillProposalRunProgress({ workspaceDir, runId: "revision-run" }),
+    ).resolves.toEqual({ mutationCount: 2, proposalIds: [proposal.record.id] });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
@@ -440,8 +462,32 @@ describe("skill workshop proposals", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
     ).resolves.toBe(
-      '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nFinal body.\n',
+      '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
+  });
+
+  it("rebuilds a stale manifest before recovering run progress", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Recovered Proposal",
+      description: "Recover a durable proposal after manifest interruption",
+      content: "# Recovered Proposal\n",
+      origin: { runId: "interrupted-run" },
+    });
+    await fs.writeFile(
+      path.join(stateDir, "skill-workshop", "proposals.json"),
+      `${JSON.stringify({
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: new Date().toISOString(),
+        proposals: [],
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(
+      getSkillProposalRunProgress({ workspaceDir, runId: "interrupted-run" }),
+    ).resolves.toEqual({ mutationCount: 1, proposalIds: [proposal.record.id] });
   });
 
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {

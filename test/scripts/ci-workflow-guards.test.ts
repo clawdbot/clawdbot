@@ -55,6 +55,8 @@ function readCiWorkflow() {
 
 function runCiManifestFixture(options: {
   bundledPlanner: boolean;
+  changedPlannerImportFails?: boolean;
+  changedPaths?: string[] | null;
   eventName?: "pull_request" | "workflow_dispatch";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
@@ -126,6 +128,25 @@ function runCiManifestFixture(options: {
     );
     if (options.bundledPlanner) {
       writeFileSync(
+        path.join(scriptsDir, "ci-changed-node-test-plan.mjs"),
+        options.changedPlannerImportFails
+          ? `throw new Error("planner import failure");\n`
+          : `
+          export const createChangedNodeTestShards = (changedPaths) =>
+            changedPaths.includes("src/focused.ts")
+              ? [{
+                  checkName: "changed-node-plan",
+                  configs: [],
+                  requiresDist: false,
+                  runner: "ubuntu-24.04",
+                  shardName: "changed-node-plan",
+                  targets: ["src/focused.test.ts"],
+                }]
+              : null;
+        `,
+        "utf8",
+      );
+      writeFileSync(
         path.join(scriptsDir, "channel-contract-test-plan.mjs"),
         `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
       );
@@ -171,6 +192,7 @@ function runCiManifestFixture(options: {
       env: {
         ...process.env,
         GITHUB_OUTPUT: outputPath,
+        OPENCLAW_CI_CHANGED_PATHS_JSON: JSON.stringify(options.changedPaths ?? null),
         OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
         OPENCLAW_CI_DOCS_CHANGED: "true",
         OPENCLAW_CI_DOCS_ONLY: "false",
@@ -2136,6 +2158,49 @@ describe("ci workflow guards", () => {
       }),
     );
 
+    const changedPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["src/focused.ts"],
+      eventName: "pull_request",
+    });
+    expect(changedPullRequest.status, changedPullRequest.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          changedPullRequest.outputs.checks_node_core_nondist_matrix,
+          "changed PR node matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "changed-node-plan",
+        shard_name: "changed-node-plan",
+        targets: ["src/focused.test.ts"],
+      }),
+    ]);
+    expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
+
+    const plannerImportFailure = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["src/focused.ts"],
+      changedPlannerImportFails: true,
+      eventName: "pull_request",
+    });
+    expect(plannerImportFailure.status, plannerImportFailure.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(
+          plannerImportFailure.outputs.checks_node_core_nondist_matrix,
+          "planner import fallback node matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "bundled-node-plan",
+        shard_name: "bundled-node-plan",
+      }),
+    ]);
+
     const currentMissingIos = runCiManifestFixture({
       bundledPlanner: true,
       eventName: "pull_request",
@@ -2530,7 +2595,9 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain('["exec", "node", "scripts/test-projects.mjs", target]');
     expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
     expect(runStep.run).toContain("childEnv[key] = value");
   });
@@ -3165,6 +3232,9 @@ describe("ci workflow guards", () => {
       "if-no-files-found": "warn",
     });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
+    expect(runStep.run.match(/test\/scripts\/ci-changed-node-test-plan\.test\.ts/g)?.length).toBe(
+      2,
+    );
   });
 
   it("keeps push docs validation ClawHub-backed", () => {

@@ -499,7 +499,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; create the cell (openclaw fleet create ${params.record.tenantId}) and then restore into it.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);

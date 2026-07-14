@@ -18,6 +18,7 @@ const APP_ROUTE_DEFINITIONS = {
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
   "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
+  "memory-import": { path: "/settings/memory-import", aliases: ["/memory-import"] },
   workboard: { path: "/workboard" },
   worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
   sessions: { path: "/settings/sessions", aliases: ["/sessions"] },

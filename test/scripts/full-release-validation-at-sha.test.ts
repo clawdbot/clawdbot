@@ -8,6 +8,7 @@ import {
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  selectWorkflowRunCheckSuite,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -128,6 +129,29 @@ describe("full-release-validation-at-sha", () => {
       "--json",
     ]);
     expect(() => releaseEvidenceVerificationArgs("")).toThrow("positive decimal");
+  });
+
+  it("selects the exact workflow run through GraphQL check-suite metadata", () => {
+    const nodes = [
+      {
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        workflowRun: { url: "https://github.com/openclaw/openclaw/actions/runs/122" },
+      },
+      {
+        status: "IN_PROGRESS",
+        conclusion: null,
+        workflowRun: { url: "https://github.com/openclaw/openclaw/actions/runs/123" },
+      },
+    ];
+
+    expect(selectWorkflowRunCheckSuite(nodes, "123")).toEqual(nodes[1]);
+    expect(selectWorkflowRunCheckSuite(nodes, "999")).toBeUndefined();
+    expect(() => selectWorkflowRunCheckSuite(nodes, "")).toThrow("positive decimal");
+
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain("checkSuites(first: 100, after: $after)");
+    expect(source).not.toContain('["run", "watch"');
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

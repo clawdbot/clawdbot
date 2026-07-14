@@ -2,6 +2,14 @@
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+
+export type ProviderAuthOptionBag = {
+  token?: string;
+  tokenProvider?: string;
+  secretInputMode?: SecretInputMode;
+  [key: string]: unknown;
+};
 
 /** Context for resolving synthetic provider credentials from config. */
 export type ProviderResolveSyntheticAuthContext = {

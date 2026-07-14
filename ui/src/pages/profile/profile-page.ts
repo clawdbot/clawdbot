@@ -3,7 +3,7 @@ import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -531,7 +531,6 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
-          <div class="page-sub">${subtitleForRoute("profile")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(this.renderBody())}

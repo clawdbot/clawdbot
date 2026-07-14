@@ -9,7 +9,7 @@ import { log } from "../logger.js";
  * Minimal active-session surface needed to steer a running attempt and observe
  * whether the queued user message reached the transcript.
  */
-export type EmbeddedAgentActiveSessionSteerTarget = {
+type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
   steer(

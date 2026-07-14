@@ -32,9 +32,9 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
-export type ConversationCapabilityProfileParams = {
+type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Live conversation key when a sandbox/policy key is used for tool filtering. */

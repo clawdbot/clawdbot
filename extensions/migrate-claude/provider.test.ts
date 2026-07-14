@@ -5,7 +5,9 @@ import path from "node:path";
 import { redactMigrationPlan } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveHomePath } from "./helpers.js";
+import { buildMemoryItems } from "./memory.js";
 import { buildClaudeMigrationProvider } from "./provider.js";
+import { CLAUDE_AUTO_MEMORY_MAX_FILES, type ClaudeSource } from "./source.js";
 import {
   cleanupTempRoots,
   makeConfigRuntime,
@@ -60,6 +62,264 @@ describe("Claude migration provider", () => {
         makeContext({ source, stateDir: path.join(root, "state"), workspaceDir: root }),
       ),
     ).rejects.toThrow("Claude state was not found");
+  });
+
+  it("plans and imports only Claude Code auto-memory into the selected agent", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, ".claude");
+    const defaultWorkspace = path.join(root, "workspace-main");
+    const targetWorkspace = path.join(root, "workspace-research");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    const memoryDir = path.join(source, "projects", "-tmp-research", "memory");
+    await writeFile(path.join(memoryDir, "MEMORY.md"), "# Research memory\n");
+    await writeFile(path.join(memoryDir, "topics", "api.md"), "# API facts\n");
+    await writeFile(path.join(memoryDir, "ignored.txt"), "not memory\n");
+    await writeFile(path.join(source, "CLAUDE.md"), "# Global instructions\n");
+    const config = {
+      agents: {
+        defaults: { workspace: defaultWorkspace },
+        list: [
+          { id: "main", default: true },
+          { id: "research", workspace: targetWorkspace },
+        ],
+      },
+    } as never;
+    const context = makeContext({
+      source,
+      stateDir,
+      workspaceDir: defaultWorkspace,
+      reportDir,
+      config,
+      targetAgentId: "research",
+      itemKinds: ["memory"],
+    });
+    const provider = buildClaudeMigrationProvider();
+
+    const plan = await provider.plan(context);
+
+    expect(plan.items).toHaveLength(2);
+    expect(plan.items.every((item) => item.kind === "memory")).toBe(true);
+    expect(plan.items.some((item) => item.id === "workspace:.claude/CLAUDE.md")).toBe(false);
+    expect(plan.items.map((item) => item.details?.relativePath)).toEqual([
+      "MEMORY.md",
+      "topics/api.md",
+    ]);
+    expect(plan.items.every((item) => item.target?.startsWith(targetWorkspace))).toBe(true);
+
+    const result = await provider.apply(context, plan);
+
+    expect(result.summary).toMatchObject({ migrated: 2, errors: 0, conflicts: 0 });
+    const imported = result.items.find((item) => item.details?.relativePath === "topics/api.md");
+    expect(imported?.target).toContain(path.join("memory", "imports", "claude-code"));
+    await expect(fs.readFile(imported?.target ?? "", "utf8")).resolves.toBe("# API facts\n");
+    await expect(fs.access(path.join(targetWorkspace, "USER.md"))).rejects.toThrow();
+  });
+
+  it("discovers a user-configured Claude Code auto-memory directory", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, ".claude");
+    const customMemory = path.join(root, "custom-memory");
+    await writeFile(
+      path.join(source, "settings.json"),
+      JSON.stringify({ autoMemoryDirectory: customMemory }),
+    );
+    await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
+    const provider = buildClaudeMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]?.source).toBe(path.join(customMemory, "MEMORY.md"));
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports an unreadable configured Claude Code auto-memory directory",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, ".claude");
+      const customMemory = path.join(root, "custom-memory");
+      await writeFile(
+        path.join(source, "settings.json"),
+        JSON.stringify({ autoMemoryDirectory: customMemory }),
+      );
+      await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
+      await fs.chmod(customMemory, 0o000);
+      const provider = buildClaudeMigrationProvider();
+
+      try {
+        await expect(
+          provider.plan(
+            makeContext({
+              source,
+              stateDir: path.join(root, "state"),
+              workspaceDir: path.join(root, "workspace"),
+              itemKinds: ["memory"],
+            }),
+          ),
+        ).rejects.toThrow("Unable to read Claude Code auto-memory directory");
+      } finally {
+        await fs.chmod(customMemory, 0o700);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports an unreadable standard Claude Code projects directory",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, ".claude");
+      const projects = path.join(source, "projects");
+      await fs.mkdir(projects, { recursive: true });
+      await fs.chmod(projects, 0o000);
+      const provider = buildClaudeMigrationProvider();
+
+      try {
+        await expect(
+          provider.plan(
+            makeContext({
+              source,
+              stateDir: path.join(root, "state"),
+              workspaceDir: path.join(root, "workspace"),
+              itemKinds: ["memory"],
+            }),
+          ),
+        ).rejects.toThrow("Unable to read Claude Code projects directory");
+      } finally {
+        await fs.chmod(projects, 0o700);
+      }
+    },
+  );
+
+  it("rejects relative Claude Code auto-memory settings", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, ".claude");
+    await writeFile(
+      path.join(source, "settings.json"),
+      JSON.stringify({ autoMemoryDirectory: "relative-memory" }),
+    );
+    const provider = buildClaudeMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir: path.join(root, "workspace"),
+          itemKinds: ["memory"],
+        }),
+      ),
+    ).rejects.toThrow("autoMemoryDirectory must be absolute or start with ~/");
+  });
+
+  it("rejects Claude Code auto-memory that contains the import destination", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, ".claude");
+    const workspaceDir = path.join(root, "workspace");
+    const customMemory = path.join(workspaceDir, "memory");
+    await writeFile(
+      path.join(source, "settings.json"),
+      JSON.stringify({ autoMemoryDirectory: customMemory }),
+    );
+    await writeFile(path.join(customMemory, "MEMORY.md"), "# Existing memory\n");
+    const provider = buildClaudeMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir,
+          itemKinds: ["memory"],
+        }),
+      ),
+    ).rejects.toThrow("source and OpenClaw import destination must be separate");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked import destination that resolves into Claude Code memory",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, ".claude");
+      const memoryDir = path.join(source, "projects", "-tmp-linked", "memory");
+      const workspaceDir = path.join(root, "workspace");
+      await writeFile(path.join(memoryDir, "MEMORY.md"), "# Source memory\n");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.symlink(memoryDir, path.join(workspaceDir, "memory"));
+      const provider = buildClaudeMigrationProvider();
+
+      await expect(
+        provider.plan(
+          makeContext({
+            source,
+            stateDir: path.join(root, "state"),
+            workspaceDir,
+            itemKinds: ["memory"],
+          }),
+        ),
+      ).rejects.toThrow("destination must stay in the selected workspace");
+    },
+  );
+
+  it("fails planning when a discovered Claude Code memory directory cannot be read", async () => {
+    const root = await makeTempRoot();
+    const missingMemory = path.join(root, "missing-memory");
+    await writeFile(missingMemory, "not a directory\n");
+    const source: ClaudeSource = {
+      root,
+      confidence: "medium",
+      autoMemorySources: [
+        {
+          id: "missing",
+          label: "missing",
+          path: missingMemory,
+        },
+      ],
+      archivePaths: [],
+    };
+
+    await expect(
+      buildMemoryItems({
+        source,
+        targets: {
+          workspaceDir: path.join(root, "workspace"),
+          stateDir: path.join(root, "state"),
+          agentDir: path.join(root, "state", "agents", "main", "agent"),
+        },
+        includeInstructions: false,
+      }),
+    ).rejects.toThrow("Unable to read Claude Code auto-memory directory");
+  });
+
+  it("rejects oversized Claude Code auto-memory instead of returning a partial plan", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, ".claude");
+    const memoryDir = path.join(source, "projects", "-tmp-large", "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await Promise.all(
+      Array.from({ length: CLAUDE_AUTO_MEMORY_MAX_FILES + 1 }, async (_, index) => {
+        await fs.writeFile(path.join(memoryDir, `memory-${index}.md`), "memory\n", "utf8");
+      }),
+    );
+    const provider = buildClaudeMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir: path.join(root, "workspace"),
+          itemKinds: ["memory"],
+        }),
+      ),
+    ).rejects.toThrow("safe import limit of 2000 Markdown files");
   });
 
   it("plans project memory, MCP servers, commands, skills, and manual review items", async () => {

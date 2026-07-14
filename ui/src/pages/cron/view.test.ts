@@ -118,6 +118,16 @@ function getElement<T extends Element>(
   return element;
 }
 
+function selectSegmented(control: HTMLElement) {
+  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
+  expect(group).not.toBeNull();
+  if (!group) {
+    return;
+  }
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("cron view list pane", () => {
   it("uses agent-scoped summary values", () => {
     const container = renderView({
@@ -164,13 +174,15 @@ describe("cron view list pane", () => {
     const onJobsFiltersChange = vi.fn();
     const container = renderView({ jobsEnabledFilter: "enabled", onJobsFiltersChange });
 
-    const active = getElement(container, '[data-test-id="cron-tab-enabled"]', HTMLButtonElement);
-    expect(active.classList.contains("settings-segmented__btn--active")).toBe(true);
-    expect(active.getAttribute("aria-pressed")).toBe("true");
-    expect(active.hasAttribute("role")).toBe(false);
-    expect(active.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Automation status");
+    const active = getElement(
+      container,
+      '[data-test-id="cron-tab-enabled"]',
+      HTMLElement,
+    ) as HTMLElement & { checked: boolean };
+    expect(active.checked).toBe(true);
+    expect(active.closest("wa-radio-group")?.getAttribute("label")).toBe("Automation status");
 
-    getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLButtonElement).click();
+    selectSegmented(getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement));
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
@@ -263,7 +275,9 @@ describe("cron view list pane", () => {
     expect(onRun).toHaveBeenCalledWith(job, "force");
 
     const toggle = getElement(container, '[data-test-id="cron-row-toggle-job-1"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
+      checked: boolean;
+    };
     expect(toggleInput.checked).toBe(true);
     toggleInput.checked = false;
     toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -272,7 +286,9 @@ describe("cron view list pane", () => {
     const runIfDue = Array.from(
       container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
     ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
-    runIfDue.click();
+    runIfDue
+      .closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }));
     expect(onRun).toHaveBeenCalledWith(job, "due");
     expect(onSelectJob).not.toHaveBeenCalled();
   });
@@ -354,7 +370,11 @@ describe("cron view list pane", () => {
     const tasks = renderView({ onListTabChange });
     expect(tasks.querySelector(".cron-table")).not.toBeNull();
     expect(tasks.querySelector(".cron-activity")).toBeNull();
-    getElement(tasks, '[data-test-id="cron-list-tab-activity"]', HTMLButtonElement).click();
+    tasks
+      .querySelector("wa-tab-group")
+      ?.dispatchEvent(
+        new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
+      );
     expect(onListTabChange).toHaveBeenCalledWith("activity");
 
     const activity = renderView({ listTab: "activity" });
@@ -362,25 +382,21 @@ describe("cron view list pane", () => {
     expect(activity.querySelector(".cron-activity")).not.toBeNull();
   });
 
-  it("moves and activates list tabs with arrow keys", () => {
+  it("configures manual Web Awesome list tabs", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
-    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLButtonElement);
-    const activity = getElement(
-      container,
-      '[data-test-id="cron-list-tab-activity"]',
-      HTMLButtonElement,
+    const group = getElement(container, ".cron-toolbar > wa-tab-group", HTMLElement);
+    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLElement);
+    const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
+
+    expect(group.getAttribute("activation")).toBe("manual");
+    expect((tasks as HTMLElement & { active: boolean }).active).toBe(true);
+    expect((activity as HTMLElement & { active: boolean }).active).toBe(false);
+    group.dispatchEvent(
+      new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
     );
 
-    expect(tasks.tabIndex).toBe(0);
-    expect(activity.tabIndex).toBe(-1);
-    tasks.focus();
-    tasks.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
-    );
-
-    expect(document.activeElement).toBe(activity);
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
@@ -411,12 +427,26 @@ describe("cron view run history", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
 
-    const statusOption = container.querySelector(
-      '[data-filter="status"] input[value="error"]',
-    ) as HTMLInputElement;
-    statusOption.checked = true;
-    statusOption.dispatchEvent(new Event("change", { bubbles: true }));
+    const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
+      '[data-filter="status"] wa-dropdown-item[value="option:error"]',
+    );
+    expect(statusOption).not.toBeNull();
+    statusOption
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: statusOption }, bubbles: true }),
+      );
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
+
+    const clearCommand = container.querySelector<HTMLElement>(
+      '[data-filter="status"] wa-dropdown-item[value="command:clear"]',
+    );
+    clearCommand
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: clearCommand }, bubbles: true }),
+      );
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
   });
 
   it("renders run summaries as sanitized markdown", () => {
@@ -471,7 +501,7 @@ describe("cron view editor", () => {
     expect(container.querySelector("#cron-payload-text")).toBeInstanceOf(HTMLTextAreaElement);
     expect(container.querySelector("#cron-name")).toBeInstanceOf(HTMLInputElement);
     expect(container.querySelector('[data-test-id="cron-schedule-kind-every"]')).toBeInstanceOf(
-      HTMLButtonElement,
+      HTMLElement,
     );
     // Create mode has no run-history tab and no enabled switch.
     expect(container.querySelector('[data-test-id="cron-detail-tab-history"]')).toBeNull();
@@ -523,14 +553,12 @@ describe("cron view editor", () => {
     const activeEvery = getElement(
       everyContainer,
       '[data-test-id="cron-schedule-kind-every"]',
-      HTMLButtonElement,
+      HTMLElement,
+    ) as HTMLElement & { checked: boolean };
+    expect(activeEvery.checked).toBe(true);
+    selectSegmented(
+      getElement(everyContainer, '[data-test-id="cron-schedule-kind-cron"]', HTMLElement),
     );
-    expect(activeEvery.getAttribute("aria-pressed")).toBe("true");
-    getElement(
-      everyContainer,
-      '[data-test-id="cron-schedule-kind-cron"]',
-      HTMLButtonElement,
-    ).click();
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
 
     const atContainer = renderView({
@@ -686,21 +714,44 @@ describe("cron view editor", () => {
     expect(onRun).toHaveBeenCalledWith(job, "force");
 
     const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
+      checked: boolean;
+    };
     expect(toggleInput.checked).toBe(true);
     expect(toggle.textContent).toContain("Active");
     toggleInput.checked = false;
     toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToggle).toHaveBeenCalledWith(job, false);
 
-    getButtonByText(container, "Run if due").click();
+    const jobMenu = container.querySelector("wa-dropdown.cron-job-menu");
+    const runIfDue = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="run-if-due"]');
+    if (runIfDue) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }),
+      );
+    }
     expect(onRun).toHaveBeenCalledWith(job, "due");
-    getButtonByText(container, "Clone").click();
+    const clone = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="clone"]');
+    if (clone) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: clone }, bubbles: true }),
+      );
+    }
     expect(onClone).toHaveBeenCalledWith(job);
-    getButtonByText(container, "Remove").click();
+    const remove = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="remove"]');
+    if (remove) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: remove }, bubbles: true }),
+      );
+    }
     expect(onRemove).toHaveBeenCalledWith(job);
 
-    getElement(container, '[data-test-id="cron-detail-tab-history"]', HTMLButtonElement).click();
+    container
+      .querySelector('[data-test-id="cron-detail-tab-history"]')
+      ?.closest("wa-tab-group")
+      ?.dispatchEvent(
+        new CustomEvent("wa-tab-show", { detail: { name: "history" }, bubbles: true }),
+      );
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
   });
 
@@ -738,7 +789,9 @@ describe("cron view editor", () => {
     const job = createJob("job-1", { enabled: false });
     const container = renderView({ jobs: [job], editingJobId: "job-1", onToggle });
     const toggle = getElement(container, '[data-test-id="cron-toggle-enabled"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "input", HTMLInputElement);
+    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
+      checked: boolean;
+    };
     expect(toggleInput.checked).toBe(false);
     expect(toggle.textContent).toContain("Paused");
     toggleInput.checked = true;

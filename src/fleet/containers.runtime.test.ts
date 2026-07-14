@@ -154,10 +154,11 @@ describe("fleet container runtime", () => {
     const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
       stdout: JSON.stringify([
         {
+          Id: "container-id",
           Image: "sha256:old-image-id",
           State: { Status: "running", Running: true },
           Config: {
-            Env: ["OPENCLAW_GATEWAY_TOKEN=secret", "FEATURE=a=b"],
+            Env: ["OPENCLAW_GATEWAY_TOKEN=test-auth-token", "FEATURE=a=b"],
             Image: "ghcr.io/openclaw/openclaw:latest",
             Labels: { "openclaw.fleet.tenant": "acme" },
             User: "1000:1000",
@@ -178,10 +179,11 @@ describe("fleet container runtime", () => {
       createFleetContainerRuntime(executor).inspect("podman", "cell-acme"),
     ).resolves.toEqual({
       kind: "ok",
+      containerId: "container-id",
       state: "running",
       running: true,
       labels: { "openclaw.fleet.tenant": "acme" },
-      environment: { OPENCLAW_GATEWAY_TOKEN: "secret", FEATURE: "a=b" },
+      environment: { OPENCLAW_GATEWAY_TOKEN: "test-auth-token", FEATURE: "a=b" },
       imageId: "sha256:old-image-id",
       memory: "2147483648",
       cpus: "2",
@@ -544,6 +546,7 @@ describe("fleet container runtime", () => {
         : {
             stdout: JSON.stringify([
               {
+                Id: "container-id",
                 Image: "sha256:image",
                 State: { Status: "running", Running: true },
                 Config: { Env: [], Labels: {} },

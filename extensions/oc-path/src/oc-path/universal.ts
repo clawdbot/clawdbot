@@ -20,23 +20,14 @@ import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
-import { setJsoncOcPath } from "./jsonc/edit.js";
-import { emitJsonc } from "./jsonc/emit.js";
+import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
 import type { JsonlAst } from "./jsonl/ast.js";
 import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/edit.js";
 import { emitJsonl } from "./jsonl/emit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
-import {
-  formatOcPath,
-  hasWildcard,
-  isQuotedSeg,
-  OcPathError,
-  parseArrayIndexSegment,
-  splitRespectingBrackets,
-  unquoteSeg,
-} from "./oc-path.js";
+import { formatOcPath, hasWildcard, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
@@ -676,43 +667,17 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
     if (typeof info.marker === "object" && info.marker.kind === "keyed") {
       return { ok: false, reason: "type-mismatch", detail: "cannot insert by key into array" };
     }
-    return mutateJsoncContainer(ast, info.parentPath, (container) => {
-      if (container.kind !== "array") {
-        return null;
-      }
-      const items = container.items.slice();
-      if (info.marker === "+") {
-        items.push(newJsoncValue);
-      } else if (typeof info.marker === "object" && info.marker.kind === "indexed") {
-        const idx = Math.min(info.marker.index, items.length);
-        items.splice(idx, 0, newJsoncValue);
-      }
-      return {
-        kind: "array",
-        items,
-        ...(container.line !== undefined ? { line: container.line } : {}),
-      };
-    });
+    const index = info.marker === "+" ? -1 : info.marker.index;
+    const r = insertJsoncOcPath(ast, info.parentPath, index, newJsoncValue);
+    return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
   }
 
   if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
     return { ok: false, reason: "type-mismatch", detail: "jsonc object insertion requires +key" };
   }
   const key = info.marker.key;
-  return mutateJsoncContainer(ast, info.parentPath, (container) => {
-    if (container.kind !== "object") {
-      return null;
-    }
-    if (container.entries.some((e) => e.key === key)) {
-      return null;
-    } // duplicate
-    const newEntry: JsoncEntry = { key, value: newJsoncValue, line: 0 };
-    return {
-      kind: "object",
-      entries: [...container.entries, newEntry],
-      ...(container.line !== undefined ? { line: container.line } : {}),
-    };
-  });
+  const r = insertJsoncOcPath(ast, info.parentPath, key, newJsoncValue);
+  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
 }
 
 function setJsonlInsertion(ast: JsonlAst, info: InsertionInfo, value: string): SetResult {
@@ -878,92 +843,6 @@ function jsonToJsoncValue(v: unknown): JsoncValue | null {
   }
   // JSON.parse never produces undefined / function / symbol.
   throw new Error(`unsupported JSON value type: ${typeof v}`);
-}
-
-function mutateJsoncContainer(
-  ast: JsoncAst,
-  parentPath: OcPath,
-  mutate: (container: JsoncValue) => JsoncValue | null,
-): SetResult {
-  if (ast.root === null) {
-    return { ok: false, reason: "no-root" };
-  }
-
-  // Quote-aware split so insertion under a key with `/`/`.`/etc. works.
-  const segments: string[] = [];
-  if (parentPath.section !== undefined) {
-    segments.push(...splitRespectingBrackets(parentPath.section, "."));
-  }
-  if (parentPath.item !== undefined) {
-    segments.push(...splitRespectingBrackets(parentPath.item, "."));
-  }
-  if (parentPath.field !== undefined) {
-    segments.push(...splitRespectingBrackets(parentPath.field, "."));
-  }
-
-  const newRoot =
-    segments.length === 0 ? mutate(ast.root) : mutateAt(ast.root, segments, 0, mutate);
-  if (newRoot === null) {
-    return { ok: false, reason: "unresolved" };
-  }
-
-  const next: JsoncAst = { kind: "jsonc", raw: "", root: newRoot };
-  return { ok: true, ast: { ...next, raw: emitJsonc(next, { mode: "render" }) } };
-}
-
-function mutateAt(
-  current: JsoncValue,
-  segments: readonly string[],
-  i: number,
-  mutate: (container: JsoncValue) => JsoncValue | null,
-): JsoncValue | null {
-  const seg = segments[i];
-  if (seg === undefined) {
-    return mutate(current);
-  }
-  if (seg.length === 0) {
-    return null;
-  }
-
-  if (current.kind === "object") {
-    // AST keys are unquoted; strip quotes from the path segment.
-    const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
-    const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {
-      return null;
-    }
-    const child = expectDefined(current.entries[idx], "located JSONC object entry index");
-    const replaced = mutateAt(child.value, segments, i + 1, mutate);
-    if (replaced === null) {
-      return null;
-    }
-    const newEntries = current.entries.slice();
-    newEntries[idx] = { ...child, value: replaced };
-    return {
-      kind: "object",
-      entries: newEntries,
-      ...(current.line !== undefined ? { line: current.line } : {}),
-    };
-  }
-  if (current.kind === "array") {
-    const idx = parseArrayIndexSegment(seg, current.items.length);
-    if (idx === null) {
-      return null;
-    }
-    const child = expectDefined(current.items[idx], "parsed JSONC array index is in bounds");
-    const replaced = mutateAt(child, segments, i + 1, mutate);
-    if (replaced === null) {
-      return null;
-    }
-    const newItems = current.items.slice();
-    newItems[idx] = replaced;
-    return {
-      kind: "array",
-      items: newItems,
-      ...(current.line !== undefined ? { line: current.line } : {}),
-    };
-  }
-  return null;
 }
 
 function rebuildMdRaw(ast: MdAst): MdAst {

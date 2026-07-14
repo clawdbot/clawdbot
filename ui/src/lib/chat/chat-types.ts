@@ -49,12 +49,13 @@ export type ChatItem =
       kind: "divider";
       key: string;
       label: string;
+      metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string };
+  | { kind: "reading-indicator"; key: string; startedAt: number };
 
 export const CHAT_HISTORY_RENDER_LIMIT = 100;
 export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;

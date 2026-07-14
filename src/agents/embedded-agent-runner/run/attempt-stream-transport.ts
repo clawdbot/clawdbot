@@ -19,6 +19,7 @@ import { log } from "../logger.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   describeEmbeddedAgentStreamStrategy,
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
@@ -29,7 +30,7 @@ import {
 } from "./attempt.run-decisions.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export function prepareEmbeddedAttemptTransport(input: {
+export async function prepareEmbeddedAttemptTransport(input: {
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   settingsManager: SettingsManager;
@@ -93,11 +94,16 @@ export function prepareEmbeddedAttemptTransport(input: {
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
   });
+  const transportApiKey = await resolveEmbeddedAgentApiKey({
+    provider: attempt.model.provider,
+    resolvedApiKey: attempt.resolvedApiKey,
+    authStorage: attempt.authStorage,
+  });
   const streamStrategy = describeEmbeddedAgentStreamStrategy({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn,
     model: attempt.model,
-    resolvedApiKey: attempt.resolvedApiKey,
+    resolvedApiKey: transportApiKey,
   });
   session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
@@ -107,6 +113,7 @@ export function prepareEmbeddedAttemptTransport(input: {
     signal: input.abortSignal,
     model: attempt.model,
     resolvedApiKey: attempt.resolvedApiKey,
+    transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });

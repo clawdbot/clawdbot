@@ -120,6 +120,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginLogger } from "./logger-types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -129,6 +130,7 @@ import type {
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
 import type {
+  ProviderAuthOptionBag,
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
@@ -240,25 +242,13 @@ export type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 
-export type ProviderAuthOptionBag = {
-  token?: string;
-  tokenProvider?: string;
-  secretInputMode?: SecretInputMode;
-  [key: string]: unknown;
-};
-
-/** Logger passed into plugin registration, services, and CLI surfaces. */
-export type PluginLogger = {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
+export type { PluginLogger } from "./logger-types.js";
 
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
+  ProviderAuthOptionBag,
   ProviderResolveExternalAuthProfilesContext,
   ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
@@ -2595,6 +2585,8 @@ export type MigrationItem = {
   message?: string;
   reason?: string;
   sensitive?: boolean;
+  /** Core-owned source revision bound by reviewed embedded migration flows. */
+  sourceRevision?: { algorithm: "sha256"; digest: string };
   details?: Record<string, unknown>;
 };
 
@@ -2641,6 +2633,10 @@ export type MigrationProviderContext = {
   runtime?: PluginRuntime;
   logger: PluginLogger;
   stateDir: string;
+  /** Explicit destination agent for embedded migration surfaces such as Control UI. */
+  targetAgentId?: string;
+  /** Optional item-kind scope used by embedded migration surfaces to avoid unrelated discovery. */
+  itemKinds?: readonly string[];
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
@@ -2655,6 +2651,8 @@ export type MigrationProviderPlugin = {
   id: string;
   label: string;
   description?: string;
+  /** Item kinds this provider can expose without requiring a full plan. */
+  supportedItemKinds?: readonly string[];
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
   prepareApply?: (
     ctx: MigrationProviderContext,

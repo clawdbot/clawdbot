@@ -236,8 +236,12 @@ describe("clawhub helpers", () => {
 
   it("checks plugin api ranges with semver precedence", () => {
     expect(satisfiesPluginApiRange("1.2.3", "^1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "~1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.x")).toBe(true);
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.3.0", "~1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
+    expect(satisfiesPluginApiRange("2.0.0-beta.1", "^1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("1.1.9", ">=1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
@@ -266,6 +270,7 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.99", "2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.4.1", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("2026.5.2", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
   });
@@ -288,6 +293,10 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", ">*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", "<*")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", ">=1.0.0 || >=2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.3||2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", "1.0.0 - 2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "~>1.2.3")).toBe(false);
   });
 
   it("checks min gateway versions with loose host labels", () => {

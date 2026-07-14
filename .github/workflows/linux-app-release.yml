@@ -1,0 +1,132 @@
+name: Linux App Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing OpenClaw release tag to receive Linux companion bundles, for example v2026.7.1
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-app-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build_and_attach:
+    name: Build and attach Linux companion bundles
+    # Oldest supported build base: bundles link against this glibc, so newer
+    # runners would silently drop Ubuntu 22.04/Debian 12 users.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Validate tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            # Alpha/beta semver suffixes map to a Debian revision that sorts
+            # AFTER the plain stable version, breaking beta-to-stable upgrades;
+            # numeric stable revisions (-N) order correctly and stay allowed.
+            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH or vYYYY.M.PATCH-N); got: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Checkout selected tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure tag commit is reachable from main
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          tag_sha=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+          if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
+            echo "Tag ${RELEASE_TAG} (${tag_sha}) is not reachable from main; Linux bundles ship for main-based releases only."
+            exit 1
+          fi
+
+      - name: Ensure matching GitHub release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Build Linux companion bundles
+        working-directory: apps/linux/src-tauri
+        env:
+          # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
+          NO_STRIP: "true"
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          # Stamp the release version into the bundles; the committed manifests
+          # keep a placeholder 0.1.0 so releases stay tag-driven.
+          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+            --config "{\"version\":\"${version}\"}"
+
+      - name: Verify and rename bundles for the release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          deb=$(ls apps/linux/src-tauri/target/release/bundle/deb/*.deb)
+          deb_version=$(dpkg-deb -f "${deb}" Version)
+          if [[ "${deb_version}" != "${version}"* ]]; then
+            echo "Debian package version '${deb_version}' does not match release version '${version}'"
+            exit 1
+          fi
+          mkdir -p dist/linux-app
+          cp "${deb}" "dist/linux-app/OpenClaw-${version}-amd64.deb"
+          cp apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage \
+            "dist/linux-app/OpenClaw-${version}-amd64.AppImage"
+          (cd dist/linux-app && sha256sum ./* > SHA256SUMS.linux-app.txt)
+          cat dist/linux-app/SHA256SUMS.linux-app.txt
+
+      - name: Attach bundles to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            dist/linux-app/*

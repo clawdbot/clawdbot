@@ -78,8 +78,11 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       expect(response?.status()).toBe(200);
 
       // Pairing folded into the footer agent-chip menu.
-      await page.locator(".sidebar-agent-chip__main").click();
-      const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      const sidebarPairingButton = sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
       await gateway.deferNext("device.pair.list");

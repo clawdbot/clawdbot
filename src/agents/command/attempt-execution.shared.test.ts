@@ -9,7 +9,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-} from "../internal-events.js";
+} from "../internal-runtime-context.js";
 import {
   persistSessionEntry,
   resolveAcpPromptBody,

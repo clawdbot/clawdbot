@@ -8,6 +8,14 @@ import Security
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
 
+private struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
+    let method: String
+
+    var errorDescription: String? {
+        "The Gateway route changed after \(self.method) was sent. Its result is unknown; refresh before retrying."
+    }
+}
+
 private enum GatewayActivationBindingKeyStore {
     private static let service = "ai.openclaw.onboarding-route-binding"
     private static let account = "credential-binding-v1"
@@ -575,6 +583,9 @@ extension GatewayConnection {
             timeoutMs: timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
+        guard await self.isCurrentRoute(route) else {
+            throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+        }
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {

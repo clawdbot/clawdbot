@@ -5,37 +5,22 @@ import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   formatCliOutputError,
-  parseCliJson,
-  parseCliJsonl,
   parseCliOutput,
-  supportsCliJsonlToolEvents,
   type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
-describe("supportsCliJsonlToolEvents", () => {
-  it.each([
-    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
-    [
-      "explicit Claude dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["Gemini provider", { command: "gemini", output: "jsonl" as const }, "google-gemini-cli", true],
-    [
-      "explicit Gemini dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "gemini-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
-  ])("%s: %s", (_name, backend, providerId, expected) => {
-    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
-  });
-});
+type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
+
+function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "json" });
+}
+
+function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
+}
 
 describe("parseCliJson", () => {
   it("preserves Claude max-turn terminal context in JSON mode", () => {

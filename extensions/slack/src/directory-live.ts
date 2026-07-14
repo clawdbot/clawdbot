@@ -10,7 +10,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackLookupClient } from "./client.js";
 
 type SlackUser = NonNullable<UsersListResponse["members"]>[number];
 type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
@@ -18,7 +18,7 @@ type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
 function createSlackDirectoryClient(params: DirectoryConfigParams) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = account.userToken ?? account.botToken?.trim();
-  return token ? createSlackWebClient(token) : null;
+  return token ? createSlackLookupClient(token) : null;
 }
 
 function normalizeQuery(value?: string | null): string {

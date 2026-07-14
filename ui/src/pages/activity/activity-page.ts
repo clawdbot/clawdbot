@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -240,7 +240,6 @@ class ActivityPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          <div class="page-sub">${subtitleForRoute("activity")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}

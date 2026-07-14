@@ -1072,7 +1072,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.locator(".chat-workspace-toggle").click();
-      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
+        timeout: 10_000,
+      });
 
       await page.getByRole("button", { name: "Copy path" }).click();
 
@@ -1152,8 +1154,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       expect(await opener.count()).toBe(0);
-      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
-      await page.getByText("preview.png").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
+        timeout: 10_000,
+      });
+      await page
+        .locator(".chat-workspace-rail__file-name", { hasText: "preview.png" })
+        .waitFor({ timeout: 10_000 });
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
       await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
         timeout: 10_000,
@@ -1175,7 +1181,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
         timeout: 10_000,
       });
-      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
+        timeout: 10_000,
+      });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
       await page.setViewportSize({ height: 900, width: 760 });
@@ -2194,7 +2202,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         mimeType: attachmentMimeType,
         buffer: Buffer.from(attachmentText),
       });
-      await page.getByText(attachmentName).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-attachment-file__name", { hasText: attachmentName }).waitFor({
+        timeout: 10_000,
+      });
       const send = page.getByRole("button", { name: "Send message" });
       const sendEnabled = await send.isEnabled();
       expect(sendEnabled).toBe(true);

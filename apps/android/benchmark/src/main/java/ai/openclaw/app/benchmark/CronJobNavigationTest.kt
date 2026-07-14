@@ -30,7 +30,7 @@ class CronJobNavigationTest {
 
   @Test
   fun opensCronJobFixtureDetail() {
-    findTextAfterScrolling("Cron Jobs").click()
+    findTextAfterScrolling("Automations").click()
 
     val cronJobLabel = findTextAfterScrolling("Android release digest")
     val cronJobRow =

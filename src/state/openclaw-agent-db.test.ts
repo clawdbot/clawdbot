@@ -1304,7 +1304,7 @@ describe("openclaw agent database", () => {
     });
   });
 
-  it("adds transcript mutation watermarks to v4 session tables", () => {
+  it("adds transcript watermarks and session provenance to v4 session tables", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(
       stateDir,
@@ -1322,6 +1322,10 @@ describe("openclaw agent database", () => {
       [
         "  transcript_updated_at INTEGER DEFAULT NULL,\n",
         "  transcript_observed_at INTEGER DEFAULT NULL,\n",
+        "  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),\n",
+        "  acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),\n",
+        "  plugin_owner_id TEXT,\n",
+        "  hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),\n",
       ].join(""),
       "",
     );
@@ -1339,6 +1343,14 @@ describe("openclaw agent database", () => {
       INSERT INTO sessions
         (session_id, session_key, created_at, updated_at)
       VALUES ('session-2', 'agent:worker-1:other', 10, 20);
+      INSERT INTO session_entries
+        (session_key, session_id, entry_json, updated_at)
+      VALUES (
+        'agent:worker-1:main',
+        'session-1',
+        '{"sessionId":"session-1","pluginOwnerId":"history-owner","hookExternalContentSource":"webhook","acp":{"backend":"acpx"}}',
+        20
+      );
       INSERT INTO transcript_events
         (session_id, seq, event_json, created_at)
       VALUES ('session-1', 0, '{"type":"custom"}', 1);
@@ -1355,7 +1367,14 @@ describe("openclaw agent database", () => {
     }>;
 
     expect(columns.map((column) => column.name)).toEqual(
-      expect.arrayContaining(["transcript_observed_at", "transcript_updated_at"]),
+      expect.arrayContaining([
+        "transcript_observed_at",
+        "transcript_updated_at",
+        "session_entry_provenance",
+        "acp_owned",
+        "plugin_owner_id",
+        "hook_external_content_source",
+      ]),
     );
     expect(
       database.db
@@ -1365,7 +1384,7 @@ describe("openclaw agent database", () => {
         .get("session-1"),
     ).toEqual({
       transcript_observed_at: 20,
-      transcript_updated_at: expect.any(Number),
+      transcript_updated_at: 1,
     });
     expect(
       database.db
@@ -1377,7 +1396,81 @@ describe("openclaw agent database", () => {
       transcript_observed_at: null,
       transcript_updated_at: null,
     });
+    expect(
+      database.db
+        .prepare(
+          "SELECT session_entry_provenance, acp_owned, plugin_owner_id, hook_external_content_source FROM sessions WHERE session_id = ?",
+        )
+        .get("session-1"),
+    ).toEqual({
+      session_entry_provenance: 1,
+      acp_owned: 1,
+      plugin_owner_id: "history-owner",
+      hook_external_content_source: "webhook",
+    });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("adds transcript provenance when upgrading the v7 status schema", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
+    const v7Schema = currentSchema.replace(
+      [
+        "  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),\n",
+        "  acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),\n",
+        "  plugin_owner_id TEXT,\n",
+        "  hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),\n",
+      ].join(""),
+      "",
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(v7Schema);
+    db.exec(`
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 7, 'worker-1', NULL, 1, 1);
+      INSERT INTO sessions
+        (session_id, session_key, created_at, updated_at, status)
+      VALUES ('session-1', 'agent:worker-1:main', 10, 20, 'done');
+      INSERT INTO session_entries
+        (session_key, session_id, entry_json, updated_at, status)
+      VALUES (
+        'agent:worker-1:main',
+        'session-1',
+        '{"sessionId":"session-1","pluginOwnerId":"history-owner","acp":{"backend":"acpx"}}',
+        20,
+        'done'
+      );
+      PRAGMA user_version = 7;
+    `);
+    db.close();
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      database.db
+        .prepare("SELECT session_entry_provenance, acp_owned, plugin_owner_id FROM sessions")
+        .get(),
+    ).toEqual({
+      session_entry_provenance: 1,
+      acp_owned: 1,
+      plugin_owner_id: "history-owner",
+    });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(8);
   });
 
   it("inspects registered database ownership without mutating the database", () => {

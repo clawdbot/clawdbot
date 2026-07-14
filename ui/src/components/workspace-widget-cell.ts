@@ -18,10 +18,12 @@ import type {
 import { getBuiltinRenderer, type BuiltinWidgetContext } from "../lib/workspace/widgets/index.ts";
 import { icons } from "./icons.ts";
 import { renderCustomWidgetHost, type CustomWidgetHostContext } from "./workspace-custom-widget.ts";
+import "./web-awesome.ts";
 
 export type WorkspaceWidgetCellCallbacks = {
   onToggleCollapse: (widget: WorkspaceWidget) => void;
   onToggleMenu: (widget: WorkspaceWidget) => void;
+  onCloseMenu: (widget: WorkspaceWidget) => void;
   onHide: (widget: WorkspaceWidget) => void;
   onRemove: (widget: WorkspaceWidget) => void;
   onEditTitle: (widget: WorkspaceWidget) => void;
@@ -88,45 +90,24 @@ function renderProvenanceChip(widget: WorkspaceWidget): TemplateResult | typeof 
   >`;
 }
 
-function renderMenu(
-  widget: WorkspaceWidget,
-  callbacks: WorkspaceWidgetCellCallbacks,
-): TemplateResult {
+function renderMenu(): TemplateResult {
   return html`
-    <div class="workspace-widget__menu" role="menu">
-      <button
-        class="workspace-widget__menu-item"
-        type="button"
-        role="menuitem"
-        @click=${() => callbacks.onEditTitle(widget)}
-      >
-        ${t("workspaces.widget.menu.editTitle")}
-      </button>
-      <button
-        class="workspace-widget__menu-item"
-        type="button"
-        role="menuitem"
-        @click=${() => callbacks.onMoveToTab(widget)}
-      >
-        ${t("workspaces.widget.menu.moveToTab")}
-      </button>
-      <button
-        class="workspace-widget__menu-item"
-        type="button"
-        role="menuitem"
-        @click=${() => callbacks.onHide(widget)}
-      >
-        ${t("workspaces.widget.menu.hide")}
-      </button>
-      <button
-        class="workspace-widget__menu-item workspace-widget__menu-item--danger"
-        type="button"
-        role="menuitem"
-        @click=${() => callbacks.onRemove(widget)}
-      >
-        ${t("workspaces.widget.menu.remove")}
-      </button>
-    </div>
+    <wa-dropdown-item class="workspace-widget__menu-item" value="edit-title">
+      ${t("workspaces.widget.menu.editTitle")}
+    </wa-dropdown-item>
+    <wa-dropdown-item class="workspace-widget__menu-item" value="move-to-tab">
+      ${t("workspaces.widget.menu.moveToTab")}
+    </wa-dropdown-item>
+    <wa-dropdown-item class="workspace-widget__menu-item" value="hide">
+      ${t("workspaces.widget.menu.hide")}
+    </wa-dropdown-item>
+    <wa-dropdown-item
+      class="workspace-widget__menu-item workspace-widget__menu-item--danger"
+      value="remove"
+      variant="danger"
+    >
+      ${t("workspaces.widget.menu.remove")}
+    </wa-dropdown-item>
   `;
 }
 
@@ -316,18 +297,50 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
           @keydown=${(event: KeyboardEvent) => handleNudgeKey(event, widget, "move", callbacks)}
           >${icons.arrowUpDown}</span
         >
-        <button
-          class="workspace-widget__menu-toggle"
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded=${props.menuOpen ? "true" : "false"}
-          aria-label=${t("workspaces.widget.menuLabel")}
+        <wa-dropdown
+          class="workspace-widget__menu"
+          placement="bottom-end"
+          .open=${props.menuOpen}
           @pointerdown=${(event: PointerEvent) => event.stopPropagation()}
-          @click=${() => callbacks.onToggleMenu(widget)}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            switch (event.detail.item.value) {
+              case "edit-title":
+                callbacks.onEditTitle(widget);
+                break;
+              case "move-to-tab":
+                callbacks.onMoveToTab(widget);
+                break;
+              case "hide":
+                callbacks.onHide(widget);
+                break;
+              case "remove":
+                callbacks.onRemove(widget);
+                break;
+              case undefined:
+                break;
+            }
+          }}
+          @wa-show=${() => {
+            if (!props.menuOpen) {
+              callbacks.onToggleMenu(widget);
+            }
+          }}
+          @wa-hide=${() => {
+            if (props.menuOpen) {
+              callbacks.onCloseMenu(widget);
+            }
+          }}
         >
-          ${icons.moreHorizontal}
-        </button>
-        ${props.menuOpen ? renderMenu(widget, callbacks) : nothing}
+          <button
+            slot="trigger"
+            class="workspace-widget__menu-toggle"
+            type="button"
+            aria-label=${t("workspaces.widget.menuLabel")}
+          >
+            ${icons.moreHorizontal}
+          </button>
+          ${renderMenu()}
+        </wa-dropdown>
       </header>
       ${widget.collapsed
         ? nothing

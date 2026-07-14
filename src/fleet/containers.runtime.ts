@@ -58,10 +58,10 @@ type FleetContainerLogsOptions = {
   since?: string;
   redactValues: readonly string[];
 };
-
 export type FleetContainerInspectResult =
   | {
       kind: "ok";
+      containerId: string;
       state: string;
       running: boolean;
       labels: Record<string, string>;
@@ -282,7 +282,6 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-
   const inspected = requireRecord(parsed[0]);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
@@ -293,6 +292,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 
   return {
     kind: "ok",
+    containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
     labels: readLabels(config.Labels),

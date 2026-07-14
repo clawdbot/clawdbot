@@ -93,7 +93,7 @@ export type TelegramDraftStream = {
   sendMayHaveLanded?: () => boolean;
 };
 
-export type TelegramDraftMessageSnapshot = {
+type TelegramDraftMessageSnapshot = {
   text: string;
   sourceText: string;
   sourceTextMode?: "html" | "markdown";

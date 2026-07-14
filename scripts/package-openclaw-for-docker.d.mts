@@ -28,6 +28,15 @@ export function packOpenClawPackageForDocker(
   outputDir: unknown,
   options?: Record<string, unknown>,
 ): Promise<string>;
+export function writePackageInventoryForDocker(
+  sourceDir: string,
+  runImpl?: (
+    command: string,
+    args: string[],
+    cwd: string,
+    options?: Record<string, unknown>,
+  ) => Promise<unknown>,
+): Promise<void>;
 export function runCommandForTest(
   command: unknown,
   args: unknown,

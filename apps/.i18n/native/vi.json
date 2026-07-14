@@ -114,14 +114,14 @@
       "translated": "Bật"
     },
     {
-      "id": "native.android.9f31cc0fcf527ed2",
-      "source": "Cron job is not due yet.",
-      "translated": "Tác vụ Cron chưa đến hạn."
+      "id": "native.android.198617f355636373",
+      "source": "Automation is not due yet.",
+      "translated": "Chưa đến thời điểm chạy tác vụ tự động."
     },
     {
-      "id": "native.android.fc2c0e26482b32cd",
-      "source": "Cron job is already running.",
-      "translated": "Tác vụ Cron đang chạy."
+      "id": "native.android.68d8213dbeaf4480",
+      "source": "Automation is already running.",
+      "translated": "Tác vụ tự động đang chạy."
     },
     {
       "id": "native.android.e1bb423a2260ee6d",
@@ -129,9 +129,9 @@
       "translated": "Quá trình khôi phục sau khi khởi động lại Gateway vẫn đang diễn ra."
     },
     {
-      "id": "native.android.341ad86c38a5d3d5",
-      "source": "Cron job has an invalid configuration.",
-      "translated": "Tác vụ Cron có cấu hình không hợp lệ."
+      "id": "native.android.7f330978f4d02d88",
+      "source": "Automation has an invalid configuration.",
+      "translated": "Tác vụ tự động có cấu hình không hợp lệ."
     },
     {
       "id": "native.android.83640045de441512",
@@ -139,24 +139,24 @@
       "translated": "Trình lập lịch Cron đã dừng."
     },
     {
-      "id": "native.android.df0b9434fa41904f",
-      "source": "Cron run finished.",
-      "translated": "Lần chạy Cron đã hoàn tất."
+      "id": "native.android.5b73964f29df42a7",
+      "source": "Automation run finished.",
+      "translated": "Lượt chạy tác vụ tự động đã hoàn tất."
     },
     {
-      "id": "native.android.c709d0617063c061",
-      "source": "Cron run skipped.",
-      "translated": "Lần chạy Cron đã bị bỏ qua."
+      "id": "native.android.37a3fea89f09fd4f",
+      "source": "Automation run skipped.",
+      "translated": "Đã bỏ qua lượt chạy tác vụ tự động."
     },
     {
-      "id": "native.android.b9f5c536c5a42514",
-      "source": "Cron run failed.",
-      "translated": "Lần chạy Cron thất bại."
+      "id": "native.android.b257b623a2508db3",
+      "source": "Automation run failed.",
+      "translated": "Lượt chạy tác vụ tự động không thành công."
     },
     {
-      "id": "native.android.a42d3ae97bf79bbe",
-      "source": "Cron run finished with an unknown status.",
-      "translated": "Lần chạy Cron đã hoàn tất với trạng thái không xác định."
+      "id": "native.android.fe6882d37530dbb3",
+      "source": "Automation run finished with an unknown status.",
+      "translated": "Lượt chạy tác vụ tự động đã hoàn tất với trạng thái không xác định."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -524,49 +524,49 @@
       "translated": "Đã kết nối (người vận hành: $operator)"
     },
     {
-      "id": "native.android.5fe7f7afb77851ff",
-      "source": "This cron job already has a queued run.",
-      "translated": "Tác vụ cron này đã có một lượt chạy trong hàng đợi."
+      "id": "native.android.d21aada33a4f9af2",
+      "source": "This automation already has a queued run.",
+      "translated": "Tác vụ tự động này đã có một lượt chạy trong hàng đợi."
     },
     {
-      "id": "native.android.1ebef3822941cdb6",
-      "source": "Cron job started.",
-      "translated": "Đã bắt đầu tác vụ cron."
+      "id": "native.android.d6f67c67daa0cf8b",
+      "source": "Automation run queued.",
+      "translated": "Đã thêm lượt chạy tác vụ tự động vào hàng đợi."
     },
     {
-      "id": "native.android.d8ba5136a17f7618",
-      "source": "Cron run queued.",
-      "translated": "Đã xếp hàng chạy cron."
+      "id": "native.android.33a3252703380d25",
+      "source": "Automation started.",
+      "translated": "Tác vụ tự động đã bắt đầu."
     },
     {
-      "id": "native.android.9bc7e4ad0b917a5f",
-      "source": "Gateway rejected the cron run.",
-      "translated": "Gateway đã từ chối lượt chạy cron."
+      "id": "native.android.2366805fa2d53539",
+      "source": "Gateway rejected the automation run.",
+      "translated": "Gateway đã từ chối lượt chạy tác vụ tự động."
     },
     {
-      "id": "native.android.8a758d2851f3db17",
-      "source": "Cron job disabled.",
-      "translated": "Đã tắt tác vụ cron."
+      "id": "native.android.f2afad6e17c1e4f5",
+      "source": "Automation enabled.",
+      "translated": "Đã bật tác vụ tự động."
     },
     {
-      "id": "native.android.fda9390dc0d4bdea",
-      "source": "Cron job enabled.",
-      "translated": "Đã bật tác vụ cron."
+      "id": "native.android.e9523d30c1f4484c",
+      "source": "Automation paused.",
+      "translated": "Đã tạm dừng tác vụ tự động."
     },
     {
-      "id": "native.android.a9aa7171558f8412",
-      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
-      "translated": "Tác vụ cron này đã thay đổi trên Gateway. Hãy xem lại phiên bản mới nhất trước khi lưu lại."
+      "id": "native.android.ee1570aa6c242586",
+      "source": "This automation changed on the gateway. Review the latest version before saving again.",
+      "translated": "Tác vụ tự động này đã thay đổi trên Gateway. Hãy xem lại phiên bản mới nhất trước khi lưu lại."
     },
     {
-      "id": "native.android.4562b415164529af",
-      "source": "Cron job updated.",
-      "translated": "Đã cập nhật tác vụ cron."
+      "id": "native.android.c8b760a913d0cb66",
+      "source": "Automation updated.",
+      "translated": "Đã cập nhật tác vụ tự động."
     },
     {
-      "id": "native.android.937a9a77deeef115",
-      "source": "Cron job deleted.",
-      "translated": "Đã xóa tác vụ cron."
+      "id": "native.android.1c494df0976b57ed",
+      "source": "Automation deleted.",
+      "translated": "Đã xóa tác vụ tự động."
     },
     {
       "id": "native.android.9c4af565f4ffe18c",
@@ -634,34 +634,34 @@
       "translated": "Đã tải các mô hình của nhà cung cấp, nhưng không có thông tin về trạng thái sẵn sàng."
     },
     {
-      "id": "native.android.0e1e5786e4cfc894",
-      "source": "Could not load cron jobs.",
-      "translated": "Không thể tải các tác vụ cron."
+      "id": "native.android.76a4ea6fbd0e9ec9",
+      "source": "Could not load automations.",
+      "translated": "Không thể tải các tác vụ tự động."
     },
     {
-      "id": "native.android.5288d0e2cd5ab8e6",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Kết nối Gateway để kiểm tra các tác vụ cron."
+      "id": "native.android.38e0abd9a93954ee",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Kết nối Gateway để kiểm tra các tác vụ tự động."
     },
     {
-      "id": "native.android.09ac6b21e791abb2",
-      "source": "Gateway returned an invalid cron job.",
-      "translated": "Gateway đã trả về một tác vụ cron không hợp lệ."
+      "id": "native.android.c90da365e3dae626",
+      "source": "Gateway returned an invalid automation.",
+      "translated": "Gateway trả về một tác vụ tự động không hợp lệ."
     },
     {
-      "id": "native.android.db2fbde400d1e692",
-      "source": "Could not load cron job.",
-      "translated": "Không thể tải tác vụ cron."
+      "id": "native.android.d6714e6f74a2cb86",
+      "source": "Could not load automation.",
+      "translated": "Không thể tải tác vụ tự động."
     },
     {
-      "id": "native.android.1c986c7849e0094a",
-      "source": "Connect the gateway to inspect cron run history.",
-      "translated": "Kết nối Gateway để kiểm tra lịch sử chạy cron."
+      "id": "native.android.892451834e038518",
+      "source": "Connect the gateway to inspect automation run history.",
+      "translated": "Kết nối Gateway để xem lịch sử chạy tác vụ tự động."
     },
     {
-      "id": "native.android.5de73d7e34c4dfda",
-      "source": "Could not load cron run history.",
-      "translated": "Không thể tải lịch sử chạy cron."
+      "id": "native.android.c25d29539ca8e4ff",
+      "source": "Could not load automation run history.",
+      "translated": "Không thể tải lịch sử chạy tác vụ tự động."
     },
     {
       "id": "native.android.153ffc5ce4132479",
@@ -669,9 +669,9 @@
       "translated": "Các thay đổi đối với cron yêu cầu quyền truy cập operator.admin."
     },
     {
-      "id": "native.android.31b0570face9a32e",
-      "source": "Connect the gateway to manage cron jobs.",
-      "translated": "Kết nối Gateway để quản lý các tác vụ cron."
+      "id": "native.android.74e54edba88f9531",
+      "source": "Connect the gateway to manage automations.",
+      "translated": "Kết nối Gateway để quản lý các tác vụ tự động."
     },
     {
       "id": "native.android.c050b799c39b1fd9",
@@ -1544,24 +1544,24 @@
       "translated": "Hủy"
     },
     {
-      "id": "native.android.ec06722578a6027e",
-      "source": "Delete cron job?",
-      "translated": "Xóa tác vụ cron?"
+      "id": "native.android.0e3e55624d2b9cc7",
+      "source": "Delete automation?",
+      "translated": "Xóa tác vụ tự động?"
     },
     {
-      "id": "native.android.362073d4e1e4624d",
-      "source": "This permanently removes the scheduled job from the gateway.",
-      "translated": "Thao tác này sẽ xóa vĩnh viễn tác vụ đã lên lịch khỏi gateway."
+      "id": "native.android.a239813fcaf37275",
+      "source": "This permanently removes the automation and its schedule from the gateway.",
+      "translated": "Thao tác này sẽ xóa vĩnh viễn tác vụ tự động và lịch chạy của tác vụ khỏi Gateway."
     },
     {
-      "id": "native.android.a3fcfa20dc395b87",
-      "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "Tác vụ này đã thay đổi trong khi bạn chỉnh sửa. Hãy hoàn nguyên về phiên bản Gateway mới nhất trước khi lưu."
+      "id": "native.android.dfbb2ffdd097891e",
+      "source": "This automation changed while you were editing. Revert to the latest gateway version before saving.",
+      "translated": "Tác vụ tự động này đã thay đổi trong khi bạn chỉnh sửa. Hãy hoàn nguyên về phiên bản mới nhất trên Gateway trước khi lưu."
     },
     {
-      "id": "native.android.db9f08d611b4c508",
-      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Hãy lưu hoặc hoàn nguyên các chỉnh sửa trước khi chạy, bật, tắt, xóa hoặc làm mới tác vụ này."
+      "id": "native.android.35f50ae04278c068",
+      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.",
+      "translated": "Hãy lưu hoặc hoàn nguyên các chỉnh sửa trước khi chạy, bật, tắt, xóa hoặc làm mới tác vụ tự động này."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -1594,14 +1594,14 @@
       "translated": "Bật"
     },
     {
-      "id": "native.android.1fed5d5912a9679c",
-      "source": "Delete Job",
-      "translated": "Xóa Tác vụ"
+      "id": "native.android.eb4763f9d83f71b5",
+      "source": "Delete Automation",
+      "translated": "Xóa tác vụ tự động"
     },
     {
-      "id": "native.android.da9ecf342cbd7035",
-      "source": "Edit Job",
-      "translated": "Sửa Tác vụ"
+      "id": "native.android.6cf371a6c39142be",
+      "source": "Edit Automation",
+      "translated": "Chỉnh sửa tác vụ tự động"
     },
     {
       "id": "native.android.006f60922ae98063",
@@ -1609,9 +1609,9 @@
       "translated": "Đã bật"
     },
     {
-      "id": "native.android.8b967e5cba1edfd8",
-      "source": "Allow the scheduler to run this job.",
-      "translated": "Cho phép bộ lập lịch chạy tác vụ này."
+      "id": "native.android.cdfd111ea8c90d0f",
+      "source": "Allow the scheduler to run this automation.",
+      "translated": "Cho phép trình lập lịch chạy tác vụ tự động này."
     },
     {
       "id": "native.android.f5fe0e769a9df4f8",
@@ -1619,14 +1619,14 @@
       "translated": "Xóa sau khi chạy"
     },
     {
-      "id": "native.android.9ed8d09744263540",
-      "source": "Remove this job after a successful one-shot run.",
-      "translated": "Xóa tác vụ này sau khi chạy một lần thành công."
+      "id": "native.android.1a6d5883c1e661ba",
+      "source": "Remove this automation after a successful one-shot run.",
+      "translated": "Xóa tác vụ tự động này sau khi chạy một lần thành công."
     },
     {
-      "id": "native.android.8faa8ae2ea76fe52",
-      "source": "Job name",
-      "translated": "Tên tác vụ"
+      "id": "native.android.7681a20f499488a8",
+      "source": "Automation name",
+      "translated": "Tên tác vụ tự động"
     },
     {
       "id": "native.android.e3a12cf55b2caea3",
@@ -3874,34 +3874,39 @@
       "translated": "Giới hạn của nhà cung cấp sẽ xuất hiện ở đây khi gateway báo cáo."
     },
     {
-      "id": "native.android.962a15bdb26cb6e1",
-      "source": "Cron Jobs",
-      "translated": "Tác vụ Cron"
-    },
-    {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "Công việc OpenClaw đã lên lịch từ gateway của bạn."
     },
     {
-      "id": "native.android.f9a5f09bd7436aa6",
-      "source": "Jobs",
-      "translated": "Tác vụ"
+      "id": "native.android.31a5440e22667f02",
+      "source": "Automations",
+      "translated": "Tác vụ tự động"
     },
     {
-      "id": "native.android.3cd22006987fde12",
-      "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
-      "translated": "Mở một công việc để kiểm tra cấu hình và lịch sử chạy của nó. Kết nối có phạm vi quản trị cũng có thể chạy, chỉnh sửa, bật, tắt hoặc xóa nó."
+      "id": "native.android.6e803f5130583ef7",
+      "source": "Search automations",
+      "translated": "Tìm kiếm tác vụ tự động"
     },
     {
-      "id": "native.android.9354a5bf1e4ce5a5",
-      "source": "Connect the gateway to load cron jobs.",
-      "translated": "Kết nối gateway để tải cron jobs."
+      "id": "native.android.ba3859394e1d84ad",
+      "source": "Search",
+      "translated": "Tìm kiếm"
     },
     {
-      "id": "native.android.239e2598dab8a8b1",
-      "source": "No scheduled jobs.",
-      "translated": "Không có công việc đã lên lịch."
+      "id": "native.android.02b3c78b09d0bbf5",
+      "source": "Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
+      "translated": "Mở một tác vụ tự động để xem cấu hình và lịch sử chạy. Các kết nối có phạm vi quản trị viên cũng có thể chạy, chỉnh sửa, bật, tắt hoặc xóa tác vụ."
+    },
+    {
+      "id": "native.android.93757bcd5a888e9b",
+      "source": "Connect the gateway to load automations.",
+      "translated": "Kết nối Gateway để tải các tác vụ tự động."
+    },
+    {
+      "id": "native.android.64a9b78fdbb526db",
+      "source": "No automations yet.",
+      "translated": "Chưa có tác vụ tự động nào."
     },
     {
       "id": "native.android.bc88f537cd309fcb",
@@ -3909,29 +3914,34 @@
       "translated": "Công việc theo lịch được tạo trên gateway sẽ xuất hiện ở đây."
     },
     {
-      "id": "native.android.2fbb66cd888e9543",
-      "source": "Cron Job",
-      "translated": "Tác vụ Cron"
+      "id": "native.android.de64e737e58cc949",
+      "source": "No matching automations.",
+      "translated": "Không có tác vụ tự động nào phù hợp."
     },
     {
-      "id": "native.android.f6dd71419863574c",
-      "source": "Inspect scheduled gateway work.",
-      "translated": "Kiểm tra công việc gateway đã lên lịch."
+      "id": "native.android.9e3164ae5cb0527a",
+      "source": "Automation",
+      "translated": "Tác vụ tự động"
     },
     {
-      "id": "native.android.e3a6337e3c28d3f5",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Kết nối Gateway để kiểm tra cron jobs."
+      "id": "native.android.5d9806af18054700",
+      "source": "Inspect and manage scheduled gateway work.",
+      "translated": "Kiểm tra và quản lý công việc Gateway đã lên lịch."
     },
     {
-      "id": "native.android.2d3daa5032913461",
-      "source": "Cron job not loaded.",
-      "translated": "Chưa tải cron job."
+      "id": "native.android.c6faada8886de13f",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Kết nối Gateway để kiểm tra các tác vụ tự động."
     },
     {
-      "id": "native.android.401993832e04f790",
-      "source": "Loading cron job…",
-      "translated": "Đang tải cron job…"
+      "id": "native.android.4530f9bf73d3155f",
+      "source": "Automation not loaded.",
+      "translated": "Chưa tải tác vụ tự động."
+    },
+    {
+      "id": "native.android.ba65a945fa8b0fc5",
+      "source": "Loading automation…",
+      "translated": "Đang tải tác vụ tự động…"
     },
     {
       "id": "native.android.0f33ca43db97b2a9",
@@ -4889,9 +4899,9 @@
       "translated": "Xem xét"
     },
     {
-      "id": "native.android.9664ff3f205c25d6",
-      "source": "Open cron job detail",
-      "translated": "Mở chi tiết tác vụ cron"
+      "id": "native.android.bee982da282e0887",
+      "source": "Open automation detail",
+      "translated": "Mở chi tiết tác vụ tự động"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
@@ -5127,6 +5137,21 @@
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+    },
+    {
+      "id": "native.android.ec82506ef939dc0e",
+      "source": "All",
+      "translated": "Tất cả"
+    },
+    {
+      "id": "native.android.f281f6a848fd8ff5",
+      "source": "Active",
+      "translated": "Đang hoạt động"
+    },
+    {
+      "id": "native.android.48080c472857781d",
+      "source": "Paused",
+      "translated": "Đã tạm dừng"
     },
     {
       "id": "native.android.c45aa61a985005d9",
@@ -5569,9 +5594,9 @@
       "translated": "Phê duyệt"
     },
     {
-      "id": "native.android.dd2def654c56b026",
-      "source": "Cron Jobs",
-      "translated": "Tác vụ Cron"
+      "id": "native.android.9cb21c6f0cbc9adc",
+      "source": "Automations",
+      "translated": "Tác vụ tự động"
     },
     {
       "id": "native.android.20833251ed61ca65",
@@ -8049,6 +8074,691 @@
       "translated": "yêu cầu đó"
     },
     {
+      "id": "native.apple.1696cec8c3c6a511",
+      "source": "Settings",
+      "translated": "Cài đặt"
+    },
+    {
+      "id": "native.apple.d66c2f42a01fdcc6",
+      "source": "History",
+      "translated": "Lịch sử"
+    },
+    {
+      "id": "native.apple.18f4b0e25c9ca42f",
+      "source": "Automation",
+      "translated": "Tác vụ tự động"
+    },
+    {
+      "id": "native.apple.f8791c06b9eea7c9",
+      "source": "Close",
+      "translated": "Đóng"
+    },
+    {
+      "id": "native.apple.35f5bb05688e822d",
+      "source": "Refresh automation",
+      "translated": "Làm mới tác vụ tự động"
+    },
+    {
+      "id": "native.apple.725e459c8dd8ba4c",
+      "source": "Delete this automation?",
+      "translated": "Xóa tác vụ tự động này?"
+    },
+    {
+      "id": "native.apple.50255322e1b2c13b",
+      "source": "Delete Automation",
+      "translated": "Xóa tác vụ tự động"
+    },
+    {
+      "id": "native.apple.d4cb0f4dc6c1058f",
+      "source": "Cancel",
+      "translated": "Hủy"
+    },
+    {
+      "id": "native.apple.ff9d5755b4f93f5d",
+      "source": "This permanently removes the automation and its schedule from the Gateway.",
+      "translated": "Thao tác này sẽ xóa vĩnh viễn tác vụ tự động và lịch trình của tác vụ khỏi Gateway."
+    },
+    {
+      "id": "native.apple.881fc358341a1df5",
+      "source": "active",
+      "translated": "đang hoạt động"
+    },
+    {
+      "id": "native.apple.4bc22f0f6856a7c5",
+      "source": "paused",
+      "translated": "đã tạm dừng"
+    },
+    {
+      "id": "native.apple.8fb3a1cb0aeb5dfe",
+      "source": "Next run",
+      "translated": "Lần chạy tiếp theo"
+    },
+    {
+      "id": "native.apple.57e96e8d8fd5c342",
+      "source": "Last run",
+      "translated": "Lần chạy gần nhất"
+    },
+    {
+      "id": "native.apple.cb17c8f476ef9637",
+      "source": "Automation detail",
+      "translated": "Chi tiết tác vụ tự động"
+    },
+    {
+      "id": "native.apple.125f2fbe90c80642",
+      "source": "Editing unavailable",
+      "translated": "Không thể chỉnh sửa"
+    },
+    {
+      "id": "native.apple.aa17216c6a622bcc",
+      "source": "Details",
+      "translated": "Chi tiết"
+    },
+    {
+      "id": "native.apple.adba197735c909a7",
+      "source": "Name",
+      "translated": "Tên"
+    },
+    {
+      "id": "native.apple.1de7b0cbc64f235e",
+      "source": "Automation name",
+      "translated": "Tên tác vụ tự động"
+    },
+    {
+      "id": "native.apple.22c0b187b1d0ed60",
+      "source": "Description",
+      "translated": "Mô tả"
+    },
+    {
+      "id": "native.apple.ea1c2fa8bee66cde",
+      "source": "Optional context",
+      "translated": "Ngữ cảnh tùy chọn"
+    },
+    {
+      "id": "native.apple.555170e9a9b3c867",
+      "source": "Schedule",
+      "translated": "Lịch trình"
+    },
+    {
+      "id": "native.apple.23ffc415d7625e1d",
+      "source": "Delete after successful run",
+      "translated": "Xóa sau khi chạy thành công"
+    },
+    {
+      "id": "native.apple.9fe4b2423471d0f1",
+      "source": "Useful for one-time automations.",
+      "translated": "Hữu ích cho các tác vụ tự động chỉ chạy một lần."
+    },
+    {
+      "id": "native.apple.84cd065063e9703c",
+      "source": "ISO date and time",
+      "translated": "Ngày và giờ theo định dạng ISO"
+    },
+    {
+      "id": "native.apple.23830e2ba37b8769",
+      "source": "2030-01-15T09:00:00Z",
+      "translated": "2030-01-15T09:00:00Z"
+    },
+    {
+      "id": "native.apple.e1399c7c254d8dbb",
+      "source": "Interval (milliseconds)",
+      "translated": "Khoảng thời gian (mili giây)"
+    },
+    {
+      "id": "native.apple.74aa65bb399fb736",
+      "source": "Anchor (milliseconds)",
+      "translated": "Mốc neo (mili giây)"
+    },
+    {
+      "id": "native.apple.bcafe4b14750497b",
+      "source": "Cron expression",
+      "translated": "Biểu thức Cron"
+    },
+    {
+      "id": "native.apple.a16790dec1a5f2b4",
+      "source": "Time zone",
+      "translated": "Múi giờ"
+    },
+    {
+      "id": "native.apple.c2c5bed70319ae16",
+      "source": "America/Los_Angeles",
+      "translated": "America/Los_Angeles"
+    },
+    {
+      "id": "native.apple.9336c989fdd5d6fa",
+      "source": "Stagger (milliseconds)",
+      "translated": "Độ trễ ngẫu nhiên (mili giây)"
+    },
+    {
+      "id": "native.apple.e03877d6332b324c",
+      "source": "Command to watch",
+      "translated": "Lệnh cần theo dõi"
+    },
+    {
+      "id": "native.apple.9fe4c10ddbf241e2",
+      "source": "pnpm build",
+      "translated": "pnpm build"
+    },
+    {
+      "id": "native.apple.585f47ef8c7223e1",
+      "source": "Action",
+      "translated": "Hành động"
+    },
+    {
+      "id": "native.apple.6260eb77ea71ba28",
+      "source": "Event text",
+      "translated": "Nội dung sự kiện"
+    },
+    {
+      "id": "native.apple.2878cb40276871ce",
+      "source": "What should the agent know?",
+      "translated": "Tác tử cần biết điều gì?"
+    },
+    {
+      "id": "native.apple.364fc52b3c80ff57",
+      "source": "Message",
+      "translated": "Tin nhắn"
+    },
+    {
+      "id": "native.apple.feac3b85bf40c7af",
+      "source": "What should the agent do?",
+      "translated": "Tác tử cần làm gì?"
+    },
+    {
+      "id": "native.apple.ab59900232a65c71",
+      "source": "Model",
+      "translated": "Mô hình"
+    },
+    {
+      "id": "native.apple.8a9349d85eeb22d2",
+      "source": "Thinking",
+      "translated": "Suy luận"
+    },
+    {
+      "id": "native.apple.7450fbb4246506d1",
+      "source": "Gateway default",
+      "translated": "Mặc định của Gateway"
+    },
+    {
+      "id": "native.apple.9e19b04a68638b23",
+      "source": "Arguments (JSON array)",
+      "translated": "Đối số (mảng JSON)"
+    },
+    {
+      "id": "native.apple.cdde064f118b68ea",
+      "source": "Working directory",
+      "translated": "Thư mục làm việc"
+    },
+    {
+      "id": "native.apple.20547b640f816b97",
+      "source": "Optional",
+      "translated": "Không bắt buộc"
+    },
+    {
+      "id": "native.apple.4ff623573733f360",
+      "source": "Execution",
+      "translated": "Thực thi"
+    },
+    {
+      "id": "native.apple.d93a77ec4f005d00",
+      "source": "Session target",
+      "translated": "Đích phiên"
+    },
+    {
+      "id": "native.apple.71ee518c108734d5",
+      "source": "main, isolated, current, or session:<id>",
+      "translated": "main, isolated, current hoặc session:<id>"
+    },
+    {
+      "id": "native.apple.34106ad50c7b87e8",
+      "source": "Wake mode",
+      "translated": "Chế độ đánh thức"
+    },
+    {
+      "id": "native.apple.0f5ba1612a172b31",
+      "source": "now or next-heartbeat",
+      "translated": "now hoặc next-heartbeat"
+    },
+    {
+      "id": "native.apple.2314f13a102a3e2c",
+      "source": "Delivery and failure routing remain visible and editable in the Control UI.",
+      "translated": "Các tùy chọn định tuyến khi phân phối và xảy ra lỗi vẫn hiển thị và có thể chỉnh sửa trong Control UI."
+    },
+    {
+      "id": "native.apple.c52518b79660be2e",
+      "source": "Manage",
+      "translated": "Quản lý"
+    },
+    {
+      "id": "native.apple.61cf5b73d3be8b9e",
+      "source": "Admin scope is required to change, run, or delete automations.",
+      "translated": "Cần có phạm vi quản trị viên để thay đổi, chạy hoặc xóa tác vụ tự động."
+    },
+    {
+      "id": "native.apple.63450040c4cdc79d",
+      "source": "Save",
+      "translated": "Lưu"
+    },
+    {
+      "id": "native.apple.4e4304768b282ed0",
+      "source": "Run Now",
+      "translated": "Chạy ngay"
+    },
+    {
+      "id": "native.apple.4b893a030daf831b",
+      "source": "Running",
+      "translated": "Đang chạy"
+    },
+    {
+      "id": "native.apple.252a740ded4f5747",
+      "source": "Enable",
+      "translated": "Bật"
+    },
+    {
+      "id": "native.apple.b0394e53e163e4d0",
+      "source": "Pause",
+      "translated": "Tạm dừng"
+    },
+    {
+      "id": "native.apple.03266f8398b57057",
+      "source": "Delete",
+      "translated": "Xóa"
+    },
+    {
+      "id": "native.apple.4dcf36018847481d",
+      "source": "Save or discard edits before running, pausing, or enabling this automation.",
+      "translated": "Lưu hoặc hủy các chỉnh sửa trước khi chạy, tạm dừng hoặc bật tác vụ tự động này."
+    },
+    {
+      "id": "native.apple.9fb34a87dc5dd407",
+      "source": "Recent runs",
+      "translated": "Lần chạy gần đây"
+    },
+    {
+      "id": "native.apple.3f31602868b5d915",
+      "source": "Loading",
+      "translated": "Đang tải"
+    },
+    {
+      "id": "native.apple.eff430620ea4d6e0",
+      "source": "Refresh",
+      "translated": "Làm mới"
+    },
+    {
+      "id": "native.apple.522ed52c5d6f2cf6",
+      "source": "No runs yet",
+      "translated": "Chưa có lần chạy nào"
+    },
+    {
+      "id": "native.apple.a0b71e211aa932c5",
+      "source": "Completed runs and delivery outcomes will appear here.",
+      "translated": "Các lần chạy đã hoàn tất và kết quả phân phối sẽ xuất hiện tại đây."
+    },
+    {
+      "id": "native.apple.4cb9a754ceb21346",
+      "source": "Schedule configured",
+      "translated": "Đã cấu hình lịch"
+    },
+    {
+      "id": "native.apple.592cd2b7c16fa91f",
+      "source": "One time",
+      "translated": "Một lần"
+    },
+    {
+      "id": "native.apple.fde9e0a6a8b23b7d",
+      "source": "Every %@",
+      "translated": "Mỗi %@"
+    },
+    {
+      "id": "native.apple.ed053c0e3d827ba3",
+      "source": "Interval",
+      "translated": "Khoảng thời gian"
+    },
+    {
+      "id": "native.apple.fe7237d5293453ff",
+      "source": "After command exits",
+      "translated": "Sau khi lệnh kết thúc"
+    },
+    {
+      "id": "native.apple.439c8dea4cc485bb",
+      "source": "Unsaved changes",
+      "translated": "Thay đổi chưa lưu"
+    },
+    {
+      "id": "native.apple.81846df87f4be1be",
+      "source": "Save or close this automation before refreshing.",
+      "translated": "Lưu hoặc đóng tác vụ tự động này trước khi làm mới."
+    },
+    {
+      "id": "native.apple.1be30cb60c21d3fe",
+      "source": "Edits preserved",
+      "translated": "Các chỉnh sửa đã được giữ lại"
+    },
+    {
+      "id": "native.apple.8d87d696c6e912dd",
+      "source": "Gateway data changed while you edited. Save will validate the current revision.",
+      "translated": "Dữ liệu Gateway đã thay đổi trong khi bạn chỉnh sửa. Khi lưu, phiên bản hiện tại sẽ được xác thực."
+    },
+    {
+      "id": "native.apple.d5c62307493aacbc",
+      "source": "Could not load automation",
+      "translated": "Không thể tải tác vụ tự động"
+    },
+    {
+      "id": "native.apple.ce3928fc379e2daf",
+      "source": "Could not load run history",
+      "translated": "Không thể tải lịch sử chạy"
+    },
+    {
+      "id": "native.apple.e84cad019bdb54c0",
+      "source": "Saving automation",
+      "translated": "Đang lưu tác vụ tự động"
+    },
+    {
+      "id": "native.apple.0e8f64ab2aae550c",
+      "source": "Automation saved",
+      "translated": "Đã lưu tác vụ tự động"
+    },
+    {
+      "id": "native.apple.a237e22c861da698",
+      "source": "The Gateway accepted the latest revision.",
+      "translated": "Gateway đã chấp nhận phiên bản mới nhất."
+    },
+    {
+      "id": "native.apple.b74b1f32135775e7",
+      "source": "Enabling automation",
+      "translated": "Đang bật tác vụ tự động"
+    },
+    {
+      "id": "native.apple.5d2466224b7f83cd",
+      "source": "Pausing automation",
+      "translated": "Đang tạm dừng tác vụ tự động"
+    },
+    {
+      "id": "native.apple.d2b1cc3738a2d411",
+      "source": "Automation enabled",
+      "translated": "Đã bật tác vụ tự động"
+    },
+    {
+      "id": "native.apple.1755a139d97def18",
+      "source": "Automation paused",
+      "translated": "Đã tạm dừng tác vụ tự động"
+    },
+    {
+      "id": "native.apple.92fd1af6e77e2b7d",
+      "source": "Future runs are active.",
+      "translated": "Các lượt chạy trong tương lai đang hoạt động."
+    },
+    {
+      "id": "native.apple.1429ded16eab70ba",
+      "source": "Future scheduled runs are paused.",
+      "translated": "Các lượt chạy theo lịch trong tương lai đã bị tạm dừng."
+    },
+    {
+      "id": "native.apple.93b93b980c47d0ac",
+      "source": "Queueing run",
+      "translated": "Đang đưa lượt chạy vào hàng đợi"
+    },
+    {
+      "id": "native.apple.e15e1406fcc112fb",
+      "source": "Run queued",
+      "translated": "Đã đưa lượt chạy vào hàng đợi"
+    },
+    {
+      "id": "native.apple.6a6c77e2f6d11ec9",
+      "source": "Refresh History to follow the result.",
+      "translated": "Làm mới Lịch sử để theo dõi kết quả."
+    },
+    {
+      "id": "native.apple.9482a1efdfc47e7f",
+      "source": "This run stays tracked until its exact result appears.",
+      "translated": "Lượt chạy này sẽ tiếp tục được theo dõi cho đến khi kết quả chính xác xuất hiện."
+    },
+    {
+      "id": "native.apple.7586bdc989075ffd",
+      "source": "Run still pending",
+      "translated": "Lượt chạy vẫn đang chờ xử lý"
+    },
+    {
+      "id": "native.apple.8f764528fa10c8eb",
+      "source": "The Gateway has not reported a result yet. Refresh History later.",
+      "translated": "Gateway chưa báo cáo kết quả. Hãy làm mới Lịch sử sau."
+    },
+    {
+      "id": "native.apple.3120beddc3ef9928",
+      "source": "Run finished",
+      "translated": "Lượt chạy đã hoàn tất"
+    },
+    {
+      "id": "native.apple.7bf6ec0bc48196b0",
+      "source": "History now shows the completed result.",
+      "translated": "Lịch sử hiện hiển thị kết quả đã hoàn tất."
+    },
+    {
+      "id": "native.apple.421eedc59a44514c",
+      "source": "Run skipped",
+      "translated": "Lần chạy đã bị bỏ qua"
+    },
+    {
+      "id": "native.apple.a0bf404e9bcb5ba3",
+      "source": "The Gateway skipped this run. History shows the result.",
+      "translated": "Gateway đã bỏ qua lần chạy này. Lịch sử hiển thị kết quả."
+    },
+    {
+      "id": "native.apple.2e2f77f95cff0717",
+      "source": "Run failed",
+      "translated": "Lần chạy thất bại"
+    },
+    {
+      "id": "native.apple.4932b01670c6bb36",
+      "source": "History shows the failure details.",
+      "translated": "Lịch sử hiển thị chi tiết lỗi."
+    },
+    {
+      "id": "native.apple.af47a77871426a34",
+      "source": "Run result available",
+      "translated": "Đã có kết quả chạy"
+    },
+    {
+      "id": "native.apple.b3aa40fc12a403ef",
+      "source": "History shows the Gateway result.",
+      "translated": "Lịch sử hiển thị kết quả của Gateway."
+    },
+    {
+      "id": "native.apple.2a8eb4abb58e4c6a",
+      "source": "Deleting automation",
+      "translated": "Đang xóa tác vụ tự động"
+    },
+    {
+      "id": "native.apple.dd3271c4e94641a2",
+      "source": "Automation action failed",
+      "translated": "Thao tác tự động hóa thất bại"
+    },
+    {
+      "id": "native.apple.32e3f08284bb3007",
+      "source": "This automation is not due yet.",
+      "translated": "Tác vụ tự động này chưa đến hạn."
+    },
+    {
+      "id": "native.apple.5927a803625f5dbb",
+      "source": "This automation is already running.",
+      "translated": "Tác vụ tự động này đang chạy."
+    },
+    {
+      "id": "native.apple.4aad892e27b4ddd1",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Quá trình khôi phục sau khi khởi động lại Gateway vẫn đang diễn ra."
+    },
+    {
+      "id": "native.apple.81308ff798cb8ff3",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Tác vụ tự động này có cấu hình không hợp lệ."
+    },
+    {
+      "id": "native.apple.a88f71792ad4beaa",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Bộ lập lịch tự động hóa đã dừng."
+    },
+    {
+      "id": "native.apple.11923296a8287615",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway không khởi chạy tác vụ tự động này."
+    },
+    {
+      "id": "native.apple.0c744cad13a3927f",
+      "source": "not scheduled",
+      "translated": "chưa được lên lịch"
+    },
+    {
+      "id": "native.apple.0bece6f361967bb7",
+      "source": "Could not track queued run",
+      "translated": "Không thể theo dõi lần chạy trong hàng đợi"
+    },
+    {
+      "id": "native.apple.fcc8d9fb5363552a",
+      "source": "One time",
+      "translated": "Một lần"
+    },
+    {
+      "id": "native.apple.e36565ab0cbc27fc",
+      "source": "Interval",
+      "translated": "Khoảng thời gian"
+    },
+    {
+      "id": "native.apple.4e409ac7b3902ef1",
+      "source": "Cron expression",
+      "translated": "Biểu thức Cron"
+    },
+    {
+      "id": "native.apple.17b0f1a44e8b54f8",
+      "source": "On command exit",
+      "translated": "Khi lệnh kết thúc"
+    },
+    {
+      "id": "native.apple.681114b86c1b4fc7",
+      "source": "System event",
+      "translated": "Sự kiện hệ thống"
+    },
+    {
+      "id": "native.apple.11ac31e919c88aaf",
+      "source": "Agent turn",
+      "translated": "Lượt của tác nhân"
+    },
+    {
+      "id": "native.apple.9f1a73fdf9e6fb74",
+      "source": "Command",
+      "translated": "Lệnh"
+    },
+    {
+      "id": "native.apple.78e698f721570440",
+      "source": "This automation uses fields this app cannot edit safely.",
+      "translated": "Tác vụ tự động hóa này sử dụng các trường mà ứng dụng này không thể chỉnh sửa một cách an toàn."
+    },
+    {
+      "id": "native.apple.01a8e1daa343aa0c",
+      "source": "Update the Gateway before saving automation changes from iOS.",
+      "translated": "Hãy cập nhật Gateway trước khi lưu các thay đổi đối với tác vụ tự động hóa từ iOS."
+    },
+    {
+      "id": "native.apple.eedad26d49890fd0",
+      "source": "No automation changes to save.",
+      "translated": "Không có thay đổi nào đối với tác vụ tự động hóa để lưu."
+    },
+    {
+      "id": "native.apple.468285718bc65cf9",
+      "source": "Automation name is required.",
+      "translated": "Tên tác vụ tự động hóa là bắt buộc."
+    },
+    {
+      "id": "native.apple.3b2cf513983fd309",
+      "source": "Session target must be main, isolated, current, or session:<id>.",
+      "translated": "Đích phiên phải là main, isolated, current hoặc session:<id>."
+    },
+    {
+      "id": "native.apple.097835fd2547d9d3",
+      "source": "Wake mode must be now or next-heartbeat.",
+      "translated": "Chế độ đánh thức phải là now hoặc next-heartbeat."
+    },
+    {
+      "id": "native.apple.cf32f85b7d927b14",
+      "source": "The connected Gateway changed. Refresh Automations and try again.",
+      "translated": "Gateway đang kết nối đã thay đổi. Hãy làm mới mục Tự động hóa rồi thử lại."
+    },
+    {
+      "id": "native.apple.6e9fc11db7a84ccd",
+      "source": "The Gateway changed after the request was sent. Check current state before retrying.",
+      "translated": "Gateway đã thay đổi sau khi yêu cầu được gửi. Hãy kiểm tra trạng thái hiện tại trước khi thử lại."
+    },
+    {
+      "id": "native.apple.8334ace07b5a8769",
+      "source": "The Gateway returned an unexpected automation response.",
+      "translated": "Gateway trả về phản hồi tự động hóa không mong đợi."
+    },
+    {
+      "id": "native.apple.d15e02f352f095b5",
+      "source": "One-time automations need an ISO time.",
+      "translated": "Tác vụ tự động hóa một lần cần có thời gian theo định dạng ISO."
+    },
+    {
+      "id": "native.apple.217ae5784e8a790c",
+      "source": "Interval must be a positive number of milliseconds.",
+      "translated": "Khoảng thời gian phải là số mili giây dương."
+    },
+    {
+      "id": "native.apple.5d1437fb94b0c2fd",
+      "source": "Anchor must be a non-negative number of milliseconds.",
+      "translated": "Mốc neo phải là số mili giây không âm."
+    },
+    {
+      "id": "native.apple.74979b1b3f3fd0cb",
+      "source": "Cron expression is required.",
+      "translated": "Biểu thức Cron là bắt buộc."
+    },
+    {
+      "id": "native.apple.d674e9211880efdd",
+      "source": "Stagger must be a non-negative number of milliseconds.",
+      "translated": "Độ lệch phải là số mili giây không âm."
+    },
+    {
+      "id": "native.apple.ecf986d82e845e3d",
+      "source": "On-exit automations need a command.",
+      "translated": "Tác vụ tự động hóa khi thoát cần có lệnh."
+    },
+    {
+      "id": "native.apple.f9a8e11940df3708",
+      "source": "Changing schedule type is available in the Control UI.",
+      "translated": "Bạn có thể thay đổi loại lịch biểu trong Control UI."
+    },
+    {
+      "id": "native.apple.15d3d90d9e55055c",
+      "source": "System event text is required.",
+      "translated": "Bắt buộc phải có nội dung sự kiện hệ thống."
+    },
+    {
+      "id": "native.apple.f9e96a64787cfd1e",
+      "source": "Agent message is required.",
+      "translated": "Bắt buộc phải có tin nhắn của tác nhân."
+    },
+    {
+      "id": "native.apple.866cd35476800bb0",
+      "source": "Command arguments must be a JSON array of non-empty strings.",
+      "translated": "Các đối số của lệnh phải là một mảng JSON gồm các chuỗi không rỗng."
+    },
+    {
+      "id": "native.apple.62a94efde347e48b",
+      "source": "The Gateway can change this command path but cannot clear it.",
+      "translated": "Gateway có thể thay đổi đường dẫn lệnh này nhưng không thể xóa."
+    },
+    {
+      "id": "native.apple.80a46289c6ed4e6f",
+      "source": "Changing action type is available in the Control UI.",
+      "translated": "Bạn có thể thay đổi loại hành động trong Control UI."
+    },
+    {
+      "id": "native.apple.d848c7c83ca56e87",
+      "source": "Could not encode automation changes.",
+      "translated": "Không thể mã hóa các thay đổi đối với tác vụ tự động."
+    },
+    {
       "id": "native.apple.6507fad2526215fc",
       "source": "Promoted Entries",
       "translated": "Mục được quảng bá"
@@ -8514,9 +9224,44 @@
       "translated": "Tiếp theo"
     },
     {
-      "id": "native.apple.265fe9a6fd48774a",
-      "source": "Jobs",
-      "translated": "Công việc"
+      "id": "native.apple.0716c9afeacc4d94",
+      "source": "Automations",
+      "translated": "Tác vụ tự động"
+    },
+    {
+      "id": "native.apple.afaf94d79c41f401",
+      "source": "Search automations",
+      "translated": "Tìm kiếm tác vụ tự động"
+    },
+    {
+      "id": "native.apple.873168b1830c60c8",
+      "source": "Automation status",
+      "translated": "Trạng thái tác vụ tự động"
+    },
+    {
+      "id": "native.apple.0147a12ccae4382f",
+      "source": "No automations yet",
+      "translated": "Chưa có tác vụ tự động"
+    },
+    {
+      "id": "native.apple.904fc50cb40466e6",
+      "source": "No matching automations",
+      "translated": "Không có tác vụ tự động phù hợp"
+    },
+    {
+      "id": "native.apple.e114f7974019ead5",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Công việc theo lịch được tạo trên Gateway sẽ xuất hiện tại đây."
+    },
+    {
+      "id": "native.apple.50668445ecd01096",
+      "source": "Try another search or status filter.",
+      "translated": "Hãy thử tìm kiếm khác hoặc bộ lọc trạng thái khác."
+    },
+    {
+      "id": "native.apple.d3df6fbbaafcc29f",
+      "source": "Edit",
+      "translated": "Chỉnh sửa"
     },
     {
       "id": "native.apple.e8964650f824c877",
@@ -8534,9 +9279,14 @@
       "translated": "Tạm dừng"
     },
     {
-      "id": "native.apple.7323dffbc056bdcd",
-      "source": "Queued %@.",
-      "translated": "Đã đưa %@ vào hàng đợi."
+      "id": "native.apple.bdd438ba675d7562",
+      "source": "Tracking %@ in run history.",
+      "translated": "Đang theo dõi %@ trong lịch sử chạy."
+    },
+    {
+      "id": "native.apple.a3cfbe05c4013cac",
+      "source": "Ran %@. Open Edit for run history.",
+      "translated": "Đã chạy %@. Mở Chỉnh sửa để xem lịch sử chạy."
     },
     {
       "id": "native.apple.424e352a747453ed",
@@ -8549,6 +9299,36 @@
       "translated": "Đã tạm dừng %@."
     },
     {
+      "id": "native.apple.1b3a26abc61c570d",
+      "source": "This automation is not due yet.",
+      "translated": "Tác vụ tự động này chưa đến hạn."
+    },
+    {
+      "id": "native.apple.c77dec246ca2f051",
+      "source": "This automation is already running.",
+      "translated": "Tác vụ tự động này đang chạy."
+    },
+    {
+      "id": "native.apple.2a91173216fc13a0",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Quá trình khôi phục sau khi khởi động lại Gateway vẫn đang diễn ra."
+    },
+    {
+      "id": "native.apple.9d416b662fe79a2d",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Tác vụ tự động này có cấu hình không hợp lệ."
+    },
+    {
+      "id": "native.apple.74db101b9d066f9b",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Trình lập lịch tự động hóa đã dừng."
+    },
+    {
+      "id": "native.apple.a68b3d18073f246f",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway không khởi chạy tác vụ tự động hóa này."
+    },
+    {
       "id": "native.apple.a373bf2332f0ab6a",
       "source": "Search agents",
       "translated": "Tìm kiếm agent"
@@ -8559,9 +9339,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.45c3f045dd9a3507",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.bed79f8c977be1cd",
+      "source": "Automations",
+      "translated": "Tự động hóa"
     },
     {
       "id": "native.apple.4bee0220d011ab53",
@@ -8674,9 +9454,9 @@
       "translated": "Đang mơ"
     },
     {
-      "id": "native.apple.4999264d74844f21",
-      "source": "Scheduled Work",
-      "translated": "Công việc đã lên lịch"
+      "id": "native.apple.22a5389054110057",
+      "source": "Automations",
+      "translated": "Tự động hóa"
     },
     {
       "id": "native.apple.13245a5075869f14",
@@ -8689,19 +9469,19 @@
       "translated": "Chọn agent này"
     },
     {
-      "id": "native.apple.4f053bb46f35a802",
-      "source": "No scheduled jobs",
-      "translated": "Không có tác vụ đã lên lịch"
+      "id": "native.apple.e0a5458b9b128e21",
+      "source": "No automations yet",
+      "translated": "Chưa có tác vụ tự động hóa"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron không khả dụng"
+      "id": "native.apple.b2e8f8831767ae0e",
+      "source": "Automations unavailable",
+      "translated": "Tính năng tự động hóa không khả dụng"
     },
     {
-      "id": "native.apple.0cd04bacdbcd8fa5",
-      "source": "The gateway has no visible cron jobs.",
-      "translated": "Gateway không có cron job hiển thị."
+      "id": "native.apple.36277ae5feb079fd",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Công việc đã lên lịch được tạo trên Gateway sẽ xuất hiện tại đây."
     },
     {
       "id": "native.apple.ae4aa2339b285164",
@@ -9199,11 +9979,6 @@
       "translated": "Đã chặn"
     },
     {
-      "id": "native.apple.c1520bfdcd827e55",
-      "source": "All",
-      "translated": "Tất cả"
-    },
-    {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
       "translated": "Trực tuyến"
@@ -9212,6 +9987,21 @@
       "id": "native.apple.a97cdae7c8e13f0e",
       "source": "Ready",
       "translated": "Sẵn sàng"
+    },
+    {
+      "id": "native.apple.c1520bfdcd827e55",
+      "source": "All",
+      "translated": "Tất cả"
+    },
+    {
+      "id": "native.apple.6761fe33fbf18cb3",
+      "source": "Active",
+      "translated": "Đang hoạt động"
+    },
+    {
+      "id": "native.apple.c10177d9487a27d5",
+      "source": "Paused",
+      "translated": "Đã tạm dừng"
     },
     {
       "id": "native.apple.9c4e8b82edf0b324",
@@ -10499,9 +11289,9 @@
       "translated": "Mức sử dụng"
     },
     {
-      "id": "native.apple.9eb33a11fb81796b",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.f21bf1e3b5ec896c",
+      "source": "Automations",
+      "translated": "Tự động hóa"
     },
     {
       "id": "native.apple.57587fec1ca582ec",
@@ -12454,6 +13244,16 @@
       "translated": "Cần thiết lập"
     },
     {
+      "id": "native.apple.0c8eb8bda0a17689",
+      "source": "Any binary: %@",
+      "translated": "Tệp nhị phân bất kỳ: %@"
+    },
+    {
+      "id": "native.apple.5242f6eeb0ffe658",
+      "source": "OS: %@",
+      "translated": "Hệ điều hành: %@"
+    },
+    {
       "id": "native.apple.113dacafa42bb62e",
       "source": "Missing: %@",
       "translated": "Thiếu: %@"
@@ -13167,6 +13967,11 @@
       "id": "native.apple.c86f7ba5b3762eb7",
       "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
       "translated": "Sau khi bạn bật Tóm tắt sức khỏe, OpenClaw sẽ đọc số bước chân, giấc ngủ, nhịp tim lúc nghỉ và bài tập để chia sẻ dữ liệu tổng hợp được yêu cầu với nhà cung cấp AI mà bạn đã cấu hình."
+    },
+    {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw không ghi hoặc thay đổi dữ liệu Sức khỏe. Tóm tắt Sức khỏe đọc số bước, giấc ngủ, nhịp tim khi nghỉ và các bài tập để chia sẻ các số liệu tổng hợp được yêu cầu với nhà cung cấp AI mà bạn đã cấu hình."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -14109,9 +14914,9 @@
       "translated": "Mức sử dụng"
     },
     {
-      "id": "native.apple.db0d9af6d0855d18",
-      "source": "Cron Jobs",
-      "translated": "Tác vụ Cron"
+      "id": "native.apple.8c4e07b06e938527",
+      "source": "Automations",
+      "translated": "Tự động hóa"
     },
     {
       "id": "native.apple.20f4753fc51c5341",
@@ -14219,9 +15024,9 @@
       "translated": "Mức sử dụng"
     },
     {
-      "id": "native.apple.0b4e807d2449e93f",
-      "source": "Cron Jobs",
-      "translated": "Tác vụ Cron"
+      "id": "native.apple.fca6a390e072ada9",
+      "source": "Automations",
+      "translated": "Tự động hóa"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",
@@ -20114,6 +20919,11 @@
       "translated": "Thiếu binary: \\(self.missingBins.joined(separator: \", \"))"
     },
     {
+      "id": "native.apple.98ac6e8935a9fee5",
+      "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
+      "translated": "Cần một trong các tệp nhị phân sau: \\(self.missingAnyBins.joined(separator: \", \"))"
+    },
+    {
       "id": "native.apple.1ffd9ad47f1dd74a",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "translated": "Thiếu env: \\(self.missingEnv.joined(separator: \", \"))"
@@ -20122,6 +20932,11 @@
       "id": "native.apple.c9ef14276ce395c1",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "translated": "Yêu cầu config: \\(self.missingConfig.joined(separator: \", \"))"
+    },
+    {
+      "id": "native.apple.1f939d96ce8464dc",
+      "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
+      "translated": "Yêu cầu hệ điều hành: \\(self.missingOS.joined(separator: \", \"))"
     },
     {
       "id": "native.apple.c588ae10b9fae52b",

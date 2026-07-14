@@ -385,6 +385,7 @@ describe("Apple app i18n catalogs", () => {
 
     expect(french).toContain('"NSCameraUsageDescription" = ');
     expect(french).toContain('"NSMicrophoneUsageDescription" = ');
+    expect(french).toContain('"NSHealthUpdateUsageDescription" = ');
     expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
     expect(shareGerman).toContain('"CFBundleDisplayName" = "OpenClaw Share";');
     expect(activityJapanese).toContain('"CFBundleDisplayName" = "OpenClaw Activity";');

@@ -500,7 +500,7 @@ describe("createWhatsAppOutboundBase", () => {
     expect(options.mediaUrl).toBe("/tmp/voice.ogg");
   });
 
-  it("keeps explicit mediaUrl first when payload also includes mediaUrls", async () => {
+  it("prefers normalized mediaUrls over legacy mediaUrl", async () => {
     const sendMessageWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
@@ -520,7 +520,7 @@ describe("createWhatsAppOutboundBase", () => {
       payload: {
         text: "\n\ncaption",
         mediaUrl: "/tmp/primary.ogg",
-        mediaUrls: [" /tmp/secondary.ogg "],
+        mediaUrls: [" /tmp/secondary.ogg ", "/tmp/secondary.ogg", " /tmp/third.ogg "],
       },
       deps: { sendWhatsApp: sendMessageWhatsApp },
     });
@@ -531,9 +531,49 @@ describe("createWhatsAppOutboundBase", () => {
       "whatsapp:+15551234567",
       "caption",
     );
-    expect(firstOptions.mediaUrl).toBe("/tmp/primary.ogg");
+    expect(firstOptions.mediaUrl).toBe("/tmp/secondary.ogg");
     const secondOptions = sendMessageOptionsAt(sendMessageWhatsApp, 1, "whatsapp:+15551234567", "");
-    expect(secondOptions.mediaUrl).toBe("/tmp/secondary.ogg");
+    expect(secondOptions.mediaUrl).toBe("/tmp/third.ogg");
+    expect(sendMessageWhatsApp).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: "mediaUrls is omitted", mediaUrls: undefined },
+    { name: "mediaUrls is empty", mediaUrls: [] },
+    { name: "mediaUrls contains only whitespace", mediaUrls: ["   "] },
+  ])("falls back to legacy mediaUrl when $name", async ({ mediaUrls }) => {
+    const sendMessageWhatsApp = vi.fn(async () => ({
+      messageId: "msg-1",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    await outbound.sendPayload!({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "",
+      payload: {
+        text: "caption",
+        mediaUrl: " /tmp/legacy.ogg ",
+        ...(mediaUrls === undefined ? {} : { mediaUrls }),
+      },
+      deps: { sendWhatsApp: sendMessageWhatsApp },
+    });
+
+    const options = sendMessageOptionsAt(
+      sendMessageWhatsApp,
+      0,
+      "whatsapp:+15551234567",
+      "caption",
+    );
+    expect(options.mediaUrl).toBe("/tmp/legacy.ogg");
+    expect(sendMessageWhatsApp).toHaveBeenCalledTimes(1);
   });
 
   it("uses the caller-provided text normalization for payload delivery", async () => {

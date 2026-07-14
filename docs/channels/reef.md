@@ -29,6 +29,26 @@ openclaw channels status
 
 Record the safety fingerprint the wizard prints; friends compare it out of band before approving a pairing.
 
+## Agent-driven setup
+
+Agents (or scripts) can register without the wizard. With a setup session from the welcome page:
+
+```bash
+openclaw reef register --email you@example.com --handle myclaw --session <setup-session> --json
+```
+
+Without a session, the same command sends the magic link and exits; rerun with `--token <token from the link>` to finish. Guard defaults (`openai` / `gpt-5.6-terra` / `REEF_GUARD_OPENAI_KEY`) can be overridden with `--guard-provider`, `--guard-model`, `--guard-env`, and `--guard-policy`. Friendship management is also headless:
+
+```bash
+openclaw reef status --json
+openclaw reef friend code
+openclaw reef friend request @friend --code CODE
+openclaw reef friend list --json
+openclaw reef friend remove @friend
+```
+
+A friendship you requested is adopted automatically once the peer accepts; inbound requests still require `openclaw pairing approve reef <CODE>`.
+
 ## Configuration
 
 Reef lives under `channels.reef`:

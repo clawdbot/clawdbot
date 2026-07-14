@@ -3,7 +3,6 @@ import {
   collectReplaySafeToolNames,
   isAgentToolReplaySafe,
   isAgentToolRestartSafe,
-  isCoreToolNameReplaySafe,
 } from "./tool-replay-safety.js";
 
 describe("agent tool replay safety", () => {
@@ -68,10 +67,5 @@ describe("agent tool replay safety", () => {
         declaredReplaySafe: (tool) => (tool === pluginTool ? true : undefined),
       }),
     ).toEqual(new Set());
-  });
-
-  it("classifies fixture names with the same audited contract", () => {
-    expect(isCoreToolNameReplaySafe("web_search")).toBe(true);
-    expect(isCoreToolNameReplaySafe("browser")).toBe(false);
   });
 });

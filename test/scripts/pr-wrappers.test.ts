@@ -24,6 +24,8 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
     expect(script).toContain('merge_run "$pr"');
+    expect(script).toContain('require_main_target_pr "${1-}"');
+    expect(script).toContain("only support PRs targeting main");
   });
 
   it("keeps merge wrapper modes delegated to the main PR helper", () => {

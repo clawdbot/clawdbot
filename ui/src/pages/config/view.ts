@@ -27,13 +27,13 @@ import {
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/web-awesome-tabs.ts";
 import {
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
@@ -1750,35 +1750,33 @@ export function renderConfig(props: ConfigProps) {
                     `
                   : nothing}
 
-                <div
+                <wa-tab-group
                   class="config-top-tabs__scroller"
-                  role="tablist"
+                  activation="manual"
+                  .active=${props.activeSection ?? "root"}
                   aria-label="${t("common.settingsSections")}"
+                  @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+                    const key = event.detail.name === "root" ? null : event.detail.name;
+                    props.onSectionChange(key);
+                    resetContentScroll(event.currentTarget);
+                  }}
                 >
                   ${topTabs.map(
                     (tab) => html`
-                      <button
-                        type="button"
+                      <wa-tab
+                        slot="nav"
                         id=${configSectionTabId(tab.key)}
-                        class="config-top-tabs__tab ${props.activeSection === tab.key
-                          ? "active"
-                          : ""}"
-                        role="tab"
-                        aria-selected=${props.activeSection === tab.key}
+                        class="config-top-tabs__tab"
+                        panel=${tab.key ?? "root"}
+                        ?active=${(props.activeSection ?? "root") === (tab.key ?? "root")}
                         aria-controls="config-section-panel"
-                        .tabIndex=${props.activeSection === tab.key ? 0 : -1}
-                        @keydown=${handleTabListKeydown}
-                        @click=${(e: Event) => {
-                          props.onSectionChange(tab.key);
-                          resetContentScroll(e.currentTarget);
-                        }}
                         title=${tab.label}
                       >
                         ${tab.label}
-                      </button>
+                      </wa-tab>
                     `,
                   )}
-                </div>
+                </wa-tab-group>
               </div>
             `}
         ${validity === "invalid" && !viewState.validityDismissed
@@ -1926,10 +1924,11 @@ export function renderConfig(props: ConfigProps) {
             `
           : nothing}
         <!-- Form content -->
-        <div
+        <wa-tab-panel
           id="config-section-panel"
           class="config-content"
-          role="tabpanel"
+          name=${props.activeSection}
+          active
           aria-labelledby=${configSectionTabId(props.activeSection)}
         >
           ${props.activeSection === "__appearance__"
@@ -2067,7 +2066,7 @@ export function renderConfig(props: ConfigProps) {
                       </div>
                     `;
                   })()}
-        </div>
+        </wa-tab-panel>
 
         ${props.issues.length > 0
           ? html`<div class="callout danger" style="margin-top: 12px;">

@@ -32,7 +32,8 @@ let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOp
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.js").testing.resetReplyRunRegistry;
-let replyRunFinalizationSettleTimeoutMs: number;
+
+const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
 function firstRuntimeLoadCall() {
   return runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
@@ -69,13 +70,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("./reply-run-registry.js");
-    const finalizationLeaseModule = await import("./reply-run-finalization-lease.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     resetReplyRunRegistry = () => replyRunRegistryModule.testing.resetReplyRunRegistry();
-    replyRunFinalizationSettleTimeoutMs =
-      finalizationLeaseModule.REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS;
   });
 
   beforeEach(() => {
@@ -827,7 +825,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       await ownerStarted.promise;
-      await vi.advanceTimersByTimeAsync(replyRunFinalizationSettleTimeoutMs);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: false });
 
       expect(replyRunRegistry.get("agent:test:session")).toBeUndefined();
@@ -878,7 +876,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       await ttsStarted.promise;
-      await vi.advanceTimersByTimeAsync(replyRunFinalizationSettleTimeoutMs);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
 
       const active = replyRunRegistry.get("agent:test:session");
       expect(active).toBeDefined();

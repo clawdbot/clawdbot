@@ -1716,9 +1716,26 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   text-align: left;
 }
 
-.sidebar-customize-menu {
+.sidebar-customize-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 120;
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-customize-menu {
+  position: fixed;
+  z-index: 120;
+}
+
+wa-dropdown.sidebar-customize-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   max-height: 420px;
@@ -1760,6 +1777,15 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 
 .sidebar-customize-menu__item:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-customize-menu__item > a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__check {
@@ -1804,9 +1830,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   color: var(--accent);
 }
 
-.session-menu {
+.session-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.session-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   padding: 6px;
@@ -1831,9 +1872,24 @@ openclaw-session-menu[popover] {
   background: transparent;
 }
 
-.sidebar-session-sort-menu {
+.sidebar-session-sort-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+wa-dropdown.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+}
+
+wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
   padding: 6px;
@@ -2182,19 +2238,12 @@ openclaw-session-menu[popover] {
   height: 6px;
 }
 
-.sidebar-agent-menu__agent-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
 .sidebar-agent-menu__agent-switch {
   min-width: 0;
-  flex: 1 1 auto;
 }
 
 .sidebar-agent-menu__new {
-  margin-inline-end: 4px;
+  padding-inline-start: 26px;
 }
 
 .sidebar-agent-menu__new:disabled {
@@ -2217,81 +2266,6 @@ openclaw-session-menu[popover] {
   overflow: visible;
   max-height: calc(100vh - 16px);
 }
-
-/* Large rosters: the switcher list scrolls; the utility rows below stay put. */
-.sidebar-agent-menu__list {
-  flex: 0 1 auto;
-  min-height: 30px;
-  max-height: 264px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.sidebar-customize-menu__submenu-host {
-  position: relative;
-}
-
-/* Bottom-aligned like the parent menu: both grow upward from the footer.
-   Fixed link list, no scrolling: overflow stays visible so the ::before
-   hover bridge below is not clipped away. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu {
-  position: absolute;
-  bottom: -6px;
-  left: calc(100% + 4px);
-  overflow: visible;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left {
-  right: calc(100% + 4px);
-  left: auto;
-}
-
-/* Viewports too narrow for side-by-side menus: cover the parent instead. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay {
-  right: -6px;
-  left: -6px;
-}
-
-/* Invisible bridge over the 4px visual gap so a slow pointer crossing it
-   never leaves the submenu host (which would close the flyout mid-travel). */
-.sidebar-agent-menu .sidebar-customize-menu__submenu::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -8px;
-  width: 8px;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left::before {
-  right: -8px;
-  left: auto;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay::before {
-  content: none;
-}
-
-.sidebar-customize-menu__chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-}
-
-.sidebar-customize-menu__chevron svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sidebar-agent-menu__filter {
   padding: 2px 8px 6px;
 }
@@ -2593,14 +2567,6 @@ openclaw-session-menu[popover] {
   letter-spacing: -0.03em;
   line-height: 1.2;
   color: var(--accent);
-}
-
-.page-sub {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
 }
 
 .page-meta {

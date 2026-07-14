@@ -1,9 +1,7 @@
-Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
+Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
 
-Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
+Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
 
-Adds workspace files, Cron details, terminal access, and Listen playback.
+Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
 
-Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
-
-Thanks @IWhatsskill, @ioridev, and @narcissus0702.
+Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.

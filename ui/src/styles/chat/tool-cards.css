@@ -1043,6 +1043,26 @@
   color: var(--accent);
 }
 
+.chat-working-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 22px;
+  min-height: 28px;
+}
+
+.chat-working-indicator__status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-working-indicator__elapsed {
+  color: var(--muted);
+}
+
 .chat-reading-indicator svg {
   width: 18px;
   height: 18px;

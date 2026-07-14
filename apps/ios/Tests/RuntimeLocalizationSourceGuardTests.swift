@@ -97,7 +97,7 @@ struct RuntimeLocalizationSourceGuardTests {
             "Files",
             "Dreaming",
             "Usage",
-            "Cron Jobs",
+            "Automations",
             "Terminal",
             "Docs",
             "Settings",
