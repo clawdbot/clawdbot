@@ -13,16 +13,18 @@ import {
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
-  buildPostCompactionLifecycleEvent,
   deliverQueuedPostCompactionDelegate,
-  drainPostCompactionDelegateDeliveries,
-  dispatchPostCompactionDelegates,
   normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
   takePendingPostCompactionDelegates,
   type PostCompactionDelegateDeliveryDeps,
-  type PostCompactionDelegateDispatchDeps,
   type QueuedPostCompactionDelegateDelivery,
+} from "./post-compaction-delegate-delivery.js";
+import {
+  buildPostCompactionLifecycleEvent,
+  drainPostCompactionDelegateDeliveries,
+  dispatchPostCompactionDelegates,
+  type PostCompactionDelegateDispatchDeps,
 } from "./post-compaction-delegate-dispatch.js";
 import type { FollowupRun } from "./queue/types.js";
 
@@ -968,9 +970,9 @@ describe("post-compaction delegate dispatch extraction", () => {
       "flow-first",
       "flow-second",
     ]);
-    expect(Math.max(...enqueuePostCompactionDelegateDelivery.mock.invocationCallOrder)).toBeLessThan(
-      finalizeStagedPostCompactionDelegates.mock.invocationCallOrder[0]!,
-    );
+    expect(
+      Math.max(...enqueuePostCompactionDelegateDelivery.mock.invocationCallOrder),
+    ).toBeLessThan(finalizeStagedPostCompactionDelegates.mock.invocationCallOrder[0]!);
     expect(preserve).toEqual([]);
     expect(log).toHaveBeenCalledWith(
       "Failed to enqueue post-compaction delegate for main (re-staged): Error: queue write failed",

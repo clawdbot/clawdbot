@@ -3,7 +3,7 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-dispatch.js";
+import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-delivery.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
