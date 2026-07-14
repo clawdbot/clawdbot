@@ -63,6 +63,10 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
+  loadAuthProfileStoreForRuntime: vi.fn(),
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
+  listProfilesForProvider: vi.fn(),
+  clearAuthProfileCooldown: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
   callGateway: vi.fn(),
   resolvePluginSetupProviderCore: vi.fn(),
@@ -90,6 +94,14 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
+}));
+
+vi.mock("../../agents/auth-profiles/usage.js", () => ({
+  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
+}));
 vi.mock("../../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig: (
     cfg: OpenClawConfig,
@@ -365,6 +377,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     mocks.loadValidConfigOrThrow.mockResolvedValue({});
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.clearAuthProfileCooldown.mockImplementation(async ({ store, profileId }) => {
       store.usageStats = {
         ...store.usageStats,
@@ -424,6 +437,37 @@ describe("modelsAuthClearCooldownCommand", () => {
       2,
       "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
     );
+  });
+
+  it("clears inherited profile state in the owning main store", async () => {
+    const store = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key" as const, provider: "openai", key: "sk-test" },
+      },
+      usageStats: {
+        [profileId]: {
+          blockedUntil: Date.now() + 3_600_000,
+          blockedReason: "subscription_limit" as const,
+        },
+      },
+    };
+    mocks.loadValidConfigOrThrow.mockResolvedValue({ agents: { list: [{ id: "worker" }] } });
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/worker");
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue(undefined);
+
+    await modelsAuthClearCooldownCommand({ profileId, agent: "worker" }, createRuntime());
+
+    expect(mocks.resolvePersistedAuthProfileOwnerAgentDir).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/worker",
+      profileId,
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store,
+      profileId,
+      agentDir: undefined,
+    });
   });
 
   it("rejects an unknown profile without changing the store", async () => {

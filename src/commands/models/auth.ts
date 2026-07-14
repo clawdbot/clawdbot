@@ -23,7 +23,10 @@ import {
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
+import {
+  loadAuthProfileStoreForRuntime,
+  resolvePersistedAuthProfileOwnerAgentDir,
+} from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, ProfileUsageStats } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
@@ -818,7 +821,8 @@ export async function modelsAuthClearCooldownCommand(
     );
   }
 
-  await clearAuthProfileCooldown({ store, profileId, agentDir });
+  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
+  await clearAuthProfileCooldown({ store, profileId, agentDir: ownerAgentDir });
   if (hasAuthProfileFailureState(store.usageStats?.[profileId])) {
     throw new Error(
       `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
