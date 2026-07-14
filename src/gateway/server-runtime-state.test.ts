@@ -16,6 +16,7 @@ import {
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { createRequest, createResponse, dispatchRequest } from "./server-http.test-harness.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -82,6 +83,56 @@ describe("createGatewayRuntimeState", () => {
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(startupRegistry);
     expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
     expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
+  });
+
+  it("avoids the wrapper registry lookup after the plugin request handler loads", async () => {
+    const startupRegistry = createRegistryWithRoute("/plugin");
+    startupRegistry.httpRoutes[0]!.handler = (_req, res) => {
+      res.end("startup");
+      return true;
+    };
+    const repinnedRegistry = createRegistryWithRoute("/plugin");
+    repinnedRegistry.httpRoutes[0]!.handler = (_req, res) => {
+      res.end("repinned");
+      return true;
+    };
+    let activeRegistry = startupRegistry;
+    const getPluginRouteRegistry = vi.fn(() => activeRegistry);
+    const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry, {
+      getPluginRouteRegistry,
+    });
+
+    const firstResponse = createResponse();
+    await dispatchRequest(
+      runtimeState.httpServer,
+      createRequest({ path: "/plugin" }),
+      firstResponse.res,
+    );
+    const firstRequestLookups = getPluginRouteRegistry.mock.calls.length;
+
+    activeRegistry = createEmptyPluginRegistry();
+    const removedRouteResponse = createResponse();
+    await dispatchRequest(
+      runtimeState.httpServer,
+      createRequest({ path: "/plugin" }),
+      removedRouteResponse.res,
+    );
+    const removedRouteLookups = getPluginRouteRegistry.mock.calls.length;
+
+    activeRegistry = repinnedRegistry;
+    const repinnedRouteResponse = createResponse();
+    await dispatchRequest(
+      runtimeState.httpServer,
+      createRequest({ path: "/plugin" }),
+      repinnedRouteResponse.res,
+    );
+
+    expect(firstResponse.getBody()).toBe("startup");
+    expect(removedRouteResponse.res.statusCode).toBe(404);
+    expect(repinnedRouteResponse.getBody()).toBe("repinned");
+    expect(firstRequestLookups).toBe(4);
+    expect(removedRouteLookups - firstRequestLookups).toBe(3);
+    expect(getPluginRouteRegistry.mock.calls.length - removedRouteLookups).toBe(3);
   });
 
   it("fails startup when the required IPv4 loopback alias cannot bind", async () => {

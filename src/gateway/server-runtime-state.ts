@@ -222,21 +222,22 @@ export async function createGatewayRuntimeState(params: {
       pathContext,
       dispatchContext,
     ) => {
+      if (loadedPluginRequestHandler) {
+        return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+      }
       const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
-      if (!loadedPluginRequestHandler) {
-        // Route registries can be re-pinned after bootstrap; keep the handler lazy and route
-        // lookup dynamic so plugin HTTP routes follow the active registry snapshot.
-        const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
-        loadedPluginRequestHandler = createGatewayPluginRequestHandler({
-          registry: params.pluginRegistry,
-          getRouteRegistry: resolvePluginRouteRegistry,
-          log: params.logPlugins,
-          getGatewayRequestContext: params.getGatewayRequestContext,
-        });
-      }
+      // Route registries can be re-pinned after bootstrap. The loaded handler keeps its route
+      // lookup dynamic, while this wrapper only needs to guard the initial lazy import.
+      const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
+      loadedPluginRequestHandler = createGatewayPluginRequestHandler({
+        registry: params.pluginRegistry,
+        getRouteRegistry: resolvePluginRouteRegistry,
+        log: params.logPlugins,
+        getGatewayRequestContext: params.getGatewayRequestContext,
+      });
       return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
     };
     const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
