@@ -141,6 +141,8 @@ import {
 import {
   CONTINUATION_DELEGATE_CONTROLLER_ID,
   CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+} from "./delegate-flow-store.js";
+import {
   cancelPendingDelegates,
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,

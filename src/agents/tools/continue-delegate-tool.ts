@@ -3,9 +3,9 @@ import {
   clampDelayMs,
   resolveContinuationRuntimeConfig,
 } from "../../auto-reply/continuation/config.js";
+import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
 import {
   enqueuePendingDelegate,
-  getContinuationDelegateQueueDepths,
   stagePostCompactionDelegate,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
