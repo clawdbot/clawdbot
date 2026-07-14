@@ -56,6 +56,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     nodeHostCommands: [],
     nodeInvokePolicies: [],
     securityAuditCollectors: [],
+    readinessCriteria: [],
     services: [],
     gatewayDiscoveryServices: [],
     commands: [],

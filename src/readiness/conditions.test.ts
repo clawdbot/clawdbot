@@ -70,4 +70,27 @@ describe("buildRuntimeReadiness", () => {
     expect(readiness.failures).toEqual([]);
     expect(readiness.advisories).toEqual(["PluginLoadFailures"]);
   });
+
+  it("includes explicitly selected conditions in the canonical result", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      additionalConditions: [
+        {
+          type: "plugin.storage.backend",
+          status: "False",
+          requirement: "required",
+          reason: "StorageUnavailable",
+          message: "Storage is unavailable.",
+        },
+      ],
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.failures).toContain("StorageUnavailable");
+    expect(readiness.conditions).toContainEqual(
+      expect.objectContaining({ type: "plugin.storage.backend", requirement: "required" }),
+    );
+  });
 });
