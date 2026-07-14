@@ -29,6 +29,7 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import {
   assertStagedPostCompactionFinalizationComplete,
   consumeStagedPostCompactionDelegates,
@@ -37,8 +38,7 @@ import {
   markPendingDelegateSpawnAccepted,
   requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
-} from "../continuation-delegate-store.js";
-import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
+} from "../continuation/delegate-store.js";
 import type { ContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";

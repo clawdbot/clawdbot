@@ -8,7 +8,7 @@
  *   without breaking today's behavior tests immediately.
  *
  * What this trap guards (load-bearing assertions):
- *   1. RUNTIME OBJECTS: `consumePendingDelegates` / `consumeStagedPostCompactionDelegates`
+ *   1. RUNTIME OBJECTS: `consumePendingDelegates` / `claimStagedPostCompactionTaskFlowDelegates`
  *      return objects whose only mode-bearing field is `mode`. They MUST NOT
  *      expose `silent` / `silentWake` / `postCompaction` boolean runtime flags.
  *   2. TOOL DESCRIPTOR: the `continue_delegate` parameter schema advertises
@@ -99,9 +99,9 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
 
 import {
   consumePendingDelegates,
-  consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates,
   enqueuePendingDelegate,
-  stagePostCompactionDelegate,
+  stagePostCompactionTaskFlowDelegate,
 } from "./delegate-store.js";
 import type { PendingContinuationDelegate } from "./types.js";
 
@@ -147,11 +147,11 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
     );
 
     it("consume staged post-compaction returns runtime object with mode='post-compaction' and no boolean fields", () => {
-      stagePostCompactionDelegate(SESSION_KEY, {
+      stagePostCompactionTaskFlowDelegate(SESSION_KEY, {
         task: "trap test",
         stagedAt: Date.now(),
       });
-      const consumed = consumeStagedPostCompactionDelegates(SESSION_KEY);
+      const consumed = claimStagedPostCompactionTaskFlowDelegates(SESSION_KEY);
       expect(consumed).toHaveLength(1);
       const delegate = expectDefined(consumed.at(0), "post-compaction delegate");
       expect(delegate.mode).toBe("post-compaction");
@@ -173,7 +173,7 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
       "persisted stateJson for mode='%s' projects to legacy boolean '%s'=true (back-compat preserved)",
       (mode, expectedBooleanField) => {
         if (mode === "post-compaction") {
-          stagePostCompactionDelegate(SESSION_KEY, {
+          stagePostCompactionTaskFlowDelegate(SESSION_KEY, {
             task: "back-compat",
             stagedAt: Date.now(),
           });

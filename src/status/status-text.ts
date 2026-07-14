@@ -26,11 +26,11 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 import {
   pendingDelegateCount,
   stagedPostCompactionDelegateCount,
-} from "../auto-reply/continuation-delegate-store.js";
-import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
+} from "../auto-reply/continuation/delegate-store.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";

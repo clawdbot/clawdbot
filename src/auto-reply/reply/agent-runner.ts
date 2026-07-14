@@ -78,15 +78,15 @@ import {
   formatTokenCount,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
+import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
+import { checkContextPressure } from "../continuation/context-pressure.js";
 import {
   enqueuePendingDelegate,
   failQueuedDelegatesCreatedAtOrAfter,
   pendingDelegateCount,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-} from "../continuation-delegate-store.js";
-import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
-import { checkContextPressure } from "../continuation/context-pressure.js";
+} from "../continuation/delegate-store.js";
 import { extractContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";

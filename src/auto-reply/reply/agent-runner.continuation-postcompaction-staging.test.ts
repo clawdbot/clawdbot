@@ -128,7 +128,7 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   markSubagentRunTerminated: () => 0,
 }));
 
-vi.mock("../continuation-delegate-store.js", async (importOriginal) => {
+vi.mock("../continuation/delegate-store.js", async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
   return {
     ...original,

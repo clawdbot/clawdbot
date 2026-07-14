@@ -48,7 +48,7 @@ vi.mock("./subagent-announce.registry.runtime.js", () => ({
   shouldIgnorePostCompletionAnnounceForSession: () => false,
 }));
 
-vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
+vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
   markPendingDelegateFailed: vi.fn(),
   stagePostCompactionDelegate: vi.fn(),

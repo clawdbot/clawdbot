@@ -32,7 +32,7 @@ import {
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
   stagePostCompactionDelegate,
-} from "../continuation-delegate-store.js";
+} from "../continuation/delegate-store.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,

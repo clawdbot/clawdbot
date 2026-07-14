@@ -23,7 +23,7 @@ import {
   stagePostCompactionDelegate,
   consumeStagedPostCompactionDelegates,
   stagedPostCompactionDelegateCount,
-} from "../continuation-delegate-store.js";
+} from "../continuation/delegate-store.js";
 
 describe("EMPIRICAL :: leaf-key post-compaction stage orphans when the leaf never compacts", () => {
   const leafKey = "leaf-session::oneshot-deny-tools";

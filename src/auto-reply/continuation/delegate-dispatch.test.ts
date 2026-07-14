@@ -215,11 +215,11 @@ import {
 } from "./delegate-dispatch.js";
 import {
   cancelPendingDelegates,
-  consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates,
   enqueuePendingDelegate,
   listRecoverableStagedPostCompactionDelegates,
-  requeueReleasedPostCompactionDelegate,
-  stagePostCompactionDelegate,
+  requeueReleasedPostCompactionTaskFlowDelegate,
+  stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
@@ -2560,8 +2560,8 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
   function stageAndClaimRunning(sessionKey: string, task: string): string {
     // Stage (queued) then consume (claim → running) to model a delegate that was
     // mid-release when the gateway crashed before the durable handoff/finalize.
-    stagePostCompactionDelegate(sessionKey, { task, stagedAt: Date.now() });
-    const claimed = consumeStagedPostCompactionDelegates(sessionKey);
+    stagePostCompactionTaskFlowDelegate(sessionKey, { task, stagedAt: Date.now() });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
     expect(claimed).toHaveLength(1);
     const flowId = claimed[0]?.flowId;
     expect(flowId).toBeDefined();
@@ -2570,11 +2570,11 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
 
   it("requeues awaiting-next-compaction running rows on startup recovery", async () => {
     const sessionKey = "agent:main:subagent:pc-next-seam-startup-requeue";
-    stagePostCompactionDelegate(sessionKey, {
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
       task: "rehydrate after crash before session-store persist",
       stagedAt: Date.now(),
     });
-    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey, {
       claimFor: "next-seam-persist",
     });
     expect(claimed).toHaveLength(1);
@@ -2600,11 +2600,11 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     loadSessionStoreForRecoveryMock.mockReturnValue({
       [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
     });
-    stagePostCompactionDelegate(sessionKey, {
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
       task: "rehydrate at the next compaction seam",
       stagedAt: Date.now(),
     });
-    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey, {
       claimFor: "next-seam-persist",
     });
     expect(claimed).toHaveLength(1);
@@ -2624,11 +2624,11 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
 
   it("requeues a next-seam persist claim on session-store persist failure", async () => {
     const sessionKey = "agent:main:subagent:pc-next-seam-requeue";
-    stagePostCompactionDelegate(sessionKey, {
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
       task: "rehydrate after failed persist",
       stagedAt: Date.now(),
     });
-    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey, {
       claimFor: "next-seam-persist",
     });
     expect(claimed).toHaveLength(1);
@@ -2638,7 +2638,7 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     if (!delegate) {
       throw new Error("expected claimed post-compaction delegate");
     }
-    expect(requeueReleasedPostCompactionDelegate(delegate)).toBe(true);
+    expect(requeueReleasedPostCompactionTaskFlowDelegate(delegate)).toBe(true);
 
     const flowId = delegate.flowId;
     expect(flowId).toBeDefined();
@@ -2961,7 +2961,10 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
       [sessionKey]: { sessionId: "session-child" },
     });
     // A queued post-compaction row staged for a compaction that has NOT happened.
-    stagePostCompactionDelegate(sessionKey, { task: "await compaction", stagedAt: Date.now() });
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "await compaction",
+      stagedAt: Date.now(),
+    });
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
 
     const result = await recoverAndReleaseStagedPostCompactionDelegates({

@@ -11,7 +11,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
-import { failQueuedDelegatesCreatedAtOrAfter } from "../../auto-reply/continuation-delegate-store.js";
+import { failQueuedDelegatesCreatedAtOrAfter } from "../../auto-reply/continuation/delegate-store.js";
 import {
   computeRequestCompactionContextUsage,
   releaseQueuedCompactionTolerant,

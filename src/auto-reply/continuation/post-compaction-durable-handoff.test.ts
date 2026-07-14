@@ -7,7 +7,7 @@ import {
   listRecoverableStagedPostCompactionDelegates,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-} from "../continuation-delegate-store.js";
+} from "../continuation/delegate-store.js";
 
 // #1144/#1158 (r3507184780 / r3517437265): staged post-compaction delegates must
 // stay non-terminal until the durable handoff (session-delivery enqueue /

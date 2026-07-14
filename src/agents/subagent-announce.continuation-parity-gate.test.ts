@@ -68,7 +68,7 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
   unregisterContinuationTimerHandle: vi.fn(),
 }));
 
-vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
+vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
   enqueuePendingDelegate: vi.fn(),
   markPendingDelegateFailed: vi.fn(),
@@ -78,7 +78,7 @@ vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
 import {
   enqueuePendingDelegate,
   stagePostCompactionDelegate,
-} from "../auto-reply/continuation-delegate-store.js";
+} from "../auto-reply/continuation/delegate-store.js";
 import {
   retainContinuationTimerRef,
   registerContinuationTimerHandle,

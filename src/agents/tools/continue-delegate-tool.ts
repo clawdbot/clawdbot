@@ -6,7 +6,7 @@ import {
 import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
 import {
   enqueuePendingDelegate,
-  stagePostCompactionDelegate,
+  stagePostCompactionTaskFlowDelegate,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
   peekContinueDelegatesScheduledThisTurn,
@@ -240,7 +240,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       }
 
       if (isPostCompaction) {
-        stagePostCompactionDelegate(sessionKey, {
+        stagePostCompactionTaskFlowDelegate(sessionKey, {
           task,
           stagedAt: Date.now(),
           ...targetingFields,

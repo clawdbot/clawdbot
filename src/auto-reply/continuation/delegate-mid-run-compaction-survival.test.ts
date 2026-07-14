@@ -6,7 +6,7 @@
  * in independent child sessions), parent-session compaction does NOT touch
  * them. The contract is enforced by what `releasePostCompactionLifecycle`
  * is allowed to observe: it ONLY consumes the STAGED post-compaction bag
- * (`consumeStagedPostCompactionDelegates`). It does NOT enumerate live
+ * (`claimStagedPostCompactionTaskFlowDelegates`). It does NOT enumerate live
  * children, does NOT call kill/abort/terminate, does NOT scan a sessions
  * registry. Children run independently to completion and deliver via
  * session-delivery-queue when they finish.
@@ -31,7 +31,7 @@ const mockState = vi.hoisted(() => ({
       }
     },
   ),
-  consumeStagedPostCompactionDelegates: vi.fn(),
+  claimStagedPostCompactionTaskFlowDelegates: vi.fn(),
   finalizeStagedPostCompactionDelegates: vi.fn(),
   clearContextPressureState: vi.fn(),
   checkContextPressure: vi.fn(),
@@ -42,7 +42,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./lazy.runtime.js", () => ({
   assertStagedPostCompactionFinalizationComplete:
     mockState.assertStagedPostCompactionFinalizationComplete,
-  consumeStagedPostCompactionDelegates: mockState.consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates: mockState.claimStagedPostCompactionTaskFlowDelegates,
   finalizeStagedPostCompactionDelegates: mockState.finalizeStagedPostCompactionDelegates,
   clearContextPressureState: mockState.clearContextPressureState,
   checkContextPressure: mockState.checkContextPressure,
@@ -101,7 +101,7 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
     // Two delegates were staged via continue_delegate(mode="post-compaction")
     // during the prior turn. They are what the lifecycle release MUST dispatch.
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([
       { task: "rehydrate-from-stage-A" },
       { task: "rehydrate-from-stage-B" },
     ]);
@@ -117,8 +117,8 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
     // (1) Consume was called exactly ONCE for the parent session — the
     //     helper drains the staged bag and is done. It does NOT iterate or
     //     enumerate other sessions.
-    expect(mockState.consumeStagedPostCompactionDelegates).toHaveBeenCalledTimes(1);
-    expect(mockState.consumeStagedPostCompactionDelegates).toHaveBeenCalledWith(SESSION_KEY);
+    expect(mockState.claimStagedPostCompactionTaskFlowDelegates).toHaveBeenCalledTimes(1);
+    expect(mockState.claimStagedPostCompactionTaskFlowDelegates).toHaveBeenCalledWith(SESSION_KEY);
 
     // (2) Exactly 2 spawns happened — one per staged delegate. The lifecycle
     //     release did NOT spawn anything extra (no "kill", no "abort", no
@@ -164,7 +164,7 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
     // is what the staged bag tells us to dispatch. Mid-run delegates are
     // invisible to this code path.
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([]);
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([]);
 
     const result = await releasePostCompactionLifecycle({
       sessionKey: SESSION_KEY,
@@ -174,8 +174,8 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
       originating: ORIGINATING,
     });
 
-    expect(mockState.consumeStagedPostCompactionDelegates).toHaveBeenCalledTimes(1);
-    expect(mockState.consumeStagedPostCompactionDelegates).toHaveBeenCalledWith(SESSION_KEY);
+    expect(mockState.claimStagedPostCompactionTaskFlowDelegates).toHaveBeenCalledTimes(1);
+    expect(mockState.claimStagedPostCompactionTaskFlowDelegates).toHaveBeenCalledWith(SESSION_KEY);
 
     // ZERO spawns. The lifecycle release did not "find" any mid-run delegates
     // to terminate or restart, because the code path has no awareness of them.
@@ -187,7 +187,7 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
   it("staged delegates are not retried on second release call — consume drains once, mid-run siblings still untouched", async () => {
     // First release: 1 staged delegate, dispatched.
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates
+    mockState.claimStagedPostCompactionTaskFlowDelegates
       .mockReturnValueOnce([{ task: "rehydrate-once" }])
       .mockReturnValueOnce([]); // store is drained on second consume
 

@@ -61,13 +61,13 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
   unregisterContinuationTimerHandle: vi.fn(),
 }));
 
-vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
+vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
   markPendingDelegateFailed: vi.fn(),
   stagePostCompactionDelegate: vi.fn(),
 }));
 
-import { stagePostCompactionDelegate } from "../auto-reply/continuation-delegate-store.js";
+import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,

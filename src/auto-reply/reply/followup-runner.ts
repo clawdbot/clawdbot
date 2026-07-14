@@ -68,7 +68,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { failQueuedDelegatesCreatedAtOrAfter } from "../continuation-delegate-store.js";
+import { failQueuedDelegatesCreatedAtOrAfter } from "../continuation/delegate-store.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import {
   getReplyPayloadMetadata,

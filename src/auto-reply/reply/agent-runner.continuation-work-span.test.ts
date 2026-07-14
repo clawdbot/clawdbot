@@ -34,7 +34,7 @@ import {
 } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
-import { enqueuePendingDelegate } from "../continuation-delegate-store.js";
+import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";

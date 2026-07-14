@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
 import {
   cancelPendingDelegates,
   consumePendingDelegates,
   resetDelegateStoreForTests,
-} from "../../auto-reply/continuation-delegate-store.js";
-import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
+} from "../../auto-reply/continuation/delegate-store.js";
 import { resetContinueDelegateTurnAdmissionForTests } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import {
   clearRuntimeConfigSnapshot,

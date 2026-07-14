@@ -66,7 +66,7 @@ export async function releasePostCompactionLifecycle(
 
   const {
     assertStagedPostCompactionFinalizationComplete,
-    consumeStagedPostCompactionDelegates,
+    claimStagedPostCompactionTaskFlowDelegates,
     finalizeStagedPostCompactionDelegates,
     clearContextPressureState,
     checkContextPressure,
@@ -97,11 +97,11 @@ export async function releasePostCompactionLifecycle(
   }
 
   // 3. Release staged post-compaction delegates with the canonical flag set.
-  //    consumeStagedPostCompactionDelegates claims rows to `running`; dispatch
+  //    claimStagedPostCompactionTaskFlowDelegates claims rows to `running`; dispatch
   //    fails deterministic policy/cap rejections, and this finalizes only rows
   //    whose spawn was accepted so transient spawn failures stay recoverable on
   //    the next restart (#1144/#1158).
-  const stagedDelegates = consumeStagedPostCompactionDelegates(sessionKey);
+  const stagedDelegates = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {
     const { dispatchStagedPostCompactionDelegates } = await import("./delegate-dispatch.js");

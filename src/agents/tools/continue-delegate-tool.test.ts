@@ -4,7 +4,7 @@ import {
   cancelPendingDelegates,
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
-} from "../../auto-reply/continuation-delegate-store.js";
+} from "../../auto-reply/continuation/delegate-store.js";
 import {
   resetContinueDelegateTurnAdmissionForTests,
   resetContinueDelegateTurnBudget,

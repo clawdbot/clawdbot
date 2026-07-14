@@ -1,5 +1,6 @@
 /** Canonical continuation-delegate business transitions over TaskFlow. */
 
+import type { SessionPostCompactionDelegate } from "../../config/sessions.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   decodeDelegateFlow,
@@ -348,7 +349,7 @@ export function cancelPendingDelegates(sessionKey: string): void {
 }
 
 /** Stage the TaskFlow-domain value used by the tool and recovery dispatcher. */
-export function stagePostCompactionDelegate(
+export function stagePostCompactionTaskFlowDelegate(
   sessionKey: string,
   delegate: StagedPostCompactionDelegate,
 ): void {
@@ -370,7 +371,7 @@ export function stagePostCompactionDelegate(
   });
 }
 
-export function requeueReleasedPostCompactionDelegate(
+export function requeueReleasedPostCompactionTaskFlowDelegate(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
 ): boolean {
   if (!delegate.flowId || delegate.expectedRevision === undefined) {
@@ -416,7 +417,7 @@ export function requeueAwaitingNextCompactionDelegates(options: {
       continue;
     }
     const delegate = decodeDelegateFlow(flow);
-    if (delegate && requeueReleasedPostCompactionDelegate(delegate)) {
+    if (delegate && requeueReleasedPostCompactionTaskFlowDelegate(delegate)) {
       requeued += 1;
     }
   }
@@ -476,7 +477,7 @@ export function failQueuedDelegatesCreatedAtOrAfter(
 }
 
 /** Claim staged TaskFlow rows without terminalizing them before durable handoff. */
-export function consumeStagedPostCompactionDelegates(
+export function claimStagedPostCompactionTaskFlowDelegates(
   sessionKey: string,
   options: { claimFor?: "release" | "next-seam-persist" } = {},
 ): PendingContinuationDelegate[] {
@@ -592,6 +593,60 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
     recoverable.push({ sessionKey: flow.ownerKey, delegate });
   }
   return recoverable;
+}
+
+/** Stage the session-persistence value used by reply and delivery callers. */
+export function stagePostCompactionDelegate(
+  sessionKey: string,
+  delegate: SessionPostCompactionDelegate,
+): void {
+  const stagedAt = delegate.createdAt ?? Date.now();
+  stagePostCompactionTaskFlowDelegate(sessionKey, {
+    task: delegate.task,
+    stagedAt,
+    firstArmedAt: delegate.firstArmedAt ?? stagedAt,
+    ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
+    ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
+    ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.traceparent && delegate.traceparentProvenance === "internal"
+      ? { traceparent: delegate.traceparent }
+      : {}),
+    ...(delegate.model ? { model: delegate.model } : {}),
+  });
+}
+
+export function consumeStagedPostCompactionDelegates(
+  sessionKey: string,
+  options?: { claimFor?: "release" | "next-seam-persist" },
+): SessionPostCompactionDelegate[] {
+  const now = Date.now();
+  return claimStagedPostCompactionTaskFlowDelegates(sessionKey, options).map((claimed) => {
+    const firstArmedAt = claimed.firstArmedAt ?? now;
+    return {
+      task: claimed.task,
+      createdAt: firstArmedAt,
+      firstArmedAt,
+      silent: true,
+      silentWake: true,
+      ...(claimed.targetSessionKey ? { targetSessionKey: claimed.targetSessionKey } : {}),
+      ...(claimed.targetSessionKeys ? { targetSessionKeys: claimed.targetSessionKeys } : {}),
+      ...(claimed.fanoutMode ? { fanoutMode: claimed.fanoutMode } : {}),
+      ...(claimed.traceparent
+        ? { traceparent: claimed.traceparent, traceparentProvenance: "internal" as const }
+        : {}),
+      ...(claimed.model ? { model: claimed.model } : {}),
+      ...(claimed.flowId ? { flowId: claimed.flowId } : {}),
+      ...(claimed.expectedRevision !== undefined
+        ? { expectedRevision: claimed.expectedRevision }
+        : {}),
+    };
+  });
+}
+
+export function requeueReleasedPostCompactionDelegate(
+  delegate: Pick<SessionPostCompactionDelegate, "flowId" | "expectedRevision" | "task">,
+): boolean {
+  return requeueReleasedPostCompactionTaskFlowDelegate(delegate);
 }
 
 export function stagedPostCompactionDelegateCount(sessionKey: string): number {

@@ -8,7 +8,7 @@ import { expect, test, vi } from "vitest";
 import {
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-} from "../auto-reply/continuation-delegate-store.js";
+} from "../auto-reply/continuation/delegate-store.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import {
   appendTranscriptMessage,

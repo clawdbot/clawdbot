@@ -52,7 +52,7 @@ import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-c
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation-delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";

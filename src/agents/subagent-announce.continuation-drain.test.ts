@@ -240,8 +240,8 @@ vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
   dispatchToolDelegates: (params: unknown) => dispatchToolDelegatesMock(params),
 }));
 
-vi.mock("../auto-reply/continuation-delegate-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../auto-reply/continuation-delegate-store.js")>()),
+vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
     clearQueuedDelegatesChainTokensFoldMock(sessionKey),
 }));

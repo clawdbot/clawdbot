@@ -104,7 +104,7 @@ vi.mock("../../agents/subagent-registry.js", () => ({
 }));
 
 // The stale-delegate drain in the finally throws here. The fix must contain it.
-vi.mock("../continuation-delegate-store.js", async (importOriginal) => {
+vi.mock("../continuation/delegate-store.js", async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
   return {
     ...original,

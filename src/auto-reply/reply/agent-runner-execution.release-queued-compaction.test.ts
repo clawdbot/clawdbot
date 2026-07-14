@@ -32,7 +32,7 @@ const state = vi.hoisted(() => ({
   stagePostCompactionDelegateMock: vi.fn(),
 }));
 
-vi.mock("../continuation-delegate-store.js", () => ({
+vi.mock("../continuation/delegate-store.js", () => ({
   stagePostCompactionDelegate: (sessionKey: string, delegate: unknown) =>
     state.stagePostCompactionDelegateMock(sessionKey, delegate),
 }));

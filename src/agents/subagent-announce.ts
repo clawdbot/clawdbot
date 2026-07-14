@@ -13,7 +13,7 @@ import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   stagePostCompactionDelegate,
-} from "../auto-reply/continuation-delegate-store.js";
+} from "../auto-reply/continuation/delegate-store.js";
 import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import {

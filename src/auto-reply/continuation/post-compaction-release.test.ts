@@ -9,7 +9,7 @@
  *   1. `clearContextPressureState(sessionKey)` runs first.
  *   2. `checkContextPressure({ postCompaction: true })` is consulted and
  *      its return value (when truthy) is enqueued as a system event.
- *   3. `consumeStagedPostCompactionDelegates(sessionKey)` is drained and
+ *   3. `claimStagedPostCompactionTaskFlowDelegates(sessionKey)` is drained and
  *      each returned delegate is dispatched with the canonical flag set
  *      (`silentAnnounce: true, wakeOnReturn: true,
  *       drainsContinuationDelegateQueue: true`) via
@@ -38,7 +38,7 @@ const mockState = vi.hoisted(() => ({
       }
     },
   ),
-  consumeStagedPostCompactionDelegates: vi.fn(),
+  claimStagedPostCompactionTaskFlowDelegates: vi.fn(),
   finalizeStagedPostCompactionDelegates: vi.fn(),
   clearContextPressureState: vi.fn(),
   checkContextPressure: vi.fn(),
@@ -49,7 +49,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./lazy.runtime.js", () => ({
   assertStagedPostCompactionFinalizationComplete:
     mockState.assertStagedPostCompactionFinalizationComplete,
-  consumeStagedPostCompactionDelegates: mockState.consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates: mockState.claimStagedPostCompactionTaskFlowDelegates,
   finalizeStagedPostCompactionDelegates: mockState.finalizeStagedPostCompactionDelegates,
   clearContextPressureState: mockState.clearContextPressureState,
   checkContextPressure: mockState.checkContextPressure,
@@ -106,7 +106,7 @@ beforeEach(() => {
 describe("releasePostCompactionLifecycle", () => {
   it("happy path: clears pressure state, fires post-compaction pressure event, and dispatches each staged delegate with the canonical flag set", async () => {
     mockState.checkContextPressure.mockReturnValue("[continuation] post-compaction band fired");
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([
       { task: "rehydrate working state for issue X", flowId: "pc-flow-x" },
       { task: "rehydrate working state for issue Y", flowId: "pc-flow-y" },
     ]);
@@ -177,7 +177,7 @@ describe("releasePostCompactionLifecycle", () => {
 
   it("finalizes only accepted post-compaction handoffs", async () => {
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([
       { task: "accepted post-compaction handoff", flowId: "pc-flow-accepted" },
       { task: "rejected post-compaction handoff", flowId: "pc-flow-rejected" },
     ]);
@@ -201,7 +201,7 @@ describe("releasePostCompactionLifecycle", () => {
 
   it("fails direct release when an accepted row was not finalized", async () => {
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([
       { task: "accepted post-compaction handoff", flowId: "pc-flow-accepted" },
     ]);
     mockState.finalizeStagedPostCompactionDelegates.mockReturnValue(0);
@@ -228,7 +228,7 @@ describe("releasePostCompactionLifecycle", () => {
 
   it("no staged delegates: fires the pressure event but performs no spawns", async () => {
     mockState.checkContextPressure.mockReturnValue("[continuation] post-compaction band fired");
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([]);
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([]);
 
     const result = await releasePostCompactionLifecycle({
       sessionKey: SESSION_KEY,
@@ -246,7 +246,7 @@ describe("releasePostCompactionLifecycle", () => {
 
   it("pressure check returns nothing: no pressure event enqueued, but delegates still dispatch", async () => {
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([{ task: "rehydrate Z" }]);
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([{ task: "rehydrate Z" }]);
 
     const result = await releasePostCompactionLifecycle({
       sessionKey: SESSION_KEY,
@@ -264,7 +264,7 @@ describe("releasePostCompactionLifecycle", () => {
   });
 
   it("missing totalTokens: skips pressure check + enqueue but still consumes/dispatches staged delegates", async () => {
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([{ task: "rehydrate W" }]);
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([{ task: "rehydrate W" }]);
 
     const result = await releasePostCompactionLifecycle({
       sessionKey: SESSION_KEY,
@@ -290,7 +290,7 @@ describe("releasePostCompactionLifecycle", () => {
       order.push("check");
       return undefined;
     });
-    mockState.consumeStagedPostCompactionDelegates.mockImplementation(() => {
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockImplementation(() => {
       order.push("consume");
       return [];
     });
@@ -312,7 +312,7 @@ describe("releasePostCompactionLifecycle", () => {
 
   it("falls back through agentCfgContextTokens → activeSessionEntry.contextTokens → DEFAULT_CONTEXT_TOKENS for pressure window", async () => {
     mockState.checkContextPressure.mockReturnValue(undefined);
-    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([]);
+    mockState.claimStagedPostCompactionTaskFlowDelegates.mockReturnValue([]);
 
     // Case A: agentCfgContextTokens wins.
     await releasePostCompactionLifecycle({

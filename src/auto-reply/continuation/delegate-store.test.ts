@@ -134,18 +134,18 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
 
 import { getDiagnosticContinuationQueueMetrics } from "../../logging/diagnostic-continuation-queues.js";
 import {
-  consumeStagedPostCompactionDelegates as consumeSessionPostCompactionDelegates,
-  requeueReleasedPostCompactionDelegate as requeueSessionPostCompactionDelegate,
-  stagePostCompactionDelegate as stageSessionPostCompactionDelegate,
-} from "../continuation-delegate-store.js";
-import {
   CONTINUATION_DELEGATE_CONTROLLER_ID,
   CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
 } from "./delegate-flow-store.js";
 import {
+  consumeStagedPostCompactionDelegates as consumeSessionPostCompactionDelegates,
+  requeueReleasedPostCompactionDelegate as requeueSessionPostCompactionDelegate,
+  stagePostCompactionDelegate as stageSessionPostCompactionDelegate,
+} from "./delegate-store.js";
+import {
   cancelPendingDelegates,
   consumePendingDelegates,
-  consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates,
   enqueuePendingDelegate,
   failStagedPostCompactionDelegatesForCleanup,
   finalizeStagedPostCompactionDelegates,
@@ -154,7 +154,7 @@ import {
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
   resetDelegateStoreForTests,
-  stagePostCompactionDelegate,
+  stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store.js";
 
@@ -211,27 +211,27 @@ describe("delegate store — TaskFlow-backed", () => {
     consumePendingDelegates(regularSession);
     expect(hasRecoverablePendingDelegate(regularSession)).toBe(true);
 
-    stagePostCompactionDelegate(postCompactionSession, {
+    stagePostCompactionTaskFlowDelegate(postCompactionSession, {
       task: "post-compaction cleanup non-blocker",
       stagedAt: Date.now(),
     });
     expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
-    consumeStagedPostCompactionDelegates(postCompactionSession);
+    claimStagedPostCompactionTaskFlowDelegates(postCompactionSession);
     expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
   });
 
   it("fails queued and running post-compaction delegates for completed child cleanup", () => {
     const sessionKey = "session-cleanup-post-compaction-fail";
     enqueuePendingDelegate(sessionKey, { task: "regular cleanup blocker" });
-    stagePostCompactionDelegate(sessionKey, {
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
       task: "post-compaction queued",
       stagedAt: Date.now(),
     });
-    stagePostCompactionDelegate(sessionKey, {
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
       task: "post-compaction running",
       stagedAt: Date.now(),
     });
-    const [running] = consumeStagedPostCompactionDelegates(sessionKey);
+    const [running] = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
     expect(running).toBeDefined();
 
     expect(
@@ -441,7 +441,10 @@ describe("delegate store — TaskFlow-backed", () => {
 
   it("cancels all delegates (regular + post-compaction)", () => {
     enqueuePendingDelegate("session-1", { task: "regular" });
-    stagePostCompactionDelegate("session-1", { task: "post-compact", stagedAt: Date.now() });
+    stagePostCompactionTaskFlowDelegate("session-1", {
+      task: "post-compact",
+      stagedAt: Date.now(),
+    });
 
     expect(pendingDelegateCount("session-1")).toBe(1);
     expect(stagedPostCompactionDelegateCount("session-1")).toBe(1);
@@ -454,7 +457,10 @@ describe("delegate store — TaskFlow-backed", () => {
 
   it("uses correct controller IDs", () => {
     enqueuePendingDelegate("session-1", { task: "regular" });
-    stagePostCompactionDelegate("session-1", { task: "post-compact", stagedAt: Date.now() });
+    stagePostCompactionTaskFlowDelegate("session-1", {
+      task: "post-compact",
+      stagedAt: Date.now(),
+    });
 
     const flows = [...mockFlows.values()];
     expect(expectDefined(flows.at(0), "first flow").controllerId).toBe(
@@ -471,7 +477,7 @@ describe("delegate store — TaskFlow-backed", () => {
 
     enqueuePendingDelegate("session-1", { task: "due" });
     enqueuePendingDelegate("session-1", { task: "future", delayMs: 60_000 });
-    stagePostCompactionDelegate("session-2", { task: "post-compact", stagedAt: 1_000 });
+    stagePostCompactionTaskFlowDelegate("session-2", { task: "post-compact", stagedAt: 1_000 });
     queueRawPendingFlow("session-3", {
       kind: "continuation_delegate",
       task: "invalid flags",
@@ -534,10 +540,10 @@ describe("delegate store — TaskFlow-backed", () => {
 
 describe("post-compaction delegate staging", () => {
   it("stages and consumes post-compaction delegates", () => {
-    stagePostCompactionDelegate("session-1", { task: "rehydrate state", stagedAt: 1000 });
+    stagePostCompactionTaskFlowDelegate("session-1", { task: "rehydrate state", stagedAt: 1000 });
 
     expect(stagedPostCompactionDelegateCount("session-1")).toBe(1);
-    const delegates = consumeStagedPostCompactionDelegates("session-1");
+    const delegates = claimStagedPostCompactionTaskFlowDelegates("session-1");
     expect(delegates).toHaveLength(1);
     const delegate = expectDefined(delegates.at(0), "delegate");
     expect(delegate.task).toBe("rehydrate state");
@@ -546,13 +552,13 @@ describe("post-compaction delegate staging", () => {
   });
 
   it("preserves firstArmedAt across post-compaction TaskFlow storage", () => {
-    stagePostCompactionDelegate("session-1", {
+    stagePostCompactionTaskFlowDelegate("session-1", {
       task: "old shard",
       stagedAt: 20_000,
       firstArmedAt: 10_000,
     });
 
-    const delegates = consumeStagedPostCompactionDelegates("session-1");
+    const delegates = claimStagedPostCompactionTaskFlowDelegates("session-1");
     expect(delegates[0]).toMatchObject({
       task: "old shard",
       mode: "post-compaction",
@@ -561,13 +567,13 @@ describe("post-compaction delegate staging", () => {
   });
 
   it("preserves targeting across post-compaction TaskFlow storage", () => {
-    stagePostCompactionDelegate("session-1", {
+    stagePostCompactionTaskFlowDelegate("session-1", {
       task: "targeted compaction shard",
       stagedAt: 20_000,
       targetSessionKeys: ["agent:main:root", "agent:main:sibling"],
     });
 
-    expect(consumeStagedPostCompactionDelegates("session-1")[0]).toMatchObject({
+    expect(claimStagedPostCompactionTaskFlowDelegates("session-1")[0]).toMatchObject({
       task: "targeted compaction shard",
       mode: "post-compaction",
       targetSessionKeys: ["agent:main:root", "agent:main:sibling"],
@@ -575,13 +581,13 @@ describe("post-compaction delegate staging", () => {
   });
 
   it("preserves traceparent across post-compaction TaskFlow storage", () => {
-    stagePostCompactionDelegate("session-1", {
+    stagePostCompactionTaskFlowDelegate("session-1", {
       task: "traced compaction shard",
       stagedAt: 20_000,
       traceparent: VALID_TRACEPARENT,
     });
 
-    expect(consumeStagedPostCompactionDelegates("session-1")[0]).toMatchObject({
+    expect(claimStagedPostCompactionTaskFlowDelegates("session-1")[0]).toMatchObject({
       task: "traced compaction shard",
       mode: "post-compaction",
       traceparent: VALID_TRACEPARENT,
@@ -590,10 +596,10 @@ describe("post-compaction delegate staging", () => {
 
   it("does not mix regular and post-compaction delegates", () => {
     enqueuePendingDelegate("session-1", { task: "regular" });
-    stagePostCompactionDelegate("session-1", { task: "post-compact", stagedAt: 1000 });
+    stagePostCompactionTaskFlowDelegate("session-1", { task: "post-compact", stagedAt: 1000 });
 
     const regular = consumePendingDelegates("session-1");
-    const postCompact = consumeStagedPostCompactionDelegates("session-1");
+    const postCompact = claimStagedPostCompactionTaskFlowDelegates("session-1");
     expect(regular).toHaveLength(1);
     expect(expectDefined(regular.at(0), "regular delegate").task).toBe("regular");
     expect(postCompact).toHaveLength(1);
@@ -1008,7 +1014,7 @@ describe("consume-paths corrupt-payload breadcrumbs", () => {
       updatedAt: Date.now(),
     });
 
-    const result = consumeStagedPostCompactionDelegates("session-453b");
+    const result = claimStagedPostCompactionTaskFlowDelegates("session-453b");
 
     // No delegates returned — corrupt payload didn't decode.
     expect(result).toEqual([]);

@@ -113,7 +113,7 @@ import {
   isInternalMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import { stagePostCompactionDelegate } from "../continuation-delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store.js";
 import { stripContinuationSignal } from "../continuation/signal.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";

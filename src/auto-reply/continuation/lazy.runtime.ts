@@ -21,7 +21,7 @@ export { dispatchToolDelegates } from "./delegate-dispatch.js";
 export { scheduleContinuationWork, scheduleContinuationWorkBatch } from "./work-dispatch.js";
 export {
   assertStagedPostCompactionFinalizationComplete,
-  consumeStagedPostCompactionDelegates,
+  claimStagedPostCompactionTaskFlowDelegates,
   finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,
   stagedPostCompactionDelegateCount,
