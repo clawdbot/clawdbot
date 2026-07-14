@@ -305,7 +305,7 @@ async function handleGatewayProbeRequest(
       allowRealIpFallback,
     });
     try {
-      const result = getReadiness();
+      const result = await getReadiness();
       statusCode = result.ready ? 200 : 503;
       body = JSON.stringify(includeDetails ? result : { ready: result.ready });
     } catch {

@@ -9,6 +9,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -26,7 +27,11 @@ import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.j
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  mergeReadinessResults,
+  type ReadinessResult,
+} from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -58,6 +63,21 @@ type GatewayStartupChannelPlugin = {
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
   return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
+}
+
+function buildGatewayPluginReadinessInput(
+  registry: GatewayBootstrap["pluginBootstrap"]["pluginRegistry"],
+): PluginReadinessInput {
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin) => ({
+      id: plugin.id,
+      activated: plugin.activated === true,
+      ...(plugin.activationSource ? { activationSource: plugin.activationSource } : {}),
+      error: plugin.error ?? "unknown plugin load error",
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return { errors };
 }
 
 export async function prepareGatewayRuntimeState(params: {
@@ -327,7 +347,7 @@ export async function prepareGatewayRuntimeState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -338,6 +358,15 @@ export async function prepareGatewayRuntimeState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const getReadiness = async (): Promise<ReadinessResult> => {
+    const gatewayReadiness = await getGatewayReadiness();
+    const runtimeReadiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: buildGatewayPluginReadinessInput(pluginRuntime.registry),
+    });
+    return mergeReadinessResults(gatewayReadiness, runtimeReadiness);
+  };
   log.info("starting HTTP server...");
   const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
     current: undefined,
