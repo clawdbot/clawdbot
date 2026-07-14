@@ -207,6 +207,12 @@ export async function runCliCommand(params: {
     let stderrTruncated = false;
     let settled = false;
     const discardStdout = params.discardStdout === true;
+    // Let the streams carry partial UTF-8 sequences across pipe chunks before
+    // qmd JSON, paths, or diagnostics reach the character-based output cap.
+    if (!discardStdout) {
+      child.stdout.setEncoding("utf8");
+    }
+    child.stderr.setEncoding("utf8");
     const timeoutMs =
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
@@ -233,16 +239,16 @@ export async function runCliCommand(params: {
       run();
     }
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (data) => {
+    child.stdout.on("data", (data: string) => {
       if (discardStdout) {
         return;
       }
-      const next = appendOutputWithCap(stdout, data.toString("utf8"), params.maxOutputChars);
+      const next = appendOutputWithCap(stdout, data, params.maxOutputChars);
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
-    child.stderr.on("data", (data) => {
-      const next = appendOutputWithCap(stderr, data.toString("utf8"), params.maxOutputChars);
+    child.stderr.on("data", (data: string) => {
+      const next = appendOutputWithCap(stderr, data, params.maxOutputChars);
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
