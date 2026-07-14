@@ -234,7 +234,7 @@ type ChannelManagerOptions = {
   tryRecoverAutostartSuppression?: () => boolean;
 };
 
-export type StopChannelOptions = {
+type StopChannelOptions = {
   manual?: boolean;
 };
 
