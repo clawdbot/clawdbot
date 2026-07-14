@@ -392,7 +392,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     mocks.callGateway.mockResolvedValue({});
   });
 
-  it("clears the selected profile and refreshes the running gateway", async () => {
+  it("clears the selected profile and prints the safe restart step", async () => {
     const store = {
       version: 1,
       profiles: {
@@ -425,17 +425,17 @@ describe("modelsAuthClearCooldownCommand", () => {
       profileId,
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
-      `Cleared cooldown state for auth profile "${profileId}".`,
+      `Cleared persisted cooldown state for auth profile "${profileId}".`,
     );
     expect(runtime.log).toHaveBeenNthCalledWith(
       2,
+      "Restart any running Gateway before retrying: openclaw gateway restart --safe.",
+    );
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      3,
       "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
     );
   });

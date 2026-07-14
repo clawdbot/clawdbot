@@ -829,8 +829,10 @@ export async function modelsAuthClearCooldownCommand(
       `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
     );
   }
-  await refreshRunningGatewayAuthState();
-  runtime.log(`Cleared cooldown state for auth profile "${profileId}".`);
+  runtime.log(`Cleared persisted cooldown state for auth profile "${profileId}".`);
+  runtime.log(
+    `Restart any running Gateway before retrying: ${formatCliCommand("openclaw gateway restart --safe")}.`,
+  );
   runtime.log(
     "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
   );
