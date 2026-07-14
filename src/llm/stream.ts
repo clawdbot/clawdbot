@@ -8,10 +8,4 @@ import "./ai-transport-host.js";
 
 registerBuiltInApiProviders(defaultApiRegistry);
 
-export {
-  complete,
-  completeSimple,
-  getEnvApiKey,
-  stream,
-  streamSimple,
-} from "@openclaw/ai/internal/runtime";
+export { complete, completeSimple, stream, streamSimple } from "@openclaw/ai/internal/runtime";

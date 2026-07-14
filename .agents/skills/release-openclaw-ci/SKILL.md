@@ -24,6 +24,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
+- Treat the product-complete pre-changelog commit as the Code SHA. Full product
+  validation and performance evidence bind to that SHA. The later Release SHA
+  may reuse those results only when it is a descendant whose complete changed
+  path set is exactly `CHANGELOG.md`.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
   `pnpm-lock.yaml`, and every source path the selected check reads. If any are
   absent, that checkout cannot validate a release dependency or Docker lane:
@@ -68,14 +72,14 @@ non-billable credentials fail before the expensive release matrix.
 
 ## Dispatch
 
-Start product performance evidence as early as the release SHA exists, in
+Start product performance evidence as early as the Code SHA exists, in
 parallel with other release work:
 
 ```bash
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
   --ref main \
-  -f target_ref=<release-sha> \
+  -f target_ref=<code-sha> \
   -f profile=release \
   -f repeat=3 \
   -f deep_profile=false \
@@ -93,7 +97,7 @@ gh workflow run openclaw-performance.yml \
   early standalone run is for overlap and faster regression discovery, but a
   regression or missing child run blocks the parent validation.
 
-Prefer the trusted workflow on `main`, target the exact release SHA:
+Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
 
 - Keep trusted-workflow checks compatible with frozen release targets. If
   `main` adds a target-owned guard script or package command after the release
@@ -103,23 +107,30 @@ Prefer the trusted workflow on `main`, target the exact release SHA:
   newer `main`-only check.
 
 ```bash
-gh workflow run full-release-validation.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=<release-sha> \
-  -f provider=openai \
-  -f mode=both \
-  -f release_profile=full \
-  -f rerun_group=all
+node scripts/full-release-validation-at-sha.mjs \
+  --sha <code-sha> \
+  --target-ref release/YYYY.M.PATCH
 ```
 
 For immutable workflow proof on a moving `main`, use
-`pnpm ci:full-release --sha <release-sha>`. Its canonical `release-ci/*` ref
-keeps exact-target evidence reuse enabled after proving the workflow commit is
-still on trusted `main` lineage. Pass `-f reuse_evidence=false` only when the
-operator intentionally needs a fresh full run.
+`pnpm ci:full-release --sha <code-sha> --target-ref
+release/YYYY.M.PATCH`. Its canonical `release-ci/*` ref keeps evidence reuse
+enabled after proving the workflow commit is still on trusted `main` lineage.
+Pass `-f reuse_evidence=false` only when the operator intentionally needs a
+fresh full run.
 
-Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Stable and full profiles force the release soak; the beta profile may opt in with `run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
+After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper
+against the Release SHA. The parent must report
+`policy=changelog-only-release-v1`, `evidenceSha=<code-sha>`, and
+`changedPaths=["CHANGELOG.md"]`; it should reuse the product matrix instead of
+dispatching child lanes. Npm preflight and package/install acceptance still run
+against the exact Release SHA and its new tarball bytes.
+
+The SHA-pinned helper infers `beta` for alpha/beta package versions and `stable`
+for stable/correction versions. Pass `release_profile=full` only when the
+operator explicitly asks for the broad advisory provider/media matrix. Stable
+and full profiles force the release soak; the beta profile may opt in with
+`run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
@@ -154,12 +165,27 @@ Stop watchers before ending the turn or switching strategy.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Fix narrowly, run local/changed proof, commit, push, rerun the smallest matching group.
+6. Classify before editing:
+   - product/code failure: fix the release branch, freeze a new Code SHA, run
+     focused proof, then obtain green full validation for that new SHA
+   - workflow/harness/infrastructure/credential failure: fix that owner
+     separately and rerun the same Code SHA
+   - changelog/release-note failure: change only `CHANGELOG.md`, keep Code SHA
+     evidence, and repeat Release SHA proof
+   - publish child/registry selector failure: keep Release SHA and resume the
+     failed child; never rebuild an immutable version that already published
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
-   From the PR head branch, dispatch the explicit exact-SHA fallback:
+   First check the target-owned workflow with `git show
+<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
+   declares `pr_number`, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
+release_gate=true`.
+   The workflow authenticates that PR's head/base, validates GitHub's current
+   synthetic merge tree, and runs the LOC task from that tree. Older workflow
+   schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
+   restart exact-head proof on the new SHA instead of dispatching them.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
@@ -173,7 +199,8 @@ target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
 
 Record:
 
-- release SHA
+- Code SHA and Release SHA
+- evidence-reuse policy and complete changed-path set
 - full parent run URL
 - child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance
 - performance comparison result versus earlier releases when available

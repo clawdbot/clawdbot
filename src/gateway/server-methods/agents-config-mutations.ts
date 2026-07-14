@@ -12,7 +12,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type AgentDeleteMutationResult = {
+type AgentDeleteMutationResult = {
   workspaceDir: string;
   agentDir: string;
   sessionsDir: string;

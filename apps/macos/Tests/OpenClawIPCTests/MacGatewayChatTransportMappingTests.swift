@@ -8,7 +8,7 @@ struct MacGatewayChatTransportMappingTests {
         let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
 
         #expect(transport.sessionTarget(for: " GLOBAL ") == .init(
-            sessionKey: " GLOBAL ",
+            sessionKey: "GLOBAL",
             agentID: "agent-a"))
         #expect(transport.sessionTarget(for: "agent:agent-a:main") == .init(
             sessionKey: "agent:agent-a:main",

@@ -146,7 +146,7 @@ function resolveSlackBotLoopProtection(
   };
 }
 
-export function isSlackStreamingEnabled(params: {
+function isSlackStreamingEnabled(params: {
   mode: "off" | "partial" | "block" | "progress";
   nativeStreaming: boolean;
   nativeProgressTaskCards?: boolean;
@@ -160,20 +160,20 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function shouldEnableSlackPreviewStreaming(params: {
+function shouldEnableSlackPreviewStreaming(params: {
   mode: "off" | "partial" | "block" | "progress";
 }): boolean {
   return params.mode !== "off";
 }
 
-export function shouldInitializeSlackDraftStream(params: {
+function shouldInitializeSlackDraftStream(params: {
   previewStreamingEnabled: boolean;
   useStreaming: boolean;
 }): boolean {
   return params.previewStreamingEnabled && !params.useStreaming;
 }
 
-export function resolveSlackDisableBlockStreaming(params: {
+function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;
   blockStreamingEnabled: boolean | undefined;
@@ -213,7 +213,7 @@ function resolveSlackNativeProgressTaskCards(
   );
 }
 
-export function resolveSlackStreamingThreadHint(params: {
+function resolveSlackStreamingThreadHint(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
@@ -236,7 +236,17 @@ type SlackEventDeliveryAttempt = {
 };
 
 const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
-const slackStreamRecipientTeamCache = new Map<string, string>();
+const slackStreamRecipientTeamCaches = new WeakMap<object, Map<string, string>>();
+
+function getSlackStreamRecipientTeamCache(client: object): Map<string, string> {
+  const existing = slackStreamRecipientTeamCaches.get(client);
+  if (existing) {
+    return existing;
+  }
+  const cache = new Map<string, string>();
+  slackStreamRecipientTeamCaches.set(client, cache);
+  return cache;
+}
 
 function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string | null {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
@@ -264,6 +274,7 @@ function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string |
 }
 
 function readSlackStreamRecipientTeamCache(params: {
+  client: object;
   fallbackTeamId?: string;
   userId?: string;
 }): string | undefined {
@@ -271,16 +282,18 @@ function readSlackStreamRecipientTeamCache(params: {
     return undefined;
   }
   const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
-  const cached = slackStreamRecipientTeamCache.get(cacheKey);
+  const cache = getSlackStreamRecipientTeamCache(params.client);
+  const cached = cache.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  slackStreamRecipientTeamCache.delete(cacheKey);
-  slackStreamRecipientTeamCache.set(cacheKey, cached);
+  cache.delete(cacheKey);
+  cache.set(cacheKey, cached);
   return cached;
 }
 
 function rememberSlackStreamRecipientTeam(params: {
+  client: object;
   fallbackTeamId?: string;
   userId?: string;
   teamId: string;
@@ -289,14 +302,15 @@ function rememberSlackStreamRecipientTeam(params: {
     return;
   }
   const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
-  if (slackStreamRecipientTeamCache.has(cacheKey)) {
-    slackStreamRecipientTeamCache.delete(cacheKey);
+  const cache = getSlackStreamRecipientTeamCache(params.client);
+  if (cache.has(cacheKey)) {
+    cache.delete(cacheKey);
   }
-  slackStreamRecipientTeamCache.set(cacheKey, params.teamId);
-  if (slackStreamRecipientTeamCache.size > SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX) {
-    const oldest = slackStreamRecipientTeamCache.keys().next().value;
+  cache.set(cacheKey, params.teamId);
+  if (cache.size > SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
     if (oldest) {
-      slackStreamRecipientTeamCache.delete(oldest);
+      cache.delete(oldest);
     }
   }
 }
@@ -371,11 +385,7 @@ function isSlackReasoningSnapshotText(text: string): boolean {
   return SLACK_REASONING_LABEL_PREFIX_RE.test(text) || SLACK_THINKING_LABEL_PREFIX_RE.test(text);
 }
 
-export function resetSlackStreamRecipientTeamCacheForTests(): void {
-  slackStreamRecipientTeamCache.clear();
-}
-
-export function createSlackEventDeliveryTracker() {
+function createSlackEventDeliveryTracker() {
   const deliveredKeys = new Set<string>();
   return {
     hasDelivered(params: SlackEventDeliveryAttempt) {
@@ -405,7 +415,7 @@ function shouldUseStreaming(params: {
   return true;
 }
 
-export async function resolveSlackStreamRecipientTeamId(params: {
+async function resolveSlackStreamRecipientTeamId(params: {
   client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
   token: string;
   userId?: PreparedSlackMessage["message"]["user"];
@@ -503,6 +513,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ctx: prepared.ctxPayload,
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
@@ -1904,6 +1915,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyOptions: {
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
+        // Room events are observe-style turns; Slack status indicators imply an
+        // automatic visible reply and can auto-open assistant threads.
+        suppressTyping: suppressRoomEventTyping ? true : undefined,
         hasRepliedRef,
         disableBlockStreaming,
         onModelSelected,

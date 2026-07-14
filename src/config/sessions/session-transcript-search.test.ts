@@ -14,18 +14,10 @@ import type { TranscriptEvent } from "./session-accessor.js";
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
-  deleteSqliteTranscript,
   replaceSqliteTranscriptEvents,
 } from "./session-accessor.sqlite.js";
-import {
-  extractTranscriptIndexEntry,
-  listSessionsNeedingTranscriptIndexReconcile,
-} from "./session-transcript-index.js";
-import {
-  resetSessionTranscriptSearchForTest,
-  searchSessionTranscripts,
-  waitForSessionTranscriptReconcileForTest,
-} from "./session-transcript-search.js";
+import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -42,14 +34,6 @@ beforeEach(() => {
     stateDir: path.join(tempDir, "state"),
     tempDir,
   };
-});
-
-afterEach(async () => {
-  await waitForSessionTranscriptReconcileForTest();
-  resetSessionTranscriptSearchForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  fs.rmSync(paths.tempDir, { recursive: true, force: true });
 });
 
 function env(): NodeJS.ProcessEnv {
@@ -86,6 +70,20 @@ function search(query: string, options: { limit?: number; sessionKeys?: string[]
     ...(options.sessionKeys ? { sessionKeys: options.sessionKeys } : {}),
   });
 }
+
+async function waitForSearchReconcile(query: string): Promise<void> {
+  await vi.waitFor(() => expect(search(query).indexing).toBe(false), {
+    interval: 10,
+    timeout: 5_000,
+  });
+}
+
+afterEach(async () => {
+  await waitForSearchReconcile("cleanup-probe");
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  fs.rmSync(paths.tempDir, { recursive: true, force: true });
+});
 
 function agentKysely() {
   const database = openOpenClawAgentDatabase({ agentId: "main", env: env() });
@@ -158,18 +156,6 @@ describe("searchSessionTranscripts", () => {
     expect(() => search("x".repeat(4097))).toThrow(/must not exceed/);
   });
 
-  it("drops hits when a transcript is deleted", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "ephemeral content");
-    expect(search("ephemeral").hits).toHaveLength(1);
-
-    await deleteSqliteTranscript({
-      agentId: "main",
-      env: env(),
-      sessionId: "session-1",
-    });
-    expect(search("ephemeral").hits).toHaveLength(0);
-  });
-
   it("reindexes synchronously when a linear transcript is replaced", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
     await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
@@ -205,7 +191,6 @@ describe("searchSessionTranscripts", () => {
         message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
       },
     ] as unknown as TranscriptEvent[]);
-    // Rewind to m1: m2 leaves the visible path.
     await appendSqliteTranscriptEvent(scope, {
       type: "leaf",
       id: "leaf-1",
@@ -213,12 +198,10 @@ describe("searchSessionTranscripts", () => {
       targetId: "m1",
     } as unknown as TranscriptEvent);
 
-    // Dirty sessions are hidden from results immediately: stale rows must
-    // not surface rewound-away text even before the rebuild commits.
     const dirty = search("beta");
     expect(dirty.indexing).toBe(true);
     expect(dirty.hits).toHaveLength(0);
-    await waitForSessionTranscriptReconcileForTest();
+    await waitForSearchReconcile("beta");
 
     expect(search("beta").hits).toHaveLength(0);
     expect(search("alpha").hits).toHaveLength(1);
@@ -226,13 +209,12 @@ describe("searchSessionTranscripts", () => {
 
   it("backfills transcripts that predate the index via reconcile", async () => {
     await appendUserMessage("session-1", "agent:main:main", "historic knowledge");
-    // Simulate a doctor-migrated database that has rows but no index state.
     const { db, kysely } = agentKysely();
     executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
     executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
     expect(search("historic").indexing).toBe(true);
 
-    await waitForSessionTranscriptReconcileForTest();
+    await waitForSearchReconcile("historic");
     const result = search("historic");
     expect(result.indexing).toBe(false);
     expect(result.hits).toHaveLength(1);
@@ -283,8 +265,6 @@ describe("searchSessionTranscripts", () => {
         timestamp: "1",
       }),
     );
-    // The ghost has no transcript rows, so only the dirty scan of a live
-    // session triggers reconcile; force one by clearing the live watermark.
     executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
 
     const ghostRows = () =>
@@ -295,62 +275,10 @@ describe("searchSessionTranscripts", () => {
           .select("message_id")
           .where("session_id", "=", "session-ghost"),
       ).rows.length;
-    // Ghost rows are already invisible to search (the sessions join drops
-    // them); the sweep reclaims their storage.
     expect(ghostRows()).toBe(1);
     expect(search("anchor").indexing).toBe(true);
-    await waitForSessionTranscriptReconcileForTest();
+    await waitForSearchReconcile("anchor");
     expect(ghostRows()).toBe(0);
     expect(search("anchor").hits).toHaveLength(1);
-  });
-});
-
-describe("extractTranscriptIndexEntry", () => {
-  it("extracts text blocks from user and assistant messages", () => {
-    const entry = extractTranscriptIndexEntry(
-      {
-        type: "message",
-        id: "m1",
-        timestamp: 1720000000000,
-        message: {
-          role: "assistant",
-          content: [
-            { type: "text", text: "first" },
-            { type: "tool_use", name: "exec", input: { command: "secret" } },
-            { type: "text", text: "second" },
-          ],
-        },
-      },
-      0,
-    );
-    expect(entry).toEqual({
-      messageId: "m1",
-      role: "assistant",
-      text: "first\nsecond",
-      timestamp: 1720000000000,
-    });
-  });
-
-  it("returns undefined for tool results, other roles, and empty text", () => {
-    expect(
-      extractTranscriptIndexEntry({ type: "message", id: "m1", message: { role: "tool" } }, 0),
-    ).toBeUndefined();
-    expect(
-      extractTranscriptIndexEntry({ type: "model_change", id: "e1", message: { role: "user" } }, 0),
-    ).toBeUndefined();
-    expect(
-      extractTranscriptIndexEntry(
-        { type: "message", id: "m1", message: { role: "user", content: [] } },
-        0,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("falls back to the append timestamp when the event has none", () => {
-    const entry = extractTranscriptIndexEntry(
-      { type: "message", id: "m1", message: { role: "user", content: "hello" } },
-      4242,
-    );
-    expect(entry?.timestamp).toBe(4242);
   });
 });

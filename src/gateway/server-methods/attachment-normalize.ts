@@ -3,7 +3,7 @@
 import type { ChatAttachment } from "../chat-attachments.js";
 
 /** RPC attachment payload shape accepted by chat-like gateway methods. */
-export type RpcAttachmentInput = {
+type RpcAttachmentInput = {
   type?: unknown;
   mimeType?: unknown;
   fileName?: unknown;

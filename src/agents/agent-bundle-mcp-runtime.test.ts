@@ -7,11 +7,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
+  createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
+} from "./agent-bundle-mcp-runtime.js";
+import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
+import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,

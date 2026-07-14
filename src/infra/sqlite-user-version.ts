@@ -1,6 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+type SqliteUserVersionReader = {
+  prepare: (sql: string) => { get: () => unknown };
+};
 
-export function readSqliteUserVersion(db: DatabaseSync): number {
+export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
   return Number(row?.user_version ?? 0);
 }

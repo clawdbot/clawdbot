@@ -16,21 +16,18 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
 } from "../../infra/diagnostic-trace-context.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
-  clearChannelBotPairLoopGuardForTests,
-  createNoopChannelEventDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
-  runPreparedChannelTurn,
-  runChannelTurn,
+  runPreparedInboundReply,
+  runChannelInboundEvent,
 } from "./kernel.js";
 import type { PreparedChannelTurn } from "./types.js";
 
@@ -194,10 +191,8 @@ describe("channel turn kernel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetDiagnosticEventsForTest();
-    resetDiagnosticTraceContextForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });
-    clearChannelBotPairLoopGuardForTests();
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
   });
 
@@ -214,10 +209,10 @@ describe("channel turn kernel", () => {
     };
 
     if (Date.now() < 0) {
-      expectTypeOf(runPreparedChannelTurn(guarded)).toEqualTypeOf<
+      expectTypeOf(runPreparedInboundReply(guarded)).toEqualTypeOf<
         Promise<ChannelTurnResult<DispatchResult>>
       >();
-      expectTypeOf(runPreparedChannelTurn(unguarded)).toEqualTypeOf<
+      expectTypeOf(runPreparedInboundReply(unguarded)).toEqualTypeOf<
         Promise<DispatchedChannelTurnResult<DispatchResult>>
       >();
     }
@@ -668,7 +663,7 @@ describe("channel turn kernel", () => {
       };
     });
 
-    const result = await runPreparedChannelTurn({
+    const result = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -771,7 +766,7 @@ describe("channel turn kernel", () => {
     });
 
     try {
-      await runPreparedChannelTurn({
+      await runPreparedInboundReply({
         channel: "slack",
         routeSessionKey: "agent:main:slack:channel:c1",
         storePath: "/tmp/sessions.json",
@@ -814,7 +809,7 @@ describe("channel turn kernel", () => {
       counts: { tool: 0, block: 0, final: 0 },
     }));
 
-    const result = await runPreparedChannelTurn({
+    const result = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -851,7 +846,7 @@ describe("channel turn kernel", () => {
       observedReplyDelivery: true,
     }));
 
-    const result = await runPreparedChannelTurn({
+    const result = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -882,7 +877,7 @@ describe("channel turn kernel", () => {
       observedReplyDelivery: false,
     }));
 
-    const result = await runPreparedChannelTurn({
+    const result = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -930,7 +925,7 @@ describe("channel turn kernel", () => {
       defaultEnabled: true,
     };
 
-    const first = await runPreparedChannelTurn({
+    const first = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -939,7 +934,7 @@ describe("channel turn kernel", () => {
       runDispatch,
       botLoopProtection: { ...botLoopProtection, nowMs: 1_000 },
     });
-    const second = await runPreparedChannelTurn({
+    const second = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -987,7 +982,7 @@ describe("channel turn kernel", () => {
       counts: { tool: 0, block: 0, final: 0 },
     };
 
-    const result = await runPreparedChannelTurn({
+    const result = await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:observer:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1009,7 +1004,7 @@ describe("channel turn kernel", () => {
   it("clears pending group history after a successful prepared turn", async () => {
     const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
 
-    await runPreparedChannelTurn({
+    await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:group:room-1",
       storePath: "/tmp/sessions.json",
@@ -1044,7 +1039,7 @@ describe("channel turn kernel", () => {
     });
 
     await expect(
-      runPreparedChannelTurn({
+      runPreparedInboundReply({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
         storePath: "/tmp/sessions.json",
@@ -1070,7 +1065,7 @@ describe("channel turn kernel", () => {
 
   it("runs afterRecord only after session recording succeeds and before dispatch", async () => {
     const events: string[] = [];
-    await runPreparedChannelTurn({
+    await runPreparedInboundReply({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1136,7 +1131,7 @@ describe("channel turn kernel", () => {
     const afterRecord = vi.fn();
 
     await expect(
-      runPreparedChannelTurn({
+      runPreparedInboundReply({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
         storePath: "/tmp/sessions.json",
@@ -1179,7 +1174,7 @@ describe("channel turn kernel", () => {
   });
 
   it("drops when ingest returns null", async () => {
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: {},
       adapter: {
@@ -1196,7 +1191,7 @@ describe("channel turn kernel", () => {
 
   it("handles non-turn event classes without dispatch", async () => {
     const resolveTurn = vi.fn();
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: {},
       adapter: {
@@ -1213,7 +1208,7 @@ describe("channel turn kernel", () => {
 
   it("stops on preflight admission drops", async () => {
     const resolveTurn = vi.fn();
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: {},
       adapter: {
@@ -1236,7 +1231,7 @@ describe("channel turn kernel", () => {
     const historyMap = new Map<string, HistoryEntry[]>();
     const resolveTurn = vi.fn();
 
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: {},
       adapter: {
@@ -1291,7 +1286,7 @@ describe("channel turn kernel", () => {
     const onFinalize = vi.fn();
     let nowMs = 1_000;
     const runOne = async (id: string) =>
-      await runChannelTurn({
+      await runChannelInboundEvent({
         channel: "test",
         accountId: "acct",
         raw: { id },
@@ -1349,7 +1344,7 @@ describe("channel turn kernel", () => {
     const events: string[] = [];
     const deliver = vi.fn();
     const onFinalize = vi.fn();
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: {},
       adapter: {
@@ -1393,7 +1388,7 @@ describe("channel turn kernel", () => {
 
   it("runs custom prepared dispatch from a full turn adapter", async () => {
     const events: string[] = [];
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       adapter: {
@@ -1433,7 +1428,7 @@ describe("channel turn kernel", () => {
         counts: { tool: 0, block: 0, final: 1 },
       };
     });
-    const result = await runChannelTurn({
+    const result = await runChannelInboundEvent({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       adapter: {
@@ -1477,7 +1472,7 @@ describe("channel turn kernel", () => {
     }) as unknown as DispatchReplyWithBufferedBlockDispatcher;
 
     await expect(
-      runChannelTurn({
+      runChannelInboundEvent({
         channel: "test",
         raw: {},
         adapter: {
@@ -1491,7 +1486,7 @@ describe("channel turn kernel", () => {
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,
-            delivery: createNoopChannelEventDeliveryAdapter(),
+            delivery: { deliver: async () => ({ visibleReplySent: false }) },
             record: {
               onRecordError: vi.fn(),
             },

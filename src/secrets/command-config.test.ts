@@ -6,9 +6,9 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
-import { collectCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
+import { analyzeCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
 
-describe("collectCommandSecretAssignmentsFromSnapshot", () => {
+describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
   it("returns assignments from the active runtime snapshot for configured refs", () => {
     const sourceConfig = buildTalkTestProviderConfig({
       source: "env",
@@ -17,10 +17,9 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
     });
     const resolvedConfig = buildTalkTestProviderConfig("talk-key"); // pragma: allowlist secret
 
-    const result = collectCommandSecretAssignmentsFromSnapshot({
+    const result = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
       resolvedConfig,
-      commandName: "memory status",
       targetIds: new Set(["talk.providers.*.apiKey"]),
     });
 
@@ -33,7 +32,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
     ]);
   });
 
-  it("throws when configured refs are unresolved in the snapshot", () => {
+  it("reports configured refs that are unresolved in the snapshot", () => {
     const sourceConfig = buildTalkTestProviderConfig({
       source: "env",
       provider: "default",
@@ -41,14 +40,18 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
     });
     const resolvedConfig = buildTalkTestProviderConfig(undefined);
 
-    expect(() =>
-      collectCommandSecretAssignmentsFromSnapshot({
-        sourceConfig,
-        resolvedConfig,
-        commandName: "memory search",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
-      }),
-    ).toThrow(new RegExp(`memory search: ${TALK_TEST_PROVIDER_API_KEY_PATH} is unresolved`));
+    const result = analyzeCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+    });
+
+    expect(result.unresolved).toEqual([
+      {
+        path: TALK_TEST_PROVIDER_API_KEY_PATH,
+        pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+      },
+    ]);
   });
 
   it("skips unresolved refs that are marked inactive by runtime warnings", () => {
@@ -75,10 +78,9 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = collectCommandSecretAssignmentsFromSnapshot({
+    const result = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
       resolvedConfig,
-      commandName: "memory search",
       targetIds: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
       inactiveRefPaths: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
     });

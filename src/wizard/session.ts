@@ -5,7 +5,7 @@ import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-export type WizardStepOption = {
+type WizardStepOption = {
   value: unknown;
   label: string;
   hint?: string;
@@ -37,6 +37,8 @@ type WizardNextResult = {
   step?: WizardStep;
   status: WizardSessionStatus;
   error?: string;
+  channels?: string[];
+  accounts?: Array<{ channel: string; accountId: string }>;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -230,9 +232,14 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
 
   constructor(
-    private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>,
+    private runner: (
+      prompter: WizardPrompter,
+      signal: AbortSignal,
+      session: WizardSession,
+    ) => Promise<void>,
     options?: { timeoutMs?: number },
   ) {
     const prompter = new WizardSessionPrompter(this);
@@ -249,10 +256,10 @@ export class WizardSession {
     }
     if (this.pendingTerminalResolution) {
       this.pendingTerminalResolution = false;
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (this.status !== "running") {
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (!this.stepDeferred) {
       this.stepDeferred = createDeferred();
@@ -261,7 +268,25 @@ export class WizardSession {
     if (step) {
       return { done: false, step, status: this.status };
     }
-    return { done: true, status: this.status, error: this.error };
+    return this.terminalResult();
+  }
+
+  private terminalResult(): WizardNextResult {
+    if (!this.configuredAccounts) {
+      return { done: true, status: this.status, error: this.error };
+    }
+    return {
+      done: true,
+      status: this.status,
+      error: this.error,
+      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+    };
+  }
+
+  /** Record what the channels flow actually configured (channels flow only). */
+  setConfiguredAccounts(accounts: ReadonlyArray<{ channel: string; accountId: string }>) {
+    this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -327,7 +352,7 @@ export class WizardSession {
 
   private async run(prompter: WizardPrompter) {
     try {
-      await this.runner(prompter, this.signal);
+      await this.runner(prompter, this.signal, this);
       if (this.status === "running") {
         this.status = "done";
       }

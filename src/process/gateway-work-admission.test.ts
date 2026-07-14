@@ -10,10 +10,11 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
-  runWithGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
+  waitForActiveGatewayRootWork,
 } from "./gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "./gateway-work-admission.test-helpers.js";
 
 beforeEach(resetGatewayWorkAdmission);
 afterEach(resetGatewayWorkAdmission);
@@ -33,6 +34,17 @@ it("counts one nested root chain once and excludes the preparing caller", async 
   });
   outer?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("waits for admitted roots and reports a bounded timeout", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  const pending = waitForActiveGatewayRootWork();
+  await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({ drained: false, active: 1 });
+
+  root?.release();
+
+  await expect(pending).resolves.toEqual({ drained: true, active: 0 });
 });
 
 it("rolls back or releases a generation-bound suspension without resetting roots", () => {
@@ -187,7 +199,7 @@ it("defers required internal root work until suspension reopens", async () => {
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
   const entered = vi.fn();
-  const pending = runWithGatewayRootWorkAdmission(async () => {
+  const pending = runWithGatewayRootWorkAdmissionForTest(async () => {
     entered();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
   });
@@ -225,7 +237,7 @@ it("retires surviving root records across an in-process reset", async () => {
 it("does not wake deferred internal work into a restart drain", async () => {
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
-  const pending = runWithGatewayRootWorkAdmission(async () => {});
+  const pending = runWithGatewayRootWorkAdmissionForTest(async () => {});
 
   markGatewayRestartDraining();
 

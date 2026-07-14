@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -12,7 +13,11 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogCreateTarget,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -28,9 +33,56 @@ function catalogError(error: unknown): { code: string; message: string } {
 }
 
 function providers(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? [])
-    .map((entry) => entry.provider)
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return registrations().map((entry) => entry.provider);
+}
+
+function registrations() {
+  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
+    left.provider.id.localeCompare(right.provider.id),
+  );
+}
+
+type SessionCatalogCreateTargetResolution =
+  | { ok: true; target: SessionCatalogCreateTarget & { pluginOwnerId: string } }
+  | { ok: false; message: string; unknownCatalog?: true };
+
+type ProviderCreateTargetResolution =
+  | { ok: true; target: SessionCatalogCreateTarget }
+  | { ok: false; message: string };
+
+function resolveProviderCreateTarget(
+  provider: SessionCatalogProvider,
+  agentId?: string,
+): ProviderCreateTargetResolution {
+  try {
+    const target = provider.resolveCreateSession?.({ agentId });
+    const model = target?.model.trim();
+    const agentRuntime = target?.agentRuntime.trim();
+    return model && agentRuntime
+      ? { ok: true, target: { model, agentRuntime } }
+      : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
+  } catch (error) {
+    return { ok: false, message: catalogError(error).message };
+  }
+}
+
+/** Resolves a catalog-owned create target at the start of sessions.create. */
+export function resolveSessionCatalogCreateTarget(
+  catalogId: string,
+  agentId: string,
+): SessionCatalogCreateTargetResolution {
+  const registration = registrations().find((entry) => entry.provider.id === catalogId);
+  if (!registration) {
+    return {
+      ok: false,
+      message: `unknown session catalog: ${catalogId}`,
+      unknownCatalog: true,
+    };
+  }
+  const resolved = resolveProviderCreateTarget(registration.provider, agentId);
+  return resolved.ok
+    ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
+    : resolved;
 }
 
 function providerOrRespond(
@@ -52,6 +104,7 @@ function catalogResult(
   provider: SessionCatalogProvider,
   hosts: SessionCatalog["hosts"],
   error?: SessionCatalog["error"],
+  createSession?: NonNullable<SessionCatalog["capabilities"]["createSession"]>,
 ): SessionCatalog {
   const result: SessionCatalog = {
     id: provider.id,
@@ -59,6 +112,7 @@ function catalogResult(
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
+      ...(createSession ? { createSession } : {}),
     },
     hosts,
   };
@@ -69,7 +123,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond }) => {
+  "sessions.catalog.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -91,8 +145,20 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     } else {
       selected = providers();
     }
+    const config = context.getRuntimeConfig();
+    const resolvedAgent = resolveAgentIdOrRespondError({
+      rawAgentId: request.agentId,
+      respond,
+      cfg: config,
+      normalize: normalizeOptionalString,
+    });
+    if (!resolvedAgent) {
+      return;
+    }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
+        const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
+        const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({
             search: request.search,
@@ -100,9 +166,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
           });
-          return catalogResult(provider, hosts);
+          return catalogResult(provider, hosts, undefined, createSession);
         } catch (error) {
-          return catalogResult(provider, [], catalogError(error));
+          return catalogResult(provider, [], catalogError(error), createSession);
         }
       }),
     );

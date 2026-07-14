@@ -56,10 +56,6 @@
     "target": "Pi"
   },
   {
-    "source": "Plugin",
-    "target": "Plugin"
-  },
-  {
     "source": "Skills",
     "target": "Skills"
   },

@@ -3,7 +3,7 @@
 // draft quoting the selection. Mirrors the imperative reply-context-menu
 // pattern in chat-thread.ts (body-portaled fixed div, document-level dismiss).
 
-export type ChatSelectionPopupActions = {
+type ChatSelectionPopupActions = {
   onMoreDetails: (selection: string) => void;
   onAskSideChat: (selection: string) => void;
 };

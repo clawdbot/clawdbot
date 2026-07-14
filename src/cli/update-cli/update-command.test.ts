@@ -12,18 +12,20 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+  updatePluginsAfterCoreUpdate,
+} from "./update-command-plugins.js";
+import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostCoreUpdateChildStdio,
-  resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
-  resolvePostSyncPluginUpdateSkipIds,
-  shouldPrepareUpdatedInstallRestart,
+  resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
+  shouldPrepareUpdatedInstallRestart,
   shouldUseLegacyProcessRestartAfterUpdate,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command.js";
+} from "./update-command-service.js";
 
 describe("resolveGatewayInstallEntrypointCandidates", () => {
   it("prefers index.js before legacy entry.js", () => {

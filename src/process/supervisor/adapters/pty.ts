@@ -1,5 +1,5 @@
-import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
+import type { IDisposable } from "@lydell/node-pty";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
@@ -7,39 +7,7 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 
-type PtyExitEvent = { exitCode: number; signal?: number };
-type PtyDisposable = { dispose: () => void };
-type PtySpawnHandle = {
-  pid: number;
-  write: (data: string | Buffer) => void;
-  onData: (listener: (value: string) => void) => PtyDisposable | void;
-  onExit: (listener: (event: PtyExitEvent) => void) => PtyDisposable | void;
-  kill: (signal?: string) => void;
-};
-type PtySpawn = (
-  file: string,
-  args: string[] | string,
-  options: {
-    name?: string;
-    cols?: number;
-    rows?: number;
-    cwd?: string;
-    env?: Record<string, string>;
-  },
-) => PtySpawnHandle;
-
-type PtyModule = {
-  spawn?: PtySpawn;
-  default?: {
-    spawn?: PtySpawn;
-  };
-};
-
-export type PtyAdapter = SpawnProcessAdapter;
-
-const loadPtyModule = createLazyRuntimeModule(
-  () => import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>,
-);
+type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
   shell: string;
@@ -50,11 +18,7 @@ export async function createPtyAdapter(params: {
   rows?: number;
   name?: string;
 }): Promise<PtyAdapter> {
-  const module = await loadPtyModule();
-  const spawn = module.spawn ?? module.default?.spawn;
-  if (!spawn) {
-    throw new Error("PTY support is unavailable (node-pty spawn not found).");
-  }
+  const { spawn } = await import("@lydell/node-pty");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
@@ -65,8 +29,8 @@ export async function createPtyAdapter(params: {
     rows: params.rows ?? 30,
   });
 
-  let dataListener: PtyDisposable | null = null;
-  let exitListener: PtyDisposable | null = null;
+  let dataListener: IDisposable | null = null;
+  let exitListener: IDisposable | null = null;
   let waitResult: { code: number | null; signal: NodeJS.Signals | number | null } | null = null;
   let resolveWait:
     | ((value: { code: number | null; signal: NodeJS.Signals | number | null }) => void)
@@ -110,11 +74,10 @@ export async function createPtyAdapter(params: {
     forceKillWaitFallbackTimer.unref();
   };
 
-  exitListener =
-    pty.onExit((event) => {
-      const signal = event.signal && event.signal !== 0 ? event.signal : null;
-      settleWait({ code: event.exitCode ?? null, signal });
-    }) ?? null;
+  exitListener = pty.onExit((event) => {
+    const signal = event.signal && event.signal !== 0 ? event.signal : null;
+    settleWait({ code: event.exitCode ?? null, signal });
+  });
 
   const stdin: ManagedRunStdin = {
     get destroyed() {
@@ -153,10 +116,9 @@ export async function createPtyAdapter(params: {
   };
 
   const onStdout = (listener: (chunk: string) => void) => {
-    dataListener =
-      pty.onData((chunk) => {
-        listener(chunk);
-      }) ?? null;
+    dataListener = pty.onData((chunk) => {
+      listener(chunk);
+    });
   };
 
   const onStderr = (_listener: (chunk: string) => void) => {

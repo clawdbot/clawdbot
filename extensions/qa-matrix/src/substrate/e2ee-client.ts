@@ -585,4 +585,3 @@ export const testing = {
   findMatrixQaObservedEventMatch,
   shouldRecordMatrixQaObservedEventUpdate,
 };
-export { testing as __testing };

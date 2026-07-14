@@ -6,7 +6,7 @@ import { redactSensitiveArgv } from "./redact-argv.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
 
-export function redactConfigAuditArgv(argv: readonly string[]): string[] {
+function redactConfigAuditArgv(argv: readonly string[]): string[] {
   return redactSensitiveArgv(argv);
 }
 

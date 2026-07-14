@@ -200,4 +200,18 @@ openclaw-chat-pane {
     .chat-pane__header {
     padding-left: 204px;
   }
+
+  /* 246px = 78px traffic lights + (5 * 28px buttons + 4 * 4px gaps) + 12px.
+     The 554px minimum adds the 234px inset delta to the 320px base column. */
+  html.openclaw-native-web-chrome .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 554px;
+  }
+
+  html.openclaw-native-web-chrome
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 246px;
+  }
 }

@@ -2,6 +2,7 @@
 
 // Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
+import pMap from "p-map";
 import {
   listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
@@ -196,14 +197,11 @@ export async function runExtensionBatchPlan(batchPlan, params = {}) {
     console.log(`[test-extension-batch] Running up to ${parallelism} config groups in parallel`);
   }
 
-  let nextGroupIndex = 0;
   let exitCode = 0;
-  async function worker() {
-    while (exitCode === 0) {
-      const groupIndex = nextGroupIndex;
-      nextGroupIndex += 1;
-      const group = orderedGroups[groupIndex];
-      if (!group) {
+  await pMap(
+    orderedGroups,
+    async (group, groupIndex) => {
+      if (exitCode !== 0) {
         return;
       }
       const groupExitCode = await runPlanGroup(group, {
@@ -215,14 +213,12 @@ export async function runExtensionBatchPlan(batchPlan, params = {}) {
         useDedicatedCache,
         vitestArgs,
       });
-      if (groupExitCode !== 0) {
+      if (groupExitCode !== 0 && exitCode === 0) {
         exitCode = groupExitCode;
-        return;
       }
-    }
-  }
-
-  await Promise.all(Array.from({ length: parallelism }, () => worker()));
+    },
+    { concurrency: parallelism, stopOnError: true },
+  );
   return exitCode;
 }
 

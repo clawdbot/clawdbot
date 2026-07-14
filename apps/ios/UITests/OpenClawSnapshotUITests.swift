@@ -417,6 +417,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
 
         let copySetupCommand = app.buttons["Copy setup code command"]
@@ -674,6 +676,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -731,7 +735,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(privacy.waitForExistence(timeout: 8))
         privacy.tap()
 
-        let request = try XCTUnwrap(self.app?.buttons["privacy-access-Photos-action"])
+        let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
         request.tap()
         self.app?.tap()
@@ -746,10 +750,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
             NSPredicate(
                 format: "identifier == %@ AND label == %@",
-                "privacy-access-Photos-status",
+                "privacy-access-photos-status",
                 "Limited")).firstMatch)
         XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
-        XCTAssertEqual(self.app?.buttons["privacy-access-Photos-action"].label, "Manage Access")
+        XCTAssertEqual(self.app?.buttons["privacy-access-photos-action"].label, "Manage Access")
         self.attachScreenshot(named: "photos-limited-access")
     }
 
@@ -825,6 +829,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))

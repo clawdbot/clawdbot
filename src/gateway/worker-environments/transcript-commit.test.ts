@@ -25,10 +25,9 @@ import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-store.js";
-import {
-  createWorkerTranscriptCommitter,
-  type WorkerTranscriptCommitter,
-} from "./transcript-commit.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+
+type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
 const SESSION_ID = "session-worker-transcript";
 const SESSION_KEY = "agent:main:worker-transcript";
@@ -39,6 +38,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: ["credential", "hash", "a"].join("-"),
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
+  runId: "run-worker-transcript",
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],

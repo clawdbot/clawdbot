@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 
@@ -15,13 +20,15 @@ function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): S
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
+  let reject: (error: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
-function createGatewayHarness(client: GatewayBrowserClient) {
+function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -33,7 +40,10 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     connected: true,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
-    hello: null,
+    hello:
+      featureMethods === undefined
+        ? null
+        : ({ features: { methods: featureMethods } } as GatewayHelloOk),
   };
   const listeners = new Set<(next: typeof snapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
@@ -82,6 +92,310 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it("allows an advertised group catalog load to be retried after failure", async () => {
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.groups.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      groupsCalls += 1;
+      if (groupsCalls === 1) {
+        throw new Error("temporary catalog failure");
+      }
+      return { groups: [{ name: "Research" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    expect(sessions.state.groups).toEqual([]);
+    await sessions.groupsLoad();
+
+    expect(groupsCalls).toBe(2);
+    expect(sessions.state.groups).toEqual(["Research"]);
+    sessions.dispose();
+  });
+
+  it("automatically retries an explicitly retryable group catalog failure", async () => {
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.groups.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      groupsCalls += 1;
+      if (groupsCalls === 1) {
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "temporary catalog failure",
+          retryable: true,
+          retryAfterMs: 100,
+        });
+      }
+      return { groups: [{ name: "Recovered" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+
+    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Recovered"]));
+    expect(groupsCalls).toBe(2);
+    sessions.dispose();
+  });
+
+  it("keeps the legacy group catalog probe one-shot without feature metadata", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("unknown method");
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    await sessions.groupsLoad();
+
+    expect(request).toHaveBeenCalledOnce();
+    sessions.dispose();
+  });
+
+  it("publishes state.error when group rename is rejected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.rename") {
+        throw new Error("rename failed");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.rename"]);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsRename("Alpha", "Beta")).rejects.toThrow("rename failed");
+    expect(sessions.state.error).toBe("Error: rename failed");
+    sessions.dispose();
+  });
+
+  it("publishes state.error when replacing the group catalog is rejected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.put") {
+        throw new Error("group catalog rejected");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.put"]);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
+    expect(sessions.state.error).toBe("Error: group catalog rejected");
+    sessions.dispose();
+  });
+
+  it("publishes state.error when group delete is rejected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.delete") {
+        throw new Error("delete failed");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.delete"]);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsDelete("Alpha")).rejects.toThrow("delete failed");
+    expect(sessions.state.error).toBe("Error: delete failed");
+    sessions.dispose();
+  });
+
+  it("reports a group rename as stale after a same-client reconnect", async () => {
+    const renamed = deferred<{ groups: Array<{ name: string }> }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.rename") {
+        return await renamed.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.rename"]);
+    const sessions = createSessionCapability(gateway);
+
+    const operation = sessions.groupsRename("Alpha", "Beta");
+    publish(false);
+    publish(true);
+    renamed.resolve({ groups: [{ name: "Beta" }] });
+
+    await expect(operation).resolves.toBe("stale");
+    expect(sessions.state.groups).toEqual([]);
+    sessions.dispose();
+  });
+
+  it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
+    const replaced = deferred<{ groups: Array<{ name: string }> }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.put") {
+        return await replaced.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.put"]);
+    const sessions = createSessionCapability(gateway);
+
+    const operation = sessions.groupsPut(["Alpha"]);
+    publish(false);
+    publish(true);
+    replaced.resolve({ groups: [{ name: "Alpha" }] });
+
+    await expect(operation).resolves.toBe("stale");
+    expect(sessions.state.groups).toEqual([]);
+    expect(sessions.state.error).toBeNull();
+    sessions.dispose();
+  });
+
+  it.each(["rename", "delete"] as const)(
+    "keeps a confirmed group %s completed when its row refresh outlives the connection",
+    async (operation) => {
+      const refreshed = deferred<SessionsListResult>();
+      const method = operation === "rename" ? "sessions.groups.rename" : "sessions.groups.delete";
+      const request = vi.fn(async (requestedMethod: string) => {
+        if (requestedMethod === method) {
+          return { groups: [{ name: operation === "rename" ? "Beta" : "Other" }] };
+        }
+        if (requestedMethod === "sessions.list") {
+          return await refreshed.promise;
+        }
+        throw new Error(`Unexpected request: ${requestedMethod}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { gateway, publish } = createGatewayHarness(client, [method]);
+      const sessions = createSessionCapability(gateway);
+
+      const mutation =
+        operation === "rename"
+          ? sessions.groupsRename("Alpha", "Beta")
+          : sessions.groupsDelete("Alpha");
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("sessions.list", expect.any(Object)),
+      );
+      publish(false);
+      refreshed.resolve(sessionsResult([], 2));
+
+      await expect(mutation).resolves.toBe("completed");
+      sessions.dispose();
+    },
+  );
+
+  it("does not probe for a group catalog when the method is explicitly absent", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, []);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    await sessions.groupsLoad();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.groups).toEqual([]);
+    sessions.dispose();
+  });
+
+  it("ignores an older group load failure after an event-driven load succeeds", async () => {
+    const firstGroups = deferred<{ groups: Array<{ name: string }> }>();
+    const currentGroups = deferred<{ groups: Array<{ name: string }> }>();
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        groupsCalls += 1;
+        return await (groupsCalls === 1 ? firstGroups.promise : currentGroups.promise);
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    const firstLoad = sessions.groupsLoad();
+    await vi.waitFor(() => expect(groupsCalls).toBe(1));
+    emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
+    await vi.waitFor(() => expect(groupsCalls).toBe(2));
+    currentGroups.resolve({ groups: [{ name: "Current" }] });
+    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Current"]));
+    firstGroups.reject(new Error("stale catalog failure"));
+    await firstLoad;
+
+    await sessions.groupsLoad();
+    expect(groupsCalls).toBe(2);
+    expect(sessions.state.groups).toEqual(["Current"]);
+    sessions.dispose();
+  });
+
+  it("keeps a session when sessions.delete reports no deletion", async () => {
+    const key = "agent:main:missing";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true, deleted: false };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.delete(key)).resolves.toEqual({ deleted: false });
+    expect(sessions.state.deletedSessions).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+    sessions.dispose();
+  });
+
+  it("excludes lifecycle no-ops from batch deletion results", async () => {
+    const keptKey = "agent:main:kept";
+    const deletedKey = "agent:main:deleted";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.delete") {
+        const key = (params as { key?: string } | undefined)?.key;
+        return { ok: true, deleted: key === deletedKey };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([{ key: keptKey, kind: "direct", updatedAt: 1 }], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const deletedSnapshots: string[][] = [];
+    const unsubscribe = sessions.subscribe((next) => {
+      deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
+    });
+
+    await expect(sessions.deleteMany([{ key: keptKey }, { key: deletedKey }])).resolves.toEqual({
+      deleted: [deletedKey],
+      errors: [],
+      preservedWorktrees: [],
+    });
+    expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
+    expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
+    expect(request).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    sessions.dispose();
+  });
+
   it("advances the canonical list revision only for sessions.list publications", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -175,6 +489,43 @@ describe("createSessionCapability", () => {
 
     await expect(operation).resolves.toBeNull();
     expect(created).not.toHaveBeenCalled();
+    sessions.dispose();
+  });
+
+  it("creates a session while a list refresh is in flight", async () => {
+    const pendingList = deferred<SessionsListResult>();
+    let listCalls = 0;
+    const key = "agent:main:created";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? await pendingList.promise
+          : sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 2);
+      }
+      if (method === "sessions.create") {
+        return { key };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    const refresh = sessions.refresh({ force: true });
+    expect(sessions.state.loading).toBe(true);
+
+    const created = sessions.create({ agentId: "main" });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    );
+
+    pendingList.resolve(sessionsResult([], 1));
+    await expect(created).resolves.toBe(key);
+    await refresh;
+
+    expect(listCalls).toBe(2);
+    expect(sessions.state.result?.sessions[0]?.key).toBe(key);
     sessions.dispose();
   });
 

@@ -15,13 +15,13 @@ import {
 } from "./sdk-alias.js";
 
 /** Jiti-based module loader used for plugin source/runtime imports. */
-export type PluginModuleLoader = ReturnType<typeof createJiti>;
+type PluginModuleLoader = ReturnType<typeof createJiti>;
 export type PluginModuleLoaderFactory = typeof createJiti;
 export type PluginModuleLoaderCache = Pick<
   PluginLruCache<PluginModuleLoader>,
   "clear" | "get" | "set" | "size"
 >;
-export type ResolvePluginModuleLoaderCacheEntryParams = {
+type ResolvePluginModuleLoaderCacheEntryParams = {
   modulePath: string;
   importerUrl: string;
   argvEntry?: string;
@@ -34,14 +34,14 @@ export type ResolvePluginModuleLoaderCacheEntryParams = {
   cacheScopeKey?: string;
   sharedCacheScopeKey?: string;
 };
-export type PluginModuleLoaderCacheEntry = {
+type PluginModuleLoaderCacheEntry = {
   loaderFilename: string;
   aliasMap: Record<string, string>;
   tryNative: boolean;
   cacheKey: string;
   scopedCacheKey: string;
 };
-export type PluginModuleLoaderStatsSnapshot = {
+type PluginModuleLoaderStatsSnapshot = {
   calls: number;
   nativeHits: number;
   nativeMisses: number;
@@ -135,7 +135,7 @@ function resolveDefaultPluginModuleLoaderConfig(
   });
 }
 
-export function resolvePluginModuleLoaderCacheEntry(
+function resolvePluginModuleLoaderCacheEntry(
   params: ResolvePluginModuleLoaderCacheEntryParams,
 ): PluginModuleLoaderCacheEntry {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);

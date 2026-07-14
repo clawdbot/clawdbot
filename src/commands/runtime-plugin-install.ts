@@ -15,7 +15,7 @@ import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 /** Static install metadata for a runtime plugin required by model selection. */
-export type RuntimePluginInstallDescriptor = {
+type RuntimePluginInstallDescriptor = {
   pluginId: string;
   label: string;
   npmSpec: string;
@@ -23,7 +23,7 @@ export type RuntimePluginInstallDescriptor = {
 };
 
 /** Result returned after ensuring a runtime plugin for a selected model. */
-export type RuntimePluginInstallResult = {
+type RuntimePluginInstallResult = {
   cfg: OpenClawConfig;
   required: boolean;
   installed: boolean;
@@ -32,14 +32,14 @@ export type RuntimePluginInstallResult = {
 };
 
 /** Predicate that decides whether a config/model pair needs the runtime plugin. */
-export type RuntimePluginSelection = (params: {
+type RuntimePluginSelection = (params: {
   cfg: OpenClawConfig;
   model?: string;
   agentId?: string;
 }) => boolean;
 
 /** Parameters for installing or enabling a runtime plugin during setup. */
-export type RuntimePluginEnsureParams = {
+type RuntimePluginEnsureParams = {
   cfg: OpenClawConfig;
   model?: string;
   agentId?: string;
@@ -49,7 +49,7 @@ export type RuntimePluginEnsureParams = {
 };
 
 /** Parameters for doctor-style runtime plugin repair. */
-export type RuntimePluginRepairParams = {
+type RuntimePluginRepairParams = {
   cfg: OpenClawConfig;
   model?: string;
   agentId?: string;
@@ -57,7 +57,7 @@ export type RuntimePluginRepairParams = {
 };
 
 /** Convenience helpers bound to one runtime plugin descriptor. */
-export type RuntimePluginModelSelectionHelpers = {
+type RuntimePluginModelSelectionHelpers = {
   ensure: (params: RuntimePluginEnsureParams) => Promise<RuntimePluginInstallResult>;
   repair: (
     params: RuntimePluginRepairParams,

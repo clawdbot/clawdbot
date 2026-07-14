@@ -9,7 +9,7 @@ import { isRecord, widgetProps } from "./types.ts";
 
 const DEFAULT_ROW_LIMIT = 8;
 
-export type TableModel = {
+type TableModel = {
   columns: string[];
   rows: Array<Record<string, unknown>>;
   shown: number;
@@ -47,7 +47,7 @@ function rowLimit(widget: WorkspaceWidget): number {
     : DEFAULT_ROW_LIMIT;
 }
 
-export function mapTable(widget: WorkspaceWidget, value: unknown): TableModel {
+function mapTable(widget: WorkspaceWidget, value: unknown): TableModel {
   const all = resolveRows(widget, value);
   const limit = rowLimit(widget);
   const rows = all.slice(0, limit);

@@ -62,7 +62,7 @@ function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): strin
   );
 }
 
-export function resolveDurableInboundReplyToId(
+function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
 ): string | null | undefined {
   // Explicit null means "do not reply to a source message"; do not fall back to context ids.

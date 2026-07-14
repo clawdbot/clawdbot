@@ -22,6 +22,7 @@ await import("./workboard-page.ts");
 type WorkboardPageTestElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
+  syncWorkboardAgentScope: () => void;
 };
 
 function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContext {
@@ -56,6 +57,12 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
       state: { result: null, loading: false },
       subscribe,
     } as unknown as ApplicationContext["sessions"],
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      set: () => undefined,
+      setScope: () => undefined,
+      subscribe,
+    },
     workboard,
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
@@ -83,5 +90,77 @@ describe("WorkboardPage lifecycle", () => {
 
     expect(stopPolling).toHaveBeenCalledWith(first);
     expect(stopLifecycleRefresh).toHaveBeenCalledWith(first);
+  });
+
+  it("closes card overlays that leave the selected agent scope", async () => {
+    const workboard = createWorkboardCapability();
+    const context = contextWithWorkboard(workboard);
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+    workboard.state.cards = [
+      {
+        id: "writer-card",
+        title: "Writer task",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "writer",
+      },
+    ];
+    workboard.state.detailCardId = "writer-card";
+    workboard.state.detailCommentBody = "draft comment";
+    workboard.state.draftOpen = true;
+    workboard.state.editingCardId = "writer-card";
+    context.agentSelection.state.scopeId = "writer";
+    page.syncWorkboardAgentScope();
+    context.agentSelection.state.scopeId = "main";
+
+    page.syncWorkboardAgentScope();
+
+    expect(workboard.state.detailCardId).toBeNull();
+    expect(workboard.state.detailCommentBody).toBe("");
+    expect(workboard.state.draftOpen).toBe(false);
+    expect(workboard.state.editingCardId).toBeNull();
+  });
+
+  it("keeps card overlays that remain inside the selected agent scope", async () => {
+    const workboard = createWorkboardCapability();
+    const context = contextWithWorkboard(workboard);
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+    workboard.state.cards = [
+      {
+        id: "writer-card",
+        title: "Writer task",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "writer",
+      },
+    ];
+    workboard.state.detailCardId = "writer-card";
+    workboard.state.detailCommentBody = "draft comment";
+    workboard.state.draftOpen = true;
+    workboard.state.editingCardId = "writer-card";
+    context.agentSelection.state.scopeId = "writer";
+    page.syncWorkboardAgentScope();
+    context.agentSelection.state.scopeId = null;
+
+    page.syncWorkboardAgentScope();
+
+    expect(workboard.state.detailCardId).toBe("writer-card");
+    expect(workboard.state.detailCommentBody).toBe("draft comment");
+    expect(workboard.state.draftOpen).toBe(true);
+    expect(workboard.state.editingCardId).toBe("writer-card");
   });
 });

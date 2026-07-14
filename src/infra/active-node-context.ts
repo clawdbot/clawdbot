@@ -1,5 +1,5 @@
 /** Stable active-node identity projected into the dynamic model runtime line. */
-export type ActiveNodeContext = {
+type ActiveNodeContext = {
   nodeId: string;
 };
 
@@ -20,8 +20,4 @@ export function formatActiveNodeContextLabel(
   context: ActiveNodeContext | null,
 ): string | undefined {
   return context?.nodeId;
-}
-
-export function resetActiveNodeContextForTests(): void {
-  activeNodeContext = null;
 }

@@ -10,7 +10,7 @@ import {
   resetRuntimeTaskTestState,
 } from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
-import { createRuntimeTaskFlows, createRuntimeTaskRuns } from "./runtime-tasks.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
 
 const runtimeTaskMocks = getRuntimeTaskMocks();
 
@@ -48,23 +48,26 @@ describe("runtime tasks", () => {
   });
 
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      legacyTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
       requesterOrigin: {
         channel: "telegram",
         to: "telegram:123",
       },
     });
-    const taskFlows = createRuntimeTaskFlows().bindSession({
+    const taskFlows = runtimeTasks.flows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
-    const otherTaskFlows = createRuntimeTaskFlows().bindSession({
+    const otherTaskFlows = runtimeTasks.flows.bindSession({
       sessionKey: "agent:main:other",
     });
-    const otherTaskRuns = createRuntimeTaskRuns().bindSession({
+    const otherTaskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:other",
     });
 
@@ -145,10 +148,13 @@ describe("runtime tasks", () => {
   });
 
   it("maps task cancellation results onto canonical task DTOs", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      legacyTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
 
@@ -191,10 +197,13 @@ describe("runtime tasks", () => {
   });
 
   it("routes runtime task cancellation through the detached task runtime seam", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      legacyTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
 
@@ -240,10 +249,13 @@ describe("runtime tasks", () => {
   });
 
   it("does not allow cross-owner task cancellation or leak task details", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      legacyTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const otherTaskRuns = createRuntimeTaskRuns().bindSession({
+    const otherTaskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:other",
     });
 

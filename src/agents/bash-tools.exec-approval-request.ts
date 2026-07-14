@@ -135,7 +135,7 @@ export type ExecApprovalRegistration = {
 };
 
 /** Registers a two-phase exec approval request with the gateway. */
-export async function registerExecApprovalRequest(
+async function registerExecApprovalRequest(
   params: RequestExecApprovalDecisionParams,
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
@@ -318,7 +318,7 @@ async function buildHostApprovalDecisionParams(
 }
 
 /** Registers a host/node approval request without waiting for a decision. */
-export async function registerExecApprovalRequestForHost(
+async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));

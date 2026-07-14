@@ -13,7 +13,7 @@ import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
 /** Maximum JSON-line size accepted from the streaming HTTP helper process. */
-export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
 /** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
@@ -277,7 +277,7 @@ function readStreamingSandboxHttpResponse(params: {
   });
 }
 
-export const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
+const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
 tmp=$(mktemp "$TMPDIR/openclaw-http.XXXXXX.py" 2>/dev/null || mktemp "/tmp/openclaw-http.XXXXXX.py") || exit 1
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp" <<'PY'

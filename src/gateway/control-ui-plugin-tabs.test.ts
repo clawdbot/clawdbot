@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
-import { projectControlUiPluginTabs } from "./control-ui-plugin-tabs.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { listControlUiPluginTabs } from "./control-ui-plugin-tabs.js";
 
 function tabDescriptor(
   overrides: Partial<PluginControlUiDescriptor> = {},
@@ -14,21 +16,36 @@ function tabDescriptor(
   };
 }
 
-describe("projectControlUiPluginTabs", () => {
+function activateDescriptors(
+  entries: Array<{ pluginId: string; descriptor: PluginControlUiDescriptor }>,
+): void {
+  const registry = createTestRegistry([]);
+  registry.controlUiDescriptors = entries.map((entry) => ({
+    ...entry,
+    source: `test:${entry.pluginId}`,
+  }));
+  setActivePluginRegistry(registry);
+}
+
+describe("listControlUiPluginTabs", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   it("projects only tab descriptors", () => {
-    const tabs = projectControlUiPluginTabs(
-      [
-        { pluginId: "logbook", descriptor: tabDescriptor() },
-        { pluginId: "other", descriptor: tabDescriptor({ id: "run-panel", surface: "run" }) },
-      ],
-      ["operator.admin"],
-    );
+    activateDescriptors([
+      { pluginId: "logbook", descriptor: tabDescriptor() },
+      { pluginId: "other", descriptor: tabDescriptor({ id: "run-panel", surface: "run" }) },
+    ]);
+
+    const tabs = listControlUiPluginTabs(["operator.admin"]);
     expect(tabs.map((tab) => tab.id)).toEqual(["logbook"]);
     expect(expectDefined(tabs[0], "tabs[0] test invariant").pluginId).toBe("logbook");
   });
 
   it("hides tabs whose required scopes are not granted", () => {
-    const entries = [
+    activateDescriptors([
       {
         pluginId: "logbook",
         descriptor: tabDescriptor({ requiredScopes: ["operator.write"] }),
@@ -41,27 +58,23 @@ describe("projectControlUiPluginTabs", () => {
           requiredScopes: ["operator.admin"],
         }),
       },
-    ];
-    expect(projectControlUiPluginTabs(entries, ["operator.read"])).toEqual([]);
-    // Admin implies write for visibility.
-    expect(projectControlUiPluginTabs(entries, ["operator.write"]).map((tab) => tab.id)).toEqual([
-      "logbook",
     ]);
-    expect(projectControlUiPluginTabs(entries, ["operator.admin"]).map((tab) => tab.id)).toEqual([
+
+    expect(listControlUiPluginTabs(["operator.read"])).toEqual([]);
+    expect(listControlUiPluginTabs(["operator.write"]).map((tab) => tab.id)).toEqual(["logbook"]);
+    expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.id)).toEqual([
       "adminy",
       "logbook",
     ]);
   });
 
   it("orders deterministically by order, label, then id", () => {
-    const tabs = projectControlUiPluginTabs(
-      [
-        { pluginId: "b", descriptor: tabDescriptor({ id: "beta", label: "Beta" }) },
-        { pluginId: "a", descriptor: tabDescriptor({ id: "alpha", label: "Alpha", order: 5 }) },
-        { pluginId: "c", descriptor: tabDescriptor({ id: "zed", label: "Beta" }) },
-      ],
-      [],
-    );
-    expect(tabs.map((tab) => tab.id)).toEqual(["beta", "zed", "alpha"]);
+    activateDescriptors([
+      { pluginId: "b", descriptor: tabDescriptor({ id: "beta", label: "Beta" }) },
+      { pluginId: "a", descriptor: tabDescriptor({ id: "alpha", label: "Alpha", order: 5 }) },
+      { pluginId: "c", descriptor: tabDescriptor({ id: "zed", label: "Beta" }) },
+    ]);
+
+    expect(listControlUiPluginTabs([]).map((tab) => tab.id)).toEqual(["beta", "zed", "alpha"]);
   });
 });

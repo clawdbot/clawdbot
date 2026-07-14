@@ -414,6 +414,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          sourceReplyFinal: false,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
       blocks: [

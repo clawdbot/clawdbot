@@ -239,7 +239,7 @@ export function resolveAuthProfileEligibility(params: {
   };
 }
 
-export type ResolveAuthProfileOrderParams = {
+type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;

@@ -13,7 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -32,12 +32,12 @@ async function seedSessionEntry(
 
 describe("listSessionsFromStore subagent metadata", () => {
   afterEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     resetSubagentRegistryForTests({ persist: false });
-    resetAgentRunContextForTest();
   });
   beforeEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     resetSubagentRegistryForTests({ persist: false });
-    resetAgentRunContextForTest();
   });
 
   const cfg = {

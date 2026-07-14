@@ -167,5 +167,3 @@ export async function setupWizardCommand(
 
   await runGuidedOnboarding(normalizedOpts, runtime);
 }
-
-export const onboardCommand = setupWizardCommand;

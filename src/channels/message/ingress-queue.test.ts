@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { Insertable } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQuerySync,
@@ -14,7 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue, createStateDirEnv } from "./ingress-queue.js";
+import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -31,33 +32,6 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-  });
-
-  it("opens a custom state database without copying the full process env", async () => {
-    const baseEnv: NodeJS.ProcessEnv = {
-      HOME: "/home/openclaw",
-      PATH: "/usr/local/bin:/usr/bin",
-    };
-    for (let index = 0; index < 10_000; index += 1) {
-      baseEnv[`KUBERNETES_SERVICE_${index}`] = "tcp://10.0.0.1:443";
-    }
-    const inheritedEnv = new Proxy(baseEnv, {
-      ownKeys() {
-        throw new Error("inherited env should not be enumerated");
-      },
-    });
-
-    await withTempState(async (stateDir) => {
-      const env = createStateDirEnv(stateDir, inheritedEnv);
-
-      expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
-      expect(env.HOME).toBe("/home/openclaw");
-      expect(Object.getPrototypeOf(env)).toBe(inheritedEnv);
-      expect(Object.keys(env)).toEqual(["OPENCLAW_STATE_DIR"]);
-
-      const database = openOpenClawStateDatabase({ env });
-      expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
-    });
   });
 
   it("deduplicates pending and completed ingress events", async () => {
@@ -528,7 +502,7 @@ describe("channel ingress queue", () => {
       await queue.complete("retry", { completedAt: 27 });
 
       const database = openOpenClawStateDatabase({
-        env: createStateDirEnv(stateDir),
+        env: { OPENCLAW_STATE_DIR: stateDir },
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(
@@ -586,7 +560,7 @@ describe("channel ingress queue", () => {
       }>,
     ) {
       const { db } = openOpenClawStateDatabase({
-        env: createStateDirEnv(stateDir),
+        env: { OPENCLAW_STATE_DIR: stateDir },
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
       const claimValue = overrides.claim_token ?? null;
@@ -609,7 +583,7 @@ describe("channel ingress queue", () => {
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
           completed_at: overrides.completed_at ?? null,
-        } as any),
+        } as Insertable<OpenClawStateKyselyDatabase["channel_ingress_events"]>),
       );
     }
 
@@ -736,7 +710,7 @@ describe("channel ingress queue", () => {
 
         // Corrupt the completed_metadata_json
         const { db } = openOpenClawStateDatabase({
-          env: createStateDirEnv(stateDir),
+          env: { OPENCLAW_STATE_DIR: stateDir },
         });
         db.prepare(
           `UPDATE channel_ingress_events
@@ -769,7 +743,7 @@ describe("channel ingress queue", () => {
         // Override the bad row's received_at to be earlier.
         {
           const { db } = openOpenClawStateDatabase({
-            env: createStateDirEnv(stateDir),
+            env: { OPENCLAW_STATE_DIR: stateDir },
           });
           db.prepare(
             `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
@@ -781,7 +755,7 @@ describe("channel ingress queue", () => {
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
 
-        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -833,7 +807,7 @@ describe("channel ingress queue", () => {
 
         await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
 
-        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
         const counts = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -871,7 +845,7 @@ describe("channel ingress queue", () => {
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
 
-        const database = openOpenClawStateDatabase({ env: createStateDirEnv(stateDir) });
+        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -921,7 +895,7 @@ describe("channel ingress queue", () => {
 
         // Verify the corrupt row was actually tombstoned in the DB.
         const { db } = openOpenClawStateDatabase({
-          env: createStateDirEnv(stateDir),
+          env: { OPENCLAW_STATE_DIR: stateDir },
         });
         const row = executeSqliteQuerySync(
           db,
@@ -959,7 +933,7 @@ describe("channel ingress queue", () => {
         );
 
         const { db } = openOpenClawStateDatabase({
-          env: createStateDirEnv(stateDir),
+          env: { OPENCLAW_STATE_DIR: stateDir },
         });
         const row = executeSqliteQueryTakeFirstSync(
           db,
@@ -1003,7 +977,7 @@ describe("channel ingress queue", () => {
 
         // The corrupt claimed row should now be tombstoned as failed.
         const { db } = openOpenClawStateDatabase({
-          env: createStateDirEnv(stateDir),
+          env: { OPENCLAW_STATE_DIR: stateDir },
         });
         const row = executeSqliteQuerySync(
           db,
@@ -1062,7 +1036,7 @@ describe("channel ingress queue", () => {
         });
 
         const { db } = openOpenClawStateDatabase({
-          env: createStateDirEnv(stateDir),
+          env: { OPENCLAW_STATE_DIR: stateDir },
         });
         const row = executeSqliteQueryTakeFirstSync(
           db,

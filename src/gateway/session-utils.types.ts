@@ -1,6 +1,7 @@
 // Shared Gateway session projection types.
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -35,7 +36,7 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
-export type SessionCompactionCheckpointPreview = Pick<
+type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
   "checkpointId" | "createdAt" | "reason"
 >;
@@ -77,6 +78,7 @@ export type GatewaySessionRow = {
   lastReadAt?: number;
   lastActivityAt?: number;
   sessionId?: string;
+  placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;

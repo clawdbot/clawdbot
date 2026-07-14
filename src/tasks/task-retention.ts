@@ -10,16 +10,25 @@ export function resolveTaskRetentionMs(status: TaskStatus): number {
 }
 
 export function resolveTaskCleanupAfter(
-  task: Pick<TaskRecord, "status" | "endedAt" | "lastEventAt" | "createdAt">,
-): number {
+  task: Pick<TaskRecord, "runtime" | "status" | "endedAt" | "lastEventAt" | "createdAt">,
+): number | undefined {
+  if (task.runtime === "cron" && task.status !== "lost") {
+    return undefined;
+  }
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return terminalAt + resolveTaskRetentionMs(task.status);
 }
 
 export function resolveEffectiveTaskCleanupAfter(
-  task: Pick<TaskRecord, "status" | "endedAt" | "lastEventAt" | "createdAt" | "cleanupAfter">,
-): number {
+  task: Pick<
+    TaskRecord,
+    "runtime" | "status" | "endedAt" | "lastEventAt" | "createdAt" | "cleanupAfter"
+  >,
+): number | undefined {
   const statusCleanupAfter = resolveTaskCleanupAfter(task);
+  if (statusCleanupAfter === undefined) {
+    return undefined;
+  }
   if (typeof task.cleanupAfter !== "number") {
     return statusCleanupAfter;
   }

@@ -248,6 +248,15 @@ describe("command-startup-policy", () => {
     expect(policy.suppressDoctorStdout).toBe(true);
   });
 
+  it("isolates cloud worker startup", () => {
+    const policy = resolvePolicy({ commandPath: ["worker"] });
+
+    expect(shouldBypassConfigGuardForCommandPath(["worker"])).toBe(true);
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("suppresses startup stdout for the bare acp protocol", () => {
     expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
   });

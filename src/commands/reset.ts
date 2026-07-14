@@ -23,10 +23,10 @@ import {
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
-export type ResetScope = "config" | "config+creds+sessions" | "full";
+type ResetScope = "config" | "config+creds+sessions" | "full";
 
 /** CLI options accepted by `openclaw reset`. */
-export type ResetOptions = {
+type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
   nonInteractive?: boolean;

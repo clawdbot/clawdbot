@@ -19,9 +19,7 @@ type RuntimeGroupPolicyParams = {
  * Resolve the effective group policy for a channel/provider runtime.
  * Missing provider config can fail closed separately from configured providers.
  */
-export function resolveRuntimeGroupPolicy(
-  params: RuntimeGroupPolicyParams,
-): RuntimeGroupPolicyResolution {
+function resolveRuntimeGroupPolicy(params: RuntimeGroupPolicyParams): RuntimeGroupPolicyResolution {
   const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
   const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
   const groupPolicy = params.providerConfigPresent
@@ -118,11 +116,4 @@ export function warnMissingProviderGroupPolicyFallbackOnce(params: {
     `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,
   );
   return true;
-}
-
-/**
- * Test helper. Keeps warning-cache state deterministic across test files.
- */
-export function resetMissingProviderGroupPolicyFallbackWarningsForTesting(): void {
-  warnedMissingProviderGroupPolicy.clear();
 }

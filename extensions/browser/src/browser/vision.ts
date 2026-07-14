@@ -10,7 +10,7 @@ import type { saveMediaBuffer as SaveMediaBufferFn } from "../sdk-setup-tools.js
 import type { normalizeBrowserScreenshot as NormalizeBrowserScreenshotFn } from "./screenshot.js";
 
 /** Default prompt for turning browser screenshots into text-only page context. */
-export const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 /** Input context for browser screenshot image understanding. */

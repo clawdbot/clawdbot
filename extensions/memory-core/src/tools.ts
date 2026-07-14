@@ -24,6 +24,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import {
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  resolveMemorySearchAbortError,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineAction,
+  type MemorySearchDeadlineControlOptions,
+} from "./memory/search-deadline.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -48,9 +56,12 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
+type MemoryManagerSearchOptions = NonNullable<
+  Parameters<ActiveMemoryManagerContext["manager"]["search"]>[1]
+> &
+  MemorySearchDeadlineControlOptions;
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 
-const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -117,55 +128,22 @@ function isActiveMemoryManagerContext(
 
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
+  parentSignal?: AbortSignal,
 ): Promise<void> {
-  for (const manager of managers) {
-    try {
-      await manager.close?.();
-    } catch {
-      // Search results should not be hidden by best-effort transient cleanup.
-    }
+  const pending = Array.from(managers, async (manager) => await manager.close?.());
+  if (pending.length === 0) {
+    return;
   }
-}
-
-async function runMemorySearchToolWithDeadline<T>(params: {
-  timeoutMs: number;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
-  const timeoutError = () =>
-    new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
-  // Abort the losing task when the deadline fires so in-flight embedding work
-  // is cancelled instead of retrying orphaned for minutes after the tool
-  // already returned "timed out" to the agent.
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => {
-      // Resolve before aborting: abort listeners run synchronously and an
-      // abort-aware search could reject the task first, replacing the stable
-      // timeout result with a provider-wrapped abort error.
-      resolve("timeout");
-      controller.abort(timeoutError());
-    }, params.timeoutMs);
-    timer.unref?.();
-  });
-  const task = params.run(controller.signal);
-  task.catch(() => undefined);
-
   try {
-    const result = await Promise.race([task, timeoutPromise]);
-    if (result === "timeout") {
-      return {
-        status: "unavailable",
-        error: timeoutError().message,
-      };
-    }
-    return { status: "ok", value: result as T };
-  } catch (error) {
-    return { status: "unavailable", error: formatErrorMessage(error) };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    await runMemorySearchWithDeadline({
+      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      parentSignal,
+      run: async () => {
+        await Promise.allSettled(pending);
+      },
+    });
+  } catch {
+    // Search results should not be hidden by best-effort transient cleanup.
   }
 }
 
@@ -465,8 +443,11 @@ export function createMemorySearchTool(options: {
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
-      async (_toolCallId, params) => {
+      async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
+        if (callerSignal?.aborted) {
+          throw resolveMemorySearchAbortError(callerSignal);
+        }
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
         const minScore = readFiniteNumberParam(rawParams, "minScore");
@@ -500,28 +481,154 @@ export function createMemorySearchTool(options: {
             }
           }
         };
-
-        const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
-          run: async (deadlineSignal) => {
-            const toolStartedAt = Date.now();
-            const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
-            const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
-            const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
-            if (cooldown && !shouldQuerySupplements) {
-              return jsonResult(buildMemorySearchUnavailableResult(cooldown.error));
-            }
-            const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
-            const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
-            const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
-              if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
+        const runWithDefaultDeadline = async <T>(
+          task: (
+            signal: AbortSignal,
+            controlDeadline: (action: MemorySearchDeadlineAction) => void,
+          ) => Promise<T>,
+        ): Promise<T> =>
+          await runMemorySearchWithDeadline({
+            timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+            parentSignal: callerSignal,
+            run: task,
+          });
+        const runMemorySearchTool = async () => {
+          const toolStartedAt = Date.now();
+          const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
+          const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
+          if (cooldown && !shouldQuerySupplements) {
+            return jsonResult(buildMemorySearchUnavailableResult(cooldown.error));
+          }
+          const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
+          const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
+          let cleanupStarted = false;
+          const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
+            if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
+              if (cleanupStarted) {
+                // Setup can settle after its deadline. Close that late transient
+                // manager instead of leaking it after the tool has returned.
+                void closeMemoryManagers([context.manager]);
+              } else {
                 memoryManagersToClose.add(context.manager);
               }
-              return context;
-            };
-            try {
-              const memory = shouldQueryMemory
-                ? await runUnavailablePhase("memory", async () =>
+            }
+            return context;
+          };
+          try {
+            const memorySetup = shouldQueryMemory
+              ? await runUnavailablePhase(
+                  "memory",
+                  async () =>
+                    await runWithDefaultDeadline(async () => {
+                      const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+                      const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
+                      const context = trackMemoryManager(
+                        await getMemoryManagerContextWithPurpose({
+                          cfg,
+                          agentId,
+                          purpose: memoryManagerPurpose,
+                          acquireLocalService: options.acquireLocalService,
+                        }),
+                      );
+                      return { context, resolvedMemoryBackend };
+                    }),
+                )
+              : null;
+            const memory = memorySetup?.context ?? null;
+            if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
+              recordMemorySearchToolCooldown(
+                cooldownKey,
+                memory.error ?? "memory search unavailable",
+              );
+              return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+            }
+
+            const citationsMode = resolveMemoryCitationsMode(cfg);
+            const includeCitations = shouldIncludeCitations({
+              mode: citationsMode,
+              sessionKey: options.agentSessionKey,
+            });
+            const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+            const dreamingEnabled = resolveMemoryDreamingConfig({
+              pluginConfig,
+              cfg,
+            }).enabled;
+            const dreaming = resolveMemoryDeepDreamingConfig({
+              pluginConfig,
+              cfg,
+            });
+            const searchStartedAt = Date.now();
+            let rawResults: MemorySearchResult[] = [];
+            let surfacedMemoryResults: Array<MemorySearchResult & { corpus: MemorySource }> = [];
+            let provider: string | undefined;
+            let model: string | undefined;
+            let fallback: unknown;
+            let searchMode: string | undefined;
+            let pausedIndexIdentityReason: string | undefined;
+            let managerMs: number | undefined;
+            let managerCacheState: string | undefined;
+            let searchDebug:
+              | {
+                  backend: string;
+                  configuredMode?: string;
+                  effectiveMode?: string;
+                  fallback?: string;
+                  toolMs?: number;
+                  managerMs?: number;
+                  outsideSearchMs?: number;
+                  searchMs: number;
+                  managerCacheState?: string;
+                  qmd?: MemorySearchRuntimeDebug["qmd"];
+                  hits: number;
+                }
+              | undefined;
+            if (shouldQueryMemory && memorySetup && memory && !("error" in memory)) {
+              await runUnavailablePhase("memory", async () => {
+                let activeMemory = memory;
+                const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+                const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+                  cfg,
+                  options.agentSessionKey,
+                );
+                const searchSources: MemorySource[] | undefined =
+                  requestedCorpus === "sessions"
+                    ? (["sessions"] as MemorySource[])
+                    : requestedCorpus === "memory"
+                      ? (["memory"] as MemorySource[])
+                      : undefined;
+                const createSearchOptions = (
+                  signal: AbortSignal,
+                  controlDeadline: (action: MemorySearchDeadlineAction) => void,
+                ) =>
+                  ({
+                    maxResults,
+                    minScore,
+                    sessionKey: options.agentSessionKey,
+                    qmdSearchModeOverride,
+                    signal,
+                    onDebug: (debug: MemorySearchRuntimeDebug) => {
+                      runtimeDebug.push(debug);
+                    },
+                    [MEMORY_SEARCH_DEADLINE_CONTROL]: controlDeadline,
+                    ...(searchSources ? { sources: searchSources } : {}),
+                  }) satisfies MemoryManagerSearchOptions;
+                const searchActiveMemory = async (): Promise<MemorySearchResult[]> =>
+                  await runWithDefaultDeadline(
+                    async (signal, controlDeadline) =>
+                      await activeMemory.manager.search(
+                        query,
+                        createSearchOptions(signal, controlDeadline),
+                      ),
+                  );
+                managerMs = memory.debug?.managerMs;
+                managerCacheState = memory.debug?.managerCacheState;
+                try {
+                  rawResults = await searchActiveMemory();
+                } catch (error) {
+                  if (!isClosedMemoryStoreError(error)) {
+                    throw error;
+                  }
+                  const refreshed = await runWithDefaultDeadline(async () =>
                     trackMemoryManager(
                       await getMemoryManagerContextWithPurpose({
                         cfg,
@@ -530,245 +637,174 @@ export function createMemorySearchTool(options: {
                         acquireLocalService: options.acquireLocalService,
                       }),
                     ),
-                  )
-                : null;
-              if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
-                recordMemorySearchToolCooldown(
-                  cooldownKey,
-                  memory.error ?? "memory search unavailable",
-                );
-                return jsonResult(buildMemorySearchUnavailableResult(memory.error));
-              }
-
-              const citationsMode = resolveMemoryCitationsMode(cfg);
-              const includeCitations = shouldIncludeCitations({
-                mode: citationsMode,
-                sessionKey: options.agentSessionKey,
-              });
-              const pluginConfig = resolveMemoryCorePluginConfig(cfg);
-              const dreamingEnabled = resolveMemoryDreamingConfig({
-                pluginConfig,
-                cfg,
-              }).enabled;
-              const dreaming = resolveMemoryDeepDreamingConfig({
-                pluginConfig,
-                cfg,
-              });
-              const searchStartedAt = Date.now();
-              let rawResults: MemorySearchResult[] = [];
-              let surfacedMemoryResults: Array<MemorySearchResult & { corpus: MemorySource }> = [];
-              let provider: string | undefined;
-              let model: string | undefined;
-              let fallback: unknown;
-              let searchMode: string | undefined;
-              let pausedIndexIdentityReason: string | undefined;
-              let managerMs: number | undefined;
-              let managerCacheState: string | undefined;
-              let searchDebug:
-                | {
-                    backend: string;
-                    configuredMode?: string;
-                    effectiveMode?: string;
-                    fallback?: string;
-                    toolMs?: number;
-                    managerMs?: number;
-                    outsideSearchMs?: number;
-                    searchMs: number;
-                    managerCacheState?: string;
-                    qmd?: MemorySearchRuntimeDebug["qmd"];
-                    hits: number;
-                  }
-                | undefined;
-              if (shouldQueryMemory && memory && !("error" in memory)) {
-                await runUnavailablePhase("memory", async () => {
-                  let activeMemory = memory;
-                  const runtimeDebug: MemorySearchRuntimeDebug[] = [];
-                  const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
-                    cfg,
-                    options.agentSessionKey,
                   );
-                  const searchSources: MemorySource[] | undefined =
-                    requestedCorpus === "sessions"
-                      ? (["sessions"] as MemorySource[])
-                      : requestedCorpus === "memory"
-                        ? (["memory"] as MemorySource[])
-                        : undefined;
-                  const searchOptions = {
-                    maxResults,
-                    minScore,
-                    sessionKey: options.agentSessionKey,
-                    qmdSearchModeOverride,
-                    signal: deadlineSignal,
-                    onDebug: (debug: MemorySearchRuntimeDebug) => {
-                      runtimeDebug.push(debug);
-                    },
-                    ...(searchSources ? { sources: searchSources } : {}),
-                  };
-                  managerMs = memory.debug?.managerMs;
-                  managerCacheState = memory.debug?.managerCacheState;
-                  try {
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                  } catch (error) {
-                    if (!isClosedMemoryStoreError(error)) {
-                      throw error;
-                    }
-                    const refreshed = trackMemoryManager(
-                      await getMemoryManagerContextWithPurpose({
-                        cfg,
-                        agentId,
-                        purpose: memoryManagerPurpose,
-                        acquireLocalService: options.acquireLocalService,
-                      }),
-                    );
-                    if ("error" in refreshed) {
-                      throw error;
-                    }
-                    managerMs = refreshed.debug?.managerMs;
-                    managerCacheState = refreshed.debug?.managerCacheState;
-                    activeMemory = refreshed;
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                  if ("error" in refreshed) {
+                    throw error;
                   }
-                  const statusBeforeRetry = activeMemory.manager.status();
-                  pausedIndexIdentityReason =
-                    resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                  managerMs = refreshed.debug?.managerMs;
+                  managerCacheState = refreshed.debug?.managerCacheState;
+                  activeMemory = refreshed;
+                  rawResults = await searchActiveMemory();
+                }
+                const statusBeforeRetry = activeMemory.manager.status();
+                pausedIndexIdentityReason =
+                  resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                if (pausedIndexIdentityReason) {
+                  return;
+                }
+                // One-shot CLI managers have no background lifecycle, so keep their bootstrap
+                // retry. Long-lived QMD managers must not run update work in the tool hot path.
+                if (
+                  rawResults.length === 0 &&
+                  activeMemory.manager.sync &&
+                  (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
+                ) {
+                  await runWithDefaultDeadline(async () => {
+                    // Sync may join shared/background manager maintenance and has
+                    // no request-cancellation contract. Bound only this tool's wait.
+                    await activeMemory.manager.sync?.({ reason: "search", force: true });
+                  });
+                  rawResults = await searchActiveMemory();
+                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                    activeMemory.manager.status(),
+                  );
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  // One-shot CLI managers have no background lifecycle, so keep their bootstrap
-                  // retry. Long-lived QMD managers must not run update work in the tool hot path.
-                  if (
-                    rawResults.length === 0 &&
-                    activeMemory.manager.sync &&
-                    (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
-                  ) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                    pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                      activeMemory.manager.status(),
-                    );
-                    if (pausedIndexIdentityReason) {
-                      return;
-                    }
-                  }
-                  rawResults = await filterMemorySearchHitsBySessionVisibility({
-                    cfg,
-                    agentId,
-                    requesterSessionKey: options.agentSessionKey,
-                    sandboxed: options.sandboxed === true,
-                    hits: rawResults,
-                  });
-                  if (requestedCorpus === "sessions") {
-                    rawResults = rawResults.filter((hit) => hit.source === "sessions");
-                  } else if (requestedCorpus === "memory") {
-                    rawResults = rawResults.filter((hit) => hit.source === "memory");
-                  }
-                  const status = activeMemory.manager.status();
-                  const decorated = decorateCitations(rawResults, includeCitations);
-                  const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-                  const memoryResults =
-                    status.backend === "qmd"
-                      ? clampResultsByInjectedChars(
-                          decorated,
-                          resolved.qmd?.limits.maxInjectedChars,
-                        )
-                      : decorated;
-                  surfacedMemoryResults = memoryResults.map((result) => ({
-                    ...result,
-                    corpus: result.source,
-                  }));
-                  if (dreamingEnabled) {
-                    queueShortTermRecallTracking({
-                      workspaceDir: status.workspaceDir,
-                      query,
-                      rawResults,
-                      surfacedResults: memoryResults,
-                      timezone: dreaming.timezone,
-                    });
-                  }
-                  provider = status.provider;
-                  model = status.model;
-                  fallback = status.fallback;
-                  const latestDebug = runtimeDebug.at(-1);
-                  const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
-                  searchMode = latestDebug?.effectiveMode;
-                  const searchMs = Math.max(0, Date.now() - searchStartedAt);
-                  searchDebug = {
-                    backend: status.backend,
-                    configuredMode: latestDebug?.configuredMode,
-                    effectiveMode:
-                      status.backend === "qmd"
-                        ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
-                        : "n/a",
-                    fallback: latestDebug?.fallback,
-                    managerMs,
-                    searchMs,
-                    managerCacheState,
-                    qmd: qmdDebug,
-                    hits: rawResults.length,
-                  };
-                });
-                if (pausedIndexIdentityReason) {
-                  return jsonResult(
-                    buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
-                  );
                 }
-              }
-              const supplementResults = shouldQuerySupplements
-                ? await runUnavailablePhase(
-                    "supplement",
-                    async () =>
-                      await searchMemoryCorpusSupplements({
-                        query,
-                        maxResults,
-                        agentId,
-                        agentSessionKey: options.agentSessionKey,
-                        sandboxed: options.sandboxed,
-                        corpus: requestedCorpus,
-                      }),
-                  )
-                : [];
-              // Wiki and memory scores use incomparable scales, so corpus=all first
-              // balances candidate selection and then backfills any unused slots.
-              const effectiveMax = Math.max(1, maxResults ?? 10);
-              const results = mergeMemorySearchCorpusResults({
-                memoryResults: surfacedMemoryResults,
-                supplementResults,
-                maxResults: effectiveMax,
-                balanceCorpora: requestedCorpus === "all",
-              });
-              if (searchDebug) {
-                const finalToolMs = Math.max(0, Date.now() - toolStartedAt);
+                rawResults = await runWithDefaultDeadline(
+                  async () =>
+                    await filterMemorySearchHitsBySessionVisibility({
+                      cfg,
+                      agentId,
+                      requesterSessionKey: options.agentSessionKey,
+                      sandboxed: options.sandboxed === true,
+                      hits: rawResults,
+                    }),
+                );
+                if (requestedCorpus === "sessions") {
+                  rawResults = rawResults.filter((hit) => hit.source === "sessions");
+                } else if (requestedCorpus === "memory") {
+                  rawResults = rawResults.filter((hit) => hit.source === "memory");
+                }
+                const status = activeMemory.manager.status();
+                const decorated = decorateCitations(rawResults, includeCitations);
+                const memoryResults =
+                  status.backend === "qmd"
+                    ? clampResultsByInjectedChars(
+                        decorated,
+                        memorySetup.resolvedMemoryBackend.qmd?.limits.maxInjectedChars,
+                      )
+                    : decorated;
+                surfacedMemoryResults = memoryResults.map((result) => ({
+                  ...result,
+                  corpus: result.source,
+                }));
+                if (dreamingEnabled) {
+                  queueShortTermRecallTracking({
+                    workspaceDir: status.workspaceDir,
+                    query,
+                    rawResults,
+                    surfacedResults: memoryResults,
+                    timezone: dreaming.timezone,
+                  });
+                }
+                provider = status.provider;
+                model = status.model;
+                fallback = status.fallback;
+                const latestDebug = runtimeDebug.at(-1);
+                const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
+                searchMode = latestDebug?.effectiveMode;
+                const searchMs = Math.max(0, Date.now() - searchStartedAt);
                 searchDebug = {
-                  ...searchDebug,
-                  toolMs: finalToolMs,
-                  outsideSearchMs: Math.max(0, finalToolMs - searchDebug.searchMs),
+                  backend: status.backend,
+                  configuredMode: latestDebug?.configuredMode,
+                  effectiveMode:
+                    status.backend === "qmd"
+                      ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                      : "n/a",
+                  fallback: latestDebug?.fallback,
+                  managerMs,
+                  searchMs,
+                  managerCacheState,
+                  qmd: qmdDebug,
+                  hits: rawResults.length,
                 };
-              }
-              return jsonResult({
-                results,
-                provider,
-                model,
-                fallback,
-                citations: citationsMode,
-                mode: searchMode,
-                debug: searchDebug,
               });
-            } finally {
-              await closeMemoryManagers(memoryManagersToClose);
+              if (pausedIndexIdentityReason) {
+                return jsonResult(
+                  buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
+                );
+              }
             }
-          },
-        });
-        if (outcome.status === "unavailable") {
+            const supplementResults = shouldQuerySupplements
+              ? await runUnavailablePhase(
+                  "supplement",
+                  async () =>
+                    await runWithDefaultDeadline(
+                      async () =>
+                        await searchMemoryCorpusSupplements({
+                          query,
+                          maxResults,
+                          agentId,
+                          agentSessionKey: options.agentSessionKey,
+                          sandboxed: options.sandboxed,
+                          corpus: requestedCorpus,
+                        }),
+                    ),
+                )
+              : [];
+            // Wiki and memory scores use incomparable scales, so corpus=all first
+            // balances candidate selection and then backfills any unused slots.
+            const effectiveMax = Math.max(1, maxResults ?? 10);
+            const results = mergeMemorySearchCorpusResults({
+              memoryResults: surfacedMemoryResults,
+              supplementResults,
+              maxResults: effectiveMax,
+              balanceCorpora: requestedCorpus === "all",
+            });
+            if (searchDebug) {
+              const finalToolMs = Math.max(0, Date.now() - toolStartedAt);
+              searchDebug = {
+                ...searchDebug,
+                toolMs: finalToolMs,
+                outsideSearchMs: Math.max(0, finalToolMs - searchDebug.searchMs),
+              };
+            }
+            return jsonResult({
+              results,
+              provider,
+              model,
+              fallback,
+              citations: citationsMode,
+              mode: searchMode,
+              debug: searchDebug,
+            });
+          } finally {
+            cleanupStarted = true;
+            await closeMemoryManagers(memoryManagersToClose, callerSignal);
+          }
+        };
+        try {
+          const result = await runMemorySearchTool();
+          if (callerSignal?.aborted) {
+            throw resolveMemorySearchAbortError(callerSignal);
+          }
+          return result;
+        } catch (error) {
+          if (callerSignal?.aborted) {
+            throw resolveMemorySearchAbortError(callerSignal);
+          }
           const unavailablePhase = failedUnavailablePhase ?? activeUnavailablePhase;
           const shouldRecordCooldown =
             requestedCorpus !== "wiki" &&
             (requestedCorpus !== "all" || unavailablePhase === "memory");
+          const message = formatErrorMessage(error);
           if (shouldRecordCooldown) {
-            recordMemorySearchToolCooldown(cooldownKey, outcome.error);
+            recordMemorySearchToolCooldown(cooldownKey, message);
           }
-          return jsonResult(buildMemorySearchUnavailableResult(outcome.error));
+          return jsonResult(buildMemorySearchUnavailableResult(message));
         }
-        return outcome.value;
       },
   });
 }

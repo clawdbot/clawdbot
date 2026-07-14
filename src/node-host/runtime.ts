@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -44,6 +45,8 @@ type PreparedNodeHostRuntime = {
 
 type ActiveNodeHostRuntime = {
   invoke(frame: NodeInvokeRequestPayload): Promise<void>;
+  cancel(invokeId: string): void;
+  cancelAll(): void;
   close(): Promise<void>;
 };
 
@@ -153,12 +156,20 @@ function createInventory(params: {
 export async function prepareNodeHostRuntime(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  /** The embedded app worker never advertises native agent runs. */
+  enableAgentRuns?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
   const pluginNodeHost = listRegisteredNodeHostCapsAndCommands({ config, env });
   const pathEnv = ensureNodePathEnv();
+  // Opt-in and binary resolution are node-local enforcement points. A Gateway
+  // cannot advertise or enable this command on the host's behalf.
+  const claudePath =
+    params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
+      ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
+      : null;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const manifest: NodeHostManifest = {
     caps: [...new Set(["system", "mcp", ...pluginNodeHost.caps])].toSorted(),
@@ -168,6 +179,7 @@ export async function prepareNodeHostRuntime(params?: {
         ...NODE_EXEC_APPROVALS_COMMANDS,
         NODE_FS_LIST_DIR_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
+        ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginNodeHost.commands,
       ]),
     ].toSorted(),
@@ -184,6 +196,7 @@ export async function prepareNodeHostRuntime(params?: {
     start({ client, onInventoryChanged }) {
       const mcpAbort = new AbortController();
       const skillBins = new SkillBinsCache(client, pathEnv);
+      const activeClaudeRuns = new Map<string, AbortController>();
       let manager: NodeHostMcpManager | undefined;
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
@@ -200,9 +213,35 @@ export async function prepareNodeHostRuntime(params?: {
       });
       return {
         async invoke(frame) {
-          await handleInvoke(frame, client, skillBins, manager);
+          const controller =
+            claudePath && frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND
+              ? new AbortController()
+              : undefined;
+          if (controller) {
+            activeClaudeRuns.set(frame.id, controller);
+          }
+          try {
+            await handleInvoke(frame, client, skillBins, manager, {
+              ...(claudePath ? { claudePath } : {}),
+              ...(controller ? { signal: controller.signal } : {}),
+            });
+          } finally {
+            if (controller && activeClaudeRuns.get(frame.id) === controller) {
+              activeClaudeRuns.delete(frame.id);
+            }
+          }
+        },
+        cancel(invokeId) {
+          activeClaudeRuns.get(invokeId)?.abort();
+        },
+        cancelAll() {
+          for (const controller of activeClaudeRuns.values()) {
+            controller.abort();
+          }
+          activeClaudeRuns.clear();
         },
         async close() {
+          this.cancelAll();
           mcpAbort.abort();
           const resolved = manager ?? (await startup.catch(() => undefined));
           await resolved?.close();

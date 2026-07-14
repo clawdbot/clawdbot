@@ -1,11 +1,6 @@
 // Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
-import {
-  extractText,
-  extractTextCached,
-  extractThinking,
-  extractThinkingCached,
-} from "./message-extract.ts";
+import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
   it("matches extractText output", () => {
@@ -132,14 +127,6 @@ describe("extractTextCached", () => {
 });
 
 describe("extractThinkingCached", () => {
-  it("matches extractThinking output", () => {
-    const message = {
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "Plan A" }],
-    };
-    expect(extractThinkingCached(message)).toBe(extractThinking(message));
-  });
-
   it("returns consistent thinking output for repeated calls", () => {
     const message = {
       role: "assistant",

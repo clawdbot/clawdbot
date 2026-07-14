@@ -17,7 +17,7 @@ const SKIP_VALUE = "__skip__";
 
 // Official plugin onboarding lists generic official plugins not already
 // configured and installs the selected ones through the trusted install flow.
-export type OfficialPluginOnboardingInstallEntry = {
+type OfficialPluginOnboardingInstallEntry = {
   pluginId: string;
   label: string;
   description?: string;

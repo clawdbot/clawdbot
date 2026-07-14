@@ -20,7 +20,7 @@ import type {
   HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.js";
 
-export type HostedOfficialExternalPluginCatalogSnapshotStoreOptions = {
+type HostedOfficialExternalPluginCatalogSnapshotStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateDatabasePath?: string;

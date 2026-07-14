@@ -510,6 +510,8 @@ describe("monitorMatrixProvider", () => {
 
   it.each([
     [undefined, "off", false],
+    // Scalar/boolean spellings stay honored for schema-open account entries
+    // until the flat-key deprecation window closes; doctor migrates them.
     [false, "off", false],
     [true, "partial", true],
     ["off", "off", false],
@@ -532,7 +534,9 @@ describe("monitorMatrixProvider", () => {
       false,
     ],
     [{ mode: "off", preview: { toolProgress: true } }, "off", false],
-  ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
+  ] satisfies Array<
+    [MatrixConfig["streaming"] | MatrixStreamingMode | boolean, MatrixStreamingMode, boolean]
+  >)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
     (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
       expect(matrixMonitorTesting.resolveMatrixStreamingMode(streaming)).toBe(expectedMode);

@@ -2,10 +2,10 @@
 // trusted proxy IP resolution, container defaults, and interface matching.
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
-  __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
@@ -563,7 +563,7 @@ describe("isContainerEnvironment", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -681,7 +681,7 @@ describe("resolveGatewayBindHost", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -722,7 +722,7 @@ describe("defaultGatewayBindMode", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 

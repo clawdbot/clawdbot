@@ -7,11 +7,11 @@ import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";

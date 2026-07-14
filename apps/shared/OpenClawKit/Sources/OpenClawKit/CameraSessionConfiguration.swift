@@ -25,8 +25,8 @@ public enum CameraSessionConfigurationError: LocalizedError {
     }
 }
 
-public enum CameraSessionConfiguration {
-    public static func addCameraInput(session: AVCaptureSession, camera: AVCaptureDevice) throws {
+enum CameraSessionConfiguration {
+    static func addCameraInput(session: AVCaptureSession, camera: AVCaptureDevice) throws {
         let input = try AVCaptureDeviceInput(device: camera)
         guard session.canAddInput(input) else {
             throw CameraSessionConfigurationError.addCameraInputFailed
@@ -34,7 +34,7 @@ public enum CameraSessionConfiguration {
         session.addInput(input)
     }
 
-    public static func addPhotoOutput(session: AVCaptureSession) throws -> AVCapturePhotoOutput {
+    static func addPhotoOutput(session: AVCaptureSession) throws -> AVCapturePhotoOutput {
         let output = AVCapturePhotoOutput()
         guard session.canAddOutput(output) else {
             throw CameraSessionConfigurationError.addPhotoOutputFailed
@@ -44,7 +44,7 @@ public enum CameraSessionConfiguration {
         return output
     }
 
-    public static func addMovieOutput(
+    static func addMovieOutput(
         session: AVCaptureSession,
         includeAudio: Bool,
         durationMs: Int) throws -> AVCaptureMovieFileOutput

@@ -33,7 +33,7 @@ export type ProviderAuthChoiceMetadata = {
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
-export type ProviderOnboardAuthFlag = {
+type ProviderOnboardAuthFlag = {
   optionKey: string;
   authChoice: string;
   cliFlag: string;
@@ -317,7 +317,7 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-export function resolveManifestProviderOnboardAuthFlags(
+function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();

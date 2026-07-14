@@ -22,12 +22,6 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
   ),
 );
 
-export function hasHelpOrVersion(argv: string[]): boolean {
-  return (
-    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
-  );
-}
-
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
   if (hasRootVersionAlias(argv)) {
     return true;
@@ -265,14 +259,14 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
 
-export type NormalizeRootNoColorArgvOptions = {
+type NormalizeRootNoColorArgvOptions = {
   shouldPreserveNoColor?: (params: {
     remainingArgs: readonly string[];
     noColorIndex: number;
   }) => boolean;
 };
 
-export type NormalizeRootLogLevelArgvOptions = {
+type NormalizeRootLogLevelArgvOptions = {
   shouldPreserveLogLevel?: (params: {
     remainingArgs: readonly string[];
     logLevelIndex: number;
@@ -590,31 +584,20 @@ export function getCommandPositionalsWithRootOptions(
   return positionals;
 }
 
-export function buildParseArgv(params: {
-  programName?: string;
-  rawArgs?: string[];
-  fallbackArgv?: string[];
-}): string[] {
-  const baseArgv =
-    params.rawArgs && params.rawArgs.length > 0
-      ? params.rawArgs
-      : params.fallbackArgv && params.fallbackArgv.length > 0
-        ? params.fallbackArgv
-        : process.argv;
-  const programName = params.programName ?? "";
+export function buildParseArgv(rawArgs: string[], programName = "openclaw"): string[] {
   const normalizedArgv =
-    programName && baseArgv[0] === programName
-      ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("openclaw")
-        ? baseArgv.slice(1)
-        : baseArgv;
+    rawArgs[0] === programName
+      ? rawArgs.slice(1)
+      : rawArgs[0]?.endsWith("openclaw")
+        ? rawArgs.slice(1)
+        : rawArgs;
   const looksLikeNode =
     normalizedArgv.length >= 2 &&
     (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
-  return ["node", programName || "openclaw", ...normalizedArgv];
+  return ["node", programName, ...normalizedArgv];
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

@@ -97,6 +97,7 @@ function scopeScript(): string {
 }
 
 async function runScope(options: {
+  diffExitCode?: number;
   draft?: boolean;
   eventName?: string;
   files?: Array<string | { filename: string; previous_filename?: string }>;
@@ -111,6 +112,7 @@ async function runScope(options: {
     eventName: options.eventName ?? "pull_request",
     payload: {
       pull_request: {
+        base: { sha: "base-sha" },
         draft: options.draft ?? false,
         number: 123,
       },
@@ -120,25 +122,35 @@ async function runScope(options: {
       repo: "openclaw",
     },
   };
-  const github = {
-    rest: {
-      pulls: {
-        listFiles() {},
-      },
-    },
-    async paginate() {
-      return (options.files ?? []).map((file) =>
-        typeof file === "string" ? { filename: file } : file,
+  const exec = {
+    async getExecOutput(command: string, args: string[]) {
+      if (command !== "git" || args.slice(0, 5).join(" ") !== "diff --quiet base-sha HEAD --") {
+        throw new Error(`unexpected scope command: ${command} ${args.join(" ")}`);
+      }
+      if (options.diffExitCode !== undefined) {
+        return { exitCode: options.diffExitCode };
+      }
+      const pathspecs = args.slice(5);
+      const filenames = (options.files ?? []).flatMap((file) =>
+        typeof file === "string"
+          ? [file]
+          : [file.filename, file.previous_filename].filter((name): name is string => Boolean(name)),
       );
+      const changed = filenames.some((filename) =>
+        pathspecs.some((pathspec) =>
+          pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
+        ),
+      );
+      return { exitCode: changed ? 1 : 0 };
     },
   };
   const execute = compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
     "context",
     "core",
-    "github",
-  ]) as (context: unknown, core: unknown, github: unknown) => Promise<void>;
+    "exec",
+  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
 
-  await execute(context, core, github);
+  await execute(context, core, exec);
   return outputs.get("should-scan");
 }
 
@@ -465,9 +477,11 @@ describe("iOS Periphery comment workflow", () => {
       compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
         "context",
         "core",
-        "github",
+        "exec",
       ]),
     ).not.toThrow();
+    expect(scopeScript()).toContain("exec.getExecOutput");
+    expect(scopeScript()).not.toContain("pulls.listFiles");
   });
 
   it.each([
@@ -508,6 +522,12 @@ describe("iOS Periphery comment workflow", () => {
     },
   ])("sets scope output for $name", async ({ expected, files, options }) => {
     await expect(runScope({ ...options, files })).resolves.toBe(expected);
+  });
+
+  it("fails closed when git cannot compare the base and head", async () => {
+    await expect(runScope({ diffExitCode: 128 })).rejects.toThrow(
+      "git diff failed with exit code 128",
+    );
   });
 
   it("accepts a valid small Periphery artifact", async () => {

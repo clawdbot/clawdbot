@@ -10,8 +10,8 @@ import {
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
-export type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
-export type BackupSkipReason = "covered" | "missing";
+type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
+type BackupSkipReason = "covered" | "missing";
 
 export type BackupAsset = {
   kind: BackupAssetKind;
@@ -20,7 +20,7 @@ export type BackupAsset = {
   archivePath: string;
 };
 
-export type SkippedBackupAsset = {
+type SkippedBackupAsset = {
   kind: BackupAssetKind;
   sourcePath: string;
   displayPath: string;
@@ -28,7 +28,7 @@ export type SkippedBackupAsset = {
   coveredBy?: string;
 };
 
-export type BackupPlan = {
+type BackupPlan = {
   stateDir: string;
   configPath: string;
   oauthDir: string;

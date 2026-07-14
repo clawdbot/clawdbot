@@ -36,12 +36,6 @@ type ChannelHealthTimingPolicy = {
 type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
   checkIntervalMs?: number;
-  /** @deprecated use timing.monitorStartupGraceMs */
-  startupGraceMs?: number;
-  /** @deprecated use timing.channelConnectGraceMs */
-  channelStartupGraceMs?: number;
-  /** @deprecated use timing.staleEventThresholdMs */
-  staleEventThresholdMs?: number;
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
@@ -60,22 +54,13 @@ type RestartRecord = {
 };
 
 function resolveTimingPolicy(
-  deps: Pick<
-    ChannelHealthMonitorDeps,
-    "startupGraceMs" | "channelStartupGraceMs" | "staleEventThresholdMs" | "timing"
-  >,
+  deps: Pick<ChannelHealthMonitorDeps, "timing">,
 ): ChannelHealthTimingPolicy {
   return {
-    monitorStartupGraceMs:
-      deps.timing?.monitorStartupGraceMs ?? deps.startupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
-    channelConnectGraceMs:
-      deps.timing?.channelConnectGraceMs ??
-      deps.channelStartupGraceMs ??
-      DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+    monitorStartupGraceMs: deps.timing?.monitorStartupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
+    channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     staleEventThresholdMs:
-      deps.timing?.staleEventThresholdMs ??
-      deps.staleEventThresholdMs ??
-      DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+      deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   };
 }
 

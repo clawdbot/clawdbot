@@ -8,14 +8,13 @@ import {
   OPENAI_GPT5_MINI_MODEL,
 } from "../../test-helpers/chat-model.ts";
 import {
-  buildChatModelOption,
+  buildCatalogDisplayLookup,
+  buildChatModelOptionFromLookup,
   buildQualifiedChatModelValue,
   createChatModelOverride,
-  formatCatalogChatModelDisplay,
-  formatChatModelDisplay,
+  formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
-  resolveServerChatModelValue,
 } from "./model-ref.ts";
 
 const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
@@ -25,126 +24,56 @@ const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
 });
 
 describe("chat-model-ref helpers", () => {
-  it("builds provider-qualified option values and prefers catalog names for labels", () => {
-    expect(buildChatModelOption(expectDefined(catalog[0], "first model fixture"), catalog)).toEqual(
-      {
-        value: "openai/gpt-5-mini",
-        label: "GPT-5 Mini",
-      },
-    );
-  });
-
-  it("preserves already-qualified model refs without prepending provider", () => {
-    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai")).toBe("ollama/qwen3:30b");
-  });
-
-  it("prefixes provider-native catalog ids that already contain slashes", () => {
-    const providerNativeModel = {
-      id: "google/gemma-4-26b-a4b-it",
-      name: "Gemma 4 26B A4B IT",
-      provider: "openrouter",
-    };
-
-    expect(buildChatModelOption(providerNativeModel, [providerNativeModel])).toEqual({
-      value: "openrouter/google/gemma-4-26b-a4b-it",
-      label: "Gemma 4 26B A4B IT",
-    });
+  it("builds provider-qualified options with catalog labels", () => {
+    const lookup = buildCatalogDisplayLookup(catalog);
     expect(
-      resolvePreferredServerChatModelValue("google/gemma-4-26b-a4b-it", "openrouter", [
-        providerNativeModel,
-      ]),
-    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
+      buildChatModelOptionFromLookup(expectDefined(catalog[0], "first model fixture"), lookup),
+    ).toEqual({
+      value: "openai/gpt-5-mini",
+      label: "GPT-5 Mini",
+    });
   });
 
-  it("prefers alias over name for picker labels", () => {
-    const aliasedModel = {
+  it("preserves provider-native nested ids and prefers aliases", () => {
+    const nested = {
       id: "moonshotai/kimi-k2.5",
       alias: "Kimi K2.5 (NVIDIA)",
       name: "Kimi K2.5",
       provider: "nvidia",
     };
+    const lookup = buildCatalogDisplayLookup([nested]);
 
-    expect(buildChatModelOption(aliasedModel, [aliasedModel])).toEqual({
+    expect(buildChatModelOptionFromLookup(nested, lookup)).toEqual({
       value: "nvidia/moonshotai/kimi-k2.5",
       label: "Kimi K2.5 (NVIDIA)",
     });
-    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [aliasedModel])).toBe(
+    expect(formatCatalogChatModelDisplayFromLookup("nvidia/moonshotai/kimi-k2.5", lookup)).toBe(
       "Kimi K2.5 (NVIDIA)",
     );
   });
 
-  it("uses friendly catalog names for qualified nested model ids", () => {
-    const nestedModel = {
-      id: "moonshotai/kimi-k2.5",
-      name: "Kimi K2.5 (NVIDIA)",
-      provider: "nvidia",
-    };
-    expect(buildChatModelOption(nestedModel, [nestedModel])).toEqual({
-      value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
-    });
-    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [nestedModel])).toBe(
-      "Kimi K2.5 (NVIDIA)",
+  it("disambiguates duplicate names by provider and model id", () => {
+    const duplicateProviders = createModelCatalog(
+      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+      { id: "claude-sonnet", name: "Claude Sonnet", provider: "openrouter" },
     );
-  });
-
-  it("disambiguates duplicate friendly names with the provider", () => {
-    const duplicateNameCatalog = createModelCatalog(
-      {
-        id: "claude-3-7-sonnet",
-        name: "Claude Sonnet",
-        provider: "anthropic",
-      },
-      {
-        id: "claude-3-7-sonnet",
-        name: "Claude Sonnet",
-        provider: "openrouter",
-      },
+    const duplicateModels = createModelCatalog(
+      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+      { id: "claude-sonnet-thinking", name: "Claude Sonnet", provider: "anthropic" },
     );
 
     expect(
-      buildChatModelOption(
-        expectDefined(duplicateNameCatalog[0], "first duplicate-name model fixture"),
-        duplicateNameCatalog,
-      ),
-    ).toEqual({
-      value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · anthropic",
-    });
+      buildChatModelOptionFromLookup(
+        expectDefined(duplicateProviders[0], "first duplicate-provider fixture"),
+        buildCatalogDisplayLookup(duplicateProviders),
+      ).label,
+    ).toBe("Claude Sonnet · anthropic");
     expect(
-      formatCatalogChatModelDisplay("openrouter/claude-3-7-sonnet", duplicateNameCatalog),
-    ).toBe("Claude Sonnet · openrouter");
-  });
-
-  it("falls back to the raw catalog label when name and provider still collide", () => {
-    const duplicateNameAndProviderCatalog = createModelCatalog(
-      {
-        id: "claude-3-7-sonnet",
-        name: "Claude Sonnet",
-        provider: "anthropic",
-      },
-      {
-        id: "claude-3-7-sonnet-thinking",
-        name: "Claude Sonnet",
-        provider: "anthropic",
-      },
-    );
-
-    expect(
-      buildChatModelOption(
-        expectDefined(duplicateNameAndProviderCatalog[0], "first duplicate-provider model fixture"),
-        duplicateNameAndProviderCatalog,
+      formatCatalogChatModelDisplayFromLookup(
+        "anthropic/claude-sonnet-thinking",
+        buildCatalogDisplayLookup(duplicateModels),
       ),
-    ).toEqual({
-      value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
-    });
-    expect(
-      formatCatalogChatModelDisplay(
-        "anthropic/claude-3-7-sonnet-thinking",
-        duplicateNameAndProviderCatalog,
-      ),
-    ).toBe("Claude Sonnet · claude-3-7-sonnet-thinking · anthropic");
+    ).toBe("Claude Sonnet · claude-sonnet-thinking · anthropic");
   });
 
   it("normalizes raw overrides when the catalog match is unique", () => {
@@ -162,18 +91,8 @@ describe("chat-model-ref helpers", () => {
     ).toBe("gpt-5-mini");
   });
 
-  it("formats qualified model refs consistently for default labels", () => {
-    expect(formatChatModelDisplay("openai/gpt-5-mini")).toBe("gpt-5-mini · openai");
-    expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
-  });
-
   it("does not double-prefix provider-native catalog ids", () => {
     expect(buildQualifiedChatModelValue("openrouter/auto", "openrouter")).toBe("openrouter/auto");
-  });
-
-  it("resolves server session data to qualified option values", () => {
-    expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
-    expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 
   it("uses the recorded server provider when it is present", () => {

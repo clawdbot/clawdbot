@@ -3,12 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
-import {
-  bumpWorkspaceDataVersion,
-  navigateToWorkspaceTab,
-  renderWorkspace,
-  requestedWorkspaceSlug,
-} from "./workspace-view.ts";
+import { renderWorkspace } from "./workspace-view.ts";
 
 function renderView(host: object): HTMLElement {
   const container = document.createElement("div");
@@ -44,34 +39,6 @@ const doc = {
   widgetsRegistry: {},
   prefs: { tabOrder: ["main", "empty", "hidden-one"] },
 };
-
-describe("requestedWorkspaceSlug", () => {
-  it("reads the ws deep-link param", () => {
-    expect(requestedWorkspaceSlug("?plugin=workspaces&id=workspaces&ws=financials")).toBe(
-      "financials",
-    );
-    expect(requestedWorkspaceSlug("?plugin=workspaces&id=workspaces")).toBeNull();
-  });
-});
-
-describe("navigateToWorkspaceTab", () => {
-  afterEach(() => {
-    window.history.replaceState({}, "", "/");
-  });
-
-  it("pushes a ws query param and dispatches popstate", () => {
-    window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces");
-    let popped = false;
-    const onPop = () => {
-      popped = true;
-    };
-    window.addEventListener("popstate", onPop);
-    navigateToWorkspaceTab("financials");
-    window.removeEventListener("popstate", onPop);
-    expect(new URLSearchParams(window.location.search).get("ws")).toBe("financials");
-    expect(popped).toBe(true);
-  });
-});
 
 describe("renderWorkspace", () => {
   afterEach(() => {
@@ -128,11 +95,36 @@ describe("renderWorkspace", () => {
     expect(container.querySelector(".workspace__toast")?.textContent).toContain("move failed");
   });
 
-  it("discards a stale binding result after the cache version changes", async () => {
+  it("honors workspace deep links and updates them from tab navigation", () => {
+    window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces&ws=empty");
     const host = document.createElement("div");
     document.body.append(host);
-    let resolveOld: ((value: unknown) => void) | undefined;
-    let resolveFresh: ((value: unknown) => void) | undefined;
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.workspace = doc;
+    state.activeSlug = "main";
+    const onPopState = vi.fn();
+    window.addEventListener("popstate", onPopState);
+
+    try {
+      render(renderWorkspace({ host, client: null, connected: false }), host);
+      expect(state.activeSlug).toBe("empty");
+      host.querySelector<HTMLButtonElement>('[data-ws="main"]')?.click();
+      expect(new URLSearchParams(window.location.search).get("ws")).toBe("main");
+      expect(onPopState).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("popstate", onPopState);
+      stopWorkspace(host);
+      host.remove();
+    }
+  });
+
+  it("discards a stale binding result after the polling version advances", async () => {
+    vi.useFakeTimers();
+    const host = document.createElement("div");
+    document.body.append(host);
+    let resolveOld!: (value: unknown) => void;
+    let resolveFresh!: (value: unknown) => void;
     const oldResult = new Promise((resolve) => {
       resolveOld = resolve;
     });
@@ -173,19 +165,19 @@ describe("renderWorkspace", () => {
 
     try {
       render(renderWorkspace({ host, client, connected: true }), host);
-      expect(request).toHaveBeenCalledTimes(1);
-      bumpWorkspaceDataVersion(host);
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
       render(renderWorkspace({ host, client, connected: true }), host);
       expect(request).toHaveBeenCalledTimes(2);
 
-      resolveFresh?.(2);
+      resolveFresh(2);
       await freshResult;
       await vi.waitFor(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("2");
       });
 
-      resolveOld?.(1);
+      resolveOld(1);
       await oldResult;
       await Promise.resolve();
       render(renderWorkspace({ host, client, connected: true }), host);
@@ -193,6 +185,7 @@ describe("renderWorkspace", () => {
     } finally {
       stopWorkspace(host);
       host.remove();
+      vi.useRealTimers();
     }
   });
 

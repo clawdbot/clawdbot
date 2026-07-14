@@ -20,7 +20,7 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
+import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // CI Docker live lanes can see repeated cancelled cron tool calls before a job

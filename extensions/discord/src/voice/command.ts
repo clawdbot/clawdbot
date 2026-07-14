@@ -6,7 +6,6 @@ import {
 } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import {
   Command,
   CommandWithSubcommands,
@@ -19,6 +18,7 @@ import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { DiscordVoiceManager } from "./manager.js";
+import { resolveDiscordVoiceOwnerAccess } from "./owner-access.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
   DiscordChannelType.GuildVoice,
@@ -73,6 +73,7 @@ async function authorizeVoiceCommand(
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
+  const ownerAccess = resolveDiscordVoiceOwnerAccess(params);
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
@@ -90,10 +91,8 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
-    ownerAllowFrom: resolveDiscordAccountAllowFrom({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
+    ownerAllowFrom: ownerAccess.ownerAllowFrom,
+    ownerAllowAll: ownerAccess.ownerAllowAll,
     sender: {
       id: sender.id,
       name: sender.name,

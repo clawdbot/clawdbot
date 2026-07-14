@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
@@ -26,10 +27,6 @@ const APPROVAL_MIN_POLL_DELAY_MS = 250;
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
 type ResolutionOrigin = "here" | "elsewhere" | "observed";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isUnavailableApprovalError(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError)) {
@@ -663,8 +660,4 @@ export class ApprovalPage extends OpenClawLightDomElement {
     document.title = title;
     this.activeDocumentTitle = title;
   }
-}
-
-if (!customElements.get("openclaw-approval-page")) {
-  customElements.define("openclaw-approval-page", ApprovalPage);
 }

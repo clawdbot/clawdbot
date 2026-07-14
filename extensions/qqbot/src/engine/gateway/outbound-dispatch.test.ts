@@ -861,7 +861,10 @@ describe("dispatchOutbound", () => {
         {
           runtime,
           cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account: { ...account, config: { streaming: true } },
+          account: {
+            ...account,
+            config: { streaming: { mode: "partial", nativeTransport: true } },
+          },
         },
       );
 
@@ -997,7 +1000,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1007,7 +1010,7 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
-  it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
+  it("delivers text-only tool progress when nativeTransport is on despite mode off", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
         await deliver({ text: "Working: checking logs" }, { kind: "tool" });
@@ -1020,7 +1023,7 @@ describe("dispatchOutbound", () => {
       cfg: {},
       account: {
         ...account,
-        config: { streaming: { mode: "off", c2cStreamApi: true } },
+        config: { streaming: { mode: "off", nativeTransport: true } },
       },
     });
 
@@ -1062,7 +1065,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1096,7 +1099,7 @@ describe("dispatchOutbound", () => {
         agentBody: "do it",
         body: "[member-openid] do it (@you)",
       }),
-      { runtime, cfg: {}, account: { ...account, config: { streaming: false } } },
+      { runtime, cfg: {}, account: { ...account, config: { streaming: { mode: "off" } } } },
     );
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1118,7 +1121,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1138,7 +1141,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1159,7 +1162,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1179,7 +1182,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1202,7 +1205,7 @@ describe("dispatchOutbound", () => {
       await dispatchOutbound(makeInbound(), {
         runtime,
         cfg: {},
-        account: { ...account, config: { streaming: false } },
+        account: { ...account, config: { streaming: { mode: "off" } } },
       });
 
       expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1230,7 +1233,7 @@ describe("dispatchOutbound", () => {
     const dispatchPromise = dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     await vi.advanceTimersByTimeAsync(90_000);
@@ -1253,7 +1256,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1274,7 +1277,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1298,7 +1301,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();

@@ -89,20 +89,6 @@ function projectCrestodianExecutionConfig(
   };
 }
 
-/** Return the authored default-agent route; never synthesize the product fallback model. */
-export async function resolveCrestodianConfiguredRoute(
-  deps: CrestodianConfiguredRouteDeps = {},
-): Promise<CrestodianConfiguredRoute | null> {
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
-  if (!snapshot.exists || !snapshot.valid) {
-    return null;
-  }
-  const runConfig = snapshot.runtimeConfig ?? snapshot.config ?? {};
-  return await resolveCrestodianConfiguredRouteFromConfig(runConfig);
-}
-
 export async function resolveCrestodianConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
 ): Promise<CrestodianConfiguredRoute | null> {

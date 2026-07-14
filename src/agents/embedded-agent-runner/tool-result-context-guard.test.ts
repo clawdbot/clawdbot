@@ -16,8 +16,10 @@ import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
   markTranscriptPromptText,
-  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "./tool-result-context-guard.js";
+
+const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
+  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 
 function makeUser(text: string): AgentMessage {
   return castAgentMessage({

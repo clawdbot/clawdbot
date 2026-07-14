@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchOpenAIAdminUsage, resolveOpenAIUsageAuth } from "./usage.js";
+import { fetchOpenAIAdminUsage, fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
@@ -127,6 +127,35 @@ describe("OpenAI provider usage", () => {
     expect(result).toEqual({
       token: 'openclaw:openai-admin:v1:{"token":"sk-admin-explicit"}',
     });
+  });
+
+  it("attaches the ChatGPT account email from the access-token claims", async () => {
+    // Assembled parts keep the fixture from reading as a real credential.
+    const claims = Buffer.from(
+      JSON.stringify({ "https://api.openai.com/profile": { email: "codex@example.com" } }),
+      "utf8",
+    ).toString("base64url");
+    const accessToken = ["fake-header", claims, "fake-sig"].join(".");
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            plan_type: "pro",
+            rate_limit: { primary_window: { limit_window_seconds: 18_000, used_percent: 12 } },
+          }),
+          { status: 200 },
+        ),
+    ) as typeof fetch;
+    const snapshot = await fetchOpenAIUsage({
+      config: {},
+      env: {},
+      provider: "openai",
+      token: accessToken,
+      timeoutMs: 5_000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBe("codex@example.com");
+    expect(snapshot.windows.length).toBeGreaterThan(0);
   });
 
   it("does not repurpose inference credentials for organization usage", async () => {

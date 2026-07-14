@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
+  acknowledgeTalkRealtimeRelayMark: vi.fn(),
   cancelTalkRealtimeRelayTurn: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
@@ -94,6 +95,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../talk-realtime-relay.js")>();
   return {
     ...actual,
+    acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
     cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
@@ -1576,6 +1578,25 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
       reason: "barge-in",
     });
+
+    const markRespond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.session.acknowledgeMark"],
+      'talkHandlers["talk.session.acknowledgeMark"] test invariant',
+    )({
+      req: { type: "req", id: "3-mark", method: "talk.session.acknowledgeMark" },
+      params: { sessionId: "relay-unified-1", markName: "audio-mark-1" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: markRespond as never,
+      context: {} as never,
+    });
+    expect(mocks.acknowledgeTalkRealtimeRelayMark).toHaveBeenCalledWith({
+      relaySessionId: "relay-unified-1",
+      connId: "conn-1",
+      markName: "audio-mark-1",
+    });
+    expectRespondOk(markRespond, { ok: true });
 
     let acceptToolResult!: () => void;
     mocks.submitTalkRealtimeRelayToolResult.mockReturnValueOnce(

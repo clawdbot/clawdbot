@@ -33,7 +33,7 @@ export type InferenceBackendKind =
   | "codex-cli"
   | "gemini-cli";
 
-export type InferenceBackendCandidate = {
+type InferenceBackendCandidate = {
   kind: InferenceBackendKind;
   modelRef: string;
   /** Short human label, e.g. "Claude Code CLI". */
@@ -47,7 +47,7 @@ export type InferenceBackendCandidate = {
   credentials?: boolean;
 };
 
-export type DetectInferenceBackendsDeps = {
+type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
   readClaudeCliCredentials?: () => { type: string } | null;
   readCodexCliCredentials?: () => { type: string } | null;
@@ -55,14 +55,14 @@ export type DetectInferenceBackendsDeps = {
   randomInt?: (maxExclusive: number) => number;
 };
 
-export type DetectInferenceBackendsOptions = {
+type DetectInferenceBackendsOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
 };
 
-export type DetectNativeCodexAppServerOptions = {
+type DetectNativeCodexAppServerOptions = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   probeLocalCommand?: typeof probeLocalCommand;

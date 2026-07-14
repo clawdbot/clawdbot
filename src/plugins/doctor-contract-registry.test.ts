@@ -14,14 +14,14 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
 let applyPluginDoctorCompatibilityMigrations: typeof import("./doctor-contract-registry.js").applyPluginDoctorCompatibilityMigrations;
-let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
+let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
+  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
 
 function makeTempDir(): string {
@@ -47,14 +47,16 @@ describe("doctor-contract-registry module loader", () => {
     vi.resetModules();
     ({
       applyPluginDoctorCompatibilityMigrations,
-      clearPluginDoctorContractRegistryCache,
       collectRelevantDoctorPluginIds,
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
       listPluginDoctorSessionStoreAgentIds,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.js"));
+    ({
+      clearPluginDoctorContractRegistryCache,
+      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
+    } = await import("./doctor-contract-registry.test-fixtures.js"));
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });

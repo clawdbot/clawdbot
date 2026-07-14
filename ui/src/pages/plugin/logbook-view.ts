@@ -5,7 +5,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
+import "../../styles/logbook.css";
 import {
   askLogbook,
   configureLogbookPolling,
@@ -31,15 +32,6 @@ type LogbookProps = {
 
 function formatClock(ms: number, timeZone: string): string {
   return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
-}
-
-function formatDurationMs(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) {
-    return t("logbook.duration.minutes", { minutes: String(minutes) });
-  }
-  const hours = Math.floor(minutes / 60);
-  return t("logbook.duration.hours", { hours: String(hours), minutes: String(minutes % 60) });
 }
 
 /** Stable category hue so colors stay consistent across renders and days. */
@@ -155,7 +147,9 @@ function renderCard(
           ${card.appPrimary
             ? html`<span class="logbook-card__app">${card.appPrimary}</span>`
             : nothing}
-          <span class="logbook-card__duration">${formatDurationMs(card.endMs - card.startMs)}</span>
+          <span class="logbook-card__duration"
+            >${formatDurationCompact(card.endMs - card.startMs, { spaced: true }) ?? "0s"}</span
+          >
         </span>
       </button>
       ${expanded
@@ -214,7 +208,9 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
         <div class="logbook-stats__focus-legend">
           <span>${t("logbook.stats.focus", { pct: String(focusPct) })}</span>
           <span
-            >${t("logbook.stats.tracked", { duration: formatDurationMs(stats.trackedMs) })}</span
+            >${t("logbook.stats.tracked", {
+              duration: formatDurationCompact(stats.trackedMs, { spaced: true }) ?? "0s",
+            })}</span
           >
         </div>
       </div>
@@ -232,7 +228,9 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
                   style="width: ${Math.max(6, Math.round((entry.ms / maxCategoryMs) * 100))}%"
                 ></span>
               </span>
-              <span class="logbook-stats__category-time">${formatDurationMs(entry.ms)}</span>
+              <span class="logbook-stats__category-time"
+                >${formatDurationCompact(entry.ms, { spaced: true }) ?? "0s"}</span
+              >
             </div>
           `,
         )}

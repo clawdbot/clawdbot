@@ -105,25 +105,6 @@ const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
 ]);
 const TCP_LISTEN_STATE_HEX = "0A";
 
-export type { BrowserExecutable } from "./chrome.executables.js";
-export {
-  diagnoseChromeCdp,
-  formatChromeCdpDiagnostic,
-  type ChromeCdpDiagnostic,
-  type ChromeCdpDiagnosticCode,
-} from "./chrome.diagnostics.js";
-export {
-  findChromeExecutableLinux,
-  findChromeExecutableMac,
-  findChromeExecutableWindows,
-  resolveBrowserExecutableForPlatform,
-} from "./chrome.executables.js";
-export {
-  decorateOpenClawProfile,
-  ensureProfileCleanExit,
-  isProfileDecorated,
-} from "./chrome.profile-decoration.js";
-
 function exists(filePath: string) {
   try {
     return fs.existsSync(filePath);
@@ -512,10 +493,7 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
 }
 
 /** Remove stale Chrome singleton lock files from a user-data-dir. */
-export function clearStaleChromeSingletonLocks(
-  userDataDir: string,
-  hostname = os.hostname(),
-): boolean {
+function clearStaleChromeSingletonLocks(userDataDir: string, hostname = os.hostname()): boolean {
   const lockPath = path.join(userDataDir, "SingletonLock");
   let target: string;
   try {
@@ -821,7 +799,7 @@ function cdpUrlForPort(cdpPort: number) {
 }
 
 /** Build Chrome launch arguments for the managed OpenClaw browser. */
-export function buildOpenClawChromeLaunchArgs(params: {
+function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   userDataDir: string;

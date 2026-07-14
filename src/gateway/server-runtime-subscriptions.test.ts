@@ -8,7 +8,7 @@ import {
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
-  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
@@ -168,7 +168,7 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs transcript handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitInternalSessionTranscriptUpdate({
+    emitSessionTranscriptUpdate({
       sessionFile: "/tmp/sess.jsonl",
       sessionKey: "agent:main:main",
     } as InternalSessionTranscriptUpdate);

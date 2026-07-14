@@ -40,7 +40,7 @@ export type RoleSnapshotOptions = {
 };
 
 /** Compute snapshot line/char/ref statistics. */
-export function getRoleSnapshotStats<T extends { role: string }>(
+function getRoleSnapshotStats<T extends { role: string }>(
   snapshot: string,
   refs: Record<string, T>,
 ): RoleSnapshotStats {

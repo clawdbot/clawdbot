@@ -1211,6 +1211,79 @@
   }
 }
 
+/* Post-turn running-tasks status row: once the turn settles while background
+   tasks keep running, the claw stays visible next to a free composer — but
+   parked, not shadowboxing. It rests nose-down (the combo's cross pose) with
+   only a slow opacity breath; tabular digits keep the ticking elapsed label
+   from nudging the row sideways. */
+.chat-tasks-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tasks-status__claw {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  animation: chatTasksStatusBreath 2.8s ease-in-out infinite;
+}
+
+.chat-tasks-status__claw svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  transform: rotate(8deg);
+}
+
+/* Static jaw pose between the working rest (-10deg) and shut (+6deg): held
+   work, not active pinching. transform-origin mirrors the working claw. */
+.chat-tasks-status__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-4deg);
+}
+
+.chat-tasks-status__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.chat-tasks-status__link:hover,
+.chat-tasks-status__link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+@keyframes chatTasksStatusBreath {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tasks-status__claw {
+    animation: none;
+  }
+}
+
 @media (pointer: coarse) {
   .chat-tool-msg-summary,
   .chat-activity-group__summary {

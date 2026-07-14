@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
@@ -684,9 +685,9 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 
     @Test func `routing identity decodes agent and contract from one response`() throws {
         let data = Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"global","agents":[]}"#.utf8)
-        let identity = try GatewayConnection.decodeSessionRoutingIdentity(data)
+        let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
 
-        #expect(identity.defaultAgentID == "Work")
+        #expect(identity.defaultAgentID == "work")
         #expect(identity.contract == "global|primary|work")
     }
 

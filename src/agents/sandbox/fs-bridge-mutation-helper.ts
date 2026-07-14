@@ -11,7 +11,7 @@ import type {
 } from "./fs-bridge-path-safety.js";
 import type { SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 
-export const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
+const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/usr/bin/python3",
   "/usr/local/bin/python3",
   "/opt/homebrew/bin/python3",

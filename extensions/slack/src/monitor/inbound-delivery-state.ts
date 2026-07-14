@@ -73,7 +73,3 @@ export async function recordSlackInboundMessageDeliveries(params: {
     ),
   );
 }
-
-export function clearSlackInboundDeliveryStateForTest(): void {
-  deliveredMessages.clearForTest();
-}

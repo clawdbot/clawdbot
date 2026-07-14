@@ -62,12 +62,7 @@ export type CustomWidgetHostContext = {
 };
 
 /** Builds the served asset URL for a widget file under the plugin route. */
-export function widgetAssetUrl(
-  basePath: string,
-  frameToken: string,
-  name: string,
-  file: string,
-): string {
+function widgetAssetUrl(basePath: string, frameToken: string, name: string, file: string): string {
   const base = basePath.replace(/\/+$/, "");
   const encodedToken = encodeURIComponent(frameToken);
   const encodedName = encodeURIComponent(name);
@@ -179,7 +174,7 @@ export async function loadWidgetManifestView(
  * the trusted gateway client, theme tokens, and prompt dispatch. The returned
  * teardown removes the window listener and disposes the bridge.
  */
-export function attachWidgetBridge(params: {
+function attachWidgetBridge(params: {
   iframe: HTMLIFrameElement;
   widget: WorkspaceWidget;
   manifest: WidgetManifestView;

@@ -1,8 +1,10 @@
+import path from "node:path";
 // Bash tool helper tests cover conversion from model-facing timeout seconds to
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { createBashTool, resolveBashTimeoutMs, type BashOperations } from "./bash.js";
+import type { BashOperations } from "./bash-operations.js";
+import { createBashTool, createLocalBashOperations, resolveBashTimeoutMs } from "./bash.js";
 
 describe("bash tool timeout helpers", () => {
   it("converts positive timeout seconds to timer-safe milliseconds", () => {
@@ -25,6 +27,16 @@ describe("bash tool timeout helpers", () => {
 });
 
 describe("bash tool output lifecycle", () => {
+  it.runIf(process.platform !== "win32")("surfaces a configured shell launch error", async () => {
+    const operations = createLocalBashOperations({
+      shellPath: path.join(process.cwd(), "package.json"),
+    });
+
+    await expect(operations.exec("echo ok", process.cwd(), { onData: () => {} })).rejects.toThrow(
+      /EACCES|permission denied/i,
+    );
+  });
+
   it("ignores output callbacks after execution settles", async () => {
     const operations: BashOperations = {
       exec: async (_command, _cwd, { onData }) => {

@@ -13,14 +13,14 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
-import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   pinActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function runner() {
   const value = getGlobalHookRunner();

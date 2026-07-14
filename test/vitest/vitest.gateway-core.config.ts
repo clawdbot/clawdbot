@@ -19,11 +19,13 @@ const nonCoreGatewayTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
+export function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(["src/gateway/**/*.test.ts"], {
     dir: "src/gateway",
     env,
     exclude: nonCoreGatewayTestExclude,
+    // Gateway child projects share one include file; preserve this project's ownership.
+    intersectIncludeFile: true,
     name: "gateway-core",
   });
 }

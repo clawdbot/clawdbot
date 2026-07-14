@@ -54,11 +54,6 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
   }
   return normalized;
 }
-
-/** @deprecated Use normalizeAgentToolResultMiddlewareRuntimes. */
-export const normalizeAgentToolResultMiddlewareHarnesses =
-  normalizeAgentToolResultMiddlewareRuntimes;
-
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
 ): AgentToolResultMiddlewareRuntime[] {

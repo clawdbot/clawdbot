@@ -7,7 +7,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Current finalized context fields used for reply route resolution. */
-export type EffectiveReplyRouteContext = Pick<
+type EffectiveReplyRouteContext = Pick<
   FinalizedMsgContext,
   | "Provider"
   | "Surface"
@@ -19,7 +19,7 @@ export type EffectiveReplyRouteContext = Pick<
 >;
 
 /** Persisted session fields used as route fallback/inheritance. */
-export type EffectiveReplyRouteEntry = Pick<
+type EffectiveReplyRouteEntry = Pick<
   SessionEntry,
   "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId" | "route" | "chatType" | "origin"
 >;

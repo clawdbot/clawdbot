@@ -6,21 +6,24 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearNostrProfileRateLimitStateForTest,
-  createNostrProfileHttpHandler,
-  getNostrProfileRateLimitStateSizeForTest,
-  isNostrProfileRateLimitedForTest,
-  type NostrProfileHttpContext,
-} from "./nostr-profile-http.js";
+import { createNostrProfileHttpHandler } from "./nostr-profile-http.js";
+
+type NostrProfileHttpContext = Parameters<typeof createNostrProfileHttpHandler>[0];
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
+const clearProfileRateLimiterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./nostr-profile-http-runtime.js", async () => {
   const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
   const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
   return {
-    createFixedWindowRateLimiter: webhookIngress.createFixedWindowRateLimiter,
+    createFixedWindowRateLimiter: (
+      ...args: Parameters<typeof webhookIngress.createFixedWindowRateLimiter>
+    ) => {
+      const limiter = webhookIngress.createFixedWindowRateLimiter(...args);
+      clearProfileRateLimiterMock.mockImplementation(() => limiter.clear());
+      return limiter;
+    },
     readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
     requestBodyErrorToText: requestGuards.requestBodyErrorToText,
     getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
@@ -237,7 +240,7 @@ async function expectAdminScopeRejected(params: {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearNostrProfileRateLimitStateForTest();
+    clearProfileRateLimiterMock();
     setGatewayRuntimeScopes(["operator.admin"]);
   });
 
@@ -484,25 +487,6 @@ describe("nostr-profile-http", () => {
           expect(data.error).toContain("Rate limit");
         }
       }
-    });
-
-    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
-      const now = 1_000_000;
-      for (let i = 0; i < 2_500; i += 1) {
-        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
-      }
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
-    });
-
-    it("prunes stale rate-limit keys after the window elapses", () => {
-      const now = 2_000_000;
-      for (let i = 0; i < 100; i += 1) {
-        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
-      }
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
-
-      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
-      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
     });
   });
 

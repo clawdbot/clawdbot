@@ -6,7 +6,6 @@ import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -344,15 +343,5 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("requires redirect-hop inspection only in explicit strict mode", () => {
-    expect(requiresInspectableBrowserNavigationRedirects()).toBe(false);
-    expect(
-      requiresInspectableBrowserNavigationRedirects({ dangerouslyAllowPrivateNetwork: false }),
-    ).toBe(true);
-    expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
-      false,
-    );
   });
 });

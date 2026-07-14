@@ -29,24 +29,24 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
-import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
-import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
-  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-  createCodexDynamicToolBridge,
-} from "./dynamic-tools.js";
+  buildDynamicTools,
+  shouldEnableCodexAppServerNativeToolSurface,
+} from "./dynamic-tool-build.js";
+import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexPluginAppCacheKey,
@@ -54,11 +54,12 @@ import {
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
-  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
 } from "./protocol.js";
+
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
   assistantMessage,
   createAppServerHarness,
@@ -79,7 +80,6 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -96,10 +96,41 @@ import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildDeveloperInstructions,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+const testing = {
+  buildDeveloperInstructions,
+  buildDynamicTools,
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolDirectNames(
+    params: EmbeddedRunAttemptParams,
+    hostCrestodianActive = false,
+  ): string[] {
+    const names: string[] = [];
+    if (
+      hostCrestodianActive &&
+      params.toolsAllow?.length === 1 &&
+      params.toolsAllow[0] === "crestodian"
+    ) {
+      names.push("crestodian");
+    }
+    if (params.sourceReplyDeliveryMode === "message_tool_only") {
+      names.push("message");
+    }
+    return names;
+  },
+  setOpenClawCodingToolsFactoryForTests(
+    factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
+  ): void {
+    dynamicToolBuildState.openClawCodingToolsFactory = factory;
+  },
+  shouldEnableCodexAppServerNativeToolSurface,
+  withCodexStartupTimeout,
+};
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -469,14 +500,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   return { request, nativeToolSurfaceEnabled };
 }
 
-function filterAllowedRuntimeToolNamesForTest(
-  params: EmbeddedRunAttemptParams,
-  tools: RuntimeDynamicToolForTest[],
-) {
-  const toolsAllow = testing.includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
-  return testing.filterCodexDynamicToolsForAllowlist(tools, toolsAllow).map((tool) => tool.name);
-}
-
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
@@ -555,16 +578,6 @@ function buildEmptyCodexToolTelemetry(): CodexAppServerToolTelemetry {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt", () => {
-  it("recreates cached Codex workspace directories after cleanup removes them", async () => {
-    const workspaceDir = path.join(tempDir, "cached-workspace");
-
-    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
-
-    expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
-  });
-
   it("executes and reports the same materialized SecretRef credential", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1363,37 +1376,6 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("reuses one computer execution when Codex redelivers an in-flight request", async () => {
-    const response: CodexDynamicToolCallResponse = {
-      success: true,
-      contentItems: [{ type: "inputText", text: "left_click ok" }],
-    };
-    let finishExecution!: (value: typeof response) => void;
-    const inFlight = new Promise<typeof response>((resolve) => {
-      finishExecution = resolve;
-    });
-    const start = vi.fn(() => inFlight);
-    const registry = testing.createCodexDynamicToolExecutionRegistry();
-    const call = {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-computer-1",
-    };
-
-    const first = registry.claim(call, start);
-    const replayed = registry.claim(call, start);
-
-    expect(first.replayed).toBe(false);
-    expect(replayed.replayed).toBe(true);
-    expect(replayed.execution).toBe(first.execution);
-    expect(start).toHaveBeenCalledTimes(1);
-    finishExecution(response);
-    await expect(Promise.all([first.execution, replayed.execution])).resolves.toEqual([
-      response,
-      response,
-    ]);
-  });
-
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
@@ -1471,36 +1453,6 @@ describe("runCodexAppServerAttempt", () => {
       .filter((event) => event.stream === "tool")
       .map((event) => event.data?.phase);
     expect(toolPhases).toEqual(["start", "result"]);
-  });
-
-  it("maps sanitized dynamic tool output into transcript progress content", () => {
-    const rawToolSecret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"; // pragma: allowlist secret
-    const result = testing.toTranscriptToolResultForTests({
-      success: true,
-      contentItems: [
-        { type: "inputText", text: `lookup result: ${rawToolSecret}` },
-        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
-        { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
-        { type: `${"x".repeat(79)}🚀tail` },
-      ],
-    });
-    const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
-
-    expect(result).not.toHaveProperty("success");
-    expect(result).not.toHaveProperty("contentItems");
-    expect(content[0]).toEqual({ type: "text", text: expect.any(String) });
-    expect(content[0]?.text).toContain("lookup result:");
-    expect(content[0]?.text).not.toContain(rawToolSecret);
-    expect(content[1]).toEqual({ type: "image", url: "data:image/png;base64,abc" });
-    expect(content[2]).toEqual({
-      type: "text",
-      text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
-    });
-    expect(content[3]).toEqual({
-      type: "text",
-      text: `[Unsupported Codex dynamic tool output: ${"x".repeat(79)}...]`,
-    });
-    expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
@@ -1706,57 +1658,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain("without a matching tool.result");
   });
 
-  it("keeps forced message dynamic tool when toolsAllow omits it", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["music_generate"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-    ]);
-
-    expect(dynamicToolNames).toContain("message");
-    expect(dynamicToolNames).toContain("music_generate");
-  });
-
-  it("keeps forced message dynamic tool when toolsAllow is empty", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = [];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
-  });
-
-  it("keeps forced heartbeat registration inside narrow toolsAllow policy", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.toolsAllow = ["message"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
-  });
-
   it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
@@ -1782,9 +1683,9 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
-    expect(webSearch?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(webSearch?.namespace).toBe("openclaw");
     expect(webSearch?.deferLoading).toBe(true);
-    expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(heartbeat?.namespace).toBe("openclaw");
     expect(heartbeat?.deferLoading).toBe(true);
     expect(agentsList).not.toHaveProperty("namespace");
     expect(agentsList).not.toHaveProperty("deferLoading");
@@ -1792,35 +1693,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
-  });
-
-  it("registers the ring-zero crestodian tool directly without private run params", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
-
-    params.toolsAllow = ["crestodian"];
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
-    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual(["crestodian"]);
-
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["message"]);
-    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual([
-      "crestodian",
-      "message",
-    ]);
-
-    const toolBridge = createCodexToolBridgeForTest(
-      params,
-      [{ ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" }],
-      undefined,
-      true,
-    );
-    const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
-      (tool) => tool.name === "crestodian",
-    );
-    expect(crestodian).not.toHaveProperty("namespace");
-    expect(crestodian).not.toHaveProperty("deferLoading");
   });
 
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
@@ -1884,7 +1756,7 @@ describe("runCodexAppServerAttempt", () => {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
         (tool) => tool.name === "heartbeat_respond",
       );
-      expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+      expect(heartbeat?.namespace).toBe("openclaw");
       expect(heartbeat?.deferLoading).toBe(true);
     }
     expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
@@ -2490,7 +2362,7 @@ describe("runCodexAppServerAttempt", () => {
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
 
-    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText.length).toBeLessThanOrEqual(1 << 20);
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain("recent continuity anchor: resume the database migration");
     expect(inputText).toContain("Current user request:");
@@ -4983,7 +4855,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
-        envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
+        envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),

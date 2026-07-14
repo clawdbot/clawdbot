@@ -20,22 +20,21 @@ async function runQaSlack(opts: LiveTransportQaCommandOptions) {
   await (await loadSlackQaCliRuntime()).runQaSlackCommand(opts);
 }
 
-export const slackQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> =
-  {
-    id: "slack",
-    scenarioIds: [
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "thread-follow-up",
-      "thread-isolation",
-    ],
-    matches: ({ channelId, driver }) => driver === "live" && channelId === "slack",
-    async create(context) {
-      return await (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
-    },
-  };
+const slackQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
+  id: "slack",
+  scenarioIds: [
+    "channel-chat-baseline",
+    "channel-canary",
+    "channel-mention-gating",
+    "channel-top-level-reply-shape",
+    "thread-follow-up",
+    "thread-isolation",
+  ],
+  matches: ({ channelId, driver }) => driver === "live" && channelId === "slack",
+  async create(context) {
+    return await (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
+  },
+};
 
 export const slackQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({

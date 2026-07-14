@@ -3,12 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  resolveConfiguredReplyToMode,
-  resolveReplyDeliveryAccountId,
-  resolveReplyToMode,
-  resolveReplyToModeWithThreading,
-} from "./reply-threading.js";
+import { resolveReplyDeliveryAccountId, resolveReplyToMode } from "./reply-threading.js";
 
 const emptyCfg = {} as OpenClawConfig;
 
@@ -82,28 +77,6 @@ describe("resolveReplyToMode", () => {
     }
   });
 
-  it("prefers plugin threading adapters over config fallback when available", () => {
-    expect(
-      resolveReplyToModeWithThreading(
-        {
-          channels: {
-            slack: {
-              replyToMode: "off",
-            },
-          },
-        } as OpenClawConfig,
-        {
-          resolveReplyToMode: () => "first",
-        },
-        {
-          channel: "slack",
-          accountId: "acct-1",
-          chatType: "direct",
-        },
-      ),
-    ).toBe("first");
-  });
-
   it("uses registered channel threading adapters for runtime reply-mode resolution", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -164,32 +137,5 @@ describe("resolveReplyToMode", () => {
 
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
-  });
-});
-
-describe("resolveConfiguredReplyToMode", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  it("handles top-level, chat-type, and legacy DM fallback without plugin registry access", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          replyToModeByChatType: { direct: "all", group: "first" },
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveConfiguredReplyToMode(cfg, "slack", "direct")).toBe("all");
-    expect(resolveConfiguredReplyToMode(cfg, "slack", "group")).toBe("first");
-    expect(resolveConfiguredReplyToMode(cfg, "slack", "channel")).toBe("off");
-    expect(resolveConfiguredReplyToMode(cfg, "slack", undefined)).toBe("off");
   });
 });

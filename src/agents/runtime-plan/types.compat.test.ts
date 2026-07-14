@@ -7,10 +7,7 @@ import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import type { PromptMode } from "../system-prompt.types.js";
 import type { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 import type {
-  AgentRuntimeFailoverReason,
-  AgentRuntimePromptMode,
-  AgentRuntimeReplyPayload,
-  AgentRuntimeThinkLevel,
+  AgentRuntimePlan,
   BuildAgentRuntimeDeliveryPlanParams,
   BuildAgentRuntimePlanParams,
 } from "./types.js";
@@ -18,6 +15,20 @@ import type {
 type Equal<X, Y> = [X] extends [Y] ? ([Y] extends [X] ? true : false) : false;
 
 type Assert<T extends true> = T;
+
+type AgentRuntimeFailoverReason = NonNullable<
+  Extract<
+    ReturnType<AgentRuntimePlan["outcome"]["classifyRunResult"]>,
+    { message: string }
+  >["reason"]
+>;
+type AgentRuntimePromptMode = Parameters<
+  AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
+>[0]["promptMode"];
+type AgentRuntimeReplyPayload = Parameters<
+  AgentRuntimePlan["delivery"]["resolveFollowupRoute"]
+>[0]["payload"];
+type AgentRuntimeThinkLevel = NonNullable<BuildAgentRuntimePlanParams["thinkingLevel"]>;
 
 describe("AgentRuntimePlan structural type compatibility", () => {
   it("keeps copied scalar unions aligned with their source contracts", () => {

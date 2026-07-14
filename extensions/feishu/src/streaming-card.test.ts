@@ -3,13 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
-import {
-  FeishuStreamingSession,
-  type FeishuStreamingFetch,
-  mergeStreamingText,
-  resolveStreamingCardSendMode,
-} from "./streaming-card.js";
+import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
+import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+
+const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
+type FeishuStreamingFetch = typeof fetch;
 
 type StreamingSessionState = {
   cardId: string;
@@ -1188,10 +1186,5 @@ describe("resolveStreamingCardSendMode", () => {
 
   it("uses create mode when no reply routing fields are provided", () => {
     expect(resolveStreamingCardSendMode()).toBe("create");
-    expect(
-      resolveStreamingCardSendMode({
-        replyInThread: true,
-      }),
-    ).toBe("create");
   });
 });

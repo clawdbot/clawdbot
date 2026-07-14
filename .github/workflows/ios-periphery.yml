@@ -14,7 +14,6 @@ env:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   scope:
@@ -23,6 +22,22 @@ jobs:
     outputs:
       should-scan: ${{ steps.scope.outputs.should-scan }}
     steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Ensure base commit
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Detect changed paths
         id: scope
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -37,32 +52,33 @@ jobs:
               return;
             }
 
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
-            const isScanPath = (filename) =>
-              typeof filename === "string" && (
-                filename.startsWith("apps/ios/") ||
-                filename.startsWith("apps/shared/OpenClawKit/Sources/") ||
-                filename.startsWith("apps/swabble/Sources/SwabbleKit/") ||
-                filename === ".github/workflows/ios-periphery.yml" ||
-                filename === ".github/workflows/ios-periphery-comment.yml" ||
-                filename === "config/swiftformat" ||
-                filename === "config/swiftlint.yml" ||
-                filename === "scripts/check-swift-tools.sh" ||
-                filename === "scripts/format-swift.sh" ||
-                filename === "scripts/install-swift-tools.sh" ||
-                filename === "scripts/ios-write-swift-filelist.mjs" ||
-                filename === "scripts/lint-swift.sh"
-              );
-            const shouldScan = files.some(
-              ({ filename, previous_filename: previousFilename }) =>
-                isScanPath(filename) || isScanPath(previousFilename)
-            );
-            core.setOutput("should-scan", String(shouldScan));
+            const baseSha = context.payload.pull_request?.base?.sha;
+            if (!baseSha) {
+              throw new Error("missing pull request base SHA");
+            }
+            const result = await exec.getExecOutput("git", [
+              "diff",
+              "--quiet",
+              baseSha,
+              "HEAD",
+              "--",
+              "apps/ios/",
+              "apps/shared/OpenClawKit/Sources/",
+              "apps/swabble/Sources/SwabbleKit/",
+              ".github/workflows/ios-periphery.yml",
+              ".github/workflows/ios-periphery-comment.yml",
+              "config/swiftformat",
+              "config/swiftlint.yml",
+              "scripts/check-swift-tools.sh",
+              "scripts/format-swift.sh",
+              "scripts/install-swift-tools.sh",
+              "scripts/ios-write-swift-filelist.mjs",
+              "scripts/lint-swift.sh",
+            ], { ignoreReturnCode: true, silent: true });
+            if (result.exitCode !== 0 && result.exitCode !== 1) {
+              throw new Error(`git diff failed with exit code ${result.exitCode}`);
+            }
+            core.setOutput("should-scan", String(result.exitCode === 1));
 
   scan:
     name: Scan iOS dead code

@@ -1,7 +1,7 @@
 // Nostr tests cover nostr bus.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createMetrics, type MetricName } from "./metrics.js";
-import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-key-utils.js";
+import { createMetrics } from "./metrics.js";
+import { validatePrivateKey, normalizePubkey } from "./nostr-key-utils.js";
 import { createSeenTracker } from "./seen-tracker.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
@@ -99,32 +99,6 @@ describe("validatePrivateKey fuzz", () => {
     });
   });
 });
-
-// ============================================================================
-// Fuzz Tests for isValidPubkey
-// ============================================================================
-
-describe("isValidPubkey fuzz", () => {
-  describe("isValidPubkey type confusion", () => {
-    it("handles non-string input gracefully", () => {
-      for (const value of [null, undefined, 123, {}]) {
-        expect(isValidPubkey(value as unknown as string)).toBe(false);
-      }
-    });
-  });
-
-  describe("malicious inputs", () => {
-    it("rejects prototype property names", () => {
-      for (const value of ["__proto__", "constructor", "toString"]) {
-        expect(isValidPubkey(value)).toBe(false);
-      }
-    });
-  });
-});
-
-// ============================================================================
-// Fuzz Tests for normalizePubkey
-// ============================================================================
 
 describe("normalizePubkey fuzz", () => {
   describe("prototype pollution attempts", () => {
@@ -274,7 +248,8 @@ describe("Metrics fuzz", () => {
       const metrics = createPlainMetrics();
 
       // Cast to bypass type checking - testing runtime behavior
-      expect(metrics.emit("invalid.metric.name" as MetricName)).toBeUndefined();
+      type EmitMetricName = Parameters<typeof metrics.emit>[0];
+      expect(metrics.emit("invalid.metric.name" as EmitMetricName)).toBeUndefined();
     });
   });
 

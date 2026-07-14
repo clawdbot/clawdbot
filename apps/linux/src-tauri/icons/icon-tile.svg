@@ -1,0 +1,12 @@
+<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- App/bundle icon: claw mark on the dark brand tile. Tray uses icon.svg
+       (transparent) so the mark sits directly on the panel. -->
+  <rect width="512" height="512" rx="112" fill="#14161d"/>
+  <rect width="512" height="512" rx="112" fill="none" stroke="#272a33" stroke-width="8"/>
+  <g stroke="#ff5c5c" stroke-width="34" fill="none" transform="translate(103 112) scale(1.42)">
+    <path transform="rotate(-20 60 108)"
+      d="M 22 92 A 38 38 0 0 1 60 54 A 38 38 0 0 1 98 92 L 98 146 A 22 22 0 0 1 76 168 L 44 168 A 22 22 0 0 1 22 146 Z"/>
+    <path transform="rotate(20 156 108)"
+      d="M 118 92 A 38 38 0 0 1 156 54 A 38 38 0 0 1 194 92 L 194 146 A 22 22 0 0 1 172 168 L 140 168 A 22 22 0 0 1 118 146 Z"/>
+  </g>
+</svg>

@@ -560,6 +560,8 @@ describe("WhatsAppConnectionController", () => {
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
     const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+    const actualAuthStore =
+      await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
@@ -590,7 +592,7 @@ describe("WhatsAppConnectionController", () => {
       expect(credsSaved).toBe(true);
       expect(result.outcome).toBe("connected");
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
-      await expect(actualSession.webAuthExists(authDir)).resolves.toBe(true);
+      await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {
       await fs.rm(authDir, { recursive: true, force: true });
     }

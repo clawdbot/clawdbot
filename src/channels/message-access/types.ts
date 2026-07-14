@@ -63,7 +63,7 @@ export type RedactedIngressMatch = {
 };
 
 /** Public normalization result for a set of allowlist entries. */
-export type ChannelIngressNormalizeResult = {
+type ChannelIngressNormalizeResult = {
   matchable: ChannelIngressNormalizedEntry[];
   invalid: RedactedIngressEntryDiagnostic[];
   disabled: RedactedIngressEntryDiagnostic[];

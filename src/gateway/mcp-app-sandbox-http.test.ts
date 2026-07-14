@@ -1,12 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
-import { handleMcpAppSandboxHttpRequest } from "./mcp-app-sandbox-http.js";
+import { createMcpAppSandboxHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   const { res, end, setHeader } = makeMockHttpResponse();
-  handleMcpAppSandboxHttpRequest({ url, method } as IncomingMessage, res);
+  const server = createMcpAppSandboxHttpServer();
+  server.emit("request", { url, method } as IncomingMessage, res);
+  server.removeAllListeners();
   return { res, end, setHeader };
 }
 
@@ -26,15 +28,17 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(String(csp)).toContain("connect-src https://api.example.com");
     expect(String(csp)).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
     expect(String(csp)).toContain("font-src 'self' https://cdn.example.com");
-    expect(String(csp)).not.toContain("frame-ancestors");
+    expect(String(csp)).toContain("frame-ancestors");
+    expect(String(csp)).toContain("frame-src 'none'");
     expect(result.setHeader).not.toHaveBeenCalledWith("X-Frame-Options", expect.anything());
+    expect(result.setHeader).toHaveBeenCalledWith("Cross-Origin-Resource-Policy", "cross-origin");
     expect(result.setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
       "camera=(), microphone=(), geolocation=(), clipboard-write=()",
     );
-    expect(result.end).toHaveBeenCalledWith(
-      expect.stringContaining("ui/notifications/sandbox-proxy-ready"),
-    );
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("document.referrer"));
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("sandbox-proxy-ready"));
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("allow-scripts allow-forms"));
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {

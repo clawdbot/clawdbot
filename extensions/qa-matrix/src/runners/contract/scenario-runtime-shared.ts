@@ -246,11 +246,11 @@ export function assertThreadReplyArtifact(
   }
 }
 
-export function readMatrixQaSyncCursor(syncState: MatrixQaSyncState, actorId: MatrixQaActorId) {
+function readMatrixQaSyncCursor(syncState: MatrixQaSyncState, actorId: MatrixQaActorId) {
   return syncState[actorId];
 }
 
-export function writeMatrixQaSyncCursor(
+function writeMatrixQaSyncCursor(
   syncState: MatrixQaSyncState,
   actorId: MatrixQaActorId,
   since?: string,

@@ -1,9 +1,41 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import { formatErrorMessage } from "./errors.js";
+import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
+let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+
+function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
+  if (isSqliteWalResetSafeVersion(version)) {
+    return;
+  }
+  throw new Error(
+    `OpenClaw requires SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) for WAL safety; ` +
+      `Node ${nodeVersion} embeds SQLite ${version}, which is affected by the upstream WAL-reset ` +
+      "database corruption bug. Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.",
+  );
+}
+
+function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
+  if (validatedSqliteModule === sqlite) {
+    return;
+  }
+  // Shared-SQLite Node builds can load a different library than process.versions
+  // reports, so query the loaded library before callers open real state databases.
+  const database = new sqlite.DatabaseSync(":memory:");
+  try {
+    const row = database.prepare("SELECT sqlite_version() AS version").get() as
+      | { version?: unknown }
+      | undefined;
+    const version = typeof row?.version === "string" ? row.version : "unknown";
+    assertSqliteWalResetSafeVersion(version, process.versions.node);
+    validatedSqliteModule = sqlite;
+  } finally {
+    database.close();
+  }
+}
 
 // node:sqlite is optional across Node versions, so callers get a clear runtime
 // error instead of a low-level module resolution failure.
@@ -11,12 +43,13 @@ const require = createRequire(import.meta.url);
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
-    return require("node:sqlite") as typeof import("node:sqlite");
+    const sqlite = require("node:sqlite") as typeof import("node:sqlite");
+    assertSafeSqliteRuntime(sqlite);
+    return sqlite;
   } catch (err) {
     const message = formatErrorMessage(err);
-    throw new Error(
-      `SQLite support is unavailable in this Node runtime (missing node:sqlite). ${message}`,
-      { cause: err },
-    );
+    throw new Error(`SQLite support is unavailable or unsafe in this Node runtime. ${message}`, {
+      cause: err,
+    });
   }
 }

@@ -207,6 +207,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     }
 }
 
+#if os(iOS)
 #Preview("Chat") {
     OpenClawChatPreview(scenario: .connected)
 }
@@ -243,6 +244,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         markdownVariant: .standard,
         userAccent: OpenClawChatTheme.accent)
 }
+#endif
 
 private struct OpenClawChatPreview: View {
     let scenario: OpenClawChatPreviewTransport.Scenario

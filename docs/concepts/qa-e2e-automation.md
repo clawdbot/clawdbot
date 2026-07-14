@@ -612,6 +612,8 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 - `slack-canary`
 - `slack-mention-gating`
 - `slack-allowlist-block`
+- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+  configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,

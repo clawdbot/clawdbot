@@ -118,6 +118,7 @@
     },
     "streaming.enabled": {
       "label": "Enable Streaming",
+      "help": "Classic streaming transcription currently requires the Twilio call provider.",
       "advanced": true
     },
     "streaming.provider": {

@@ -235,7 +235,7 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-export function createSlackSocketModeLogger(
+function createSlackSocketModeLogger(
   sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
 ): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
@@ -276,7 +276,7 @@ export function createSlackSocketModeLogger(
   };
 }
 
-export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
+function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
   const botId = args.context?.botId;
   const botUserId = args.context?.botUserId;
   const message = asRecord(args.message);
@@ -366,7 +366,7 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-export function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
+function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
   const waiterAbortController = new AbortController();
   const relayAbort = () => waiterAbortController.abort();
   let latest: SlackSocketDisconnect | undefined;
@@ -427,9 +427,7 @@ function isMissingSocketStartErrorDetail(err: unknown): boolean {
   );
 }
 
-export function resolveSlackSocketShutdownClient(
-  app: unknown,
-): SlackSocketShutdownClient | undefined {
+function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
   if (!app || typeof app !== "object") {
     return undefined;
   }

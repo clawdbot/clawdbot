@@ -65,13 +65,10 @@ function getActionCommandPath(actionCommand: Command): string[] {
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   const root = getRootCommand(actionCommand);
-  if (typeof root.getOptionValueSource !== "function") {
-    return undefined;
-  }
   if (root.getOptionValueSource("logLevel") !== "cli") {
     return undefined;
   }
-  const logLevel = root.opts<Record<string, unknown>>().logLevel;
+  const logLevel = root.getOptionValue("logLevel");
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
@@ -154,9 +151,15 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    let skipPristineStartupStateMigrations = false;
+    let skipPristineCoreStateMigrations = false;
     if (isGatewayRunAction(actionCommand)) {
-      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
-        await import("../gateway-cli/pre-bootstrap.js");
+      const {
+        prepareGatewayRunBootstrap,
+        recheckGatewayRunBootstrap,
+        wasPreparedGatewayRunCoreStatePristine,
+        wasPreparedGatewayRunStatePristine,
+      } = await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       const opts = {
@@ -167,6 +170,8 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       if (!shouldBootstrap) {
         return;
       }
+      skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
+      skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
       beforeStateMigrations = (snapshot) =>
         recheckGatewayRunBootstrap({
           opts,
@@ -180,6 +185,8 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       startupPolicy,
       allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+      ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+      ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
       skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
     if (beforeStateMigrations) {

@@ -60,7 +60,9 @@ function strictEvidenceReuse() {
     current: { runId: "123", targetSha },
     root: { runId: "122", targetSha },
     evidenceReuse: {
+      changedPaths: [],
       evidenceSha: targetSha,
+      policy: "exact-target-full-validation-v1",
       rootRunId: "122",
       selectedRunId: "122",
     },
@@ -208,6 +210,40 @@ describe("full release validation evidence", () => {
     );
   });
 
+  it("accepts changelog-only release evidence reuse on the SHA-pinned path", () => {
+    const codeSha = "c".repeat(40);
+    const reuse = {
+      changedPaths: ["CHANGELOG.md"],
+      evidenceSha: codeSha,
+      policy: "changelog-only-release-v1",
+      runId: "122",
+      selectedRunId: "122",
+    };
+    const result = validateFullReleaseValidationEvidence({
+      run: releaseRun(),
+      manifest: releaseManifest({ evidenceReuse: reuse }),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedWorkflowBranch: "release/2026.7.1",
+      isTrustedMainAncestor: () => true,
+      validateEvidenceReuseStrictly: () => ({
+        ...strictEvidenceReuse(),
+        current: { runId: "123", targetSha },
+        root: { runId: "122", targetSha: codeSha },
+        evidenceReuse: {
+          changedPaths: ["CHANGELOG.md"],
+          evidenceSha: codeSha,
+          policy: "changelog-only-release-v1",
+          rootRunId: "122",
+          selectedRunId: "122",
+        },
+      }),
+    });
+
+    expect(result.source).toBe("sha-pinned-main");
+  });
+
   it("requires strict root and child validation for reused evidence", () => {
     expect(() =>
       validateFullReleaseValidationEvidence({
@@ -249,6 +285,19 @@ describe("full release validation evidence", () => {
       validate(
         {},
         { evidenceReuse: { ...exactTargetEvidenceReuse(), evidenceSha: "c".repeat(40) } },
+      ),
+    ).toThrow("evidence reuse is invalid");
+    expect(() =>
+      validate(
+        {},
+        {
+          evidenceReuse: {
+            ...exactTargetEvidenceReuse(),
+            changedPaths: ["src/a.ts"],
+            evidenceSha: "c".repeat(40),
+            policy: "changelog-only-release-v1",
+          },
+        },
       ),
     ).toThrow("evidence reuse is invalid");
   });

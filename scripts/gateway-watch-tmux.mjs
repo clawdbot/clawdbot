@@ -15,6 +15,10 @@ const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
+const RUN_NODE_SCRIPT = "scripts/run-node.mjs";
+const GATEWAY_WATCH_TMUX_SCRIPT = "scripts/gateway-watch-tmux.mjs";
+const SERVICE_HANDOFF_ARG = "--handoff-managed-service";
+const DEFAULT_GATEWAY_PORT = "18789";
 const TMUX_CWD_ENV_KEY = "OPENCLAW_GATEWAY_WATCH_CWD";
 const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
 const TMUX_CHILD_ENV_KEYS = [
@@ -62,6 +66,52 @@ const readArgValue = (args, flag) => {
     }
   }
   return null;
+};
+
+const hasArg = (args, flag) =>
+  args.some((arg) => arg === flag || (typeof arg === "string" && arg.startsWith(`${flag}=`)));
+
+const parsePortValue = (raw, { allowHost = false } = {}) => {
+  const trimmed = String(raw ?? "").trim();
+  let portText = /^\d+$/.test(trimmed) ? trimmed : null;
+  if (!portText && allowHost) {
+    const bracketed = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
+    if (bracketed?.[1]) {
+      portText = bracketed[1];
+    } else {
+      const firstColon = trimmed.indexOf(":");
+      const lastColon = trimmed.lastIndexOf(":");
+      const suffix =
+        firstColon > 0 && firstColon === lastColon ? trimmed.slice(firstColon + 1) : "";
+      portText = /^\d+$/.test(suffix) ? suffix : null;
+    }
+  }
+  const port = portText ? Number(portText) : Number.NaN;
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+};
+
+const resolveGatewayWatchPort = ({ args, env }) => {
+  // Keep CLI precedence and Compose-style env parsing aligned with the Gateway
+  // owners in src/cli/gateway-cli/run.ts and src/config/paths.ts.
+  if (hasArg(args, "--port")) {
+    return { explicitCli: true, port: parsePortValue(readArgValue(args, "--port")) };
+  }
+  return {
+    explicitCli: false,
+    port: parsePortValue(env.OPENCLAW_GATEWAY_PORT, { allowHost: true }),
+  };
+};
+
+const resolveGatewayWatchProfile = ({ args, env }) => {
+  if (hasArg(args, "--profile")) {
+    return readArgValue(args, "--profile") ?? "";
+  }
+  const gatewayIndex = args.indexOf("gateway");
+  const devIndex = args.indexOf("--dev");
+  if (devIndex >= 0 && (gatewayIndex < 0 || devIndex < gatewayIndex)) {
+    return "dev";
+  }
+  return env.OPENCLAW_PROFILE || null;
 };
 
 const joinArtifactPath = (dir, basename) => {
@@ -144,18 +194,15 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
  * Resolves the tmux session name for gateway watch arguments/environment.
  */
 export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.env } = {}) => {
-  const profile =
-    env.OPENCLAW_PROFILE ||
-    readArgValue(args, "--profile") ||
-    (args.includes("--dev") ? "dev" : null);
-  const port = env.OPENCLAW_GATEWAY_PORT || readArgValue(args, "--port");
+  const profile = resolveGatewayWatchProfile({ args, env });
+  const { port } = resolveGatewayWatchPort({ args, env });
   const parts = [
     "openclaw",
     "gateway",
     "watch",
     sanitizeSessionPart(profile ?? DEFAULT_PROFILE_NAME),
   ];
-  if (port && port !== "18789") {
+  if (port && String(port) !== DEFAULT_GATEWAY_PORT) {
     parts.push(sanitizeSessionPart(port));
   }
   return parts.join("-");
@@ -199,17 +246,117 @@ export const buildGatewayWatchTmuxCommand = ({
       env[key] == null || env[key] === "" ? [] : [`${key}=${env[key]}`],
     ),
   ];
+  const childEnvCommand = childEnv.map(shellQuote);
+  const handoffCommand = [
+    ...childEnvCommand,
+    shellQuote(nodePath),
+    shellQuote(GATEWAY_WATCH_TMUX_SCRIPT),
+    shellQuote(SERVICE_HANDOFF_ARG),
+    ...args.map(shellQuote),
+    "&&",
+  ];
   const watchCommand = [
     "cd",
     shellQuote(cwd),
     "&&",
+    ...handoffCommand,
     "exec",
-    ...childEnv.map(shellQuote),
+    ...childEnvCommand,
     shellQuote(nodePath),
     shellQuote(RAW_WATCH_SCRIPT),
     ...args.map(shellQuote),
   ].join(" ");
   return `exec ${shellQuote(shell)} -lc ${shellQuote(watchCommand)}`;
+};
+
+const parseTrailingJsonObject = (raw) => {
+  const text = String(raw ?? "").trim();
+  for (let index = text.lastIndexOf("{"); index >= 0; index = text.lastIndexOf("{", index - 1)) {
+    try {
+      return JSON.parse(text.slice(index));
+    } catch {
+      // Build output can precede the CLI JSON; keep scanning for the outer object.
+    }
+  }
+  return null;
+};
+
+/** Stops the matching managed service without targeting an unrelated listener. */
+export const runGatewayWatchServiceHandoff = (params = {}) => {
+  const args = params.args ?? [];
+  const cwd = params.cwd ?? process.cwd();
+  const env = params.env ? { ...params.env } : { ...process.env };
+  const nodePath = params.nodePath ?? process.execPath;
+  const spawnSyncImpl = params.spawnSync ?? spawnSync;
+  const stderr = params.stderr ?? process.stderr;
+  const profile = resolveGatewayWatchProfile({ args, env });
+  const profileArgs = profile === null ? [] : ["--profile", profile];
+  const statusResult = spawnSyncImpl(
+    nodePath,
+    [RUN_NODE_SCRIPT, ...profileArgs, "gateway", "status", "--json", "--no-probe"],
+    {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (statusResult.error || statusResult.status !== 0) {
+    const detail =
+      statusResult.error?.message || String(statusResult.stderr || "").trim() || "unknown error";
+    log(stderr, `failed to inspect the managed Gateway service before watch: ${detail}`);
+    return statusResult.status || 1;
+  }
+  const status = parseTrailingJsonObject(statusResult.stdout);
+  if (!status || typeof status !== "object") {
+    log(stderr, "failed to parse managed Gateway service status before watch");
+    return 1;
+  }
+  const managedServiceActive =
+    status.service?.loaded === true || status.service?.runtime?.status === "running";
+  if (!managedServiceActive) {
+    return 0;
+  }
+
+  const { explicitCli, port: requestedPort } = resolveGatewayWatchPort({ args, env });
+  if (explicitCli && requestedPort === null) {
+    // The watcher will report the invalid CLI value without disrupting a healthy service.
+    return 0;
+  }
+  const managedPort = parsePortValue(status.gateway?.port);
+  const currentConfigPort = parsePortValue(status.portCli?.port ?? status.gateway?.port);
+  const watchPort = requestedPort ?? currentConfigPort;
+  if (managedPort === null || watchPort === null) {
+    log(stderr, "failed to resolve the Gateway watch port before service handoff");
+    return 1;
+  }
+  if (watchPort !== managedPort) {
+    log(
+      stderr,
+      `gateway:watch leaving managed Gateway on port ${managedPort}; watching port ${watchPort}`,
+    );
+    return 0;
+  }
+
+  // If the service unloads after status, keep the unmanaged fallback scoped to
+  // the watch target instead of a lower-precedence environment port.
+  const stopEnv = { ...env };
+  if (explicitCli) {
+    stopEnv.OPENCLAW_GATEWAY_PORT = String(watchPort);
+  }
+  const stopResult = spawnSyncImpl(nodePath, [RUN_NODE_SCRIPT, ...profileArgs, "gateway", "stop"], {
+    cwd,
+    env: stopEnv,
+    stdio: "inherit",
+  });
+  if (stopResult.error) {
+    log(
+      stderr,
+      `failed to stop the managed Gateway service before watch: ${stopResult.error.message}`,
+    );
+    return 1;
+  }
+  return stopResult.status ?? (stopResult.signal ? 1 : 0);
 };
 
 const runForegroundWatcher = ({ args, cwd, env, nodePath, spawnSyncImpl, stdio = "inherit" }) => {
@@ -278,6 +425,9 @@ const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => 
     }
   }
 };
+
+const retainTmuxPaneOnExit = ({ sessionName, spawnSyncImpl }) =>
+  runTmux(spawnSyncImpl, ["set-option", "-w", "-t", sessionName, "remain-on-exit", "on"]);
 
 /**
  * Runs the gateway-watch tmux wrapper main flow.
@@ -355,10 +505,37 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     return 1;
   }
 
-  const startSession = () =>
-    runTmux(deps.spawnSync, ["new-session", "-d", "-s", sessionName, "-c", deps.cwd, command]);
-  const restartSession = () =>
+  const launchPane = () =>
     runTmux(deps.spawnSync, ["respawn-pane", "-k", "-t", sessionName, "-c", deps.cwd, command]);
+  const prepareSession = () => retainTmuxPaneOnExit({ sessionName, spawnSyncImpl: deps.spawnSync });
+  const startSession = () => {
+    // Create a durable shell pane first so remain-on-exit is active before the
+    // watcher can fail. Agents can then capture the original startup error.
+    const created = runTmux(deps.spawnSync, [
+      "new-session",
+      "-d",
+      "-s",
+      sessionName,
+      "-c",
+      deps.cwd,
+    ]);
+    if (created.error || created.status !== 0) {
+      return created;
+    }
+    const prepared = prepareSession();
+    if (prepared.error || prepared.status !== 0) {
+      runTmux(deps.spawnSync, ["kill-session", "-t", sessionName]);
+      return prepared;
+    }
+    return launchPane();
+  };
+  const restartSession = () => {
+    const prepared = prepareSession();
+    if (prepared.error || prepared.status !== 0) {
+      return prepared;
+    }
+    return launchPane();
+  };
   const action = hasSession.status === 0 ? "restarted" : "started";
   let result = hasSession.status === 0 ? restartSession() : startSession();
   if (hasSession.status === 0 && isMissingTmuxTarget(result)) {
@@ -410,6 +587,7 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     return 0;
   }
   deps.stdout.write(`Attach: tmux attach -t ${sessionName}\n`);
+  deps.stdout.write(`Logs: tmux capture-pane -ep -t ${sessionName} -S -200\n`);
   deps.stdout.write(`Cwd: tmux show-options -v -t ${sessionName} ${TMUX_CWD_OPTION_KEY}\n`);
   deps.stdout.write("Restart: rerun the same pnpm gateway:watch command\n");
   deps.stdout.write(`Stop: tmux kill-session -t ${sessionName}\n`);
@@ -417,5 +595,10 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exit(runGatewayWatchTmuxMain());
+  const args = process.argv.slice(2);
+  process.exit(
+    args[0] === SERVICE_HANDOFF_ARG
+      ? runGatewayWatchServiceHandoff({ args: args.slice(1) })
+      : runGatewayWatchTmuxMain({ args }),
+  );
 }

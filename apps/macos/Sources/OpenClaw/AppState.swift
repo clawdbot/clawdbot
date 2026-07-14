@@ -264,8 +264,20 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
-                Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(self.peekabooBridgeEnabled) }
             }
+            self.applyPeekabooBridgeHostState()
+        }
+    }
+
+    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
+    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
+    /// via its own Mac app instead of a second, separately toggled bridge here.
+    func applyPeekabooBridgeHostState() {
+        self.ifNotPreview {
+            let computerControlEnabled = UserDefaults.standard
+                .object(forKey: computerControlEnabledKey) as? Bool ?? false
+            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
+            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
         }
     }
 
@@ -625,17 +637,27 @@ final class AppState {
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         let fingerprint = Self.configFingerprint(root)
-        let changed = fingerprint != self.lastConfigFingerprint
+        guard fingerprint != self.lastConfigFingerprint else { return }
         self.lastConfigFingerprint = fingerprint
         self.applyConfigOverrides(root)
         MacNodeModeCoordinator.shared.refresh()
-        if changed {
-            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
-        }
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
     private static func configFingerprint(_ root: [String: Any]) -> Data? {
-        try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        var comparableRoot = root
+        if var meta = comparableRoot["meta"] as? [String: Any] {
+            // Writers refresh these bookkeeping fields without changing runtime configuration.
+            // Ignoring them prevents metadata churn from restarting gateway and node routing.
+            meta.removeValue(forKey: "lastTouchedAt")
+            meta.removeValue(forKey: "lastTouchedVersion")
+            if meta.isEmpty {
+                comparableRoot.removeValue(forKey: "meta")
+            } else {
+                comparableRoot["meta"] = meta
+            }
+        }
+        return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
@@ -1187,6 +1209,10 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
+    static func _testConfigFingerprint(_ root: [String: Any]) -> Data? {
+        self.configFingerprint(root)
+    }
+
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> [String: Any]

@@ -32,6 +32,7 @@ export async function authorizeDiscordVoiceIngress(params: {
   channelLabel?: string;
   memberRoleIds: string[];
   ownerAllowFrom?: string[];
+  ownerAllowAll?: boolean;
   sender: { id: string; name?: string; tag?: string };
 }): Promise<
   { ok: true; channelConfig?: DiscordChannelConfigResolved | null } | { ok: false; message: string }
@@ -111,7 +112,10 @@ export async function authorizeDiscordVoiceIngress(params: {
   const useAccessGroups = params.useAccessGroups ?? params.cfg.commands?.useAccessGroups !== false;
   const authorizers = useAccessGroups
     ? [
-        { configured: ownerAllowList != null, allowed: ownerAllowed },
+        {
+          configured: params.ownerAllowAll === true || ownerAllowList != null,
+          allowed: params.ownerAllowAll === true || ownerAllowed,
+        },
         { configured: hasAccessRestrictions, allowed: memberAllowed },
       ]
     : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];

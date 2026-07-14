@@ -48,11 +48,6 @@ export function resolvePackageDirs(args: string[]): {
   jobs: number;
   packageDirs: unknown[];
 };
-export function runBoundedTasks<Item, Result>(
-  items: Item[],
-  jobs: number,
-  runTask: (item: Item) => Promise<Result>,
-): Promise<Result[]>;
 export function resolveShrinkwrapJobs(
   rawValue: unknown,
   env?: NodeJS.ProcessEnv,
@@ -89,6 +84,7 @@ export function disableShrinkwrappedOverrideConflictSources(
 ): string[];
 export function exactOverrideRulesFromOverrides(overrides: unknown): unknown;
 export function exactVersionFromOverrideSpec(spec: unknown): string | null;
+export function normalizeOverrides(overrides: unknown): Record<string, unknown>;
 export function mergeOverrides(
   packageOverrides: unknown,
   workspaceOverrides: unknown,

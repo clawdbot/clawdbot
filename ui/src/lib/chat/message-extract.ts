@@ -52,7 +52,7 @@ export function extractTextCached(message: unknown): string | null {
   return value;
 }
 
-export function extractThinking(message: unknown): string | null {
+function extractThinking(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const parts: string[] = [];

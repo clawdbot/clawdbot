@@ -2,6 +2,7 @@
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   isBaseFieldActiveForChannelSurface,
   isEnabledFlag,
@@ -10,53 +11,11 @@ import {
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
-    {
-      id: "channels.irc.accounts.*.nickserv.password",
-      targetType: "channels.irc.accounts.*.nickserv.password",
-      configFile: "openclaw.json",
-      pathPattern: "channels.irc.accounts.*.nickserv.password",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.irc.accounts.*.password",
-      targetType: "channels.irc.accounts.*.password",
-      configFile: "openclaw.json",
-      pathPattern: "channels.irc.accounts.*.password",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.irc.nickserv.password",
-      targetType: "channels.irc.nickserv.password",
-      configFile: "openclaw.json",
-      pathPattern: "channels.irc.nickserv.password",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.irc.password",
-      targetType: "channels.irc.password",
-      configFile: "openclaw.json",
-      pathPattern: "channels.irc.password",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "irc",
+  account: ["nickserv.password", "password"],
+  channel: ["nickserv.password", "password"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

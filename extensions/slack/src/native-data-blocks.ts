@@ -50,7 +50,7 @@ export function isSlackInvalidBlocksError(error: unknown): boolean {
 }
 
 /** Extract a complete accessible summary from a supported native data block. */
-export function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
+function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
   const type = asRecord(value)?.type;
   if (type === "data_visualization") {
     return renderSlackDataVisualizationMrkdwnFallbackText(value);

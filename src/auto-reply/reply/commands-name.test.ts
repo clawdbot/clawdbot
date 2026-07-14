@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { loadCommandHandlers } from "./commands-handlers.runtime.js";
-import { handleNameCommand, parseNameCommand } from "./commands-name.js";
+import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const sessionKey = "agent:main:web:main";
@@ -66,14 +66,6 @@ function buildNameParams(
 }
 
 describe("name command", () => {
-  it("parses the captured title and ignores other commands", () => {
-    expect(parseNameCommand("/name Quarterly planning")).toEqual({
-      title: "Quarterly planning",
-    });
-    expect(parseNameCommand("/name")).toEqual({ title: "" });
-    expect(parseNameCommand("/goal status")).toBeNull();
-  });
-
   it("registers and loads the command on text and native surfaces", () => {
     const command = buildBuiltinChatCommands().find((entry) => entry.key === "name");
 
@@ -215,9 +207,10 @@ describe("name command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
-  it("returns null when text commands are disabled", async () => {
+  it("ignores other commands and disabled text commands", async () => {
     const storePath = await createStorePath();
     const params = buildNameParams("/name Anything", storePath);
     expect(await handleNameCommand(params, false)).toBeNull();
+    expect(await handleNameCommand(buildNameParams("/goal status", storePath), true)).toBeNull();
   });
 });

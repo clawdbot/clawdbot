@@ -46,7 +46,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
-import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
+import { compareValidSemver } from "../infra/semver.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -150,7 +150,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
 } as const;
 
-export type PluginInstallErrorCode =
+type PluginInstallErrorCode =
   (typeof PLUGIN_INSTALL_ERROR_CODE)[keyof typeof PLUGIN_INSTALL_ERROR_CODE];
 
 export type InstallPluginResult =
@@ -251,7 +251,7 @@ async function readOptionalPackageManifest(params: {
   }
 }
 
-export type PluginNpmIntegrityDriftParams = {
+type PluginNpmIntegrityDriftParams = {
   spec: string;
   expectedIntegrity: string;
   actualIntegrity: string;
@@ -317,7 +317,7 @@ function compareNpmSemver(a: string, b: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
+  return compareValidSemver(a, b) ?? 0;
 }
 
 type TrustedOfficialPrereleaseResolution =
@@ -2827,7 +2827,7 @@ export async function installPluginFromArchive(
   return result;
 }
 
-export async function installPluginFromDir(
+async function installPluginFromDir(
   params: {
     dirPath: string;
   } & PackageInstallCommonParams,

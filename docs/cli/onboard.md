@@ -262,7 +262,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>`.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node>`.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

@@ -7,9 +7,19 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
+
+type NpmInstallIntegrityDrift = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: {
+    integrity?: string;
+    resolvedSpec?: string;
+    version?: string;
+  };
+};
 
 function appBundledPluginRoot(pluginId: string): string {
   return bundledPluginRootAt(APP_ROOT, pluginId);
@@ -2990,7 +3000,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockImplementation(
       async (params: {
         spec: string;
-        onIntegrityDrift?: (drift: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+        onIntegrityDrift?: (drift: NpmInstallIntegrityDrift) => boolean | Promise<boolean>;
       }) => {
         const proceed = await params.onIntegrityDrift?.({
           spec: params.spec,

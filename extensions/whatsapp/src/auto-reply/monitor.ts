@@ -94,9 +94,11 @@ function resolveWebMonitorConfigSnapshot(params: {
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
         textChunkLimit: account.textChunkLimit,
-        chunkMode: account.chunkMode,
+        // Account merge replaces `streaming` wholesale, so pinning the
+        // account-resolved object here keeps downstream root-level resolver
+        // reads (chunk mode, block enable/coalesce) on this account's config.
+        streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
-        blockStreaming: account.blockStreaming,
         groups: account.groups,
       },
     },

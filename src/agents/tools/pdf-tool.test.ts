@@ -625,8 +625,9 @@ describe("createPdfTool", () => {
   it.each([
     ["1.5", "1.5"],
     ["1,2.5", "2.5"],
+    [`1,${String(Number.MAX_SAFE_INTEGER + 1)}`, String(Number.MAX_SAFE_INTEGER + 1)],
   ])(
-    "rejects fractional page selection %s before loading or fallback extraction",
+    "rejects invalid page selection %s before loading or fallback extraction",
     async (pages, invalidPage) => {
       await withTempPdfAgentDir(async (agentDir) => {
         const { loadSpy } = await stubPdfToolInfra(agentDir, {

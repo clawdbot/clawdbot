@@ -26,13 +26,8 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.j
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  emitAgentEvent,
-  onAgentEvent,
-  resetAgentEventsForTest,
-  resetAgentRunContextForTest,
-} from "../infra/agent-events.js";
-import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -393,7 +388,6 @@ beforeEach(() => {
   installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
-  resetAgentRunContextForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());

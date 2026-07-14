@@ -288,7 +288,8 @@ rerun after a focused patch.
 ### Full Release Validation
 
 `Full Release Validation` (`.github/workflows/full-release-validation.yml`) is
-the manual "everything before release" umbrella. It resolves a target ref, then
+the manual product-validation umbrella. Run the full child matrix on the
+product-complete pre-changelog **Code SHA**. It resolves a target ref, then
 dispatches:
 
 - manual `CI` for the full normal CI graph, with Android enabled via
@@ -300,30 +301,23 @@ dispatches:
   Telegram release lanes
 - optional post-publish Telegram E2E when a package spec is supplied
 
-Run it only when validating an actual release candidate, after broad shared CI
-or release orchestration changes, or when explicitly asked:
+Run the full matrix only when validating an actual Code SHA, after broad shared
+CI or release orchestration changes, or when explicitly asked:
 
 ```bash
-gh workflow run full-release-validation.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=<branch-or-sha> \
-  -f provider=openai \
-  -f mode=both \
-  -f release_profile=stable
+node scripts/full-release-validation-at-sha.mjs \
+  --sha <code-sha> \
+  --target-ref release/YYYY.M.PATCH
 ```
 
-Run the workflow itself from the trusted current ref, normally `--ref main`;
-child workflows are dispatched from that same ref even when `ref` points at an
-older release branch or tag. Full Release Validation has no separate child
-workflow ref input; choose the trusted harness by choosing the workflow run ref.
-Use `release_profile=minimum|stable|full` to control live/provider breadth:
-`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
-stable provider/backend set, and `full` adds the broad advisory provider/media
-matrix. Do not make `full` faster by silently dropping suites; optimize setup,
-artifact reuse, and sharding instead. The parent verifier job appends a child
-overview plus slowest-job tables for child runs; rerun only that verifier after
-a child rerun turns green.
+The helper pins the trusted workflow revision on current `main` while targeting
+the historical release SHA and recording the canonical release branch as
+context. It infers `beta` for alpha/beta package versions and `stable` for
+stable/correction versions. Pass `-f release_profile=full` only for the broad
+advisory provider/media sweep. Do not make `full` faster by silently dropping
+suites; optimize setup, artifact reuse, and sharding instead. The parent
+verifier job appends a child overview plus slowest-job tables for child runs;
+rerun only that verifier after a child rerun turns green.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
@@ -340,6 +334,15 @@ The child-dispatch jobs record the child run ids. The final
 parent gate. If a child workflow failed but was later rerun successfully, rerun
 only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
+
+Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
+**Release SHA** is eligible for product-evidence reuse only when GitHub proves
+that it is a descendant of the Code SHA and the complete changed path set is
+exactly `CHANGELOG.md`. Dispatch the same SHA-pinned helper for the Release SHA;
+the resulting parent records `changelog-only-release-v1` and reuses the Code
+SHA children. Package, install/update, and release-note proof still runs on the
+Release SHA because its tarball bytes changed. Any non-changelog path
+invalidates reuse and requires a new Code SHA full matrix.
 
 For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,

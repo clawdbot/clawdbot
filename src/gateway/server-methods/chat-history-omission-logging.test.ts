@@ -8,12 +8,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { onDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { DiagnosticPayloadLargeEvent } from "../../infra/diagnostic-events.js";
-import { capArrayByJsonBytes } from "../session-utils.js";
+import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
-} from "./chat.js";
+} from "./chat-history-budget.js";
 
 type Captured = DiagnosticPayloadLargeEvent[];
 

@@ -126,17 +126,6 @@ function isSafeOAuthIdentityTransition(
   return hasMatchingOAuthIdentity(existing, incoming);
 }
 
-/** Returns true when stored OAuth identity can be overwritten. */
-export function isSafeToOverwriteStoredOAuthIdentity(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: true,
-    whenExistingIdentityMissing: false,
-  });
-}
-
 /** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,

@@ -9,7 +9,7 @@ import { createBoundaryAwareStreamFnForModel } from "../provider-transport-strea
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
-let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
+const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 let openClawNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
 
 type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
@@ -27,10 +27,6 @@ export function resolveEmbeddedAgentBaseStreamFn(params: {
   const baseStreamFn = params.session.agent.streamFn;
   embeddedAgentBaseStreamFnCache.set(params.session, baseStreamFn);
   return baseStreamFn;
-}
-
-export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
-  embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 }
 
 function isDefaultOpenClawStreamFnForModel(

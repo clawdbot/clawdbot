@@ -1,7 +1,9 @@
 // Daemon restart health tests cover health checks after daemon restart operations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
-import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
+import type { PortUsage } from "../../infra/ports.js";
+
+type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
 
 const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
 const sleep = vi.hoisted(() => vi.fn(async (_ms: number) => {}));

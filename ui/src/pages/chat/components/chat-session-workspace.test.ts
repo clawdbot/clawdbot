@@ -1,10 +1,11 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionWorkspaceRail,
   toggleSessionWorkspace,
   type SessionWorkspaceHost,
-  workspaceBrowserFilePath,
 } from "./chat-session-workspace.ts";
 
 function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
@@ -39,24 +40,6 @@ describe("toggleSessionWorkspace", () => {
 
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("workspaceBrowserFilePath", () => {
-  it("resolves browser rows from the workspace root", () => {
-    expect(workspaceBrowserFilePath("/workspace", "src/readme.md")).toBe(
-      "/workspace/src/readme.md",
-    );
-  });
-
-  it("preserves Windows workspace separators", () => {
-    expect(workspaceBrowserFilePath("C:\\workspace", "src/readme.md")).toBe(
-      "C:\\workspace\\src\\readme.md",
-    );
-  });
-
-  it("preserves the POSIX filesystem root", () => {
-    expect(workspaceBrowserFilePath("/", "src/readme.md")).toBe("/src/readme.md");
   });
 });
 
@@ -136,4 +119,58 @@ describe("openSessionWorkspaceFile", () => {
     expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({ kind: "file" });
     expect(handleOpenSidebar.mock.calls[0]?.[0]?.edit).toBeUndefined();
   });
+
+  it.each([
+    { root: "/workspace", expected: "/workspace/src/readme.md" },
+    { root: "C:\\workspace", expected: "C:\\workspace\\src\\readme.md" },
+  ])(
+    "opens rendered workspace-browser rows beneath $root with the full path",
+    async ({ root, expected }) => {
+      const getFile = vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:current",
+        root,
+        file: {
+          path: expected,
+          workspacePath: "src/readme.md",
+          name: "readme.md",
+          kind: "read",
+          missing: false,
+          content: "# Browser file\n",
+        },
+      });
+      const listFiles = vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:current",
+        root,
+        files: [],
+        browser: {
+          path: "",
+          entries: [{ kind: "file", name: "readme.md", path: "src/readme.md" }],
+        },
+      });
+      const request = vi.fn().mockResolvedValue({ artifacts: [] });
+      const state = {
+        client: { request },
+        connected: true,
+        handleOpenSidebar: vi.fn(),
+        hello: gatewayHello([]),
+        sessionKey: "agent:main:current",
+        sessions: { getFile, listFiles },
+      } as unknown as SessionWorkspaceHost;
+
+      toggleSessionWorkspace(state);
+      await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+      const container = document.createElement("div");
+      render(renderSessionWorkspaceRail(createSessionWorkspaceProps(state)), container);
+      const row = container.querySelector<HTMLButtonElement>(
+        ".chat-workspace-rail__list--browser .chat-workspace-rail__file-open",
+      );
+      expect(row).toBeInstanceOf(HTMLButtonElement);
+      row!.click();
+
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
+      expect(getFile.mock.calls[0]?.[1]).toBe(expected);
+    },
+  );
 });

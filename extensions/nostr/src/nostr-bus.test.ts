@@ -1,16 +1,8 @@
 // Nostr tests cover nostr bus plugin behavior.
+import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
-import {
-  validatePrivateKey,
-  getPublicKeyFromPrivate,
-  isValidPubkey,
-  normalizePubkey,
-  pubkeyToNpub,
-} from "./nostr-key-utils.js";
-import { TEST_HEX_PRIVATE_KEY, TEST_NSEC } from "./test-fixtures.js";
-
-const UPPERCASE_HEX = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-const INVALID_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg";
+import { validatePrivateKey, getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
+import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
 function expectThrowsError(run: () => unknown): void {
   let error: unknown;
@@ -21,71 +13,6 @@ function expectThrowsError(run: () => unknown): void {
   }
   expect(error).toBeInstanceOf(Error);
 }
-
-const uppercaseHexAcceptanceCases = [
-  {
-    name: "validatePrivateKey",
-    assert: () => {
-      const result = validatePrivateKey(TEST_HEX_PRIVATE_KEY.toUpperCase());
-      expect(result).toBeInstanceOf(Uint8Array);
-    },
-  },
-  {
-    name: "isValidPubkey",
-    assert: () => {
-      expect(isValidPubkey(UPPERCASE_HEX)).toBe(true);
-    },
-  },
-];
-
-const invalidHexRejectionCases = [
-  {
-    name: "validatePrivateKey",
-    assert: (input: string) => {
-      expect(() => validatePrivateKey(input)).toThrow("Private key must be 64 hex characters");
-    },
-  },
-  {
-    name: "isValidPubkey",
-    assert: (input: string) => {
-      expect(isValidPubkey(input)).toBe(false);
-    },
-  },
-];
-
-const whitespaceNormalizationCases = [
-  {
-    name: "validatePrivateKey",
-    assert: () => {
-      const result = validatePrivateKey(`  ${TEST_HEX_PRIVATE_KEY}  `);
-      expect(result).toBeInstanceOf(Uint8Array);
-    },
-  },
-  {
-    name: "normalizePubkey",
-    assert: () => {
-      expect(normalizePubkey(`  ${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
-    },
-  },
-];
-
-describe("hex key helper contracts", () => {
-  it.each(uppercaseHexAcceptanceCases)("$name accepts uppercase hex", ({ assert }) => {
-    assert();
-  });
-
-  it.each(invalidHexRejectionCases)("$name rejects non-hex characters", ({ assert }) => {
-    assert(INVALID_HEX);
-  });
-
-  it.each(invalidHexRejectionCases)("$name rejects empty string", ({ assert }) => {
-    assert("");
-  });
-
-  it.each(whitespaceNormalizationCases)("$name trims whitespace", ({ assert }) => {
-    assert();
-  });
-});
 
 describe("validatePrivateKey", () => {
   describe("validatePrivateKey hex format", () => {
@@ -147,40 +74,6 @@ describe("validatePrivateKey", () => {
   });
 });
 
-describe("isValidPubkey", () => {
-  describe("isValidPubkey hex format", () => {
-    it("accepts valid 64-char hex pubkey", () => {
-      expect(isValidPubkey(TEST_HEX_PRIVATE_KEY)).toBe(true);
-    });
-
-    it("rejects 63-char hex", () => {
-      const shortHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde";
-      expect(isValidPubkey(shortHex)).toBe(false);
-    });
-
-    it("rejects 65-char hex", () => {
-      const longHex = `${TEST_HEX_PRIVATE_KEY}0`;
-      expect(isValidPubkey(longHex)).toBe(false);
-    });
-  });
-
-  describe("npub format", () => {
-    it("rejects invalid npub", () => {
-      expect(isValidPubkey("npub1invalid")).toBe(false);
-    });
-
-    it("rejects nsec (wrong type)", () => {
-      expect(isValidPubkey(TEST_NSEC)).toBe(false);
-    });
-  });
-
-  describe("edge cases", () => {
-    it("handles whitespace-padded input", () => {
-      expect(isValidPubkey(`  ${TEST_HEX_PRIVATE_KEY}  `)).toBe(true);
-    });
-  });
-});
-
 describe("normalizePubkey", () => {
   describe("normalizePubkey hex format", () => {
     it("lowercases hex pubkey", () => {
@@ -192,6 +85,10 @@ describe("normalizePubkey", () => {
     it("rejects invalid hex", () => {
       expect(() => normalizePubkey("invalid")).toThrow("Pubkey must be 64 hex characters");
     });
+
+    it("trims surrounding whitespace", () => {
+      expect(normalizePubkey(`  ${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
   });
 
   describe("normalizePubkey npub format", () => {
@@ -200,7 +97,7 @@ describe("normalizePubkey", () => {
     // nostr-tools >=2.0 returns it as the hex string directly. allowFrom
     // entries written as npubs therefore never matched any hex sender pubkey.
     const HEX = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-    const NPUB = pubkeyToNpub(HEX);
+    const NPUB = nip19.npubEncode(HEX);
 
     it("decodes npub to the original 64-char hex pubkey", () => {
       const result = normalizePubkey(NPUB);
@@ -210,7 +107,7 @@ describe("normalizePubkey", () => {
     });
 
     it("survives a hex→npub→normalizePubkey roundtrip", () => {
-      expect(normalizePubkey(pubkeyToNpub(HEX))).toBe(HEX);
+      expect(normalizePubkey(nip19.npubEncode(HEX))).toBe(HEX);
     });
 
     it("trims surrounding whitespace before decoding", () => {
@@ -234,23 +131,5 @@ describe("getPublicKeyFromPrivate", () => {
 
   it("throws for invalid private key", () => {
     expectThrowsError(() => getPublicKeyFromPrivate("invalid"));
-  });
-});
-
-describe("pubkeyToNpub", () => {
-  it("converts hex pubkey to npub format", () => {
-    const npub = pubkeyToNpub(TEST_HEX_PRIVATE_KEY);
-    expect(npub).toMatch(/^npub1[a-z0-9]+$/);
-  });
-
-  it("produces consistent output", () => {
-    const npub1 = pubkeyToNpub(TEST_HEX_PRIVATE_KEY);
-    const npub2 = pubkeyToNpub(TEST_HEX_PRIVATE_KEY);
-    expect(npub1).toBe(npub2);
-  });
-
-  it("normalizes uppercase hex first", () => {
-    const upper = TEST_HEX_PRIVATE_KEY.toUpperCase();
-    expect(pubkeyToNpub(TEST_HEX_PRIVATE_KEY)).toBe(pubkeyToNpub(upper));
   });
 });

@@ -209,6 +209,8 @@ describe("getFileExtension", () => {
     { filePath: "https://cdn.example.com/bad%ZZ%2Emp4", expected: undefined },
     { filePath: "https://cdn.example.com/render%2Emp4/", expected: undefined },
     { filePath: String.raw`C:\media\clip.MP4`, expected: ".mp4" },
+    { filePath: String.raw`C:\media.folder\clip`, expected: undefined },
+    { filePath: String.raw`C:\media.folder\clip.MP4`, expected: ".mp4" },
   ] as const)("extracts $expected from $filePath", ({ filePath, expected }) => {
     expect(getFileExtension(filePath)).toBe(expected);
   });

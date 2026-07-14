@@ -130,33 +130,6 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return resolveBrowserActRequestTimeoutMs(request);
 }
 
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserConsoleMessages: typeof browserConsoleMessages;
-      browserDownload: typeof browserDownload;
-      browserSnapshot: typeof browserSnapshot;
-      browserTabs: typeof browserTabs;
-      browserWaitForDownload: typeof browserWaitForDownload;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-    }> | null,
-  ) {
-    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolActionDeps.browserConsoleMessages =
-      overrides?.browserConsoleMessages ?? browserConsoleMessages;
-    browserToolActionDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
-    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
-    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
-    browserToolActionDeps.browserWaitForDownload =
-      overrides?.browserWaitForDownload ?? browserWaitForDownload;
-    browserToolActionDeps.imageResultFromFile =
-      overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-  },
-};
-
 type BrowserProxyRequest = (opts: {
   method: string;
   path: string;
@@ -727,4 +700,3 @@ export async function executeActAction(params: {
     throw err;
   }
 }
-export { testing as __testing };

@@ -31,10 +31,6 @@ export function findCaptionlessSlackAudioFile(message: SlackMessageEvent): Slack
   return message.files?.slice(0, MAX_SLACK_MEDIA_FILES).find(isSlackAudioFile);
 }
 
-export function hasCaptionlessSlackAudio(message: SlackMessageEvent): boolean {
-  return Boolean(findCaptionlessSlackAudioFile(message));
-}
-
 export function formatSlackAudioTranscriptForAgent(params: {
   transcript: string;
   rawBody: string;

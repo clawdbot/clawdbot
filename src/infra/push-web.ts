@@ -189,7 +189,7 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
+async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }

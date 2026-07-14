@@ -361,13 +361,7 @@ export type QaBootstrapScenarioCatalog = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-export {
-  QA_OBSERVABILITY_SCENARIO_IDS,
-  QA_PERSONAL_AGENT_SCENARIO_IDS,
-  QA_SCENARIO_PACKS,
-  resolveQaScenarioPackScenarioIds,
-  type QaScenarioPackDefinition,
-} from "./scenario-packs.js";
+export { QA_SCENARIO_PACKS } from "./scenario-packs.js";
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";

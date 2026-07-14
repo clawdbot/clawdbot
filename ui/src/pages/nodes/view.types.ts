@@ -30,7 +30,6 @@ export type NodesProps = {
   execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
-  onRefresh: () => void;
   onDevicePairSetupOpen: () => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;

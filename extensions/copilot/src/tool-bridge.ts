@@ -1,5 +1,10 @@
 // Copilot plugin module implements tool bridge behavior.
-import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
+import {
+  convertMcpCallToolResult,
+  type Tool as SdkTool,
+  type ToolInvocation,
+  type ToolResultObject,
+} from "@github/copilot-sdk";
 import type {
   AnyAgentTool,
   EmbeddedRunAttemptParams,
@@ -27,10 +32,6 @@ type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
 >[0];
 
-type AgentToolResultLike = {
-  content?: unknown;
-};
-
 /**
  * Mutable holder populated by `attempt.ts` *after* `client.createSession()`
  * (or `client.resumeSession()`) succeeds, so that the tool bridge — which is
@@ -39,7 +40,7 @@ type AgentToolResultLike = {
  * execute before the SDK session is up, so reading `current === undefined`
  * inside `onYield` is a no-op by design.
  */
-export interface CopilotSessionHolder {
+interface CopilotSessionHolder {
   current: { abort?: () => unknown } | undefined;
 }
 
@@ -552,7 +553,7 @@ export function convertOpenClawToolToSdkTool(
       );
     }
 
-    let result: AgentToolResultLike;
+    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
     try {
       result = await sourceTool.execute(
         invocation.toolCallId,
@@ -570,7 +571,9 @@ export function convertOpenClawToolToSdkTool(
       );
     }
 
-    const sdkResult = agentToolResultToSdk(result);
+    // OpenClaw tools throw for execution failures. Error-shaped details remain
+    // lifecycle metadata; successful content uses the SDK's MCP converter.
+    const sdkResult = convertMcpCallToolResult({ content: result.content });
     const sanitizedResult = sanitizeToolResult(result);
     const resultIsError = sdkResult.resultType === "failure" || isToolResultError(sanitizedResult);
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
@@ -694,72 +697,6 @@ function toToolStartArgs(args: unknown): Record<string, unknown> {
     : { value: args };
 }
 
-function agentToolResultToSdk(result: AgentToolResultLike | undefined): ToolResultObject {
-  const content = result?.content;
-  if (content == null) {
-    return createSuccessResult("");
-  }
-
-  if (!Array.isArray(content)) {
-    return createUnsupportedContentFailure(typeof content);
-  }
-
-  const textParts: string[] = [];
-  const binaryResults: Array<Record<string, string>> = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return createUnsupportedContentFailure(typeof block);
-    }
-
-    const kind = readString((block as { type?: unknown }).type);
-    if (kind === "text") {
-      const text = readString((block as { text?: unknown }).text, { allowEmpty: true });
-      if (text === undefined) {
-        return createUnsupportedContentFailure(kind);
-      }
-      textParts.push(text);
-      continue;
-    }
-
-    if (kind === "image") {
-      const base64Data = readString((block as { data?: unknown }).data);
-      const mimeType = readString((block as { mimeType?: unknown }).mimeType);
-      if (!base64Data || !mimeType) {
-        return createUnsupportedContentFailure(kind);
-      }
-      binaryResults.push({
-        base64Data,
-        data: base64Data,
-        mimeType,
-        type: "image",
-      });
-      continue;
-    }
-
-    return createUnsupportedContentFailure(kind ?? typeof block);
-  }
-
-  return {
-    ...(binaryResults.length > 0
-      ? { binaryResultsForLlm: binaryResults as ToolResultObject["binaryResultsForLlm"] }
-      : {}),
-    resultType: "success",
-    textResultForLlm: textParts.join("\n"),
-  };
-}
-
-function createUnsupportedContentFailure(kind: string): ToolResultObject {
-  const message = `[copilot-tool-bridge] unsupported AgentToolResult content shape: ${kind}`;
-  return createFailureResult(message, new Error(message));
-}
-
-function createSuccessResult(textResultForLlm: string): ToolResultObject {
-  return {
-    resultType: "success",
-    textResultForLlm,
-  };
-}
-
 function createFailureResult(message: string, error: unknown): ToolResultObject {
   // ToolResultObject.error is typed as `string | undefined` in the SDK contract
   // (see `node_modules/@github/copilot-sdk/dist/types.d.ts`). Returning an
@@ -869,16 +806,6 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
     .filter(([, count]) => count > 1)
     .map(([name]) => name)
     .toSorted();
-}
-
-function readString(value: unknown, options: { allowEmpty?: boolean } = {}): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  if (options.allowEmpty || value.length > 0) {
-    return value;
-  }
-  return undefined;
 }
 
 function toError(error: unknown): Error {

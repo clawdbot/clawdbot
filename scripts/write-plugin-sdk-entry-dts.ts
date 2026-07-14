@@ -51,6 +51,7 @@ function isBareImportSpecifier(id: string): boolean {
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "@openclaw/model-catalog-core/model-catalog-types" ||
+    id === "@openclaw/retry" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id.startsWith("@openclaw/media-core/") ||
     id.startsWith("@openclaw/acp-core/")

@@ -18,12 +18,12 @@ const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
 
-export type ParsedCommand = {
+type ParsedCommand = {
   name: string;
   args: string;
 };
 
-export type SlashCommandOptions = {
+type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;

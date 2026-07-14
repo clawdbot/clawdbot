@@ -89,7 +89,7 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   }
 }
 
-export type PersistedAuthProfileStoreInspection =
+type PersistedAuthProfileStoreInspection =
   | { status: "missing"; reason: "database" | "table" | "row" }
   | { status: "readable"; raw: unknown }
   | { status: "unreadable" };

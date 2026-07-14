@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
@@ -13,6 +14,7 @@ import type { WebInboundMessageInput, WebListenerCloseReason } from "./inbound.j
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import { setWhatsAppRuntime } from "./runtime.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
@@ -224,6 +226,8 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     resetWebAutoReplySessionSockets();
     _resetBaileysMocks();
     _resetLoadConfigMock();
+    // Scoped test files must seed the plugin slot instead of inheriting another file's runtime.
+    setWhatsAppRuntime(createPluginRuntimeMock());
     if (opts?.pinDns) {
       resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }

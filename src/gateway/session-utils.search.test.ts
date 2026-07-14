@@ -15,7 +15,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -407,8 +407,8 @@ describe("listSessionsFromStore search", () => {
   });
 
   afterEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     resetSubagentRegistryForTests();
-    resetAgentRunContextForTest();
     closeSessionSqliteDatabasesForTest();
   });
 

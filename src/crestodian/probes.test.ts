@@ -27,7 +27,7 @@ describe("crestodian probes", () => {
       const result = await probeLocalCommand(
         process.execPath,
         ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
-        { timeoutKillGraceMs: 25, timeoutMs: 25 },
+        { timeoutMs: 25 },
       );
 
       expect(result).toMatchObject({

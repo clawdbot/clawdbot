@@ -18,16 +18,12 @@ export {
   normalizeUsageDisplay,
   normalizeVerboseLevel,
   resolveEffectiveResponseUsage,
-  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
   FastMode,
-  NoticeLevel,
   ReasoningLevel,
-  ResponseUsageDefaultConfig,
-  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
@@ -46,7 +42,7 @@ import {
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 
 /** UI-facing thinking level option. */
-export type ThinkingLevelOption = {
+type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
 };

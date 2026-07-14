@@ -15,7 +15,7 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
-export type ParsedSessionDeliveryRoute = {
+type ParsedSessionDeliveryRoute = {
   accountId?: string;
   channel: string;
   peerId: string;
@@ -23,7 +23,7 @@ export type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
-export type ParsedCronRunScopeSuffix = {
+type ParsedCronRunScopeSuffix = {
   baseSessionKey: string | undefined;
   runId: string | undefined;
 };

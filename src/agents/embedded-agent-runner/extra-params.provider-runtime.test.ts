@@ -86,13 +86,15 @@ describe("extra-params: provider runtime handoff", () => {
         id: "gpt-5.6-sol",
       } as unknown as Model<"openai-responses">,
       thinkingLevel: "max",
+      workspaceDir: "/tmp/runtime-workspace",
       payload: { model: "gpt-5.6-sol", input: [] },
     });
 
     expect(wrapProviderStreamFn).toHaveBeenCalledTimes(1);
-    expect(wrapProviderStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
-    );
+    expect(wrapProviderStreamFn.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/runtime-workspace",
+      context: { thinkingLevel: "max", workspaceDir: "/tmp/runtime-workspace" },
+    });
   });
 
   it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {

@@ -83,6 +83,7 @@ export function validateEvidenceReuseChain(
   currentManifest: unknown,
   selectedManifest: unknown,
   rootManifest: unknown,
+  compareCommits?: unknown,
 ): unknown;
 export function selectedChildKeys(parentJobs: unknown): Set<string>;
 export function manifestChildEntries<Child extends { manifestKey: string; name: string }>(

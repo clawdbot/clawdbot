@@ -162,6 +162,7 @@ describe("createWhatsAppOutboundBase", () => {
       cfg: {
         channels: {
           whatsapp: {
+            authDir: "/tmp/whatsapp-default",
             defaultAccount: "work",
             accounts: {
               work: {},
@@ -182,6 +183,50 @@ describe("createWhatsAppOutboundBase", () => {
       fromMe: false,
       participant: "111@s.whatsapp.net",
       messageText: "quoted body",
+    });
+  });
+
+  it("uses the implicit authDir default account for quote metadata lookup", async () => {
+    cacheInboundMessageMeta("default", "15551234567@s.whatsapp.net", "reply-auth-dir", {
+      participant: "444@s.whatsapp.net",
+      body: "implicit default body",
+    });
+    const sendMessageWhatsApp = vi.fn(async () => ({
+      messageId: "msg-auth-dir",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    await outbound.sendText!({
+      cfg: {
+        channels: {
+          whatsapp: {
+            authDir: "/tmp/whatsapp-default",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as never,
+      to: "whatsapp:+15551234567",
+      text: "reply",
+      deps: { sendWhatsApp: sendMessageWhatsApp },
+      replyToId: "reply-auth-dir",
+    });
+
+    const options = sendMessageOptionsAt(sendMessageWhatsApp, 0, "whatsapp:+15551234567", "reply");
+    expect(options.quotedMessageKey).toEqual({
+      id: "reply-auth-dir",
+      remoteJid: "15551234567@s.whatsapp.net",
+      fromMe: false,
+      participant: "444@s.whatsapp.net",
+      messageText: "implicit default body",
     });
   });
 
@@ -345,8 +390,11 @@ describe("createWhatsAppOutboundBase", () => {
       cfg: {
         channels: {
           whatsapp: {
+            authDir: "/tmp/whatsapp-default",
+            defaultAccount: "other",
             accounts: {
               work: {},
+              other: {},
             },
           },
         },

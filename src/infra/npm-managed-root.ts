@@ -518,7 +518,7 @@ function isTopLevelLockPackageLocation(location: string): boolean {
   return location.split("/").filter((part) => part === "node_modules").length === 1;
 }
 
-export type MissingRequiredPlatformPackage = {
+type MissingRequiredPlatformPackage = {
   name: string;
   packagePath: string;
 };

@@ -1599,12 +1599,10 @@ export class AgentSession {
     return this.sessionResourceLoader;
   }
 
-  /**
-   * Abort current operation and wait for agent to become idle.
-   */
-  async abort(): Promise<void> {
+  /** Abort the current run; yield callers pass a turnHandoff reason to skip interruption guidance. */
+  async abort(reason?: unknown): Promise<void> {
     this.abortRetry();
-    this.agent.abort();
+    this.agent.abort(reason);
     await this.agent.waitForIdle();
   }
 

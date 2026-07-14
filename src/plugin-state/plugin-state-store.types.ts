@@ -73,7 +73,7 @@ export type PluginStateStoreOperation =
   | "probe"
   | "close";
 
-export type PluginStateStoreErrorOptions = {
+type PluginStateStoreErrorOptions = {
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
   path?: string;

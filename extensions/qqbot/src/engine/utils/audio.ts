@@ -35,7 +35,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
 }
 
 /** Wrap raw PCM s16le data into a standard WAV file. */
-export function pcmToWav(
+function pcmToWav(
   pcmData: Uint8Array,
   sampleRate: number,
   channels = 1,
@@ -70,7 +70,7 @@ export function pcmToWav(
 }
 
 /** Strip the AMR header that may be present in QQ voice payloads. */
-export function stripAmrHeader(buf: Buffer): Buffer {
+function stripAmrHeader(buf: Buffer): Buffer {
   const AMR_HEADER = Buffer.from("#!AMR\n");
   if (buf.length > 6 && buf.subarray(0, 6).equals(AMR_HEADER)) {
     return buf.subarray(6);
@@ -449,7 +449,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 }
 
 /** Parse a standard PCM WAV and extract mono 24 kHz PCM data. */
-export function parseWavFallback(buf: Buffer): Buffer | null {
+function parseWavFallback(buf: Buffer): Buffer | null {
   if (buf.length < 44) {
     return null;
   }

@@ -88,11 +88,13 @@ const callbackMessageWithoutAdmissionFacts = {
   },
 };
 
-// @ts-expect-error Callback messages must provide admission or deprecated admission fields.
-const invalidCallbackMessage: WebInboundCallbackMessage = callbackMessageWithoutAdmissionFacts;
-void invalidCallbackMessage;
-
 describe("WhatsApp inbound flat aliases", () => {
+  it("rejects callback messages without admission facts", () => {
+    expectTypeOf(
+      callbackMessageWithoutAdmissionFacts,
+    ).not.toMatchTypeOf<WebInboundCallbackMessage>();
+  });
+
   it("keeps deprecated admission fields typed on monitor callbacks", () => {
     expectTypeOf<MonitorWebInboxMessage>().toMatchTypeOf<{
       admission: NonNullable<WebInboundCallbackMessage["admission"]>;

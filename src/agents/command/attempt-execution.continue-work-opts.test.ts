@@ -446,7 +446,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   });
 
   it("keeps gateway-tool maxChainLength protected while runtime tests can still induce #973", async () => {
-    const { assertGatewayConfigMutationAllowedForTest } = await import("../tools/gateway-tool.js");
+    const { assertGatewayConfigMutationAllowedForTest } =
+      await import("../tools/gateway-config-guard.js");
 
     expect(() =>
       assertGatewayConfigMutationAllowedForTest({

@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry-types.js";
+import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -13,7 +13,7 @@ import {
   HOOK_ONLY_MESSAGE,
   LEGACY_BEFORE_AGENT_START_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
-} from "./status.test-helpers.js";
+} from "./status.test-fixtures.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();

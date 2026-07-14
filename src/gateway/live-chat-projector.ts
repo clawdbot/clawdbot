@@ -14,7 +14,7 @@ import {
   isSuppressedControlReplyText,
 } from "./control-reply-text.js";
 
-export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 /** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
 export function resolveAssistantLiveChatInput(

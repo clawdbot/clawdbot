@@ -104,7 +104,10 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables artifact publishing. */
+/**
+ * List extension package dirs whose package metadata enables artifact publishing.
+ * @internal Shared repository-script contract.
+ */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -297,7 +300,10 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
   };
 }
 
-/** Build package-local runtime files and static assets for one plugin package. */
+/**
+ * Build package-local runtime files and static assets for one plugin package.
+ * @internal Shared repository-script contract.
+ */
 export async function buildPluginNpmRuntime(params) {
   const plan = resolvePluginNpmRuntimeBuildPlan(params);
   if (!plan) {
@@ -359,6 +365,7 @@ function readPackageDirArg(argv) {
   return { packageDir };
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseArgs(argv) {
   return readPackageDirArg(argv);
 }

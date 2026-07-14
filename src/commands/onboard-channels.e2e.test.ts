@@ -494,15 +494,6 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
   );
-  const listChannelPluginCatalogEntries = (
-    ...args: Parameters<typeof actual.listChannelPluginCatalogEntries>
-  ) => {
-    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
-    if (implementation) {
-      return catalogMocks.listChannelPluginCatalogEntries(...args);
-    }
-    return actual.listChannelPluginCatalogEntries(...args);
-  };
   const listRawChannelPluginCatalogEntries = (
     ...args: Parameters<typeof actual.listRawChannelPluginCatalogEntries>
   ) => {
@@ -514,7 +505,6 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   };
   return {
     ...actual,
-    listChannelPluginCatalogEntries,
     listRawChannelPluginCatalogEntries,
   };
 });

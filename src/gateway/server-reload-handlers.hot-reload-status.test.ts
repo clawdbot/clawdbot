@@ -6,6 +6,7 @@
  * itself already tracked "active"/"disabled" correctly.
  */
 import { describe, expect, it, vi } from "vitest";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
@@ -73,13 +74,16 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         sourceConfig: config,
         config,
         authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
         warnings: [],
         webTools: {},
       })) as never,
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      prepareTerminalConfig: vi.fn(),
       reconcileTerminalSessions: vi.fn(),
       commitTerminalConfig: vi.fn(),
+      acceptTerminalConfig: vi.fn(),
       clients: [],
     });
 

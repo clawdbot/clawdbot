@@ -1,18 +1,15 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
-import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
-import { promisify } from "node:util";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
+import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
 import { pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
-
-const execFileAsync = promisify(execFile);
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
@@ -44,24 +41,28 @@ async function generateSelfSignedCert(params: {
       "openssl not found in trusted system directories. Install it in an OS-managed location.",
     );
   }
-  // Use execFile with a trusted system binary; certificate paths are arguments,
+  // Use argv execution with a trusted system binary; certificate paths are arguments,
   // not shell text.
-  await execFileAsync(opensslBin, [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-sha256",
-    "-days",
-    "3650",
-    "-nodes",
-    "-keyout",
-    params.keyPath,
-    "-out",
-    params.certPath,
-    "-subj",
-    "/CN=openclaw-gateway",
-  ]);
+  await runExec(
+    opensslBin,
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      params.keyPath,
+      "-out",
+      params.certPath,
+      "-subj",
+      "/CN=openclaw-gateway",
+    ],
+    { logOutput: false },
+  );
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
   params.log?.info?.(

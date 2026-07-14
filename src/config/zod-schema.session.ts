@@ -88,7 +88,6 @@ export const SessionSchema = z
         /** @deprecated Use pruneAfter instead. */
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
-        rotateBytes: z.union([z.string(), z.number()]).optional(),
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),

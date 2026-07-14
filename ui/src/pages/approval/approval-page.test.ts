@@ -14,9 +14,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { applicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import "./approval-page.ts";
+import { ApprovalPage } from "./approval-page.ts";
 
-const PROVIDER_ELEMENT_NAME = "test-approval-page-context-provider";
+const TEST_ELEMENT_SUFFIX = crypto.randomUUID();
+const PROVIDER_ELEMENT_NAME = `test-approval-page-context-provider-${TEST_ELEMENT_SUFFIX}`;
+const APPROVAL_PAGE_ELEMENT_NAME = `test-openclaw-approval-page-${TEST_ELEMENT_SUFFIX}`;
 
 class ApprovalPageContextProvider extends LitElement {
   private readonly contextProvider = new ContextProvider(this, {
@@ -28,9 +30,10 @@ class ApprovalPageContextProvider extends LitElement {
   }
 }
 
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, ApprovalPageContextProvider);
-}
+// The non-isolated UI runner resets modules but not customElements. Register
+// the current provider and page graphs so context and locale state stay paired.
+customElements.define(PROVIDER_ELEMENT_NAME, ApprovalPageContextProvider);
+customElements.define(APPROVAL_PAGE_ELEMENT_NAME, class extends ApprovalPage {});
 
 type TestApprovalPage = HTMLElement & {
   approvalId: string;
@@ -122,7 +125,7 @@ function createPage(params: {
 }) {
   const source = createGateway(params.client, params.connected);
   const provider = document.createElement(PROVIDER_ELEMENT_NAME) as ApprovalPageContextProvider;
-  const page = document.createElement("openclaw-approval-page") as TestApprovalPage;
+  const page = document.createElement(APPROVAL_PAGE_ELEMENT_NAME) as TestApprovalPage;
   provider.setContext({
     basePath: "",
     gateway: source.gateway,

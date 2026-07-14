@@ -15,7 +15,7 @@ const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
-export type ReusableSkillSnapshotParams = {
+type ReusableSkillSnapshotParams = {
   workspaceDir: string;
   config: OpenClawConfig;
   agentId?: string;
@@ -27,7 +27,7 @@ export type ReusableSkillSnapshotParams = {
   hydrateExisting?: boolean;
 };
 
-export type ReusableSkillSnapshotResult = {
+type ReusableSkillSnapshotResult = {
   snapshot: SkillSnapshot;
   shouldRefresh: boolean;
   snapshotVersion: number;

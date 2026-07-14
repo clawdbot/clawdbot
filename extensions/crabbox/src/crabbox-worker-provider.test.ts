@@ -114,6 +114,76 @@ describe("Crabbox worker provider", () => {
     });
   });
 
+  it("runs the profile setup command on the ready lease and keeps it", async () => {
+    const calls: string[][] = [];
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv[1] === "run") {
+        return commandResult();
+      }
+      return warmed || argv.includes(LEASE_ID)
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
+
+    const setup = "command -v node || install-node";
+    await expect(
+      provider.provision({ ...PROFILE, setup }, "provision:setup-run"),
+    ).resolves.toMatchObject({ leaseId: LEASE_ID });
+    const runCall = calls.find((argv) => argv[1] === "run");
+    expect(runCall?.slice(1)).toEqual([
+      "run",
+      "--provider",
+      "aws",
+      "--id",
+      LEASE_ID,
+      "--keep=true",
+      "--no-sync",
+      "--",
+      "bash",
+      "-lc",
+      setup,
+    ]);
+  });
+
+  it("stops the lease when the profile setup command fails", async () => {
+    const calls: string[][] = [];
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv[1] === "run") {
+        return commandResult({ code: 7, stderr: "apt exploded" });
+      }
+      if (argv[1] === "stop") {
+        return commandResult();
+      }
+      return warmed || argv.includes(LEASE_ID)
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, setup: "install-node" }, "provision:setup-fail"),
+    ).rejects.toThrow("Crabbox setup failed with exit code 7");
+    expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
+  });
+
+  it("rejects a blank profile setup command", async () => {
+    const provider = providerWithRunner(async () => commandResult());
+    await expect(provider.provision({ ...PROFILE, setup: "  " }, "provision:x")).rejects.toThrow(
+      "Crabbox profile setup must be a non-empty command string",
+    );
+  });
+
   it("stops a newly provisioned lease when inspect cannot supply a host key", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const runCommand: CrabboxCommandRunner = async (argv, options) => {

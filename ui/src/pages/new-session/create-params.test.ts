@@ -16,6 +16,21 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
+  it("submits the catalog target for server-side resolution", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start coding",
+        worktree: false,
+        catalogId: "claude",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start coding",
+      catalogId: "claude",
+    });
+  });
+
   it("maps worktree selections onto additive create params", () => {
     expect(
       buildDraftSessionCreateParams({

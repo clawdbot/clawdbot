@@ -8,6 +8,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
+import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -415,55 +416,69 @@ export function createCronPromptExecutor(params: {
             cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
               ? cliSessionBinding
               : undefined;
-          const result = await runCliAgent({
-            sessionId: params.cronSession.sessionEntry.sessionId,
-            sessionKey: params.runSessionKey,
-            sessionEntry: params.cronSession.sessionEntry,
-            agentId: params.agentId,
-            trigger: "cron",
-            jobId: params.job.id,
-            cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
-            sessionFile,
-            workspaceDir: params.workspaceDir,
-            config: params.cfgWithAgentDefaults,
-            prompt: modelPrompt,
-            transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
-            modelProvider: providerOverride,
-            provider: executionProvider,
-            model: modelOverride,
-            thinkLevel: candidateThinkLevel,
-            timeoutMs: params.timeoutMs,
-            runId: params.cronSession.sessionEntry.sessionId,
-            lane: resolveCronAgentLane(params.lane),
-            allowEmptyAssistantReplyAsSilent,
-            cliSessionId: cliSessionBinding?.sessionId,
-            cliSessionBinding: guardedCliSessionBinding,
-            skillsSnapshot: params.skillsSnapshot,
-            messageChannel,
-            sourceReplyDeliveryMode,
-            requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-            cliSessionBindingFacts: {
-              sourceReplyDeliveryMode,
-              requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+          // Cron intentionally reuses its durable session id as the run id; turn
+          // claims stay unique via per-claim ids and the worker gate handles this
+          // via credential rotation (see worker-environments/service.ts fences).
+          const runId = params.cronSession.sessionEntry.sessionId;
+          const result = await withLocalSessionPlacementTurnAdmission(
+            {
+              sessionId: params.cronSession.sessionEntry.sessionId,
+              sessionKey: params.runSessionKey,
+              agentId: params.agentId,
+              runId,
             },
-            toolsAllow: resolveCliRuntimeToolsAllow(
-              params.agentPayload?.toolsAllow,
-              params.agentPayload?.toolsAllowIsDefault,
-            ),
-            abortSignal: params.abortSignal,
-            onExecutionStarted: params.onExecutionStarted,
-            onExecutionPhase: params.onExecutionPhase,
-            bootstrapContextMode,
-            bootstrapContextRunKind: "cron",
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature,
-            fastModeStartedAtMs,
-            fastModeAutoProgressState,
-            isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-            userTurnTranscriptRecorder,
-            suppressNextUserMessagePersistence:
-              userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
-          });
+            () =>
+              runCliAgent({
+                sessionId: params.cronSession.sessionEntry.sessionId,
+                sessionKey: params.runSessionKey,
+                sessionEntry: params.cronSession.sessionEntry,
+                agentId: params.agentId,
+                trigger: "cron",
+                jobId: params.job.id,
+                cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
+                sessionFile,
+                workspaceDir: params.workspaceDir,
+                config: params.cfgWithAgentDefaults,
+                prompt: modelPrompt,
+                transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+                modelProvider: providerOverride,
+                provider: executionProvider,
+                model: modelOverride,
+                thinkLevel: candidateThinkLevel,
+                timeoutMs: params.timeoutMs,
+                runId,
+                lane: resolveCronAgentLane(params.lane),
+                allowEmptyAssistantReplyAsSilent,
+                cliSessionId: cliSessionBinding?.sessionId,
+                cliSessionBinding: guardedCliSessionBinding,
+                skillsSnapshot: params.skillsSnapshot,
+                messageChannel,
+                sourceReplyDeliveryMode,
+                requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+                cliSessionBindingFacts: {
+                  sourceReplyDeliveryMode,
+                  requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+                },
+                toolsAllow: resolveCliRuntimeToolsAllow(
+                  params.agentPayload?.toolsAllow,
+                  params.agentPayload?.toolsAllowIsDefault,
+                ),
+                abortSignal: params.abortSignal,
+                onExecutionStarted: params.onExecutionStarted,
+                onExecutionPhase: params.onExecutionPhase,
+                bootstrapContextMode,
+                bootstrapContextRunKind: "cron",
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature,
+                fastModeStartedAtMs,
+                fastModeAutoProgressState,
+                isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                userTurnTranscriptRecorder,
+                suppressNextUserMessagePersistence:
+                  userTurnTranscriptRecorder.hasPersisted() ||
+                  userTurnTranscriptRecorder.isBlocked(),
+              }),
+          );
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );

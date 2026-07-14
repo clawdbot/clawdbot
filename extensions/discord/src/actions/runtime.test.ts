@@ -8,10 +8,8 @@ import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
-import {
-  discordMessagingActionRuntime,
-  handleDiscordMessagingAction,
-} from "./runtime.messaging.js";
+import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import {
   discordModerationActionRuntime,
   handleDiscordModerationAction,

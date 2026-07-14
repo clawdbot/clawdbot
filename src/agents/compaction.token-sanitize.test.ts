@@ -34,7 +34,7 @@ describe("compaction token accounting sanitization", () => {
         content: [{ type: "text", text: "ok" }],
         details: { raw: "x".repeat(50_000) },
         timestamp: 1,
-      } as any,
+      } as AgentMessage,
       {
         role: "user",
         content: "next",
@@ -65,13 +65,13 @@ describe("compaction token accounting sanitization", () => {
         content: [{ type: "text", text: "ok" }],
         details: { raw: "x".repeat(50_000) },
         timestamp: 1,
-      } as any,
+      } as AgentMessage,
       {
         role: "custom",
         customType: "openclaw.runtime-context",
         content: "internal",
         timestamp: 2,
-      } as any,
+      } as AgentMessage,
       {
         role: "user",
         content: "next",

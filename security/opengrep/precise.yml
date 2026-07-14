@@ -179,7 +179,7 @@ rules:
       - patterns:
           - pattern-either:
               - pattern: getChannelPluginCatalogEntry(...)
-              - pattern: listChannelPluginCatalogEntries(...)
+              - pattern: listRawChannelPluginCatalogEntries(...)
           - pattern-not-regex: \bexcludeWorkspace\s*:\s*true\b
     pattern-sanitizers:
       - patterns:

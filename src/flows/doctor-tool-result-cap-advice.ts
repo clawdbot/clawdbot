@@ -7,7 +7,7 @@ import type { HealthFinding } from "./health-checks.js";
 
 const TOOL_RESULT_CAP_CHECK_ID = "core/doctor/tool-result-cap";
 
-export type ToolResultCapDoctorIssue = {
+type ToolResultCapDoctorIssue = {
   kind: "configured-above-runtime-ceiling" | "configured-below-auto-cap";
   contextWindowTokens: number;
   modelKey: string;
@@ -20,7 +20,7 @@ export type ToolResultCapDoctorIssue = {
 };
 
 // Doctor advice for explicit live tool-result caps that fight model-window defaults.
-export type ToolResultCapDoctorAdviceParams = {
+type ToolResultCapDoctorAdviceParams = {
   contextWindowTokens: number;
   modelKey: string;
   configuredCap?: number;

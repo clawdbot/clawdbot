@@ -26,7 +26,7 @@ const GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS = 190_000;
 
 type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 
-export type RemoteGatewayInferenceTarget = {
+type RemoteGatewayInferenceTarget = {
   config: OpenClawConfig;
   gatewayUrl: string;
   token?: string;
@@ -34,7 +34,7 @@ export type RemoteGatewayInferenceTarget = {
   tlsFingerprint?: string;
 };
 
-export type RemoteGatewayInferenceOnboardingDeps = {
+type RemoteGatewayInferenceOnboardingDeps = {
   callGateway?: CallGateway;
   createPrompter?: GuidedOnboardingDeps["createPrompter"];
   runTui?: typeof import("../tui/tui.js").runTui;

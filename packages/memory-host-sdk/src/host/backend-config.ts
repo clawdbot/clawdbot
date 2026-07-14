@@ -1,8 +1,13 @@
 // Memory Host SDK module implements backend config behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  CANONICAL_ROOT_MEMORY_FILENAME,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import {
+  MEMORY_HOST_ROOT_FILENAME,
   type MemoryBackend,
   type MemoryCitationsMode,
   type MemoryQmdConfig,
@@ -11,19 +16,14 @@ import {
   type MemoryQmdSearchMode,
   type MemoryQmdStartupMode,
   type OpenClawConfig,
-  parseDurationMs,
-  resolveAgentWorkspaceDir,
+  resolveMemoryHostAgentWorkspaceDir,
   normalizeAgentId,
-  resolveUserPath,
+  resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
   splitShellArgs,
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-  uniqueStrings,
-} from "./string-utils.js";
+import { parseDurationMs } from "./openclaw-runtime-config.js";
 
 function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
@@ -63,14 +63,14 @@ export type ResolvedMemoryBackendConfig = {
   qmd?: ResolvedQmdConfig;
 };
 
-export type ResolvedQmdCollection = {
+/** @public */ export type ResolvedQmdCollection = {
   name: string;
   path: string;
   pattern: string;
   kind: "memory" | "custom" | "sessions";
 };
 
-export type ResolvedQmdUpdateConfig = {
+/** @public */ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
@@ -83,14 +83,14 @@ export type ResolvedQmdUpdateConfig = {
   embedTimeoutMs: number;
 };
 
-export type ResolvedQmdLimitsConfig = {
+/** @public */ export type ResolvedQmdLimitsConfig = {
   maxResults: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
 };
 
-export type ResolvedQmdSessionConfig = {
+/** @public */ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
   exportDir?: string;
   retentionDays?: number;
@@ -209,7 +209,7 @@ function resolvePath(raw: string, workspaceDir: string): string {
     throw new Error("path required");
   }
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
-    return path.normalize(resolveUserPath(trimmed));
+    return path.normalize(resolveMemoryHostUserPath(trimmed));
   }
   return path.normalize(path.resolve(workspaceDir, trimmed));
 }
@@ -407,7 +407,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
+    { path: workspaceDir, pattern: MEMORY_HOST_ROOT_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -429,7 +429,7 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, normalizedAgentId);
+  const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();

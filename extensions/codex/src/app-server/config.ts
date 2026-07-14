@@ -38,11 +38,11 @@ const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
-export type CodexAppServerHomeScope = "agent" | "user";
+type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
+type CodexAppServerHomeScope = "agent" | "user";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
-export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
+type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -66,14 +66,14 @@ type CodexAppServerDefaultPolicy = {
   dangerFullAccessAllowed?: boolean;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
-export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
+type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
+type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexManagedCommandOrder = "package-first" | "desktop-first";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
+type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
@@ -118,14 +118,14 @@ export type ResolvedCodexComputerUseConfig = {
   marketplaceName?: string;
 };
 
-export type CodexPluginEntryConfig = {
+type CodexPluginEntryConfig = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
 };
 
-export type CodexPluginsConfig = {
+type CodexPluginsConfig = {
   enabled?: boolean;
   allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
@@ -149,23 +149,23 @@ export type CodexSupervisionEndpoint =
       authTokenEnv?: string;
     };
 
-export type CodexSupervisionConfig = {
+type CodexSupervisionConfig = {
   enabled?: boolean;
   endpoints?: CodexSupervisionEndpoint[];
   allowRawTranscripts?: boolean;
   allowWriteControls?: boolean;
 };
 
-export type CodexAppServerExperimentalConfig = {
+type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
-export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
-export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
-export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
-export type CodexAppServerNetworkProxyMode = "limited" | "full";
+type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
+type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
+type CodexAppServerNetworkProxyMode = "limited" | "full";
 
-export type CodexAppServerNetworkProxyConfig = {
+type CodexAppServerNetworkProxyConfig = {
   enabled?: boolean;
   profileName?: string;
   baseProfile?: CodexAppServerNetworkProxyBaseProfile;
@@ -182,7 +182,7 @@ export type CodexAppServerNetworkProxyConfig = {
   dangerouslyAllowAllUnixSockets?: boolean;
 };
 
-export type ResolvedCodexAppServerNetworkProxyConfig = {
+type ResolvedCodexAppServerNetworkProxyConfig = {
   profileName: string;
   configFingerprint: string;
   configPatch: JsonObject;
@@ -243,7 +243,7 @@ export type CodexAppServerRuntimeOptions = {
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
-export type CodexModelBackedReviewerContext = {
+type CodexModelBackedReviewerContext = {
   modelProvider?: string;
   model?: string;
   config?: ProviderAuthAliasConfig;
@@ -297,88 +297,6 @@ export function shouldAutoApproveCodexAppServerApprovals(
     appServer.sandbox === "danger-full-access"
   );
 }
-
-export const CODEX_APP_SERVER_CONFIG_KEYS = [
-  "mode",
-  "transport",
-  "homeScope",
-  "command",
-  "args",
-  "url",
-  "authToken",
-  "headers",
-  "clearEnv",
-  "remoteWorkspaceRoot",
-  "codeModeOnly",
-  "requestTimeoutMs",
-  "turnCompletionIdleTimeoutMs",
-  "postToolRawAssistantCompletionIdleTimeoutMs",
-  "approvalPolicy",
-  "sandbox",
-  "approvalsReviewer",
-  "serviceTier",
-  "networkProxy",
-  "defaultWorkspaceDir",
-  "experimental",
-] as const;
-
-export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
-
-export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
-  "enabled",
-  "autoInstall",
-  "marketplaceDiscoveryTimeoutMs",
-  "liveTestTimeoutMs",
-  "toolCallTimeoutMs",
-  "healthCheckEnabled",
-  "healthCheckIntervalMinutes",
-  "pluginCacheMode",
-  "strictReadiness",
-  "autoRepair",
-  "marketplaceSource",
-  "marketplacePath",
-  "marketplaceName",
-  "pluginName",
-  "mcpServerName",
-] as const;
-
-export const CODEX_PLUGINS_CONFIG_KEYS = [
-  "enabled",
-  "allow_all_plugins",
-  "allow_destructive_actions",
-  "plugins",
-] as const;
-
-export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
-  "enabled",
-  "marketplaceName",
-  "pluginName",
-  "allow_destructive_actions",
-] as const;
-
-export const CODEX_SUPERVISION_CONFIG_KEYS = [
-  "enabled",
-  "endpoints",
-  "allowRawTranscripts",
-  "allowWriteControls",
-] as const;
-
-export const CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS = [
-  "id",
-  "label",
-  "transport",
-  "command",
-  "args",
-  "cwd",
-] as const;
-
-export const CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS = [
-  "id",
-  "label",
-  "transport",
-  "url",
-  "authTokenEnv",
-] as const;
 
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
@@ -962,7 +880,7 @@ export function canUseCodexModelBackedApprovalsReviewerForModel(
   return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
 }
 
-export function isTrustedCodexModelBackedOpenAIProvider(params: {
+function isTrustedCodexModelBackedOpenAIProvider(params: {
   config?: ProviderAuthAliasConfig;
   env?: NodeJS.ProcessEnv;
   model?: string;
@@ -1287,7 +1205,7 @@ function resolveNetworkProxyPermissionProfileName(
   return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 
-export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
+function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
   return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
 }
 
@@ -2203,14 +2121,6 @@ function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReview
     : undefined;
 }
 
-export function resolveOpenClawExecModeFromConfig(params: {
-  config?: unknown;
-  agentId?: string;
-}): OpenClawExecMode | undefined {
-  const policy = resolveOpenClawExecPolicyFromConfig(params);
-  return policy.touched ? policy.mode : undefined;
-}
-
 function resolveOpenClawExecPolicyFromConfig(params: {
   config?: unknown;
   agentId?: string;
@@ -2231,19 +2141,6 @@ function resolveOpenClawExecPolicyFromConfig(params: {
   });
   const agentExec = readRecord(readRecord(readRecord(agentEntry)?.tools)?.exec);
   return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
-}
-
-export function resolveOpenClawExecModeForCodexAppServer(params: {
-  execOverrides?: {
-    security?: unknown;
-    ask?: unknown;
-  };
-  approvals?: ExecApprovalsFile;
-  config?: unknown;
-  agentId?: string;
-}): OpenClawExecMode | undefined {
-  const policy = resolveOpenClawExecPolicyForCodexAppServer(params);
-  return policy.touched ? policy.mode : undefined;
 }
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {

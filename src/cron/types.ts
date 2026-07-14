@@ -32,10 +32,10 @@ export type CronSchedule =
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
-export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-export type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = "next-heartbeat" | "now";
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
@@ -60,13 +60,13 @@ export type CronDelivery = {
 };
 
 /** Webhook completion destination used alongside chat delivery. */
-export type CronCompletionDestination = {
+type CronCompletionDestination = {
   mode: "webhook";
   to?: string;
 };
 
 /** Destination override for failed-run notifications. */
-export type CronFailureDestination = {
+type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -74,7 +74,7 @@ export type CronFailureDestination = {
 };
 
 /** Partial failure-destination update shape; null clears individual override fields. */
-export type CronFailureDestinationPatch = {
+type CronFailureDestinationPatch = {
   channel?: CronMessageChannel | null;
   to?: string | null;
   accountId?: string | null;
@@ -138,7 +138,7 @@ export type CronDeliveryPreview = {
 };
 
 /** Token usage summary copied from the agent runner when available. */
-export type CronUsageSummary = {
+type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
@@ -212,8 +212,6 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
-  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
-  firstModelCallStarted?: boolean;
 };
 
 /** Watchdog update that requires the new execution phase. */

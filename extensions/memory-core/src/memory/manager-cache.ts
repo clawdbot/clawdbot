@@ -5,7 +5,7 @@ type Closable = {
   close?: () => Promise<void> | void;
 };
 
-export type ManagedCache<T> = {
+type ManagedCache<T> = {
   cache: Map<string, T>;
   pending: Map<string, Promise<T>>;
 };

@@ -1,21 +1,22 @@
 // Tests execution wrapper resolution for shell commands.
 import { describe, expect, test } from "vitest";
+import { unwrapEnvInvocation } from "./command-carriers.js";
 import {
-  basenameLower,
+  isDispatchWrapperExecutable,
+  resolveDispatchWrapperTrustPlan,
+} from "./dispatch-wrapper-resolution.js";
+import {
   extractEnvAssignmentKeysFromDispatchWrappers,
   extractShellWrapperCommand,
-  extractShellWrapperInlineCommand,
   hasEnvManipulationBeforeShellWrapper,
-  isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   isShellWrapperInvocation,
   normalizeExecutableToken,
-  resolveDispatchWrapperTrustPlan,
   resolveShellWrapperTransportArgv,
-  unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 
 function supportsScriptPositionalCommandForTests(): boolean {
   return process.platform === "darwin" || process.platform === "freebsd";
@@ -38,16 +39,6 @@ function expectTransparentDispatchWrapperCase(params: {
     policyBlocked: false,
   });
 }
-
-describe("basenameLower", () => {
-  test.each([
-    { token: " Bun.CMD ", expected: "bun.cmd" },
-    { token: "C:\\tools\\PwSh.EXE", expected: "pwsh.exe" },
-    { token: "/tmp/bash", expected: "bash" },
-  ])("normalizes basenames for %j", ({ token, expected }) => {
-    expect(basenameLower(token)).toBe(expected);
-  });
-});
 
 describe("normalizeExecutableToken", () => {
   test.each([

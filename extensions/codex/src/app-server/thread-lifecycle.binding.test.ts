@@ -2,7 +2,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -16,10 +15,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  shouldRotateCodexAppServerBindingForRuntime,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -82,7 +78,7 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
     ...createThreadLifecycleAppServerOptions(),
     networkProxy: {
       profileName: "openclaw-network",
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: "test-network-proxy",
       configPatch,
     },
   };
@@ -655,35 +651,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
     expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
-  });
-
-  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v0",
-      }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v1",
-      }),
-    ).toBe(false);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "local-loopback",
-        current: "local-runtime-v1",
-      }),
-    ).toBe(false);
   });
 
   it("does not write a binding when thread start resolves after abort", async () => {

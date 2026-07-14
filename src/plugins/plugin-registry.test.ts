@@ -20,13 +20,11 @@ import {
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
-  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   createPluginRegistryIdNormalizer,
   getPluginRecord,
   inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
-  listPluginRecords,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
@@ -37,10 +35,14 @@ import {
   resolvePluginContributionOwners,
   resolveProviderOwners,
 } from "./plugin-registry.js";
-import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+
+function listPluginRecords(params: { index: InstalledPluginIndex }) {
+  return params.index.plugins;
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -210,27 +212,6 @@ function expectSnapshotPluginIds(snapshot: InstalledPluginIndex, expectedPluginI
 }
 
 describe("plugin registry facade", () => {
-  it("resolves relative plugin API paths against the plugin root", () => {
-    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
-
-    expect(resolvePluginPath("data/cache.json", pluginRoot)).toBe(
-      path.join(pluginRoot, "data", "cache.json"),
-    );
-    expect(resolvePluginPath("./data/cache.json", pluginRoot)).toBe(
-      path.join(pluginRoot, "data", "cache.json"),
-    );
-  });
-
-  it("keeps absolute and home plugin API paths user-resolved", () => {
-    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
-    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
-
-    expect(resolvePluginPath(absolute, pluginRoot)).toBe(resolvePluginPath(absolute, undefined));
-    expect(resolvePluginPath("~/openclaw/plugin.txt", pluginRoot)).toBe(
-      resolvePluginPath("~/openclaw/plugin.txt", undefined),
-    );
-  });
-
   it("resolves cold plugin records and contribution owners without loading runtime", () => {
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);

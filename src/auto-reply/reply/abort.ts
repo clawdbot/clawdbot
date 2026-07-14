@@ -39,29 +39,14 @@ import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
 } from "./abort-cutoff.js";
-import {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
-} from "./abort-primitives.js";
+import { isAbortRequestText, isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 
-export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
-export {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
-};
+export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 
 const defaultAbortDeps = {
   getAcpSessionManager,
@@ -521,4 +506,3 @@ export async function tryFastAbortFromMessage(params: {
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
-export { testing as __testing };

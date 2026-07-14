@@ -2,8 +2,9 @@
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { clearGroupNameCache, handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgentRoute } =
@@ -218,7 +219,7 @@ describe("broadcast dispatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearGroupNameCache();
+    feishuGroupNameCache.clear();
     finalizeInboundContextCalls.length = 0;
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",

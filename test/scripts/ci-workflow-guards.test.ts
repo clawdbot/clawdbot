@@ -65,6 +65,11 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  nodeFastOnly?: boolean;
+  nodeFastPluginContracts?: boolean;
+  nodeFastCiRouting?: boolean;
+  runNode?: boolean;
+  runTsLoc?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -183,11 +188,14 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_RUN_MACOS: "true",
         OPENCLAW_CI_RUN_NATIVE_I18N: "true",
-        OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_ONLY: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: "false",
+        OPENCLAW_CI_RUN_NODE: String(options.runNode ?? true),
+        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: String(options.nodeFastCiRouting ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_ONLY: String(options.nodeFastOnly ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
+          options.nodeFastPluginContracts ?? false,
+        ),
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
+        OPENCLAW_CI_RUN_TS_LOC: String(options.runTsLoc ?? true),
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
       },
@@ -383,6 +391,55 @@ function runGit(cwd: string, args: string[]): string {
 function writeExecutable(filePath: string, lines: string[]): void {
   writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
   chmodSync(filePath, 0o755);
+}
+
+function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
+  calls: string[];
+  output: string;
+  status: number | null;
+} {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deadcode-"));
+  try {
+    const fakeBin = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({
+        scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
+      })}\n`,
+    );
+    writeExecutable(path.join(fakeBin, "pnpm"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ]);
+    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    ).run;
+    const run = spawnSync("bash", ["-c", checkShardRun], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FORMAT_CHECK: "false",
+        HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PNPM_CALLS: callsPath,
+        PR_BASE_SHA: "",
+        TASK: "dependencies",
+      },
+    });
+    return {
+      calls: existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function runGeneratedPublisherScenario(
@@ -583,6 +640,18 @@ describe("ci workflow guards", () => {
       default: "",
       type: "string",
     });
+    expect(workflow.on.workflow_dispatch.inputs.loc_base_ref).toEqual({
+      description: "Optional exact LOC comparison-base SHA for standalone manual runs",
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.pr_number).toEqual({
+      description: "Pull request number required by the exact-SHA release gate",
+      required: false,
+      default: "",
+      type: "string",
+    });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}",
     );
@@ -593,10 +662,60 @@ describe("ci workflow guards", () => {
     expect(validationStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
+    expect(validationStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
     expect(validationStep.run).toContain(
       "release_gate requires target_ref to be a full commit SHA",
     );
+    expect(validationStep.run).toContain(
+      "release_gate requires pr_number to identify an open pull request",
+    );
     expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
+    const manualLocBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate manual LOC base input",
+    );
+    expect(manualLocBaseStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''",
+    );
+    expect(manualLocBaseStep.run).toContain("loc_base_ref must be a full commit SHA");
+    const mergeTreeStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate release-gate PR merge tree",
+    );
+    expect(mergeTreeStep.id).toBe("release_gate_loc_tree");
+    expect(mergeTreeStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.release_gate",
+    );
+    expect(mergeTreeStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeTreeStep.env.TARGET_REF).toBe("${{ inputs.target_ref }}");
+    expect(mergeTreeStep.run).toContain(
+      'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"',
+    );
+    expect(mergeTreeStep.run).toContain(".head.sha");
+    expect(mergeTreeStep.run).toContain(".base.sha");
+    expect(mergeTreeStep.run).toContain('[[ "$pr_head_sha" != "$TARGET_REF" ]]');
+    expect(mergeTreeStep.run).toContain("for attempt in {1..12}");
+    expect(mergeTreeStep.run).toContain(".mergeable == null");
+    expect(mergeTreeStep.run).toContain(".merge_commit_sha");
+    expect(mergeTreeStep.run).toContain('[[ "$mergeable" == "false" ]]');
+    expect(mergeTreeStep.run).toContain("sleep 2");
+    expect(mergeTreeStep.run).toContain('"+refs/pull/${PR_NUMBER}/merge:${merge_ref}"');
+    expect(mergeTreeStep.run).toContain('[[ "$resolved_merge_sha" != "$merge_sha"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^1"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^2"');
+    expect(mergeTreeStep.run).toContain('echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"');
+    expect(mergeTreeStep.run).toContain('echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"');
+    expect(workflow.jobs.preflight.permissions["pull-requests"]).toBe("read");
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain(
+      "steps.release_gate_loc_tree.outputs.base_sha",
+    );
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain("inputs.loc_base_ref");
+    expect(workflow.jobs.preflight.outputs.loc_head_sha).toContain(
+      "steps.release_gate_loc_tree.outputs.head_sha",
+    );
+    const ciDocs = readFileSync("docs/ci.md", "utf8");
+    expect(ciDocs).toContain("`pr_number`");
+    expect(ciDocs).toContain("synthetic pull-request merge ref");
+    expect(ciDocs).toContain("matches automatic PR CI's merged tree and policy implementation");
+    expect(ciDocs).toContain("cannot provide equivalent merge-tree evidence");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
@@ -660,8 +779,26 @@ describe("ci workflow guards", () => {
     const nativeInventoryStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Refresh shared native inventory",
     );
+    const nativeAndroidStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Android native resources",
+    );
+    const nativeAppleStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Apple native resources",
+    );
+    const nativeValidationStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate native locale refresh",
+    );
+    const nativePublishStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
+    );
+    const controlUiAggregateStep = controlUiFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Finalize control UI generated artifacts",
+    );
+    const controlUiValidationStep = controlUiFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate control UI locale refresh",
     );
 
     expect(refresh.if).toBe(
@@ -702,6 +839,8 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
+    expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
     expect(refreshStep.run).toContain("run_openai_refresh");
@@ -715,6 +854,32 @@ describe("ci workflow guards", () => {
     expect(nativeInventoryStep.run).toBe(
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
+    expect(nativeAndroidStep.run).toBe("node --import tsx scripts/android-app-i18n.ts sync");
+    expect(nativeAppleStep.run).toBe(
+      "node --import tsx scripts/apple-app-i18n.ts sync-ios --write",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/native-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/android-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain("node --import tsx scripts/apple-app-i18n.ts check");
+    expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
+      "apps/.i18n/native",
+      "apps/.i18n/native-source.json",
+      "apps/.i18n/apple-translation-contradictions.json",
+      "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
+      "apps/android/app/src/main/res/values*/assistant.xml",
+      "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/ios/Resources/Localizable.xcstrings",
+      "apps/ios/Sources/*.lproj/InfoPlist.strings",
+      "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
+      "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
+      "apps/ios/ActivityWidget/*.lproj/InfoPlist.strings",
+    ]);
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -724,6 +889,12 @@ describe("ci workflow guards", () => {
     );
     expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
+    expect(controlUiAggregateStep.run).toBe(
+      "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    );
+    expect(controlUiFinalize.steps.indexOf(controlUiAggregateStep)).toBeLessThan(
+      controlUiFinalize.steps.indexOf(controlUiValidationStep),
+    );
 
     for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
       expect(ownerWorkflow.on.push.paths).toContain(CREATE_GENERATED_PR_TOKENS_ACTION);
@@ -1308,6 +1479,14 @@ describe("ci workflow guards", () => {
     expect(source).not.toContain("blacksmith-");
   });
 
+  it("keeps security checks hosted and the cache writer on Blacksmith", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+    expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
+    expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
@@ -1468,6 +1647,25 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("refetches an exact manual target when the workflow branch moves", () => {
+    const workflow = readCiWorkflow();
+    const checkoutStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
+    const run = checkoutStep.run;
+    const driftCheck = run.indexOf(
+      'if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then',
+    );
+    const exactFetch = run.indexOf('fetch_checkout_ref "$checkout_ref"', driftCheck);
+    const finalCheck = run.indexOf('if [ "$resolved_sha" != "$requested_sha" ]; then', driftCheck);
+
+    expect(driftCheck).toBeGreaterThan(-1);
+    expect(run).toContain("while the manual run waits for a runner");
+    expect(run).toContain('checkout_ref="$requested_sha"');
+    expect(exactFetch).toBeGreaterThan(driftCheck);
+    expect(finalCheck).toBeGreaterThan(exactFetch);
   });
 
   it("retries workflow sanity checkout fetch timeouts", () => {
@@ -1697,6 +1895,69 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
+  it("uses stable deadcode checks for current and frozen checkouts", () => {
+    const modern = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
+    });
+    expect(modern.status, modern.output).toBe(0);
+    expect(modern.calls).toEqual([
+      "deadcode:dependencies",
+      "deadcode:unused-files",
+      "deadcode:exports",
+    ]);
+
+    const frozenWithExports = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
+    });
+    expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
+    expect(frozenWithExports.calls).toEqual([
+      "deadcode:dependencies",
+      "deadcode:unused-files",
+      "deadcode:exports",
+    ]);
+
+    const frozen = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: [
+        "deadcode:ci",
+        "deadcode:dependencies",
+        "deadcode:report:ci:ts-unused",
+        "deadcode:unused-files",
+      ],
+    });
+    expect(frozen.status, frozen.output).toBe(0);
+    expect(frozen.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+
+    const currentWithoutExports = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files"],
+    });
+    expect(currentWithoutExports.status).toBe(1);
+    expect(currentWithoutExports.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    expect(currentWithoutExports.output).toContain(
+      "Current CI targets must provide the deadcode:exports package script.",
+    );
+
+    const legacy = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: ["deadcode:ci"],
+    });
+    expect(legacy.status, legacy.output).toBe(0);
+    expect(legacy.calls).toEqual(["deadcode:ci"]);
+
+    const incompleteCurrent = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies"],
+    });
+    expect(incompleteCurrent.status).toBe(1);
+    expect(incompleteCurrent.calls).toEqual([]);
+    expect(incompleteCurrent.output).toContain(
+      "Target does not provide a supported deadcode check.",
+    );
+  });
+
   it("runs mobile protocol coverage for Node and native-only changes", () => {
     const workflow = readCiWorkflow();
     const coverageStep = workflow.jobs.preflight.steps.find(
@@ -1709,6 +1970,80 @@ describe("ci workflow guards", () => {
     expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
     expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
+  it("runs the changed-file TypeScript LOC ratchet against the exact tested tree", () => {
+    const workflow = readCiWorkflow();
+    const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
+    const mergeCheckout = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Checkout verified release-gate LOC merge tree",
+    );
+    const checksFastRun = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.before");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("github.event.pull_request.head.sha");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("inputs.target_ref");
+    expect(mergeCheckout.if).toContain("matrix.task == 'loc-ratchet'");
+    expect(mergeCheckout.if).toContain("needs.preflight.outputs.loc_head_sha != ''");
+    expect(mergeCheckout.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
+    expect(mergeCheckout.env.LOC_PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeCheckout.run).toContain(
+      '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
+    );
+    expect(mergeCheckout.run).toContain('[[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]');
+    expect(mergeCheckout.run).toContain("git checkout --detach refs/remotes/origin/ci-head");
+    expect(checksFastSteps.indexOf(mergeCheckout)).toBeLessThan(
+      checksFastSteps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
+    );
+    expect(checksFastRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^1");
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^2");
+    expect(checksFastRun.run).toContain(
+      'git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"',
+    );
+    expect(checksFastRun.run).toContain('merge_head="$(git rev-parse HEAD^2)"');
+    expect(checksFastRun.run).toContain('[[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]');
+    expect(checksFastRun.run).toContain('loc_base_ref="$(git rev-parse HEAD^1)"');
+    expect(checksFastRun.run).toContain(
+      'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"',
+    );
+    expect(checksFastRun.run).toContain('pnpm check:loc --base "$loc_base_ref" --head HEAD');
+
+    const fastOnly = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      nodeFastOnly: true,
+      nodeFastPluginContracts: true,
+    });
+    expect(fastOnly.status, fastOnly.output).toBe(0);
+    expect(fastOnly.outputs.run_check).toBe("false");
+    expect(fastOnly.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
+        .include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
+
+    const nativeTypeScript = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      runNode: false,
+      runTsLoc: true,
+    });
+    expect(nativeTypeScript.status, nativeTypeScript.output).toBe(0);
+    expect(nativeTypeScript.outputs.run_node).toBe("false");
+    expect(nativeTypeScript.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(nativeTypeScript.outputs.checks_fast_core_matrix, "native TS checks matrix"),
+      ).include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
@@ -1978,6 +2313,17 @@ describe("ci workflow guards", () => {
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
+    expect(checkShard.run).toContain("pnpm deadcode:exports");
+    expect(checkShard.run).toContain(
+      "Current CI targets must provide the deadcode:exports package script.",
+    );
+    expect(checkShard.run).toContain(
+      'elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"',
+    );
+    expect(checkShard.run).toContain("Target does not provide a supported deadcode check.");
 
     const uiInstall = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Install Playwright Chromium",
@@ -2049,7 +2395,7 @@ describe("ci workflow guards", () => {
     );
 
     expect(startupMemoryStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
-      "${{ runner.environment == 'github-hosted' && '425' || '350' }}",
+      "${{ runner.environment == 'github-hosted' && '425' || '400' }}",
     );
   });
 

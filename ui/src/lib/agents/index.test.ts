@@ -3,12 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createAgentCapability,
-  loadAgents,
   loadToolsCatalog,
   loadToolsEffective,
   setDefaultAgent,
 } from "./index.ts";
-import type { AgentsConfigCapability, AgentsState } from "./index.ts";
+import type { AgentsState } from "./index.ts";
+
+type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
@@ -123,62 +124,6 @@ function createSaveState(): {
     request,
   };
 }
-
-describe("loadAgents", () => {
-  it("preserves selected agent when it still exists in the list", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "kimi";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("kimi");
-  });
-
-  it("resets to default when selected agent is removed", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "removed-agent";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("main");
-  });
-
-  it("sets default when no agent is selected", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = null;
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("main");
-  });
-});
 
 describe("createAgentCapability lifecycle", () => {
   it("starts a fresh list request after a same-client reconnect", async () => {

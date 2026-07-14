@@ -1,131 +1,102 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "./invoke.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: vi.fn(),
-  };
-});
-
-const { spawn } = await import("node:child_process");
-
-type MockChild = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  kill: ReturnType<typeof vi.fn>;
-};
-
-function createMockChild(): MockChild {
-  return Object.assign(new EventEmitter(), {
-    stdout: new EventEmitter(),
-    stderr: new EventEmitter(),
-    kill: vi.fn(),
-  });
-}
-
-function mockNextSpawn(child: MockChild): void {
-  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
-}
-
 describe("runCommand", () => {
   afterEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "settles after child exit when %s emits an error",
-    async (streamName) => {
-      const child = createMockChild();
-      mockNextSpawn(child);
-
-      const resultPromise = testing.runCommand(["echo", "hello"], undefined, undefined, undefined);
-      child.stdout.emit("data", Buffer.from("captured stdout"));
-      child.stderr.emit("data", Buffer.from("captured stderr"));
-      child[streamName].emit("error", new Error(`${streamName} broke`));
-
-      let settled = false;
-      void resultPromise.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-      child.stdout.emit("error", new Error("later stdout error"));
-      child.stderr.emit("error", new Error("later stderr error"));
-      expect(child.kill).toHaveBeenCalledTimes(1);
-      child.emit("exit", 1);
-
-      await expect(resultPromise).resolves.toEqual({
-        exitCode: 1,
-        timedOut: false,
-        success: false,
-        stdout: "captured stdout",
-        stderr: "captured stderr",
-        error: `${streamName} broke`,
-        truncated: false,
-      });
-    },
-  );
-
-  it("escalates stream-error termination when the child does not exit", async () => {
-    vi.useFakeTimers();
-    const child = createMockChild();
-    mockNextSpawn(child);
-
-    const resultPromise = testing.runCommand(["slow"], undefined, undefined, undefined);
-    child.stderr.emit("error", new Error("stderr broke"));
-
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    await vi.advanceTimersByTimeAsync(testing.STREAM_ERROR_KILL_GRACE_MS);
-    expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
-    child.emit("exit", null);
-    await expect(resultPromise).resolves.toMatchObject({
-      exitCode: undefined,
+  it("captures stdout, stderr, and exit status", async () => {
+    await expect(
+      testing.runCommand(
+        [
+          process.execPath,
+          "-e",
+          "process.stdout.write('captured stdout'); process.stderr.write('captured stderr')",
+        ],
+        undefined,
+        undefined,
+        undefined,
+      ),
+    ).resolves.toEqual({
+      exitCode: 0,
       timedOut: false,
-      success: false,
-      error: "stderr broke",
+      success: true,
+      stdout: "captured stdout",
+      stderr: "captured stderr",
+      error: null,
+      truncated: false,
     });
   });
 
-  it("preserves child spawn errors", async () => {
-    const child = createMockChild();
-    mockNextSpawn(child);
-
-    const resultPromise = testing.runCommand(["missing"], undefined, undefined, undefined);
-    child.emit("error", new Error("spawn failed"));
-
-    await expect(resultPromise).resolves.toMatchObject({
-      exitCode: undefined,
-      timedOut: false,
-      success: false,
-      error: "spawn failed",
-    });
-    expect(child.kill).not.toHaveBeenCalled();
+  it("closes stdin for commands that wait for EOF", async () => {
+    await expect(
+      testing.runCommand(
+        [
+          process.execPath,
+          "-e",
+          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('eof'))",
+        ],
+        undefined,
+        undefined,
+        2_000,
+      ),
+    ).resolves.toMatchObject({ success: true, stdout: "eof" });
   });
 
-  it("preserves timeout termination and exit settlement", async () => {
-    vi.useFakeTimers();
-    const child = createMockChild();
-    mockNextSpawn(child);
-
-    const resultPromise = testing.runCommand(["slow"], undefined, undefined, 10);
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-    child.emit("exit", null);
-    await expect(resultPromise).resolves.toMatchObject({
-      exitCode: undefined,
-      timedOut: true,
+  it("preserves nonzero command results", async () => {
+    await expect(
+      testing.runCommand(
+        [process.execPath, "-e", "process.stderr.write('failed'); process.exit(7)"],
+        undefined,
+        undefined,
+        undefined,
+      ),
+    ).resolves.toMatchObject({
+      exitCode: 7,
+      timedOut: false,
       success: false,
+      stderr: "failed",
       error: null,
     });
+  });
+
+  it.runIf(process.platform !== "win32")("force-kills timed-out command trees", async () => {
+    const startedAt = Date.now();
+    const result = await testing.runCommand(
+      [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+      undefined,
+      undefined,
+      25,
+    );
+    expect(result).toMatchObject({ timedOut: true, success: false, error: null });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("keeps the combined output prefix bounded", async () => {
+    const result = await testing.runCommand(
+      [process.execPath, "-e", "process.stdout.write('x'.repeat(200_001))"],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(result.stdout).toHaveLength(200_000);
+    expect(result.stdout).toBe("x".repeat(200_000));
+    expect(result.truncated).toBe(true);
+  });
+
+  it("preserves child launch errors", async () => {
+    const result = await testing.runCommand(
+      [`openclaw-missing-${process.pid}-${Date.now()}`],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(result).toMatchObject({ exitCode: undefined, timedOut: false, success: false });
+    expect(result.error).toMatch(/ENOENT|not found/i);
   });
 
   describe("working directory failures", () => {
@@ -139,58 +110,40 @@ describe("runCommand", () => {
       );
     });
 
-    it("flags a cwd that exists but is not a directory", () => {
+    it("flags a cwd that exists but is not a directory", async () => {
       const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);
       fs.writeFileSync(file, "x");
       try {
-        const error = Object.assign(new Error("spawn ENOTDIR"), {
-          code: "ENOTDIR",
-        }) as NodeJS.ErrnoException;
-        expect(testing.clarifyNodeExecCwdSpawnError(error, file)).toBe(
-          `node exec working directory is not a directory on the node host: ${file} (os reported: spawn ENOTDIR)`,
+        const result = await testing.runCommand(
+          [process.execPath, "-e", "process.exit(0)"],
+          file,
+          undefined,
+          undefined,
+        );
+        expect(result).toMatchObject({ success: false });
+        expect(result.error).toContain(
+          `node exec working directory is not a directory on the node host: ${file}`,
         );
       } finally {
         fs.rmSync(file, { force: true });
       }
     });
 
-    it("clarifies an asynchronous spawn error for a missing cwd", async () => {
-      const child = createMockChild();
-      mockNextSpawn(child);
+    it("clarifies a missing cwd during execution", async () => {
       const cwd = path.join(os.tmpdir(), `node-exec-run-missing-${process.pid}-${Date.now()}`);
-
-      const resultPromise = testing.runCommand(["/bin/sh"], cwd, undefined, undefined);
-      child.emit("error", enoent("spawn /bin/sh ENOENT"));
-
-      await expect(resultPromise).resolves.toMatchObject({
-        success: false,
-        error: expect.stringContaining(
-          `node exec working directory does not exist on the node host: ${cwd}`,
-        ),
-      });
+      const result = await testing.runCommand(
+        [process.execPath, "-e", "process.exit(0)"],
+        cwd,
+        undefined,
+        undefined,
+      );
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(
+        `node exec working directory does not exist on the node host: ${cwd}`,
+      );
     });
 
-    it("clarifies a synchronous spawn throw for a cwd that is a file", async () => {
-      const file = path.join(os.tmpdir(), `node-exec-run-file-${process.pid}-${Date.now()}.txt`);
-      fs.writeFileSync(file, "x");
-      vi.mocked(spawn).mockImplementationOnce(() => {
-        throw Object.assign(new Error("spawn ENOTDIR"), { code: "ENOTDIR" });
-      });
-      try {
-        await expect(
-          testing.runCommand(["/bin/sh"], file, undefined, undefined),
-        ).resolves.toMatchObject({
-          success: false,
-          error: expect.stringContaining(
-            `node exec working directory is not a directory on the node host: ${file}`,
-          ),
-        });
-      } finally {
-        fs.rmSync(file, { force: true });
-      }
-    });
-
-    it("preserves genuine executable and unrelated spawn errors", () => {
+    it("preserves executable and unrelated errors", () => {
       const missingExecutable = "spawn /usr/bin/does-not-exist ENOENT";
       expect(testing.clarifyNodeExecCwdSpawnError(enoent(missingExecutable), os.tmpdir())).toBe(
         missingExecutable,
@@ -206,14 +159,10 @@ describe("runCommand", () => {
 
     it("preserves the spawn error when the cwd cannot be inspected", () => {
       const message = "spawn /bin/sh ENOENT";
-      const stat = vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
+      vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
         throw Object.assign(new Error("permission denied"), { code: "EACCES" });
       });
-      try {
-        expect(testing.clarifyNodeExecCwdSpawnError(enoent(message), "/unreadable")).toBe(message);
-      } finally {
-        stat.mockRestore();
-      }
+      expect(testing.clarifyNodeExecCwdSpawnError(enoent(message), "/unreadable")).toBe(message);
     });
   });
 });

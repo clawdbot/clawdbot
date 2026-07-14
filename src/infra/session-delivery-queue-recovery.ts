@@ -123,7 +123,7 @@ function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefi
   return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
-export function isSessionDeliveryEligibleForRetry(
+function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {

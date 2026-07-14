@@ -14,7 +14,7 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export class OpenClawModalDialog extends OpenClawLitElement {
+class OpenClawModalDialog extends OpenClawLitElement {
   @property() label = "";
   @property() description = "";
 
@@ -41,8 +41,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: min(540px, calc(100vw - 48px));
-      max-height: calc(100dvh - 48px);
+      width: min(var(--openclaw-modal-width, 540px), calc(100vw - 48px));
+      max-height: var(--openclaw-modal-max-height, calc(100dvh - 48px));
       margin: 0;
       padding: 0;
       border: 0;
@@ -113,6 +113,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         aria-describedby=${ifDefined(descriptionId || undefined)}
         tabindex="-1"
         @cancel=${this.handleCancel}
+        @click=${this.handleDialogClick}
         @keydown=${this.handleKeydown}
       >
         ${this.label
@@ -187,6 +188,13 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (!dialog) {
       return;
     }
+    const autofocusTarget = this.getFocusableElements().find((element) =>
+      element.hasAttribute("autofocus"),
+    );
+    if (autofocusTarget) {
+      autofocusTarget.focus({ preventScroll: true });
+      return;
+    }
     try {
       dialog.focus({ preventScroll: true });
     } catch {
@@ -197,6 +205,12 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   private handleCancel = (event: Event) => {
     event.preventDefault();
     this.dispatchCancel();
+  };
+
+  private handleDialogClick = (event: MouseEvent) => {
+    if (event.target === event.currentTarget) {
+      this.dispatchCancel();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {

@@ -1,8 +1,6 @@
 // OC Path tests cover security and limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  MAX_PATH_LENGTH,
-  MAX_TRAVERSAL_DEPTH,
   OcPathError,
   findOcPaths,
   formatOcPath,
@@ -12,6 +10,9 @@ import {
 } from "../../index.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
+// The limits are internals (trimmed from the public barrel); import them from
+// their defining module.
+import { MAX_PATH_LENGTH, MAX_TRAVERSAL_DEPTH } from "../../oc-path.js";
 
 function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): void {
   try {

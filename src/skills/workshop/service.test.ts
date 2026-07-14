@@ -381,6 +381,7 @@ describe("skill workshop proposals", () => {
       name: "Draftable Skill",
       description: "Original proposal",
       content: "# Draftable\n\nOriginal body.\n",
+      origin: { runId: "original-run" },
       supportFiles: [
         {
           path: "references/original.md",
@@ -396,6 +397,7 @@ describe("skill workshop proposals", () => {
       proposalId: proposal.record.id,
       description: "Revised proposal",
       content: "# Draftable\n\nRevised body.\n",
+      origin: { runId: "revision-run" },
       evidence: "",
     });
 
@@ -404,6 +406,7 @@ describe("skill workshop proposals", () => {
     expect(revised.record.description).toBe("Revised proposal");
     expect(revised.record.goal).toBe("Original goal");
     expect(revised.record.evidence).toBeUndefined();
+    expect(revised.record.origin).toEqual({ runId: "revision-run" });
     expect(revised.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/original.md",
     ]);
@@ -418,6 +421,7 @@ describe("skill workshop proposals", () => {
     });
 
     expect(removedSupport.record.proposedVersion).toBe("v3");
+    expect(removedSupport.record.origin).toEqual({ runId: "revision-run" });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
@@ -928,6 +932,82 @@ describe("skill workshop proposals", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "prompt-injection-skill", "SKILL.md")),
     ).rejects.toThrow();
+  });
+
+  it.each([
+    "skill name",
+    "description",
+    "content",
+    "support file",
+    "support path",
+    "goal",
+    "evidence",
+  ])(
+    "rejects a recognized literal credential in %s before writing proposal state",
+    async (surface) => {
+      const workspaceDir = await makeWorkspace();
+      const sample = `sk-proj-${"a".repeat(32)}`;
+      const input = {
+        workspaceDir,
+        name: surface === "skill name" ? sample : "Credential Safety",
+        description: surface === "description" ? sample : "Keep credentials out of skill proposals",
+        content: surface === "content" ? `# Unsafe\n\n${sample}\n` : "# Safe content\n",
+        ...(surface === "support file"
+          ? { supportFiles: [{ path: "references/example.md", content: sample }] }
+          : {}),
+        ...(surface === "support path"
+          ? { supportFiles: [{ path: `references/${sample}.md`, content: "Safe support.\n" }] }
+          : {}),
+        ...(surface === "goal" ? { goal: sample } : {}),
+        ...(surface === "evidence" ? { evidence: sample } : {}),
+      };
+
+      await expect(proposeCreateSkill(input)).rejects.toThrow(
+        "contains a recognized literal credential",
+      );
+      expect((await listSkillProposals()).proposals).toHaveLength(0);
+    },
+  );
+
+  it("rejects literal credentials before update or revision writes", async () => {
+    const workspaceDir = await makeWorkspace();
+    const sample = `github_pat_${"a".repeat(32)}`;
+    const skillDir = path.join(workspaceDir, "skills", "safe-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "safe-skill",
+      description: "A writable workspace skill",
+      body: "# Safe Skill\n\nOriginal body.\n",
+    });
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        skillName: "safe-skill",
+        description: sample,
+        content: "# Safe Update\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    expect((await listSkillProposals()).proposals).toHaveLength(0);
+
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Safe Revision",
+      description: "A safe pending proposal",
+      content: "# Safe Revision\n\nOriginal proposal.\n",
+    });
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        description: sample,
+        content: "# Safe Revision\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    const unchanged = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    expect(unchanged?.record.proposedVersion).toBe("v1");
+    expect(unchanged?.content).toContain("Original proposal.");
+    expect(unchanged?.content).not.toContain(sample);
   });
 
   it("rejects unsafe support paths before creating proposal state", async () => {

@@ -6,7 +6,6 @@ import {
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
-  resolveSessionKey,
   type SessionCapability,
   type SessionListOptions,
   type SessionRefreshTarget,
@@ -14,18 +13,13 @@ import {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
-  normalizeAgentId,
-  normalizeSessionKeyForUiComparison,
-  resolveUiConfiguredMainKey,
-  resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
-  resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+export { getPendingChatPickerPatch };
 
 const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
 const CHAT_SESSION_LIST_LIMIT = 50;
@@ -61,7 +55,7 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function buildChatSessionListOptions(
+function buildChatSessionListOptions(
   _state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
@@ -235,78 +229,6 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
-const pendingChatPickerPatches = new WeakMap<SessionCapability, Map<string, Promise<boolean>>>();
-
-type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
-
-function resolveChatPickerPatchKey(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): string {
-  const normalizedKey = normalizeSessionKeyForUiComparison(sessionKey);
-  const match = /^agent:([^:]+):(.*)$/u.exec(normalizedKey);
-  const body = match?.[2] ?? normalizedKey;
-  const isGlobal = isUiGlobalSessionKey(sessionKey);
-  const isMainAlias = [DEFAULT_MAIN_KEY, resolveUiConfiguredMainKey(host)].includes(
-    body.toLowerCase(),
-  );
-  const defaultAgentId = resolveUiDefaultAgentId(host);
-  const parsedAgentId = match?.[1];
-  // Match the Gateway's legacy default-main remap only when the live agent
-  // catalog proves that "main" is not a real agent.
-  const isLegacyDefaultMainAlias =
-    isMainAlias &&
-    normalizeAgentId(parsedAgentId ?? "") === DEFAULT_AGENT_ID &&
-    defaultAgentId !== DEFAULT_AGENT_ID &&
-    host.agentsList?.agents != null &&
-    !host.agentsList.agents.some(
-      (candidate) => normalizeAgentId(candidate.id) === DEFAULT_AGENT_ID,
-    );
-  // Main aliases share the literal global store only in global session scope.
-  const isGlobalMain = host.agentsList?.scope
-    ? host.agentsList.scope === "global"
-    : isUiGlobalSessionKey(resolveSessionKey(DEFAULT_MAIN_KEY, host.hello));
-  const resolvedAgentId =
-    (isLegacyDefaultMainAlias ? defaultAgentId : agentId?.trim() || parsedAgentId) ||
-    (isGlobal ? resolveUiSelectedGlobalAgentId(host) : defaultAgentId);
-  const settingsKey =
-    isGlobal || (isMainAlias && isGlobalMain) ? "global" : isMainAlias ? DEFAULT_MAIN_KEY : body;
-  return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
-}
-
-export function getPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey);
-}
-
-export function trackPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-) {
-  const pendingBySession =
-    pendingChatPickerPatches.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  pendingChatPickerPatches.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey);
-  const previous = pendingBySession.get(patchKey);
-  // Aggregate every picker patch across the shared capability; overlapping
-  // Gateway handlers can overtake pane-local or latest-only tracking.
-  const pending = Promise.all([previous ?? true, patchPromise]).then(
-    ([previousReady, patchReady]) => previousReady && patchReady,
-  );
-  pendingBySession.set(patchKey, pending);
-  void pending.finally(() => {
-    if (pendingBySession.get(patchKey) === pending) {
-      pendingBySession.delete(patchKey);
-    }
-  });
-}
-
 // Immediate-apply pickers can overlap patches for the same session. Mirror the
 // pendingModelPatches token guard in sessions/index.ts: only the latest patch
 // may re-assert or roll back the optimistic row, so a slow earlier request
@@ -386,18 +308,21 @@ export function switchChatFastMode(
   };
   const patchPromise = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           fastMode: next ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { fastMode: next });
       }
@@ -408,7 +333,6 @@ export function switchChatFastMode(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }
 
@@ -447,18 +371,23 @@ export async function switchChatModel(
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           model: nextModel || null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => {
+            await host.onModelChanged?.();
+            await refreshCurrentChatSessionList(host);
+          },
+        },
       );
       if (!patched) {
         return false;
       }
-      await host.onModelChanged?.();
-      await refreshCurrentChatSessionList(host);
       return true;
     } catch (err) {
       host.sessions.setModelOverride(targetSessionKey, previousModelOverride);
@@ -474,7 +403,6 @@ export async function switchChatModel(
     ...host.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
-  trackPendingChatPickerPatch(host, targetSessionKey, switchPromise);
   host.requestUpdate?.();
   return switchPromise;
 }
@@ -514,18 +442,21 @@ export function switchChatThinkingLevel(
   };
   const patchPromise = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           thinkingLevel: normalizedNext ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
         if (host.sessionKey === targetSessionKey) {
@@ -539,6 +470,5 @@ export function switchChatThinkingLevel(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }

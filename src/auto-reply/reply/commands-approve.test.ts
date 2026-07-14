@@ -1,6 +1,6 @@
 // Tests approval command behavior for pending tool and execution requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
 import {

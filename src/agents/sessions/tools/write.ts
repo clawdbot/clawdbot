@@ -34,8 +34,6 @@ const writeSchema = Type.Object({
   }),
   content: Type.String({ description: "File content." }),
 });
-export type { WriteToolInput } from "./tool-contracts.js";
-
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).

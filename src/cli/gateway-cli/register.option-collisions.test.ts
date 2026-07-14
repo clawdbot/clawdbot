@@ -46,14 +46,6 @@ vi.mock("../../commands/gateway-status.js", () => ({
 }));
 
 vi.mock("./call.js", () => ({
-  gatewayCallOpts: (cmd: Command) =>
-    cmd
-      .option("--url <url>", "Gateway WebSocket URL")
-      .option("--token <token>", "Gateway token")
-      .option("--password <password>", "Gateway password")
-      .option("--timeout <ms>", "Timeout in ms", "10000")
-      .option("--expect-final", "Wait for final response (agent)", false)
-      .option("--json", "Output JSON", false),
   callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
     mocks.callGatewayCli(method, opts, params),
 }));

@@ -84,8 +84,3 @@ export function clearBootstrapSnapshotOnSessionRollover(params: {
 
   clearBootstrapSnapshot(params.sessionKey);
 }
-
-/** Clear all cached bootstrap snapshots. */
-export function clearAllBootstrapSnapshots(): void {
-  cache.clear();
-}

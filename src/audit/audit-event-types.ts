@@ -2,9 +2,9 @@
 
 export const AUDIT_EVENT_SCHEMA_VERSION = 1 as const;
 
-export type AuditEventKind = "agent_run" | "tool_action" | "message";
+type AuditEventKind = "agent_run" | "tool_action" | "message";
 
-export type AuditEventStatus =
+type AuditEventStatus =
   | "started"
   | "succeeded"
   | "failed"
@@ -13,7 +13,7 @@ export type AuditEventStatus =
   | "blocked"
   | "unknown";
 
-export type AuditMessageDirection = "inbound" | "outbound";
+type AuditMessageDirection = "inbound" | "outbound";
 export type AuditMessageConversationKind = "direct" | "group" | "channel" | "unknown";
 export type AuditMessageDeliveryKind = "text" | "media" | "other";
 export type AuditMessageFailureStage = "platform_send" | "queue" | "unknown";
@@ -41,7 +41,7 @@ export const AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS = [
 export type AuditInboundMessageSkippedReasonCode =
   (typeof AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS)[number];
 
-export type AuditInboundMessageFailureReasonCode = "acp_dispatch_failed" | "plugin_bound_error";
+type AuditInboundMessageFailureReasonCode = "acp_dispatch_failed" | "plugin_bound_error";
 
 export const AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS = [
   "cancelled_by_message_sending_hook",
@@ -85,7 +85,7 @@ export type AgentRunAuditEventInput = AuditEventInputBase &
   AgentAuditAttribution &
   AgentRunAuditLifecycle & { kind: "agent_run" };
 
-export type ToolActionFinishedAuditTerminal =
+type ToolActionFinishedAuditTerminal =
   | { status: "succeeded"; errorCode?: never }
   | { status: "failed"; errorCode: "tool_failed" }
   | { status: "cancelled"; errorCode: "tool_cancelled" }

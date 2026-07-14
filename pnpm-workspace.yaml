@@ -8,7 +8,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
-  - "@openclaw/crabline@0.1.9"
+  - "@openclaw/crabline@0.1.11"
   - "@openclaw/fs-safe@0.4.1"
   - "@openclaw/proxyline@0.3.3"
   - "@openclaw/uirouter@0.1.0"
@@ -37,6 +37,7 @@ minimumReleaseAgeExclude:
   - "@aws-sdk/token-providers@3.1052.0"
   - "@aws-sdk/token-providers@3.1053.0"
   - "@copilotkit/aimock@1.27.1"
+  - "@microsoft/mxc-sdk@0.7.0"
   - "@earendil-works/pi-tui"
   - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.66.0"
@@ -144,6 +145,7 @@ allowBuilds:
   clawpdf: true
   "@openclaw/crabline": true
   rastermill: true
+  node-pty: true
 
 packageExtensions:
   baileys:

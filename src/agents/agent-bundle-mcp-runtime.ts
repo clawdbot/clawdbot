@@ -1204,7 +1204,7 @@ function createSessionMcpRuntimeManager(
   };
 }
 
-export function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
+function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
 }
 
@@ -1232,7 +1232,7 @@ export function peekSessionMcpRuntime(params: {
   });
 }
 
-export async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
+async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
   await getSessionMcpRuntimeManager().disposeSession(sessionId);
 }
 

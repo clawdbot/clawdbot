@@ -9,6 +9,12 @@ import { css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import {
+  isTerminalPanelShortcut,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+  type TerminalPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { terminalTheme } from "./terminal-theme.ts";
@@ -20,19 +26,7 @@ const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="non
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 
-type TerminalDock = "bottom" | "right";
-type TerminalToggleDetail = {
-  dock?: TerminalDock;
-  open?: boolean;
-};
-
-type PanelLayout = {
-  open: boolean;
-  dock: TerminalDock;
-  height: number;
-  width: number;
-};
-
+type TerminalDock = DockPanelSide;
 type TerminalTabState = {
   id: string;
   sequence: number;
@@ -85,56 +79,24 @@ function terminalTabStatusLabel(tab: TerminalTabState): string | null {
     : t("terminal.exited");
 }
 
-const LAYOUT_KEY = "openclaw.terminal.panel.v1";
+const panelLayout = createDockPanelLayout({
+  storageKey: "openclaw.terminal.panel.v1",
+  minHeight: 140,
+  minWidth: 320,
+  defaultDock: "bottom",
+  defaultHeight: 320,
+  defaultWidth: 520,
+});
 // Session ids for reattach after a reload/reconnect. Deliberately
 // sessionStorage, not localStorage: attach is take-over, and a shared
 // per-origin key would make multiple Control UI windows clobber each other's
 // ids and steal each other's live shells. Per-tab storage survives exactly the
 // cases reattach is for (reload, laptop sleep, transient disconnect).
 const SESSIONS_KEY = "openclaw.terminal.sessions.v1";
-const DEFAULT_LAYOUT: PanelLayout = { open: false, dock: "bottom", height: 320, width: 520 };
-const MIN_HEIGHT = 140;
-const MIN_WIDTH = 320;
-const TOGGLE_EVENT = "openclaw:terminal-toggle";
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 const TERMINAL_INPUT_DECODER = new TextDecoder();
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
-
-function loadLayout(): PanelLayout {
-  try {
-    const raw = globalThis.localStorage?.getItem(LAYOUT_KEY);
-    if (!raw) {
-      return { ...DEFAULT_LAYOUT };
-    }
-    const parsed = JSON.parse(raw) as Partial<PanelLayout>;
-    return {
-      open: Boolean(parsed.open),
-      dock: parsed.dock === "right" ? "right" : "bottom",
-      height: clampSize(parsed.height, MIN_HEIGHT, maxPanelHeight(), DEFAULT_LAYOUT.height),
-      width: clampSize(parsed.width, MIN_WIDTH, maxPanelWidth(), DEFAULT_LAYOUT.width),
-    };
-  } catch {
-    return { ...DEFAULT_LAYOUT };
-  }
-}
-
-// A size persisted on a large desktop must not swallow a smaller window: cap
-// the dock at 80% of the viewport so the header/resizer stay reachable and the
-// shell content keeps a usable slice.
-function maxPanelHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.floor((globalThis.innerHeight || 800) * 0.8));
-}
-
-function maxPanelWidth(): number {
-  return Math.max(MIN_WIDTH, Math.floor((globalThis.innerWidth || 1280) * 0.8));
-}
-
-function clampSize(value: unknown, min: number, max: number, fallback: number): number {
-  const size =
-    typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
-  return Math.min(size, max);
-}
 
 function loadPersistedSessionIds(): string[] {
   try {
@@ -169,8 +131,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   @state() private open = false;
   @state() private dock: TerminalDock = "bottom";
-  @state() private height = DEFAULT_LAYOUT.height;
-  @state() private width = DEFAULT_LAYOUT.width;
+  @state() private height = panelLayout.defaults.height;
+  @state() private width = panelLayout.defaults.width;
   @state() private tabs: TerminalTabState[] = [];
   @state() private activeId: string | null = null;
   @state() private booting = false;
@@ -184,13 +146,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
   // up off-screen after the viewport shrinks (e.g. rotate, window resize).
   private readonly onViewportResize = () => {
-    const height = Math.min(this.height, maxPanelHeight());
-    const width = Math.min(this.width, maxPanelWidth());
+    const height = Math.min(this.height, panelLayout.maxHeight());
+    const width = Math.min(this.width, panelLayout.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -205,14 +168,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     this.activeClient = this.client;
     this.activeAvailable = this.available;
     if (!this.fullscreen) {
-      const layout = loadLayout();
+      const layout = panelLayout.load();
       this.dock = layout.dock;
       this.height = layout.height;
       this.width = layout.width;
       // Only restore the open state when the surface is actually available.
       this.open = layout.open && this.available;
       window.addEventListener("keydown", this.onGlobalKeyDown);
-      window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       window.addEventListener("resize", this.onViewportResize);
     } else {
       // Fullscreen documents have no toggle/dock chrome; the panel is simply
@@ -227,7 +190,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     // Release the content-area reservation so the shell reflows to full size.
     document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "0px");
@@ -314,7 +277,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         // panel WITHOUT persisting: a disconnect must not overwrite the user's
         // open preference, or the reconnect path would never auto-reopen.
         this.open = false;
-      } else if (!this.open && (this.fullscreen || loadLayout().open)) {
+      } else if (!this.open && (this.fullscreen || panelLayout.load().open)) {
         // Hello arrived after mount (or a reconnect); restore the persisted
         // open state (fullscreen documents are always open while available)
         // and reattach persisted sessions where possible.
@@ -361,10 +324,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private handleToggleRequest(event: Event): void {
+  handleToggleRequest(event: Event): void {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as TerminalToggleDetail)
+        ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
     if (dock) {
@@ -391,7 +354,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Backquote") {
+    if (isTerminalPanelShortcut(event)) {
       event.preventDefault();
       this.toggle();
     }
@@ -456,8 +419,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     rows: number;
   }> {
     const connection = this.connectionFor(operation);
-    // Captured so the cancelled-open cleanup can close the session even if a
-    // teardown swaps this.connection while the open/attach RPC is in flight.
+    // Preserve the connection so cancelled-open cleanup still closes the in-flight session.
     const host = document.createElement("div");
     host.className = "tp-host";
     const id = `tab-${++this.tabSeq}`;
@@ -475,7 +437,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const tabRef = { current: undefined as TerminalTabState | undefined };
     let controller: GhosttyTerminalController;
     try {
-      controller = await createIsolatedGhosttyTerminal({
+      controller = await this.createTerminal({
         parent: host,
         readOnly: false,
         terminalOptions: {
@@ -800,17 +762,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private persistLayout(): void {
-    try {
-      const layout: PanelLayout = {
-        open: this.open,
-        dock: this.dock,
-        height: this.height,
-        width: this.width,
-      };
-      globalThis.localStorage?.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      // Storage may be unavailable (private mode); layout just won't persist.
-    }
+    panelLayout.save({
+      open: this.open,
+      dock: this.dock,
+      height: this.height,
+      width: this.width,
+    });
   }
 
   private startResize(event: PointerEvent): void {
@@ -822,11 +779,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const startWidth = this.width;
     const onMove = (move: PointerEvent) => {
       if (this.dock === "bottom") {
-        const next = Math.max(MIN_HEIGHT, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, maxPanelHeight());
+        const next = Math.max(panelLayout.minHeight, startHeight + (startY - move.clientY));
+        this.height = Math.min(next, panelLayout.maxHeight());
       } else {
-        const next = Math.max(MIN_WIDTH, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, maxPanelWidth());
+        const next = Math.max(panelLayout.minWidth, startWidth + (startX - move.clientX));
+        this.width = Math.min(next, panelLayout.maxWidth());
       }
       // Reflow the content reservation live so the shell tracks the drag.
       this.syncLayoutReservation();
@@ -1167,12 +1124,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       color: var(--danger, #ff6b6b);
     }
   `;
-}
-
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
-if (!customElements.get("openclaw-terminal-panel")) {
-  customElements.define("openclaw-terminal-panel", OpenClawTerminalPanel);
 }
 
 declare global {

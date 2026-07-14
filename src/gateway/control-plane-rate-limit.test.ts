@@ -4,12 +4,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   consumeControlPlaneWriteBudget,
   pruneStaleControlPlaneBuckets,
-  testing,
 } from "./control-plane-rate-limit.js";
 
 describe("control-plane-rate-limit", () => {
   afterEach(() => {
-    testing.resetControlPlaneRateLimitState();
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
 
   test("pruneStaleControlPlaneBuckets removes expired buckets (#63643)", () => {
@@ -40,18 +39,28 @@ describe("control-plane-rate-limit", () => {
     expect(pruneStaleControlPlaneBuckets()).toBe(0);
   });
 
-  test("control-plane bucket map stays bounded between prune sweeps", () => {
+  test("control-plane bucket map evicts the oldest identity at its hard cap", () => {
     const baseMs = 2_000_000;
-    for (let i = 0; i < 10_001; i++) {
+    const consume = (id: string) =>
       consumeControlPlaneWriteBudget({
         client: {
-          connect: { device: { id: `dev-${i}` } },
+          connect: { device: { id } },
           clientIp: "1.2.3.4",
         } as never,
         nowMs: baseMs,
       });
+
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(false);
+
+    for (let index = 0; index < 10_000; index += 1) {
+      consume(`new-${index}`);
     }
 
-    expect(testing.getControlPlaneRateLimitBucketCount()).toBe(10_000);
+    // A fresh budget proves the oldest bucket was evicted, without exposing
+    // the internal map solely for tests.
+    expect(consume("oldest")).toMatchObject({ allowed: true, remaining: 2 });
   });
 });

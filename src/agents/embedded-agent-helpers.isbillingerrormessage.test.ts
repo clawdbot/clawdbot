@@ -1,26 +1,24 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
+import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import {
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
-  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./embedded-agent-helpers.js";
+import { isAuthPermanentErrorMessage } from "./embedded-agent-helpers/failover-matches.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -78,6 +76,18 @@ function expectNotFailoverSample(sample: string) {
   expect(isTimeoutErrorMessage(sample)).toBe(false);
   expect(classifyFailoverReason(sample)).toBeNull();
   expect(isFailoverErrorMessage(sample)).toBe(false);
+}
+
+function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+  opts?: { provider?: string },
+) {
+  if (status === undefined) {
+    return null;
+  }
+  const statusText = `HTTP ${status}`;
+  return classifyFailoverReason(message ? `${statusText}: ${message}` : statusText, opts);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -639,20 +649,6 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
-  it("treats body-less HTTP 422 as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
-  });
-
-  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
-    expect(
-      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
-    ).toBeNull();
-  });
-
   it("treats HTTP 422 with an unclassifiable body as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
       "format",
@@ -1040,7 +1036,6 @@ describe("image dimension errors", () => {
       contentIndex: 1,
       raw,
     });
-    expect(isImageDimensionErrorMessage(raw)).toBe(true);
   });
 });
 

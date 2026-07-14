@@ -11,8 +11,8 @@ import {
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {

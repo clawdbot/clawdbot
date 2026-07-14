@@ -200,6 +200,18 @@ describe("Raft wake gateway", () => {
     await expect(
       fetch(wakeEndpoint, {
         method: "POST",
+        headers: { "x-raft-bridge-token": "x".repeat(bridgeToken.length) },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
+        headers: { "x-raft-bridge-token": "short" },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
         headers: {
           "x-raft-bridge-token": bridgeToken,
         },

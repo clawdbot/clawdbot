@@ -28,7 +28,6 @@ import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 
-export type { InboundEventKind } from "../inbound-event/kind.js";
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
 /** Admission decision for an inbound channel event before agent dispatch. */
@@ -110,7 +109,7 @@ export type ReplyPlanFacts = {
 };
 
 /** Allowlist projection used by access checks without exposing raw configured entries. */
-export type ProjectedAllowlistAccessFacts = {
+type ProjectedAllowlistAccessFacts = {
   configured: boolean;
   matched: boolean;
   reasonCode?: string;
@@ -127,7 +126,7 @@ export type ProjectedAllowlistAccessFacts = {
 };
 
 /** Event-level access projection for commands, reactions, buttons, and native events. */
-export type ProjectedEventAccessFacts = {
+type ProjectedEventAccessFacts = {
   kind:
     | "message"
     | "reaction"
@@ -270,7 +269,7 @@ export type ChannelDeliveryResult = {
 };
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
-export type ChannelTurnDurableDeliveryOptions = Pick<
+type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
@@ -335,13 +334,10 @@ export type ChannelTurnDroppedHistoryOptions = {
 };
 
 /** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
-export type ChannelTurnDispatcherOptions = Omit<
-  ReplyDispatcherWithTypingOptions,
-  "deliver" | "onError"
->;
+type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
 
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
-export type ChannelTurnReplyPipelineOptions = Omit<
+type ChannelTurnReplyPipelineOptions = Omit<
   CreateChannelReplyPipelineParams,
   "cfg" | "agentId" | "channel" | "accountId"
 >;
@@ -407,7 +403,7 @@ export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
     });
 
 /** Ordered lifecycle stage names emitted to channel turn log hooks. */
-export type ChannelTurnStage =
+type ChannelTurnStage =
   | "ingest"
   | "classify"
   | "preflight"
@@ -451,7 +447,7 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
 };
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
-export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
   preflight?: (

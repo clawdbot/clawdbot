@@ -41,6 +41,7 @@ const GROUP_LABELS: Record<string, string> = {
   commands: "Commands",
   session: "Session",
   cron: "Cron",
+  worktrees: "Worktrees",
   hooks: "Hooks",
   ui: "UI",
   browser: "Browser",
@@ -70,6 +71,7 @@ const GROUP_ORDER: Record<string, number> = {
   commands: 85,
   session: 90,
   cron: 100,
+  worktrees: 105,
   hooks: 110,
   ui: 120,
   browser: 130,
@@ -109,14 +111,12 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
-export function isPluginOwnedChannelHintPath(path: string): boolean {
+function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
   }
   return !isKernelOwnedChannelHintPath(path);
 }
-
-export { isSensitiveConfigPath };
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
@@ -328,4 +328,3 @@ export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 };
-export { testApi as __test__ };

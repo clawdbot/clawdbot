@@ -19,14 +19,14 @@ import {
   type PluginPayloadSmokeFailure,
 } from "./plugin-payload-validation.js";
 
-export type PostCoreConvergenceWarning = {
+type PostCoreConvergenceWarning = {
   pluginId?: string;
   reason: string;
   message: string;
   guidance: string[];
 };
 
-export type PostCoreConvergenceResult = {
+type PostCoreConvergenceResult = {
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];

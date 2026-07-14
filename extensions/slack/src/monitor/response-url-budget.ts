@@ -4,7 +4,7 @@ export type SlackResponseUrlBudget<TPayload> = {
   remaining: () => number | undefined;
 };
 
-export const SLACK_RESPONSE_URL_MAX_CALLS = 5;
+const SLACK_RESPONSE_URL_MAX_CALLS = 5;
 
 export class SlackResponseAlreadyReportedError extends Error {}
 

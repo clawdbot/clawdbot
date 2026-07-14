@@ -58,6 +58,8 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+
 export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {

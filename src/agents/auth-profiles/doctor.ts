@@ -30,7 +30,7 @@ type FormatAuthDoctorHintParams = {
 
 // Keep local short-circuits and the plugin fallback in one seam so focused tests
 // can prove their ordering without loading the full provider runtime.
-export async function formatAuthDoctorHintWithPluginBuilder(
+async function formatAuthDoctorHintWithPluginBuilder(
   params: FormatAuthDoctorHintParams,
   buildPluginHint: typeof buildProviderAuthDoctorHintWithPlugin,
 ): Promise<string> {

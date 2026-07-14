@@ -19,13 +19,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunLogEntriesSync } from "../cron/run-log.js";
-import type { CronRunLogEntry } from "../cron/run-log.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
-import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isPluginStateDatabaseOpen,
@@ -38,6 +33,11 @@ import {
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
 import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
+import {
+  collectCronHistoryOverflowTaskIds,
+  shouldPruneTerminalTask,
+} from "./cron-history-retention.js";
+export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
@@ -64,14 +64,11 @@ import {
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "./task-registry.store.sqlite.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
-import {
-  resolveEffectiveTaskCleanupAfter,
-  resolveTaskCleanupAfter,
-  resolveTaskRetentionMs,
-} from "./task-retention.js";
+import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -88,7 +85,6 @@ const SWEEP_YIELD_BATCH_SIZE = 25;
 let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
-let configuredCronStorePath: string | undefined;
 let configuredRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
@@ -119,9 +115,7 @@ type TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
   isRuntimeAuthoritative: () => boolean;
-  resolveCronJobsStorePath: typeof resolveCronJobsStorePath;
-  loadCronJobsStoreSync: typeof loadCronJobsStoreSync;
-  readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
+  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: typeof listTaskRegistryRecordsByRuntimeSourceIdFromSqlite;
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
@@ -159,9 +153,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
   isRuntimeAuthoritative: () => configuredRuntimeAuthoritative,
-  resolveCronJobsStorePath: () => configuredCronStorePath ?? resolveCronJobsStorePath(),
-  loadCronJobsStoreSync,
-  readCronRunLogEntriesSync,
+  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
 };
 
 let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
@@ -197,23 +189,17 @@ export type TaskRegistryMaintenanceDiagnostics = {
   staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[];
 };
 
-type CronExecutionId = {
-  jobId: string;
-  startedAt: number;
-};
-
 type CronTerminalRecovery = {
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out">;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   endedAt: number;
   lastEventAt: number;
   error?: string;
   terminalSummary?: string;
+  detail?: TaskRecord["detail"];
 };
 
 type CronRecoveryContext = {
-  storePath: string;
-  store?: CronStoreFile | null;
-  runLogsByJobId: Map<string, CronRunLogEntry[]>;
+  taskRowsByJobId: Map<string, TaskRecord[]>;
 };
 
 type SessionEntryLookup = {
@@ -227,8 +213,7 @@ type BackingSessionLookupContext = {
 
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
-    storePath: taskRegistryMaintenanceRuntime.resolveCronJobsStorePath(),
-    runLogsByJobId: new Map<string, CronRunLogEntry[]>(),
+    taskRowsByJobId: new Map<string, TaskRecord[]>(),
   };
 }
 
@@ -319,30 +304,6 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= graceMs;
 }
 
-function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
-  const runId = task.runId?.trim();
-  if (!runId?.startsWith("cron:")) {
-    return undefined;
-  }
-  const separator = runId.lastIndexOf(":");
-  if (separator <= "cron:".length) {
-    return undefined;
-  }
-  const startedAt = parseStrictNonNegativeInteger(runId.slice(separator + 1));
-  if (startedAt === undefined) {
-    return undefined;
-  }
-  const jobId = runId.slice("cron:".length, separator).trim();
-  if (!jobId || (task.sourceId?.trim() && task.sourceId.trim() !== jobId)) {
-    return undefined;
-  }
-  return { jobId, startedAt };
-}
-
-function isTimeoutCronError(error: string | undefined): boolean {
-  return error === "cron: job execution timed out";
-}
-
 function isRecoverableLostCronTask(task: TaskRecord): boolean {
   if (task.status !== "lost") {
     return false;
@@ -351,97 +312,31 @@ function isRecoverableLostCronTask(task: TaskRecord): boolean {
   return Boolean(error?.includes("backing session missing"));
 }
 
-function mapCronTerminalStatus(status: unknown, error?: string): CronTerminalRecovery["status"] {
-  if (status === "ok" || status === "skipped") {
-    return "succeeded";
-  }
-  return isTimeoutCronError(error) ? "timed_out" : "failed";
+function isCronTerminalTaskStatus(status: TaskStatus): status is CronTerminalRecovery["status"] {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "timed_out" ||
+    status === "cancelled"
+  );
 }
 
-function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): CronRunLogEntry[] {
-  const cached = context.runLogsByJobId.get(jobId);
+function getCronTaskRows(context: CronRecoveryContext, jobId: string): TaskRecord[] {
+  const cached = context.taskRowsByJobId.get(jobId);
   if (cached) {
     return cached;
   }
-  let entries: CronRunLogEntry[];
+  let rows: TaskRecord[];
   try {
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync({
-      storePath: context.storePath,
-      jobId,
-      limit: 5000,
+    rows = taskRegistryMaintenanceRuntime.listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+      runtime: "cron",
+      sourceId: jobId,
     });
   } catch {
-    entries = [];
+    rows = [];
   }
-  context.runLogsByJobId.set(jobId, entries);
-  return entries;
-}
-
-function getCronStore(context: CronRecoveryContext): CronStoreFile | null {
-  if (context.store !== undefined) {
-    return context.store;
-  }
-  try {
-    context.store = taskRegistryMaintenanceRuntime.loadCronJobsStoreSync(context.storePath);
-  } catch {
-    context.store = null;
-  }
-  return context.store;
-}
-
-function resolveCronRunLogRecovery(
-  execution: CronExecutionId,
-  context: CronRecoveryContext,
-): CronTerminalRecovery | undefined {
-  const entries = getCronRunLogEntries(context, execution.jobId);
-  const entry = entries.findLast(
-    (candidate) =>
-      candidate.jobId === execution.jobId &&
-      candidate.action === "finished" &&
-      candidate.runAtMs === execution.startedAt &&
-      (candidate.status === "ok" || candidate.status === "skipped" || candidate.status === "error"),
-  );
-  if (!entry) {
-    return undefined;
-  }
-  const durationMs =
-    typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-      ? Math.max(0, entry.durationMs)
-      : undefined;
-  const endedAt = durationMs === undefined ? entry.ts : execution.startedAt + durationMs;
-  return {
-    status: mapCronTerminalStatus(entry.status, entry.error),
-    endedAt,
-    lastEventAt: endedAt,
-    ...(entry.error !== undefined ? { error: entry.error } : {}),
-    ...(entry.summary !== undefined ? { terminalSummary: entry.summary } : {}),
-  };
-}
-
-function resolveCronJobStateRecovery(
-  execution: CronExecutionId,
-  context: CronRecoveryContext,
-): CronTerminalRecovery | undefined {
-  const store = getCronStore(context);
-  const job: CronJob | undefined = store?.jobs.find((entry) => entry.id === execution.jobId);
-  if (!job || job.state.lastRunAtMs !== execution.startedAt) {
-    return undefined;
-  }
-  const status = job.state.lastRunStatus ?? job.state.lastStatus;
-  if (status !== "ok" && status !== "skipped" && status !== "error") {
-    return undefined;
-  }
-  const durationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, job.state.lastDurationMs)
-      : 0;
-  const endedAt = execution.startedAt + durationMs;
-  return {
-    status: mapCronTerminalStatus(status, job.state.lastError),
-    endedAt,
-    lastEventAt: endedAt,
-    ...(job.state.lastError !== undefined ? { error: job.state.lastError } : {}),
-  };
+  context.taskRowsByJobId.set(jobId, rows);
+  return rows;
 }
 
 function resolveDurableCronTaskRecovery(
@@ -451,13 +346,33 @@ function resolveDurableCronTaskRecovery(
   if (task.runtime !== "cron" || (!isActiveTask(task) && !isRecoverableLostCronTask(task))) {
     return undefined;
   }
-  const execution = parseCronExecutionId(task);
-  if (!execution) {
+  const jobId = task.sourceId?.trim();
+  if (!jobId) {
     return undefined;
   }
-  return (
-    resolveCronRunLogRecovery(execution, context) ?? resolveCronJobStateRecovery(execution, context)
+  if (
+    taskRegistryMaintenanceRuntime.isRuntimeAuthoritative() &&
+    taskRegistryMaintenanceRuntime.isCronJobActive(jobId)
+  ) {
+    return undefined;
+  }
+  const row = getCronTaskRows(context, jobId).find(
+    (candidate) =>
+      candidate.taskId === task.taskId ||
+      (Boolean(task.runId?.trim()) && candidate.runId === task.runId),
   );
+  if (!row || !isCronTerminalTaskStatus(row.status)) {
+    return undefined;
+  }
+  const endedAt = row.endedAt ?? row.lastEventAt ?? row.createdAt;
+  return {
+    status: row.status,
+    endedAt,
+    lastEventAt: row.lastEventAt ?? endedAt,
+    ...(row.error !== undefined ? { error: row.error } : {}),
+    ...(row.terminalSummary !== undefined ? { terminalSummary: row.terminalSummary } : {}),
+    ...(row.detail !== undefined ? { detail: row.detail } : {}),
+  };
 }
 
 function hasActiveCliRun(task: TaskRecord): boolean {
@@ -568,22 +483,15 @@ function hasDetachedTaskRecoveryHook(): boolean {
   return Boolean(getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost);
 }
 
-function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
-  if (!isTerminalTask(task)) {
-    return false;
-  }
-  if (typeof task.cleanupAfter === "number") {
-    return now >= resolveEffectiveTaskCleanupAfter(task);
-  }
-  const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return now - terminalAt >= resolveTaskRetentionMs(task.status);
-}
-
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
-  return isTerminalTask(task) && typeof task.cleanupAfter !== "number";
+  return (
+    isTerminalTask(task) &&
+    typeof task.cleanupAfter !== "number" &&
+    resolveTaskCleanupAfter(task) !== undefined
+  );
 }
 
-function resolveCleanupAfter(task: TaskRecord): number {
+function resolveCleanupAfter(task: TaskRecord): number | undefined {
   return resolveTaskCleanupAfter(task);
 }
 
@@ -782,7 +690,7 @@ function markTaskLost(
     ...task,
     status: "lost",
     endedAt: lostAt,
-  });
+  })!;
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
@@ -804,8 +712,9 @@ function markTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery): Ta
       lastEventAt: recovery.lastEventAt,
       error: recovery.error,
       ...(recovery.terminalSummary !== undefined
-        ? { terminalSummary: recovery.terminalSummary }
+        ? { terminalSummary: recovery.terminalSummary, preserveTerminalSummary: true }
         : {}),
+      ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
     }) ?? projectTaskRecovered(task, recovery);
   void taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
@@ -821,6 +730,7 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
     ...(recovery.terminalSummary !== undefined
       ? { terminalSummary: recovery.terminalSummary }
       : {}),
+    ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
   };
   if (recovery.error === undefined) {
     delete projected.error;
@@ -972,7 +882,9 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
-  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+  const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
+  for (const task of tasks) {
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
@@ -981,7 +893,7 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
       reconciled += 1;
       continue;
     }
-    if (shouldPruneTerminalTask(task, now)) {
+    if (shouldPruneTerminalTask(task, now, cronHistoryOverflowTaskIds)) {
       pruned += 1;
       continue;
     }
@@ -1090,6 +1002,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
@@ -1159,7 +1072,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
     await cleanupTerminalAcpSession(current);
     if (
-      shouldPruneTerminalTask(current, now) &&
+      shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
     ) {
       pruned += 1;
@@ -1169,14 +1082,17 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (
-      shouldStampCleanupAfter(current) &&
-      taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
-        taskId: current.taskId,
-        cleanupAfter: resolveCleanupAfter(current),
-      })
-    ) {
-      cleanupStamped += 1;
+    if (shouldStampCleanupAfter(current)) {
+      const cleanupAfter = resolveCleanupAfter(current);
+      if (
+        cleanupAfter !== undefined &&
+        taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
+          taskId: current.taskId,
+          cleanupAfter,
+        })
+      ) {
+        cleanupStamped += 1;
+      }
     }
     processed += 1;
     if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
@@ -1232,16 +1148,13 @@ export function setTaskRegistryMaintenanceRuntimeForTests(
 
 export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
-  configuredCronStorePath = undefined;
   configuredRuntimeAuthoritative = false;
 }
 
-export function configureTaskRegistryMaintenance(options: {
-  cronStorePath?: string;
+export function configureTaskRegistryMaintenance(options?: {
   runtimeAuthoritative?: boolean;
 }): void {
-  configuredCronStorePath = options.cronStorePath?.trim() || undefined;
-  if (options.runtimeAuthoritative !== undefined) {
+  if (options?.runtimeAuthoritative !== undefined) {
     configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
 }

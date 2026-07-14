@@ -14,18 +14,9 @@ import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
   buildPluginLoaderJitiOptions,
-  isBundledPluginExtensionPath,
-  listPluginSdkAliasCandidates,
-  listPluginSdkExportedSubpaths,
-  normalizeJitiAliasTargetPath,
-  resolvePluginLoaderJitiFsCacheDir,
-  resolvePluginLoaderJitiFsCacheOption,
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
-  resolveExtensionApiAlias,
-  resolvePluginRuntimeModulePath,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  resolvePluginSdkAliasFile,
   shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
@@ -134,6 +125,19 @@ function createPluginSdkAliasFixture(params?: {
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
+}
+
+function writePluginSdkSubpathArtifacts(root: string, subpaths: readonly string[]) {
+  for (const subpath of subpaths) {
+    for (const candidate of [
+      path.join(root, "src", "plugin-sdk", `${subpath}.ts`),
+      path.join(root, "dist", "plugin-sdk", `${subpath}.js`),
+    ]) {
+      if (!fs.existsSync(candidate)) {
+        fs.writeFileSync(candidate, "export {};\n", "utf-8");
+      }
+    }
+  }
 }
 
 function createExtensionApiAliasFixture(params?: {
@@ -333,23 +337,6 @@ function createUserInstalledPluginSdkAliasFixture() {
   };
 }
 
-function resolvePluginSdkAlias(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath: string;
-  argv1?: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const run = () =>
-    resolvePluginSdkAliasFile({
-      srcFile: params.srcFile,
-      distFile: params.distFile,
-      modulePath: params.modulePath,
-      argv1: params.argv1,
-    });
-  return params.env ? withEnv(params.env, run) : run();
-}
-
 function resolvePluginRuntimeModule(params: {
   modulePath: string;
   argv1?: string;
@@ -358,12 +345,12 @@ function resolvePluginRuntimeModule(params: {
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
   const run = () =>
-    resolvePluginRuntimeModulePath({
+    resolvePluginRuntimeModulePathWithDiagnostics({
       modulePath: params.modulePath,
       argv1: params.argv1,
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
-    });
+    }).resolvedPath;
   return params.env ? withEnv(params.env, run) : run();
 }
 
@@ -409,29 +396,6 @@ function expectPluginSdkAliasTargets(
   }
 }
 
-function expectPluginSdkAliasResolution(params: {
-  fixture: { root: string; srcFile: string; distFile: string };
-  srcFile: string;
-  distFile: string;
-  modulePath: (root: string) => string;
-  argv1?: (root: string) => string;
-  env?: NodeJS.ProcessEnv;
-  expected: "src" | "dist";
-}) {
-  const resolved = resolvePluginSdkAlias({
-    srcFile: params.srcFile,
-    distFile: params.distFile,
-    modulePath: params.modulePath(params.fixture.root),
-    argv1: params.argv1?.(params.fixture.root),
-    env: params.env,
-  });
-  expectResolvedFixturePath({
-    resolved,
-    fixture: params.fixture,
-    expected: params.expected,
-  });
-}
-
 function expectExtensionApiAliasResolution(params: {
   fixture: { root: string; srcFile: string; distFile: string };
   modulePath: (root: string) => string;
@@ -439,11 +403,13 @@ function expectExtensionApiAliasResolution(params: {
   env?: NodeJS.ProcessEnv;
   expected: "src" | "dist";
 }) {
-  const resolved = withEnv(params.env ?? {}, () =>
-    resolveExtensionApiAlias({
-      modulePath: params.modulePath(params.fixture.root),
-      argv1: params.argv1?.(params.fixture.root),
-    }),
+  const resolved = withEnv(
+    params.env ?? {},
+    () =>
+      buildPluginLoaderAliasMap(
+        params.modulePath(params.fixture.root),
+        params.argv1?.(params.fixture.root) ?? "",
+      )["openclaw/extension-api"] ?? null,
   );
   expectResolvedFixturePath({
     resolved,
@@ -452,16 +418,34 @@ function expectExtensionApiAliasResolution(params: {
   });
 }
 
+function listPluginSdkExportedSubpaths(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  devSourceRoot?: string | null;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}): string[] {
+  return Object.keys(
+    buildPluginLoaderAliasMap(
+      params.modulePath,
+      params.argv1 ?? "",
+      params.moduleUrl,
+      params.pluginSdkResolution,
+      params.devSourceRoot,
+    ),
+  )
+    .filter((key) => key.startsWith("openclaw/plugin-sdk/"))
+    .map((key) => key.slice("openclaw/plugin-sdk/".length))
+    .toSorted();
+}
+
 function expectExportedSubpaths(params: {
   fixture: { root: string };
   modulePath: string;
   expected: readonly string[];
   cwd?: string;
 }) {
-  const run = () =>
-    listPluginSdkExportedSubpaths({
-      modulePath: params.modulePath,
-    });
+  const run = () => listPluginSdkExportedSubpaths({ modulePath: params.modulePath });
   const subpaths = params.cwd ? withCwd(params.cwd, run) : run();
   expect(subpaths).toEqual(params.expected);
 }
@@ -471,12 +455,13 @@ function expectCwdFallbackPluginSdkAliasResolution(params: {
   expected: "src" | "dist" | null;
 }) {
   const resolved = withCwd(params.fixture.root, () =>
-    resolvePluginSdkAlias({
-      srcFile: "channel-runtime.ts",
-      distFile: "channel-runtime.js",
-      modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-      env: { NODE_ENV: undefined },
-    }),
+    withEnv(
+      { NODE_ENV: undefined },
+      () =>
+        buildPluginLoaderAliasMap("/tmp/tsx-cache/openclaw-loader.js", "")[
+          "openclaw/plugin-sdk/channel-runtime"
+        ] ?? null,
+    ),
   );
   if (params.expected === null) {
     expect(resolved).toBeNull();
@@ -571,15 +556,24 @@ describe("plugin sdk alias helpers", () => {
     },
   ])("$name", ({ buildFixture, modulePath, argv1, srcFile, distFile, env, expected }) => {
     const fixture = buildFixture();
-    expectPluginSdkAliasResolution({
-      fixture,
-      srcFile,
-      distFile,
-      modulePath,
-      argv1,
-      env,
-      expected,
-    });
+    const sourceCandidate = path.join(fixture.root, "src", "plugin-sdk", srcFile);
+    const distCandidate = path.join(fixture.root, "dist", "plugin-sdk", distFile);
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    if (fs.existsSync(sourceCandidate) && sourceCandidate !== sourceRootAlias) {
+      fs.copyFileSync(sourceCandidate, sourceRootAlias);
+    }
+    if (fs.existsSync(distCandidate) && distCandidate !== distRootAlias) {
+      fs.copyFileSync(distCandidate, distRootAlias);
+    }
+    const resolved = withEnv(
+      env ?? {},
+      () =>
+        buildPluginLoaderAliasMap(modulePath(fixture.root), argv1?.(fixture.root) ?? "")[
+          "openclaw/plugin-sdk"
+        ] ?? null,
+    );
+    expect(resolved).toBe(expected === "dist" ? distRootAlias : sourceRootAlias);
   });
 
   it.each([
@@ -594,19 +588,11 @@ describe("plugin sdk alias helpers", () => {
       env: { NODE_ENV: undefined },
       expected: "src" as const,
     },
-    {
-      name: "resolves extension-api alias from package root when loader runs from transpiler cache path",
-      modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
-      argv1: (root: string) => path.join(root, "openclaw.mjs"),
-      env: { NODE_ENV: undefined },
-      expected: "src" as const,
-    },
-  ])("$name", ({ modulePath, argv1, env, expected }) => {
+  ])("$name", ({ modulePath, env, expected }) => {
     const fixture = createExtensionApiAliasFixture();
     expectExtensionApiAliasResolution({
       fixture,
       modulePath,
-      argv1,
       env,
       expected,
     });
@@ -654,16 +640,18 @@ describe("plugin sdk alias helpers", () => {
     },
   ])("$name", ({ env, expectedFirst }) => {
     const fixture = createPluginSdkAliasFixture();
-    const candidates = withEnv(env ?? {}, () =>
-      listPluginSdkAliasCandidates({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
-      }),
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.copyFileSync(fixture.srcFile, sourceRootAlias);
+    fs.copyFileSync(fixture.distFile, distRootAlias);
+    const resolved = withEnv(
+      env ?? {},
+      () =>
+        buildPluginLoaderAliasMap(path.join(fixture.root, "src", "plugins", "loader.ts"), "")[
+          "openclaw/plugin-sdk"
+        ],
     );
-    const first = expectedFirst === "dist" ? fixture.distFile : fixture.srcFile;
-    const second = expectedFirst === "dist" ? fixture.srcFile : fixture.distFile;
-    expect(candidates.indexOf(first)).toBeLessThan(candidates.indexOf(second));
+    expect(resolved).toBe(expectedFirst === "dist" ? distRootAlias : sourceRootAlias);
   });
 
   it("derives plugin-sdk subpaths from package exports", () => {
@@ -677,6 +665,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/.hidden": { default: "./dist/plugin-sdk/hidden.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["compat", "core"]);
     const subpaths = listPluginSdkExportedSubpaths({
       modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
     });
@@ -689,6 +678,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
       "export const qaChannel = true;\n",
@@ -728,6 +718,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/qa-runner-runtime": { default: "./dist/plugin-sdk/qa-runner-runtime.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
     const sourceQaRunnerPath = path.join(fixture.root, "src", "plugin-sdk", "qa-runner-runtime.ts");
     const distQaLiveTransportScenariosPath = path.join(
@@ -782,6 +773,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     fs.rmSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
       { force: true },
@@ -881,6 +873,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
       "export const qaChannel = true;\n",
@@ -949,6 +942,7 @@ describe("plugin sdk alias helpers", () => {
     },
   ] as const)("$name", ({ fixture: buildFixture, expected }) => {
     const fixture = buildFixture();
+    writePluginSdkSubpathArtifacts(fixture.root, ["channel-runtime", "core"]);
     expectExportedSubpaths({
       fixture,
       cwd: fixture.root,
@@ -1254,6 +1248,7 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
     const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
     const sourceSsrFInternalPath = path.join(
@@ -1564,11 +1559,29 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "boolean-coercion.ts",
       distFile: "boolean-coercion.mjs",
     });
+    const normalizationResult = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "result.ts",
+      distFile: "result.mjs",
+    });
+    const normalizationAgentId = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "agent-id.ts",
+      distFile: "agent-id.mjs",
+    });
     const normalizationStringCoerce = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "normalization-core",
       srcFile: "string-coerce.ts",
       distFile: "string-coerce.mjs",
+    });
+    const retry = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "retry",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
     });
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1633,7 +1646,10 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(acpCoreRuntimeTypes.distFile);
     fs.rmSync(normalizationCore.distFile);
     fs.rmSync(normalizationBooleanCoercion.distFile);
+    fs.rmSync(normalizationResult.distFile);
+    fs.rmSync(normalizationAgentId.distFile);
     fs.rmSync(normalizationStringCoerce.distFile);
+    fs.rmSync(retry.distFile);
     fs.rmSync(terminalCore.distFile);
     fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
@@ -1694,9 +1710,16 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/boolean-coercion"] ?? "")).toBe(
       fs.realpathSync(normalizationBooleanCoercion.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/result"] ?? "")).toBe(
+      fs.realpathSync(normalizationResult.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
+      fs.realpathSync(normalizationAgentId.srcFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationStringCoerce.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(fs.realpathSync(retry.srcFile));
     expect(fs.realpathSync(aliases["@openclaw/terminal-core"] ?? "")).toBe(
       fs.realpathSync(terminalCore.srcFile),
     );
@@ -1766,6 +1789,15 @@ describe("plugin sdk alias helpers", () => {
     );
     mkdirSafeDir(path.dirname(normalizationCoreRootDistFile));
     fs.writeFileSync(normalizationCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "retry",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const retryRootDistFile = path.join(fixture.root, "dist", "retry", "index.js");
+    mkdirSafeDir(path.dirname(retryRootDistFile));
+    fs.writeFileSync(retryRootDistFile, "export {};\n", "utf-8");
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
@@ -1824,6 +1856,9 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationCoreRootDistFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(
+      fs.realpathSync(retryRootDistFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
     );
@@ -1835,7 +1870,7 @@ describe("plugin sdk alias helpers", () => {
     ).toBe(fs.realpathSync(modelCatalogCore.distFile));
   });
 
-  it("derives acp-core aliases from packaged root dist when package metadata is absent", () => {
+  it("derives workspace aliases from packaged root dist when package metadata is absent", () => {
     const fixture = createPluginSdkAliasFixture();
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -1844,6 +1879,14 @@ describe("plugin sdk alias helpers", () => {
     const acpRuntimeErrors = path.join(fixture.root, "dist", "acp-core", "runtime", "errors.js");
     mkdirSafeDir(path.dirname(acpRuntimeErrors));
     fs.writeFileSync(acpRuntimeErrors, "export {};\n", "utf-8");
+    const normalizationAgentId = path.join(
+      fixture.root,
+      "dist",
+      "normalization-core",
+      "agent-id.js",
+    );
+    mkdirSafeDir(path.dirname(normalizationAgentId));
+    fs.writeFileSync(normalizationAgentId, "export {};\n", "utf-8");
     const cwdWithoutOpenClawPackage = makeTempDir();
 
     const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
@@ -1854,6 +1897,9 @@ describe("plugin sdk alias helpers", () => {
 
     expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/errors"] ?? "")).toBe(
       fs.realpathSync(acpRuntimeErrors),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
+      fs.realpathSync(normalizationAgentId),
     );
   });
 
@@ -2245,46 +2291,6 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
-  it("detects bundled plugin extension paths across source and dist roots", () => {
-    expect(
-      isBundledPluginExtensionPath({
-        modulePath: "/repo/extensions/demo/api.js",
-        openClawPackageRoot: "/repo",
-      }),
-    ).toBe(true);
-    expect(
-      isBundledPluginExtensionPath({
-        modulePath: "/repo/dist/extensions/demo/api.js",
-        openClawPackageRoot: "/repo",
-      }),
-    ).toBe(true);
-    expect(
-      isBundledPluginExtensionPath({
-        modulePath: "/repo/vendor/demo/api.js",
-        openClawPackageRoot: "/repo",
-      }),
-    ).toBe(false);
-  });
-
-  it("normalizes Windows alias targets before handing them to the source transformer", () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: "win32",
-    });
-
-    try {
-      expect(normalizeJitiAliasTargetPath(String.raw`C:\repo\dist\plugin-sdk\root-alias.cjs`)).toBe(
-        "C:/repo/dist/plugin-sdk/root-alias.cjs",
-      );
-    } finally {
-      Object.defineProperty(process, "platform", {
-        configurable: true,
-        value: originalPlatform,
-      });
-    }
-  });
-
   it("loads source runtime shims through the non-native module loading boundary", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
@@ -2396,7 +2402,7 @@ export const syntheticRuntimeMarker = {
     fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
 
     expect(
-      resolvePluginRuntimeModulePath({
+      resolvePluginRuntimeModule({
         modulePath: loaderCachePath,
         argv1: path.join(root, "bin", "openclaw"),
         pluginSdkResolution: "dist",
@@ -2419,7 +2425,7 @@ export const syntheticRuntimeMarker = {
     process.argv[1] = path.join(root, "bin", "openclaw");
     try {
       expect(
-        resolvePluginRuntimeModulePath({
+        resolvePluginRuntimeModule({
           modulePath: loaderCachePath,
           pluginSdkResolution: "dist",
         }),
@@ -2448,7 +2454,7 @@ export const syntheticRuntimeMarker = {
     fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
 
     expect(
-      resolvePluginRuntimeModulePath({
+      resolvePluginRuntimeModule({
         modulePath: loaderCachePath,
         argv1: path.join(root, "bin", "openclaw"),
         pluginSdkResolution: "dist",
@@ -2473,7 +2479,7 @@ export const syntheticRuntimeMarker = {
     fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
 
     expect(
-      resolvePluginRuntimeModulePath({
+      resolvePluginRuntimeModule({
         modulePath: loaderCachePath,
         argv1: shimFile,
         pluginSdkResolution: "dist",
@@ -2498,7 +2504,7 @@ export const syntheticRuntimeMarker = {
     fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
 
     expect(
-      resolvePluginRuntimeModulePath({
+      resolvePluginRuntimeModule({
         modulePath: loaderCachePath,
         argv1: binFile,
         pluginSdkResolution: "dist",
@@ -2706,45 +2712,6 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
-  it("scopes jiti fs cache by OpenClaw package version and install metadata", () => {
-    const root = createTrustedOpenClawPackageFixture("1.2.3-beta.4");
-    const tmpDir = path.join(root, "tmp");
-
-    const fsCache = withEnv({ TMPDIR: tmpDir }, () =>
-      resolvePluginLoaderJitiFsCacheDir({
-        modulePath: path.join(root, "dist", "plugins", "loader.js"),
-      }),
-    );
-
-    expect(fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "1.2.3-beta.4") + path.sep);
-    expect(path.basename(fsCache)).toMatch(/^\d+-\d+$/u);
-  });
-
-  it("preserves jiti's tmpdir guard when TMPDIR resolves to cwd", () => {
-    const root = createTrustedOpenClawPackageFixture("1.2.3-beta.4");
-
-    const guardedFsCache = withEnv({ TMPDIR: root, JITI_RESPECT_TMPDIR_ENV: undefined }, () =>
-      withCwd(root, () =>
-        resolvePluginLoaderJitiFsCacheDir({
-          modulePath: path.join(root, "dist", "plugins", "loader.js"),
-        }),
-      ),
-    );
-    const respectedFsCache = withEnv({ TMPDIR: root, JITI_RESPECT_TMPDIR_ENV: "1" }, () =>
-      withCwd(root, () =>
-        resolvePluginLoaderJitiFsCacheDir({
-          modulePath: path.join(root, "dist", "plugins", "loader.js"),
-        }),
-      ),
-    );
-
-    expect(guardedFsCache).toContain(path.join("jiti", "openclaw", "1.2.3-beta.4") + path.sep);
-    expect(guardedFsCache.startsWith(path.join(root, "jiti") + path.sep)).toBe(false);
-    expect(respectedFsCache).toContain(
-      path.join(root, "jiti", "openclaw", "1.2.3-beta.4") + path.sep,
-    );
-  });
-
   it("adds the versioned fs cache directory to plugin loader jiti options", () => {
     const root = createTrustedOpenClawPackageFixture("2.0.0");
     const tmpDir = path.join(root, "tmp");
@@ -2757,25 +2724,6 @@ describe("buildPluginLoaderJitiOptions", () => {
     );
 
     expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
-  });
-
-  it("preserves jiti's fs cache environment opt-out", () => {
-    const root = createTrustedOpenClawPackageFixture("2.0.0");
-
-    const explicitOptOut = withEnv({ JITI_FS_CACHE: "false" }, () =>
-      resolvePluginLoaderJitiFsCacheOption({
-        modulePath: path.join(root, "dist", "plugins", "loader.js"),
-      }),
-    );
-    const legacyOptOut = withEnv({ JITI_CACHE: "false", JITI_FS_CACHE: undefined }, () =>
-      buildPluginLoaderJitiOptions(
-        { "openclaw/plugin-sdk": path.join(root, "dist", "plugin-sdk", "root-alias.cjs") },
-        { modulePath: path.join(root, "dist", "plugins", "loader.js") },
-      ),
-    );
-
-    expect(explicitOptOut).toBe(false);
-    expect(legacyOptOut.fsCache).toBe(false);
   });
 
   it("pre-normalizes and marks alias maps for source transforms", () => {

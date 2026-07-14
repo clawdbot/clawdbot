@@ -11,11 +11,13 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { codexNativeSubagentRunId } from "./native-subagent-task-mirror.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+
+const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 
 const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT === "1";

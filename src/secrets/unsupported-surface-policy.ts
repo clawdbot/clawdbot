@@ -165,7 +165,7 @@ export function getUnsupportedSecretRefSurfacePatterns(): string[] {
 /**
  * Concrete unsupported config value discovered from an openclaw.json-like object.
  */
-export type UnsupportedSecretRefConfigCandidate = {
+type UnsupportedSecretRefConfigCandidate = {
   path: string;
   value: unknown;
 };

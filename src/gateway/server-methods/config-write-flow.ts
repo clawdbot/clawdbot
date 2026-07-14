@@ -22,10 +22,8 @@ import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plan
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type ConfigWriteSnapshot = Awaited<
-  ReturnType<typeof readConfigFileSnapshotForWrite>
->["snapshot"];
-export type ConfigWriteOptions = Awaited<
+type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"];
+type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 

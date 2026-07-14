@@ -62,7 +62,7 @@ const SKILL_MATCH_STOPWORDS = new Set([
   "your",
 ]);
 
-export type WorkspaceSkillSummary = {
+type WorkspaceSkillSummary = {
   name: string;
   description?: string;
 };
@@ -276,20 +276,4 @@ export function groupDurableInstructionProposals(params: {
     }
   }
   return proposals;
-}
-
-/**
- * Extracts, routes, and groups durable instructions. Runtime capture uses the two phase helpers
- * above so signal-free turns can return before workspace skill discovery.
- */
-export function extractDurableInstructionProposals(params: {
-  messages: unknown[];
-  existingSkills?: readonly WorkspaceSkillSummary[];
-  maxProposals?: number;
-}): DurableInstruction[] {
-  return groupDurableInstructionProposals({
-    instructions: extractDurableInstructions(params.messages),
-    existingSkills: params.existingSkills,
-    maxProposals: params.maxProposals,
-  });
 }

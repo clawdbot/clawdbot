@@ -52,7 +52,7 @@ export type AgentsState = {
   agentsPanel?: AgentsPanel;
 };
 
-export type AgentsConfigCapability = {
+type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
   save: () => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
@@ -116,43 +116,6 @@ function resolveToolsErrorMessage(
   return isMissingOperatorReadScopeError(err)
     ? formatMissingOperatorReadScopeMessage(target)
     : String(err);
-}
-
-export async function loadAgents(state: AgentsState) {
-  const client = state.client;
-  if (!client || !state.connected || state.agentsLoading) {
-    return;
-  }
-  const generation = state.requestGeneration;
-  const isCurrent = () =>
-    state.client === client && state.connected && state.requestGeneration === generation;
-  state.agentsLoading = true;
-  state.agentsError = null;
-  try {
-    const res = await loadAgentsList(client);
-    if (!isCurrent()) {
-      return;
-    }
-    state.agentsList = res;
-    const selected = state.agentsSelectedId;
-    if (!selected || !res.agents.some((entry) => entry.id === selected)) {
-      state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
-    }
-  } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    if (isMissingOperatorReadScopeError(err)) {
-      state.agentsList = null;
-      state.agentsError = formatMissingOperatorReadScopeMessage("agent list");
-    } else {
-      state.agentsError = String(err);
-    }
-  } finally {
-    if (isCurrent()) {
-      state.agentsLoading = false;
-    }
-  }
 }
 
 export async function loadToolsCatalog(state: AgentsState, agentId: string) {
@@ -237,6 +200,27 @@ export async function setDefaultAgent(
       }
     }
   }
+}
+
+type AgentIdentityUpdate = {
+  agentId: string;
+  name?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+/** Persist identity fields through the gateway; the handler also rewrites the
+    agent's workspace IDENTITY.md so agent and UI share one identity source. */
+export async function updateAgentIdentity(
+  client: GatewayBrowserClient,
+  update: AgentIdentityUpdate,
+): Promise<void> {
+  await client.request("agents.update", {
+    agentId: update.agentId,
+    ...(update.name ? { name: update.name } : {}),
+    ...(update.emoji ? { emoji: update.emoji } : {}),
+    ...(update.avatar ? { avatar: update.avatar } : {}),
+  });
 }
 
 function emptyAgentFilesStatus(): AgentFilesStatus {

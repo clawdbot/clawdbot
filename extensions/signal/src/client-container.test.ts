@@ -18,9 +18,8 @@ import {
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
 
-// Build a Response-like `body` stream from a string so the production code exercises the
-// bounded body readers (readProviderTextResponse / readResponseTextLimited) instead of an
-// unbounded res.text(). Kept local to this file to avoid touching shared HTTP test mocks.
+// Build Response-like `body` streams so production code exercises bounded readers instead
+// of unbounded res.text()/arrayBuffer(). Kept local to avoid touching shared HTTP mocks.
 function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
   const bytes = new TextEncoder().encode(text);
   return {
@@ -30,6 +29,31 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
           controller.enqueue(bytes);
         }
         controller.close();
+      },
+    }),
+  };
+}
+
+function stalledBodyStream(): { body: ReadableStream<Uint8Array> } {
+  return {
+    body: new ReadableStream<Uint8Array>(),
+  };
+}
+
+function delayedBodyStream(
+  chunks: Array<{ delayMs: number; text: string }>,
+  closeDelayMs = 1,
+): { body: ReadableStream<Uint8Array> } {
+  const encoder = new TextEncoder();
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        let elapsedMs = 0;
+        for (const chunk of chunks) {
+          elapsedMs += chunk.delayMs;
+          setTimeout(() => controller.enqueue(encoder.encode(chunk.text)), elapsedMs);
+        }
+        setTimeout(() => controller.close(), elapsedMs + closeDelayMs);
       },
     }),
   };
@@ -331,6 +355,36 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
   });
 
+  it("times out stalled REST error bodies before reporting the HTTP failure", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 500,
+          statusText: "Internal Server Error",
+        });
+      });
+
+      const request = containerRestRequest("/v2/send", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST 500: Internal Server Error",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles empty response body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -378,6 +432,68 @@ describe("containerRestRequest", () => {
       expect(requireFetchCall()[1].signal).toBeInstanceOf(AbortSignal);
     } finally {
       timeoutSpy.mockRestore();
+    }
+  });
+
+  it("times out stalled REST response bodies without aborting completed fetches", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      const request = containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST response body stalled after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows slow REST response bodies while chunks keep arriving before the idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockResolvedValue(
+        new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"ok"' },
+            { delayMs: 20, text: ":true" },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+      const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(75);
+      await expect(request).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
@@ -962,6 +1078,36 @@ describe("containerFetchAttachment", () => {
         maxResponseBytes: 4,
       }),
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
+  });
+
+  it("times out stalled attachment bodies without aborting completed fetches", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(stalledBodyStream().body, {
+          status: 200,
+          headers: new Headers(),
+        });
+      });
+
+      const request = containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow(
+        "Signal REST attachment response body stalled after 25ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

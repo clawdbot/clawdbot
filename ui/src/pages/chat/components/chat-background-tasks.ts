@@ -263,7 +263,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -314,8 +314,69 @@ export function createBackgroundTasksProps(
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
+}
+
+type BackgroundTasksStatus = { count: number; startedMs: number | null };
+
+/** Summary for the bottom-of-thread status row: active-task count plus the
+ * oldest active start time so the row ticks one elapsed label, not one per
+ * task. `startedMs` is null when no active task has a usable timestamp. */
+function activeBackgroundTasksStatus(
+  props: BackgroundTasksProps | undefined,
+): BackgroundTasksStatus | null {
+  const active = props?.tasks?.filter(isActiveTask) ?? [];
+  if (active.length === 0) {
+    return null;
+  }
+  let startedMs: number | null = null;
+  for (const task of active) {
+    const started = taskTimestampMs(task.startedAt ?? task.createdAt);
+    if (started > 0 && (startedMs === null || started < startedMs)) {
+      startedMs = started;
+    }
+  }
+  return { count: active.length, startedMs };
+}
+
+/** Post-turn status row in the chat thread: once the agent turn settles while
+ * background tasks keep running, the running work stays visible next to a
+ * free composer. The link opens the tasks rail (noop when already open). */
+export function renderBackgroundTasksStatusRow(
+  backgroundTasks: BackgroundTasksProps | undefined,
+): TemplateResult | typeof nothing {
+  const status = activeBackgroundTasksStatus(backgroundTasks);
+  // Disconnected snapshots are stale: task events cannot arrive, so a ticking
+  // "running" claim would be a lie. The rail owns the disconnected state.
+  if (!backgroundTasks?.connected || !status) {
+    return nothing;
+  }
+  const label =
+    status.count === 1
+      ? t("chat.backgroundTasks.statusRunningOne")
+      : t("chat.backgroundTasks.statusRunningMany", { count: String(status.count) });
+  const openRail = () => {
+    if (backgroundTasks.collapsed) {
+      backgroundTasks.onToggleCollapsed();
+    }
+  };
+  return html`
+    <div class="chat-tasks-status" role="status">
+      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
+      ${status.startedMs !== null
+        ? html`
+            <!-- Ticking time stays out of the polite live region: without
+                 aria-hidden, screen readers would re-announce every second. -->
+            <span class="chat-tasks-status__time" aria-hidden="true">
+              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+            </span>
+            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+          `
+        : nothing}
+      <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+    </div>
+  `;
 }
 
 export function renderBackgroundTasksToggle(

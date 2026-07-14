@@ -16,7 +16,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
-export type SkillWorkshopToolPolicyDiagnostic = {
+type SkillWorkshopToolPolicyDiagnostic = {
   agentId: string;
   source: string;
   detail: string;
@@ -170,7 +170,7 @@ function describeExclusion(params: {
   };
 }
 
-export type SkillWorkshopToolPolicyAvailability = {
+type SkillWorkshopToolPolicyAvailability = {
   available: boolean;
   exclusion?: ToolPolicyFilterEvent;
 };

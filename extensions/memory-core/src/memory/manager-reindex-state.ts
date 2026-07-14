@@ -124,23 +124,6 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function isMemoryIndexIdentityDirty(params: {
-  meta: MemoryIndexMeta | null;
-  provider: { id: string; model: string } | null;
-  providerKey?: string;
-  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
-  providerKeyKnown?: boolean;
-  configuredSources: MemorySource[];
-  configuredScopeHash: string;
-  chunkTokens: number;
-  chunkOverlap: number;
-  vectorReady: boolean;
-  hasIndexedChunks?: boolean;
-  ftsTokenizer: string;
-}): boolean {
-  return resolveMemoryIndexIdentityState(params).status !== "valid";
-}
-
 export function resolveMemoryIndexIdentityState(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;

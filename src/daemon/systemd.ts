@@ -103,7 +103,7 @@ async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string
   return null;
 }
 
-export type InstalledSystemdGatewayScope = {
+type InstalledSystemdGatewayScope = {
   scope: SystemdUnitScope;
   unitName: string;
   unitPath: string;

@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
@@ -29,7 +28,6 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);
 });

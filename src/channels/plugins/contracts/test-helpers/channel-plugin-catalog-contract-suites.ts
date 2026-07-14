@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
-import { listChannelPluginCatalogEntries } from "../../catalog.js";
+import { listRawChannelPluginCatalogEntries } from "../../catalog.js";
 
 function createCatalogEntry(params: {
   packageName: string;
@@ -88,7 +88,7 @@ function expectCatalogIdsContain(params: {
   catalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const ids = listChannelPluginCatalogEntries({
+  const ids = listRawChannelPluginCatalogEntries({
     ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
     ...(params.env ? { env: params.env } : {}),
   }).map((entry) => entry.id);
@@ -100,7 +100,7 @@ function findCatalogEntry(params: {
   catalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  return listChannelPluginCatalogEntries({
+  return listRawChannelPluginCatalogEntries({
     ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
     ...(params.env ? { env: params.env } : {}),
   }).find((entry) => entry.id === params.channelId);

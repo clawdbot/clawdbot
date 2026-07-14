@@ -1294,6 +1294,25 @@ describe("legacy WebChat channel config migrate", () => {
   });
 });
 
+describe("retired cron run-log config migrate", () => {
+  it("removes cron.runLog while preserving current cron config", () => {
+    const raw = {
+      cron: {
+        enabled: true,
+        runLog: { maxBytes: "2mb", keepLines: 100 },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("cron.runLog");
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.cron).toEqual({ enabled: true });
+    expect(res.changes).toContain(
+      "Removed retired cron.runLog config; cron history now keeps 2000 runs per job.",
+    );
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({

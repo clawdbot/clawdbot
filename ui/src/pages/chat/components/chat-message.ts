@@ -94,7 +94,7 @@ type ChatTimestampDisplay = {
   dateTime: string;
 };
 
-export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
@@ -134,7 +134,7 @@ const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
 /** Footer label: relative for recent messages, compact date beyond a week. */
-export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return t("chat.messages.unknownDate");
@@ -206,25 +206,6 @@ function pinMessageMetaPreview(event: MouseEvent) {
   }
   event.preventDefault();
   delete details.dataset.preview;
-}
-
-export function resetAssistantAttachmentAvailabilityCacheForTest() {
-  assistantAttachmentAvailabilityCache.clear();
-  bumpAssistantAttachmentAvailabilityRenderVersion();
-  for (const timer of assistantAttachmentRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  assistantAttachmentRefreshTimers.clear();
-  for (const { timer } of pairingQrExpiryRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  pairingQrExpiryRefreshTimers.clear();
-  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
-  }
-  managedImageBlobUrlCache.clear();
-  managedImageBlobUrlResolvedCache.clear();
-  managedImageBlobUrlMissCache.clear();
 }
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {

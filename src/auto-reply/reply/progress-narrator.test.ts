@@ -18,8 +18,11 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 import {
   attachProgressNarratorToReplyOptions,
   createProgressNarrator,
-  type ProgressNarrationInput,
 } from "./progress-narrator.js";
+
+type ProgressNarrationInput = Parameters<
+  NonNullable<Parameters<typeof createProgressNarrator>[0]["generate"]>
+>[0];
 
 const cfg = {} as OpenClawConfig;
 

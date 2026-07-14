@@ -170,7 +170,7 @@ export function createPullRequestBranch(
 
 // Collapsed rows lead with live work; merged/closed history sits behind the
 // "show more" toggle so a long landing streak never buries the active PR.
-export function visibleChatPullRequests(
+function visibleChatPullRequests(
   pullRequests: ControlUiSessionPullRequest[],
   expanded: boolean,
 ): { visible: ControlUiSessionPullRequest[]; hiddenCount: number } {

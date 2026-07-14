@@ -2,14 +2,14 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 /** Cap quoted selection snippets so the /btw command stays bounded. */
-export const CHAT_SELECTION_SNIPPET_MAX_CHARS = 600;
+const CHAT_SELECTION_SNIPPET_MAX_CHARS = 600;
 
 /**
  * /btw questions are single-line: command normalization keeps only the first
  * line, so newlines in the quoted selection must collapse to spaces before
  * the snippet is embedded in the command text.
  */
-export function collapseChatSelectionSnippet(text: string): string {
+function collapseChatSelectionSnippet(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   return truncateUtf16Safe(collapsed, CHAT_SELECTION_SNIPPET_MAX_CHARS);
 }
@@ -24,7 +24,7 @@ export function buildMoreDetailsSideCommand(selection: string): string | null {
 }
 
 /** Composer draft for "Ask in side chat": user types the question after the quote. */
-export function buildSideChatComposerDraft(selection: string): string | null {
+function buildSideChatComposerDraft(selection: string): string | null {
   const snippet = collapseChatSelectionSnippet(selection);
   if (!snippet) {
     return null;

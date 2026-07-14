@@ -46,7 +46,10 @@ removed, only disabled.
 Catalog and search access require `operator.read`. Install, enable, disable,
 remove, and MCP server changes require `operator.admin`. A ClawHub install is
 performed by the Gateway and preserves its trust, integrity, and plugin-install
-policy checks.
+policy checks. Enabling an installed plugin as an administrator also records
+that explicit trust by adding the selected plugin to an existing restrictive
+`plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
+must be removed before enabling the plugin.
 
 Installing or removing plugin code requires a Gateway restart. Enablement
 changes can be applied without a restart when the installed plugin and current

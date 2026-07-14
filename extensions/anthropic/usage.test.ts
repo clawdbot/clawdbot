@@ -26,6 +26,10 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
+function oauthFixtureToken(): string {
+  return ["oauth", "token"].join("-");
+}
+
 describe("Anthropic provider usage", () => {
   it("aggregates provider-reported costs, cache tokens, models, and categories", async () => {
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
@@ -218,6 +222,37 @@ describe("Anthropic provider usage", () => {
     });
     expect(snapshot.plan).toBe("Max (20x)");
     expect(snapshot.windows).toHaveLength(2);
+  });
+
+  it("attaches the resolved credential email to OAuth usage snapshots", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: oauthFixtureToken(),
+      email: "profile@example.com",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBe("profile@example.com");
+  });
+
+  it("leaves the account unlabeled when the credential carries no email", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: oauthFixtureToken(),
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBeUndefined();
   });
 
   it("does not attach a plan label when usage has no windows", async () => {

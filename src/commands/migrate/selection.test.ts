@@ -12,16 +12,16 @@ import {
   getDefaultMigrationPluginSelectionValues,
   getSelectableMigrationPluginItems,
   getDefaultMigrationSkillSelectionValues,
-  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
-  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
-  MIGRATION_PLUGIN_NOT_SELECTED_REASON,
-  MIGRATION_SKILL_NOT_SELECTED_REASON,
+  MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+  MIGRATION_SELECTION_TOGGLE_ALL_ON,
   reconcileInteractiveMigrationEnterValues,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
   resolveInteractiveMigrationPluginSelection,
   resolveInteractiveMigrationSkillSelection,
 } from "./selection.js";
+
+const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
 
 function skillItem(params: {
   id: string;
@@ -197,7 +197,7 @@ describe("applyMigrationSkillSelection", () => {
       conflicts: 0,
     });
     expectItemStatus(selected.items, "skill:alpha", "planned");
-    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_SKILL_NOT_SELECTED_REASON);
+    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_NOT_SELECTED_REASON);
     expectItemStatus(selected.items, "archive:config.toml", "planned");
   });
 
@@ -227,7 +227,7 @@ describe("applyMigrationSkillSelection", () => {
 
     expect(selected.summary.conflicts).toBe(0);
     expectItemStatus(selected.items, "skill:alpha", "planned");
-    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_SKILL_NOT_SELECTED_REASON);
+    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_NOT_SELECTED_REASON);
   });
 
   it("allows interactive selection to choose no skills", () => {
@@ -270,12 +270,12 @@ describe("applyMigrationSkillSelection", () => {
 
     expect(
       resolveInteractiveMigrationSkillSelection(items, [
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        MIGRATION_SELECTION_TOGGLE_ALL_ON,
+        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
       ]),
     ).toEqual({ action: "select", selectedItemIds: new Set() });
     expect(
-      resolveInteractiveMigrationSkillSelection(items, [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON]),
+      resolveInteractiveMigrationSkillSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
     ).toEqual({
       action: "select",
       selectedItemIds: new Set(["skill:alpha", "skill:beta"]),
@@ -287,28 +287,28 @@ describe("applyMigrationSkillSelection", () => {
 
     expect(
       reconcileInteractiveMigrationSkillToggleValues(
-        [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON],
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        [MIGRATION_SELECTION_TOGGLE_ALL_ON],
+        MIGRATION_SELECTION_TOGGLE_ALL_ON,
         selectable,
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
 
     expect(
       reconcileInteractiveMigrationSkillToggleValues(
         [
-          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+          MIGRATION_SELECTION_TOGGLE_ALL_ON,
           "skill:alpha",
           "skill:beta",
-          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+          MIGRATION_SELECTION_TOGGLE_ALL_OFF,
         ],
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
         selectable,
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
 
     expect(
       reconcileInteractiveMigrationSkillToggleValues(
-        [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF, "skill:alpha"],
+        [MIGRATION_SELECTION_TOGGLE_ALL_OFF, "skill:alpha"],
         "skill:alpha",
         selectable,
       ),
@@ -318,24 +318,24 @@ describe("applyMigrationSkillSelection", () => {
       reconcileInteractiveMigrationShortcutValues(
         ["skill:alpha", "skill:beta"],
         [
-          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
-          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+          MIGRATION_SELECTION_TOGGLE_ALL_ON,
+          MIGRATION_SELECTION_TOGGLE_ALL_OFF,
           "skill:alpha",
           "skill:beta",
         ],
         selectable,
         "a",
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
 
     expect(
       reconcileInteractiveMigrationShortcutValues(
-        [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF],
-        [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF, MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON],
+        [MIGRATION_SELECTION_TOGGLE_ALL_OFF],
+        [MIGRATION_SELECTION_TOGGLE_ALL_OFF, MIGRATION_SELECTION_TOGGLE_ALL_ON],
         selectable,
         "i",
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
   });
 
   it("reconciles enter as activating the cursor row without toggling it off", () => {
@@ -344,18 +344,18 @@ describe("applyMigrationSkillSelection", () => {
     expect(
       reconcileInteractiveMigrationEnterValues(
         ["skill:alpha"],
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        MIGRATION_SELECTION_TOGGLE_ALL_ON,
         selectable,
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
 
     expect(
       reconcileInteractiveMigrationEnterValues(
         ["skill:alpha"],
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
         selectable,
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
 
     expect(
       reconcileInteractiveMigrationEnterValues(["skill:alpha"], "skill:beta", selectable),
@@ -402,12 +402,7 @@ describe("applyMigrationPluginSelection", () => {
 
     expectSummaryFields(selected.summary, { planned: 2, skipped: 1, conflicts: 0 });
     expectItemStatus(selected.items, "plugin:google-calendar", "planned");
-    expectItemStatus(
-      selected.items,
-      "plugin:gmail",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
-    );
+    expectItemStatus(selected.items, "plugin:gmail", "skipped", MIGRATION_NOT_SELECTED_REASON);
     const configItem = requireItem(selected.items, "config:codex-plugins");
     expect(configItem.status).toBe("planned");
     const plugins = requireCodexPluginConfigPlugins(configItem);
@@ -434,19 +429,14 @@ describe("applyMigrationPluginSelection", () => {
       selected.items,
       "plugin:google-calendar",
       "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+      MIGRATION_NOT_SELECTED_REASON,
     );
-    expectItemStatus(
-      selected.items,
-      "plugin:gmail",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
-    );
+    expectItemStatus(selected.items, "plugin:gmail", "skipped", MIGRATION_NOT_SELECTED_REASON);
     expectItemStatus(
       selected.items,
       "config:codex-plugins",
       "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+      MIGRATION_NOT_SELECTED_REASON,
     );
   });
 
@@ -506,12 +496,12 @@ describe("applyMigrationPluginSelection", () => {
 
     expect(
       resolveInteractiveMigrationPluginSelection(items, [
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
-        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        MIGRATION_SELECTION_TOGGLE_ALL_ON,
+        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
       ]),
     ).toEqual({ action: "select", selectedItemIds: new Set() });
     expect(
-      resolveInteractiveMigrationPluginSelection(items, [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON]),
+      resolveInteractiveMigrationPluginSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
     ).toEqual({
       action: "select",
       selectedItemIds: new Set(["plugin:google-calendar", "plugin:gmail"]),

@@ -97,6 +97,9 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
+    expect(
+      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
+    ).toContain("runtime state requires node:sqlite");
   });
 
   it("flags version-managed node paths", async () => {

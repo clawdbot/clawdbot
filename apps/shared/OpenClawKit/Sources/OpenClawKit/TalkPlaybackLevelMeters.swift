@@ -181,16 +181,16 @@ public final class PCMPlaybackEnvelope {
 /// via its built-in metering at ~30 Hz. Detach clears the level to nil so the
 /// consumer can distinguish "silent" from "not playing".
 @MainActor
-public final class AudioPlayerLevelMeter {
+final class AudioPlayerLevelMeter {
     private let onLevel: @MainActor (Double?) -> Void
     private var pollTask: Task<Void, Never>?
     private weak var player: AVAudioPlayer?
 
-    public init(onLevel: @escaping @MainActor (Double?) -> Void) {
+    init(onLevel: @escaping @MainActor (Double?) -> Void) {
         self.onLevel = onLevel
     }
 
-    public func attach(_ player: AVAudioPlayer) {
+    func attach(_ player: AVAudioPlayer) {
         self.detach()
         player.isMeteringEnabled = true
         self.player = player
@@ -204,7 +204,7 @@ public final class AudioPlayerLevelMeter {
         }
     }
 
-    public func detach() {
+    func detach() {
         self.pollTask?.cancel()
         self.pollTask = nil
         self.player = nil

@@ -90,6 +90,7 @@ const suspectClosedClients = new WeakSet<CodexAppServerClient>();
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CLIENT_START_METADATA = Symbol.for(
   "openclaw.codexAppServerClientStartMetadata",
 );
@@ -1085,6 +1086,12 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   state.clients.clear();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
+
+(
+  globalThis as typeof globalThis & {
+    [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
+  }
+)[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
 
 function getOrCreateSharedClientEntry(
   state: SharedCodexAppServerClientState,

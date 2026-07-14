@@ -15,9 +15,7 @@ import {
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 
-export type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-
-export type ConfigSchema = Record<string, unknown>;
+type ConfigSchema = Record<string, unknown>;
 
 type JsonSchemaNode = Record<string, unknown>;
 
@@ -108,7 +106,7 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type ConfigSchemaLookupChild = {
+type ConfigSchemaLookupChild = {
   key: string;
   path: string;
   type?: string | string[];
@@ -119,17 +117,17 @@ export type ConfigSchemaLookupChild = {
   hintPath?: string;
 };
 
-export type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+type ConfigSchemaReloadKind = "restart" | "hot" | "none";
 
-export type ConfigSchemaReloadMetadata = {
+type ConfigSchemaReloadMetadata = {
   kind: ConfigSchemaReloadKind;
 };
 
-export type ConfigSchemaReloadMetadataResolver = (
+type ConfigSchemaReloadMetadataResolver = (
   path: string,
 ) => ConfigSchemaReloadMetadata | null | undefined;
 
-export type ConfigSchemaLookupResult = {
+type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
   reloadKind?: ConfigSchemaReloadKind;

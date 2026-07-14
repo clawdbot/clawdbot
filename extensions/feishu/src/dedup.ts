@@ -3,33 +3,11 @@
 // the same event once per bot, so handlers claim a dedupe key before
 // processing, commit once handling is dispatched, and release on retryable
 // failure so the event can be redelivered.
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-
-// Persisted namespaces resolve to `feishu.dedup.<namespace hash>` in the shared
-// plugin-state SQLite store. Rows from the retired hand-rolled `dedup.*` store
-// are dropped without import: replay protection is cache and rebuilds after
-// upgrade, leaving only a brief unclean-shutdown redelivery gap.
-const DEDUPE_NAMESPACE_PREFIX = "feishu.dedup";
-// Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
-const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
-const MEMORY_MAX_SIZE = 1_000;
-const STORE_MAX_ENTRIES = 10_000;
+import { feishuDedupeState } from "./dedup-state.js";
 
 type FeishuDedupeLog = (...args: unknown[]) => void;
 
 type FeishuMessageClaim = "claimed" | "duplicate" | "inflight";
-
-function createFeishuDedupeGuard() {
-  return createClaimableDedupe({
-    pluginId: "feishu",
-    namespacePrefix: DEDUPE_NAMESPACE_PREFIX,
-    ttlMs: DEDUP_TTL_MS,
-    memoryMaxSize: MEMORY_MAX_SIZE,
-    stateMaxEntries: STORE_MAX_ENTRIES,
-  });
-}
-
-let guard = createFeishuDedupeGuard();
 
 function dedupeKey(messageId: string | undefined | null): string {
   return messageId?.trim() ?? "";
@@ -64,7 +42,8 @@ export async function claimUnprocessedFeishuMessage(params: {
   if (!key) {
     return "claimed";
   }
-  return (await guard.claim(key, dedupeOptions(params.namespace, params.log))).kind;
+  return (await feishuDedupeState.guard.claim(key, dedupeOptions(params.namespace, params.log)))
+    .kind;
 }
 
 /** Drops an uncommitted claim so a failed handler can retry the message. */
@@ -74,7 +53,7 @@ export function releaseFeishuMessageProcessing(
 ): void {
   const key = dedupeKey(messageId);
   if (key) {
-    guard.release(key, { namespace });
+    feishuDedupeState.guard.release(key, { namespace });
   }
 }
 
@@ -94,10 +73,10 @@ export async function finalizeFeishuMessageProcessing(params: {
     return false;
   }
   const options = dedupeOptions(params.namespace, params.log);
-  if (!params.claimHeld && (await guard.claim(key, options)).kind !== "claimed") {
+  if (!params.claimHeld && (await feishuDedupeState.guard.claim(key, options)).kind !== "claimed") {
     return false;
   }
-  return await guard.commit(key, options);
+  return await feishuDedupeState.guard.commit(key, options);
 }
 
 /** Records a handled message so restart/replay cannot dispatch it again; false when already recorded. */
@@ -110,7 +89,7 @@ export async function recordProcessedFeishuMessage(
   if (!key) {
     return false;
   }
-  return await guard.commit(key, dedupeOptions(namespace, log));
+  return await feishuDedupeState.guard.commit(key, dedupeOptions(namespace, log));
 }
 
 /** Forgets a recorded message so a retryable synthetic event can be handled on redelivery. */
@@ -123,7 +102,7 @@ export async function forgetProcessedFeishuMessage(
   if (!key) {
     return false;
   }
-  return await guard.forget(key, dedupeOptions(namespace, log));
+  return await feishuDedupeState.guard.forget(key, dedupeOptions(namespace, log));
 }
 
 /** Checks recency without claiming or recording. */
@@ -136,7 +115,7 @@ export async function hasProcessedFeishuMessage(
   if (!key) {
     return false;
   }
-  return await guard.hasRecent(key, dedupeOptions(namespace, log));
+  return await feishuDedupeState.guard.hasRecent(key, dedupeOptions(namespace, log));
 }
 
 /** Loads recent persisted entries into memory at account start; returns the loaded count. */
@@ -144,14 +123,7 @@ export async function warmupDedupFromPluginState(
   namespace: string,
   log?: FeishuDedupeLog,
 ): Promise<number> {
-  return await guard.warmup(namespace, (error) =>
+  return await feishuDedupeState.guard.warmup(namespace, (error) =>
     log?.(`feishu-dedup: warmup persistent state error: ${String(error)}`),
   );
 }
-
-export const testingHooks = {
-  /** Drops in-flight claims and process memory; persisted rows follow the test's state dir. */
-  resetFeishuDedupForTests() {
-    guard = createFeishuDedupeGuard();
-  },
-};

@@ -347,22 +347,6 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func ensureSnapshotResult()
-        -> Result<ExecApprovalsSnapshot, ExecApprovalsReadError>
-    {
-        do {
-            let snapshot = try self.withWriteLock {
-                _ = try self.ensureFileUnlocked()
-                return try self.readSnapshotUnlocked()
-            }
-            return .success(snapshot)
-        } catch {
-            self.logger.warning(
-                "exec approvals snapshot unavailable: \(error.localizedDescription, privacy: .public)")
-            return .failure(.unavailable)
-        }
-    }
-
     private static func readSnapshotUnlocked() throws -> ExecApprovalsSnapshot {
         if self.legacyFileURLIfPending() != nil {
             let file = self.unmigratedLegacyFallbackFile()
@@ -388,22 +372,6 @@ enum ExecApprovalsStore {
             exists: true,
             hash: self.hashRaw(raw),
             file: decoded)
-    }
-
-    static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
-        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if socketPath.isEmpty {
-            return ExecApprovalsFile(
-                version: file.version,
-                socket: nil,
-                defaults: file.defaults,
-                agents: file.agents)
-        }
-        return ExecApprovalsFile(
-            version: file.version,
-            socket: ExecApprovalsSocketConfig(path: socketPath, token: nil),
-            defaults: file.defaults,
-            agents: file.agents)
     }
 
     static func loadFile() -> ExecApprovalsFile {

@@ -20,7 +20,7 @@ import {
   listSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -31,12 +31,16 @@ import {
   getPairedDevice,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { resetGatewaySuspendCoordinatorForTest } from "../infra/gateway-suspend-coordinator.js";
-import { __testing as restartTesting } from "../infra/restart.js";
+import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,
@@ -46,8 +50,10 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -290,13 +296,13 @@ function applyGatewaySkipEnv() {
 }
 
 function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: boolean }): void {
-  // Resume a held scheduler before hard admission reset invalidates and forgets its
-  // lease. Then cancel restart timers and retire their module-local signal lease.
-  resetGatewaySuspendCoordinatorForTest();
-  if (options.preserveRuntimeBindings) {
-    restartTesting.resetSigusr1TransientState();
-  } else {
-    restartTesting.resetSigusr1State();
+  // Resume held scheduling and cancel pending restart work before clearing
+  // admission. Live suite servers keep their policy and active-work binding.
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
+  resetGatewayRestartStateForInProcessRestart();
+  if (!options.preserveRuntimeBindings) {
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
   }
   resetGatewayWorkAdmission();
 }
@@ -411,7 +417,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetModelCatalogCacheForTest();
   agentDiscoveryMock.enabled = false;
@@ -506,7 +512,7 @@ async function resetGatewayTestRuntimeOnly() {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest({ preserveListeners: true });
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -642,10 +648,12 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
-  const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  const resolvedOpts = {
+    ...opts,
+    controlUiEnabled: opts?.controlUiEnabled ?? false,
+  };
   if (
-    resolvedOpts?.controlUiEnabled === true &&
+    resolvedOpts.controlUiEnabled &&
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
     tempControlUiRoot &&
     typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"

@@ -98,9 +98,9 @@ public struct TalkWaveformView: View {
 
 /// Pure waveform math, split from the view for unit testing and so the Android
 /// port has one canonical reference for every constant.
-public enum TalkWaveformMath {
+enum TalkWaveformMath {
     /// Per-phase drive for the wave amplitude in 0...1.
-    public static func power(for phase: TalkWaveformPhase, time: Double) -> Double {
+    static func power(for phase: TalkWaveformPhase, time: Double) -> Double {
         switch phase {
         case .idle:
             return 0.05
@@ -121,7 +121,7 @@ public enum TalkWaveformMath {
     }
 
     /// One wave = max envelope of three drifting lobes, mirrored around the midline.
-    public static func wavePath(in size: CGSize, time: Double, seed: Double, power: Double) -> Path {
+    static func wavePath(in size: CGSize, time: Double, seed: Double, power: Double) -> Path {
         let midX = Double(size.width) / 2
         let midY = Double(size.height) / 2
 

@@ -199,5 +199,15 @@ describeControlUiE2e("session pull request chips", () => {
       .toBe("https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events");
     // No dismiss control: the row reflects the checkout itself.
     await expect.poll(() => row.locator(".chat-pr__dismiss").count()).toBe(0);
+
+    // The row shares the composer's centered width; it is part of the input
+    // stack, not a full-pane banner.
+    const rowBox = await page.locator(".chat-prs").boundingBox();
+    const composerBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+    expect(rowBox && composerBox).toBeTruthy();
+    if (rowBox && composerBox) {
+      expect(Math.abs(rowBox.width - composerBox.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rowBox.x - composerBox.x)).toBeLessThanOrEqual(1);
+    }
   });
 });

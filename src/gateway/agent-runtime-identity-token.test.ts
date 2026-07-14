@@ -76,6 +76,19 @@ describe("agent runtime identity token", () => {
     expect(fs.existsSync(execApprovalsPath(home))).toBe(false);
   });
 
+  it("rejects a token with a shortened signature", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+    });
+
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token.slice(0, -1)),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects tokens minted from a different local state directory", async () => {
     const firstHome = useTempHome();
     const firstProcess = await importRuntimeTokenModule();

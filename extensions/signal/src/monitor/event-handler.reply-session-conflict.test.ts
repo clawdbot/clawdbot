@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover retry behavior for reply session initialization conflicts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -240,7 +242,7 @@ describe("signal reply session init conflict retry", () => {
           error: (msg: string) => {
             errorLogs.push(msg);
           },
-        } as any,
+        } as SignalEventHandlerDeps["runtime"],
       }),
     );
 
@@ -313,7 +315,7 @@ describe("signal reply session init conflict retry", () => {
       createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 10 } },
-        } as any,
+        } as OpenClawConfig,
       }),
     );
 

@@ -36,7 +36,7 @@ export type SecretResolutionResult<TSource extends string> = {
 /**
  * Metadata fields shared by runtime web search and fetch provider selection.
  */
-export type RuntimeWebProviderMetadataBase<TSource extends string> = {
+type RuntimeWebProviderMetadataBase<TSource extends string> = {
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
   selectedProvider?: string;
@@ -47,7 +47,7 @@ export type RuntimeWebProviderMetadataBase<TSource extends string> = {
 /**
  * Parameters shared by web search/fetch provider selection after provider surface discovery.
  */
-export type RuntimeWebProviderSelectionParams<
+type RuntimeWebProviderSelectionParams<
   TProvider extends {
     id: string;
     requiresCredential?: boolean;
@@ -214,7 +214,7 @@ function setResolvedCredentialPath(params: {
 /**
  * Provider set plus effective config state for one runtime web tool surface.
  */
-export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
+type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
   providers: TProvider[];
   configuredProvider?: string;
   enabled: boolean;
@@ -224,7 +224,7 @@ export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
 /**
  * Parameters for resolving configured/available providers before credential selection.
  */
-export type ResolveRuntimeWebProviderSurfaceParams<
+type ResolveRuntimeWebProviderSurfaceParams<
   TProvider extends {
     id: string;
     requiresCredential?: boolean;

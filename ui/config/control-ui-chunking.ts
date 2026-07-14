@@ -12,6 +12,17 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
 }
 
 export function controlUiManualChunk(id: string): string | undefined {
+  const normalized = normalizeModuleId(id);
+
+  // These entry-and-route helpers must stay together; separate shared chunks
+  // turn small route-graph changes into extra startup preload requests.
+  if (
+    normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
+    normalized.endsWith("/ui/src/lib/clipboard.ts")
+  ) {
+    return "control-ui-shared";
+  }
+
   if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||

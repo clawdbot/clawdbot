@@ -37,7 +37,6 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
-  resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {

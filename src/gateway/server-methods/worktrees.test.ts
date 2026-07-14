@@ -65,11 +65,15 @@ describe("worktrees gateway methods", () => {
       "worktree restore response",
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
-    expect(await call(handlers, "worktrees.gc", {})).toEqual([
+    expect(await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext })).toEqual([
       true,
       { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },
       undefined,
     ]);
+    expect(service.gc).toHaveBeenCalledWith({
+      limits: {},
+      isOwnerActive: expect.any(Function),
+    });
 
     expect(service.create).toHaveBeenCalledWith({
       repoRoot: "/repo",
@@ -143,6 +147,24 @@ describe("worktrees gateway methods", () => {
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("passes configured cleanup limits to gc", async () => {
+    const service = {
+      gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    const context = {
+      getRuntimeConfig: () => ({
+        worktrees: { cleanup: { maxCount: 25, maxTotalSizeGb: 50 } },
+      }),
+    };
+    const response = await call(handlers, "worktrees.gc", {}, { context });
+    expect(response?.[0]).toBe(true);
+    expect(service.gc).toHaveBeenCalledWith({
+      limits: { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
+      isOwnerActive: expect.any(Function),
+    });
   });
 
   it("maps snapshot failures onto a structured removed=false result", async () => {

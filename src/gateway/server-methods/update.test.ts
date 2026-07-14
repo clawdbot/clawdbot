@@ -7,7 +7,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.open
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
@@ -15,6 +15,9 @@ let capturedPayload: RestartSentinelPayload | undefined;
 let restartSentinelWriteError: Error | null = null;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
+type UpdateInstallSurface = Awaited<
+  ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
+>;
 const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
   kind: "git",
   mode: "git",

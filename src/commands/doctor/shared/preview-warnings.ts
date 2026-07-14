@@ -668,7 +668,7 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
-export type DoctorPreviewNotes = {
+type DoctorPreviewNotes = {
   /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
   /** Warning notes shown during preview. */

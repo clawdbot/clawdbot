@@ -1,11 +1,9 @@
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget, WidgetManifestView } from "../lib/workspace/types.ts";
 import {
-  attachWidgetBridge,
   loadWidgetManifestView,
   renderCustomWidgetHost,
-  widgetAssetUrl,
   type CustomWidgetHostContext,
 } from "./workspace-custom-widget.ts";
 
@@ -46,20 +44,45 @@ function renderToContainer(template: unknown): HTMLElement {
   return container;
 }
 
+function connectRenderedWidget(params: {
+  widget?: WorkspaceWidget;
+  manifest?: WidgetManifestView;
+  context?: CustomWidgetHostContext;
+}) {
+  const container = renderToContainer(
+    renderCustomWidgetHost({
+      widget: params.widget ?? widget(),
+      manifest: params.manifest ?? manifest(),
+      context: params.context ?? host(),
+    }),
+  );
+  const iframe = container.querySelector("iframe");
+  if (!iframe) {
+    throw new Error("expected custom widget iframe");
+  }
+  const channel = new MessageChannel();
+  const posts: unknown[] = [];
+  channel.port1.addEventListener("message", (event) => posts.push(event.data));
+  channel.port1.start();
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: { v: 1, type: "workspace:bridge:init", token: BRIDGE_TOKEN },
+      source: iframe.contentWindow,
+      ports: [channel.port2],
+    }),
+  );
+  return {
+    childPort: channel.port1,
+    container,
+    iframe,
+    posts,
+    disconnect: () => render(nothing, container),
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.innerHTML = "";
-});
-
-describe("widgetAssetUrl", () => {
-  it("builds a URL under the plugin route with encoded segments", () => {
-    expect(widgetAssetUrl("", BRIDGE_TOKEN, "revenue-chart", "index.html")).toBe(
-      `/plugins/workspaces/widgets/${BRIDGE_TOKEN}/revenue-chart/index.html`,
-    );
-    expect(widgetAssetUrl("/base", "token value", "a b", "assets/app.js")).toBe(
-      "/base/plugins/workspaces/widgets/token%20value/a%20b/assets/app.js",
-    );
-  });
 });
 
 describe("loadWidgetManifestView", () => {
@@ -105,6 +128,19 @@ describe("loadWidgetManifestView", () => {
     const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
     expect(Object.keys(view?.bindings ?? {})).toEqual([]);
   });
+
+  it("refuses a manifest without the approved entrypoint", async () => {
+    const request = vi.fn(async () => ({
+      frameToken: "test-token-placeholder",
+      frameExpiresAt: FRAME_EXPIRES_AT,
+      manifest: {
+        bindings: [{ id: "value", source: "static", value: 1 }],
+        capabilities: ["data:read"],
+      },
+    }));
+
+    expect(await loadWidgetManifestView({ request } as never, "revenue-chart")).toBeNull();
+  });
 });
 
 describe("renderCustomWidgetHost DOM", () => {
@@ -140,46 +176,18 @@ describe("renderCustomWidgetHost DOM", () => {
   });
 });
 
-function connectWidgetBridge(params: {
-  iframe: HTMLIFrameElement;
-  widget?: WorkspaceWidget;
-  manifest?: WidgetManifestView;
-  context?: CustomWidgetHostContext;
-}): { childPort: MessagePort; detach: () => void; posts: unknown[] } {
-  const channel = new MessageChannel();
-  const posts: unknown[] = [];
-  channel.port1.addEventListener("message", (event) => posts.push(event.data));
-  channel.port1.start();
-  const detach = attachWidgetBridge({
-    iframe: params.iframe,
-    widget: params.widget ?? widget(),
-    manifest: params.manifest ?? manifest(),
-    context: params.context ?? host(),
-    bridgeToken: BRIDGE_TOKEN,
-  });
-  window.dispatchEvent(
-    new MessageEvent("message", {
-      data: { v: 1, type: "workspace:bridge:init", token: BRIDGE_TOKEN },
-      source: params.iframe.contentWindow,
-      ports: [channel.port2],
-    }),
-  );
-  return { childPort: channel.port1, detach, posts };
-}
-
-describe("attachWidgetBridge document-bound channel", () => {
-  it("drops a foreign bootstrap and accepts the iframe's token-bound port", async () => {
-    const iframe = document.createElement("iframe");
+describe("renderCustomWidgetHost bridge", () => {
+  it("drops a foreign bootstrap and accepts only its iframe document", async () => {
+    const container = renderToContainer(
+      renderCustomWidgetHost({ widget: widget(), manifest: manifest(), context: host() }),
+    );
+    const iframe = container.querySelector("iframe");
+    if (!iframe) {
+      throw new Error("expected custom widget iframe");
+    }
     const foreign = document.createElement("iframe");
-    document.body.append(iframe, foreign);
+    document.body.append(foreign);
     const foreignChannel = new MessageChannel();
-    const detach = attachWidgetBridge({
-      iframe,
-      widget: widget(),
-      manifest: manifest(),
-      context: host(),
-      bridgeToken: BRIDGE_TOKEN,
-    });
     window.dispatchEvent(
       new MessageEvent("message", {
         data: { v: 1, type: "workspace:bridge:init", token: BRIDGE_TOKEN },
@@ -187,7 +195,6 @@ describe("attachWidgetBridge document-bound channel", () => {
         ports: [foreignChannel.port2],
       }),
     );
-
     const channel = new MessageChannel();
     const posts: unknown[] = [];
     channel.port1.addEventListener("message", (event) => posts.push(event.data));
@@ -199,37 +206,31 @@ describe("attachWidgetBridge document-bound channel", () => {
         ports: [channel.port2],
       }),
     );
-    channel.port1.postMessage(
-      {
-        v: 1,
-        type: "workspace:getData",
-        requestId: "r2",
-        bindingId: "value",
-      },
-      [],
-    );
+    channel.port1.postMessage({
+      v: 1,
+      type: "workspace:getData",
+      requestId: "r2",
+      bindingId: "value",
+    });
 
     await vi.waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toMatchObject({ type: "workspace:data", requestId: "r2", bindingId: "value" });
-    foreignChannel.port1.close();
+    expect(posts[0]).toMatchObject({
+      type: "workspace:data",
+      requestId: "r2",
+      bindingId: "value",
+    });
     channel.port1.close();
-    detach();
+    foreignChannel.port1.close();
+    render(nothing, container);
   });
 
   it("sends an approved prompt with a gateway idempotency key", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const request = vi.fn(async (_method: string, _params: unknown) => ({
-      runId: "run-1",
-      status: "started",
-    }));
-    const { childPort, detach } = connectWidgetBridge({
-      iframe,
+    const request = vi.fn(async () => ({ runId: "run-1", status: "started" }));
+    const connected = connectRenderedWidget({
       manifest: manifest({ name: "prompt-send-test", capabilities: ["prompt:send"] }),
       context: host({ client: { request } as never, confirmPrompt: () => true }),
     });
-
-    childPort.postMessage(
+    connected.childPort.postMessage(
       {
         v: 1,
         type: "workspace:sendPrompt",
@@ -244,19 +245,78 @@ describe("attachWidgetBridge document-bound channel", () => {
       sessionKey: "main",
       message: "Summarize this workspace",
       deliver: false,
-      idempotencyKey: expect.any(String),
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
-    const payload = request.mock.calls[0]?.[1] as { idempotencyKey?: string } | undefined;
-    expect(payload?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
-    detach();
+    connected.childPort.close();
+    connected.disconnect();
   });
 
-  it("closes the document port on detach", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const { childPort, detach, posts } = connectWidgetBridge({ iframe });
-    detach();
-    childPort.postMessage(
+  it("closes the document port when the rendered widget detaches", async () => {
+    const connected = connectRenderedWidget({});
+    connected.disconnect();
+    connected.childPort.postMessage(
+      {
+        v: 1,
+        type: "workspace:getData",
+        requestId: "after-detach",
+        bindingId: "value",
+      },
+      [],
+    );
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(connected.posts).toEqual([]);
+    connected.childPort.close();
+  });
+
+  it("rejects a second bootstrap for the same iframe document", async () => {
+    const connected = connectRenderedWidget({});
+    const replacementInit = Object.fromEntries([
+      ["v", 1],
+      ["type", "workspace:bridge:init"],
+      ["token", BRIDGE_TOKEN],
+    ]);
+    const replacement = new MessageChannel();
+    const replacementPosts: unknown[] = [];
+    replacement.port1.addEventListener("message", (event) => replacementPosts.push(event.data));
+    replacement.port1.start();
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: replacementInit,
+        source: connected.iframe.contentWindow,
+        ports: [replacement.port2],
+      }),
+    );
+    replacement.port1.postMessage({
+      v: 1,
+      type: "workspace:getData",
+      requestId: "replacement",
+      bindingId: "value",
+    });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(replacementPosts).toEqual([]);
+    replacement.port1.close();
+    connected.childPort.close();
+    connected.disconnect();
+  });
+
+  it.each([
+    [{ source: "rpc", method: "sessions.delete" } as const],
+    [{ source: "rpc", method: "sessions.list" } as const],
+    [{ source: "file", path: "private.json" } as const],
+  ])("denies privileged binding %o without calling the gateway", async (binding) => {
+    const request = vi.fn(async () => ({ leaked: true }));
+    const connected = connectRenderedWidget({
+      widget: widget({ bindings: { value: binding } }),
+      manifest: manifest({ bindings: { value: binding } }),
+      context: host({ client: { request } as never }),
+    });
+    connected.childPort.postMessage(
       {
         v: 1,
         type: "workspace:getData",
@@ -265,132 +325,15 @@ describe("attachWidgetBridge document-bound channel", () => {
       },
       [],
     );
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-    expect(posts).toHaveLength(0);
-    childPort.close();
-  });
 
-  it("never accepts a replacement document's second bootstrap", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const { childPort, detach } = connectWidgetBridge({ iframe });
-    const replacement = new MessageChannel();
-    const replacementPosts: unknown[] = [];
-    replacement.port1.addEventListener("message", (event) => replacementPosts.push(event.data));
-    replacement.port1.start();
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: { v: 1, type: "workspace:bridge:init", token: BRIDGE_TOKEN },
-        source: iframe.contentWindow,
-        ports: [replacement.port2],
-      }),
-    );
-    replacement.port1.postMessage(
-      {
-        v: 1,
-        type: "workspace:getData",
-        requestId: "replacement",
-        bindingId: "value",
-      },
-      [],
-    );
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-
-    expect(replacementPosts).toHaveLength(0);
-    childPort.close();
-    replacement.port1.close();
-    detach();
-  });
-});
-
-describe("attachWidgetBridge privileged-data boundary", () => {
-  it("denies an rpc binding without calling the gateway", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const request = vi.fn(async () => ({ leaked: true }));
-    const { childPort, detach, posts } = connectWidgetBridge({
-      iframe,
-      widget: widget({ bindings: { value: { source: "rpc", method: "sessions.delete" } } }),
-      manifest: manifest({
-        bindings: { value: { source: "rpc", method: "sessions.delete" } },
-      }),
-      context: host({ client: { request } as never }),
-    });
-    childPort.postMessage(
-      { v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" },
-      [],
-    );
-    await vi.waitFor(() => expect(posts.length).toBeGreaterThan(0));
-    expect(posts[0]).toMatchObject({
+    await vi.waitFor(() => expect(connected.posts.length).toBeGreaterThan(0));
+    expect(connected.posts[0]).toMatchObject({
       type: "workspace:error",
       code: "binding_denied",
       requestId: "r1",
     });
     expect(request).not.toHaveBeenCalled();
-    detach();
-  });
-
-  it("denies an allowlisted rpc binding without calling the gateway", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const request = vi.fn(async () => ({ sessions: [] }));
-    const { childPort, detach, posts } = connectWidgetBridge({
-      iframe,
-      widget: widget({ bindings: { value: { source: "rpc", method: "sessions.list" } } }),
-      manifest: manifest({ bindings: { value: { source: "rpc", method: "sessions.list" } } }),
-      context: host({ client: { request } as never }),
-    });
-    childPort.postMessage(
-      { v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" },
-      [],
-    );
-    await vi.waitFor(() => expect(posts.length).toBeGreaterThan(0));
-    expect(posts[0]).toMatchObject({
-      type: "workspace:error",
-      code: "binding_denied",
-      requestId: "r1",
-    });
-    expect(request).not.toHaveBeenCalled();
-    detach();
-  });
-
-  it("denies a file binding without reading through the gateway", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.appendChild(iframe);
-    const request = vi.fn(async () => ({ secret: true }));
-    const { childPort, detach, posts } = connectWidgetBridge({
-      iframe,
-      widget: widget({ bindings: { value: { source: "file", path: "private.json" } } }),
-      manifest: manifest({ bindings: { value: { source: "file", path: "private.json" } } }),
-      context: host({ client: { request } as never }),
-    });
-    childPort.postMessage(
-      { v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" },
-      [],
-    );
-    await vi.waitFor(() => expect(posts.length).toBeGreaterThan(0));
-    expect(posts[0]).toMatchObject({
-      type: "workspace:error",
-      code: "binding_denied",
-      requestId: "r1",
-    });
-    expect(request).not.toHaveBeenCalled();
-    detach();
-  });
-
-  it("refuses a manifest with no entrypoint", async () => {
-    // The approval gate hashes the declared entrypoint; without one there is no
-    // approved file to load, so nothing should mount.
-    const request = vi.fn(async () => ({
-      frameToken: BRIDGE_TOKEN,
-      frameExpiresAt: FRAME_EXPIRES_AT,
-      manifest: { bindings: [], capabilities: [] },
-    }));
-
-    expect(await loadWidgetManifestView({ request } as never, "revenue-chart")).toBeNull();
+    connected.childPort.close();
+    connected.disconnect();
   });
 });

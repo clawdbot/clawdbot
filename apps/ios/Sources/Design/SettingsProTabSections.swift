@@ -157,6 +157,11 @@ extension SettingsProTab {
                 title: "Channels",
                 route: .channels)
             self.settingsListRow(
+                icon: "sparkles",
+                iconColor: OpenClawBrand.accent,
+                title: "Skills",
+                route: .skills)
+            self.settingsListRow(
                 icon: "waveform",
                 iconColor: .pink,
                 title: "Voice & Talk",
@@ -226,6 +231,10 @@ extension SettingsProTab {
             SettingsChannelsDestination()
                 .navigationTitle(title(for: route))
                 .navigationBarTitleDisplayMode(.inline)
+        case .skills:
+            SettingsSkillsDestination()
+                .navigationTitle(title(for: route))
+                .navigationBarTitleDisplayMode(.inline)
         default:
             List {
                 switch route {
@@ -237,6 +246,8 @@ extension SettingsProTab {
                     self.approvalsDestination
                 case .permissions:
                     self.permissionsDestination
+                case .skills:
+                    EmptyView()
                 case .voice:
                     self.voiceDestination
                 case .diagnostics:
@@ -271,32 +282,27 @@ extension SettingsProTab {
                         .font(OpenClawType.headline)
                         .foregroundStyle(.primary)
                 }
+                if route == .gateway {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            self.openGatewayQRScanner()
+                        } label: {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .disabled(self.connectingGateway != nil)
+                        .accessibilityLabel("Scan QR")
+                    }
+                }
             }
         }
     }
 
+    /// Ordered by intent: connection state, then pairing (the first-run action),
+    /// then facts/preferences; manual entry and credentials are plumbing at the end.
     var gatewayDestination: some View {
         Group {
-            self.detailStatusCard(
-                icon: "antenna.radiowaves.left.and.right",
-                title: "Gateway",
-                detail: .verbatim(self.gatewayStatusDetail),
-                value: .verbatim(self.gatewayStatusValue),
-                color: self.gatewayStatusColor)
-
-            self.detailListCard {
-                SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
-                SettingsDetailRow("Server", value: .verbatim(self.gatewayServer))
-                SettingsDetailRow(
-                    "Discovered",
-                    value: .verbatim(self.gatewayController.gateways.count.formatted()))
-                SettingsDetailRow(
-                    "Default Agent",
-                    value: .verbatim(self.appModel.activeAgentName))
-                SettingsDetailRow(
-                    "Agents",
-                    value: .verbatim(self.appModel.gatewayAgents.count.formatted()))
-            }
+            self.gatewayStatusCard
 
             Section {
                 Button {
@@ -315,15 +321,78 @@ extension SettingsProTab {
                 .disabled(self.isRefreshingGateway)
             }
 
-            self.manualGatewayCard
-            self.pairedGatewaysCard
-            self.deviceIdentityCard
-            self.agentSelectionCard
             self.gatewaySetupCard
-            self.discoveredGatewaysCard
+            self.pairedGatewaysCard
+
+            self.detailListCard {
+                SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
+                SettingsDetailRow("Server", value: .verbatim(self.gatewayServer))
+                SettingsDetailRow(
+                    "Discovered",
+                    value: .verbatim(self.gatewayController.gateways.count.formatted()))
+                SettingsDetailRow(
+                    "Default Agent",
+                    value: .verbatim(self.appModel.activeAgentName))
+                SettingsDetailRow(
+                    "Agents",
+                    value: .verbatim(self.appModel.gatewayAgents.count.formatted()))
+                SettingsDetailRow(
+                    "Access",
+                    value: .verbatim(
+                        self.appModel.isOperatorGatewayConnected
+                            ? (self.appModel.hasOperatorAdminScope ? "Full" : "Limited")
+                            : "Not available"))
+            }
+
+            if self.appModel.isOperatorGatewayConnected,
+               !self.appModel.hasOperatorAdminScope
+            {
+                Section("Upgrade access") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("This phone has limited Gateway access.")
+                            .font(OpenClawType.subheadSemiBold)
+                        Text(
+                            "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.") // swiftlint:disable:this line_length
+                            .font(OpenClawType.caption) // Keep the native localization key contiguous.
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button {
+                        self.openGatewayQRScanner()
+                    } label: {
+                        Label("Scan Full-Access Code", systemImage: "qrcode.viewfinder")
+                            .font(OpenClawType.body)
+                    }
+                }
+            }
+
+            self.agentSelectionCard
+            self.deviceIdentityCard
+            self.manualGatewayCard
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
+    }
+
+    private var gatewayStatusCard: some View {
+        // Hero pairing action honors the same connect lock as the other scanner
+        // entry points; an in-flight attempt must not race a second scan.
+        let showScanHero = self.gatewayNeedsPairing && self.connectingGateway == nil
+        // Unapplied `self.openGatewayQRScanner` in a ternary crashes the Swift 6
+        // type checker ("failed to produce diagnostic"); build the optional closure imperatively.
+        var scanAction: (() -> Void)?
+        if showScanHero {
+            scanAction = { self.openGatewayQRScanner() }
+        }
+        return self.detailStatusCard(
+            icon: "antenna.radiowaves.left.and.right",
+            title: "Gateway",
+            detail: .verbatim(self.gatewayStatusDetail),
+            value: .verbatim(self.gatewayStatusValue),
+            color: self.gatewayStatusColor,
+            actionTitle: showScanHero ? "Scan QR to Pair" : nil,
+            actionSystemImage: "qrcode.viewfinder",
+            action: scanAction)
     }
 
     var gatewayQuickSwitchMenu: some View {
@@ -767,7 +836,7 @@ extension SettingsProTab {
 
     /// Native inset-grouped action row (plain tinted text, no pill chrome).
     func gatewayActionButton(
-        title: String,
+        title: LocalizedStringKey,
         icon: String,
         color: Color,
         isBusy: Bool,
@@ -788,7 +857,7 @@ extension SettingsProTab {
         .buttonStyle(.plain)
         .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(title))
     }
 
     var aboutDestination: some View {
@@ -979,13 +1048,10 @@ extension SettingsProTab {
         }
     }
 
+    /// One section owns the whole pairing story: scan, paste, and discovered
+    /// gateways; splitting these across the page hid Scan QR below plumbing.
     var gatewaySetupCard: some View {
         Section {
-            TextField("Paste setup code", text: self.$setupCode)
-                .font(OpenClawType.body)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .disabled(self.connectingGateway != nil)
             self.gatewayActionButton(
                 title: "Scan QR",
                 icon: "qrcode.viewfinder",
@@ -995,31 +1061,20 @@ extension SettingsProTab {
             {
                 self.openGatewayQRScanner()
             }
-
+            TextField("Paste setup code", text: self.$setupCode)
+                .font(OpenClawType.body)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .disabled(self.connectingGateway != nil)
             self.gatewayActionButton(
                 title: "Connect",
                 icon: "bolt.horizontal.circle",
                 color: OpenClawBrand.accent,
-                isBusy: self.connectingGateway == .manual,
+                isBusy: self.setupAttemptID != nil,
                 isDisabled: !self.canApplyGatewaySetup || self.connectingGateway != nil)
             {
                 Task { await self.applySetupCodeAndConnect() }
             }
-        } header: {
-            Text("Setup Code")
-                .font(OpenClawType.subheadSemiBold)
-        } footer: {
-            if let warning = self.tailnetWarningText {
-                Text(warning).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.warn)
-            } else if let status = self.setupStatusLine {
-                Text(status)
-                    .font(OpenClawType.footnote)
-            }
-        }
-    }
-
-    var discoveredGatewaysCard: some View {
-        Section("Discovered Gateways") {
             if self.gatewayController.gateways.isEmpty {
                 Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
                     .font(OpenClawType.subhead)
@@ -1028,6 +1083,16 @@ extension SettingsProTab {
                 ForEach(self.gatewayController.gateways) { gateway in
                     self.discoveredGatewayRow(gateway)
                 }
+            }
+        } header: {
+            Text("Add Gateway")
+                .font(OpenClawType.subheadSemiBold)
+        } footer: {
+            if let warning = self.tailnetWarningText {
+                Text(warning).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.warn)
+            } else if let status = self.setupStatusLine {
+                Text(status)
+                    .font(OpenClawType.footnote)
             }
         }
     }

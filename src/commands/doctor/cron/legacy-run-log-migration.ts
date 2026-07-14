@@ -1,76 +1,35 @@
-// Legacy cron JSONL run-log migration into the SQLite cron run-log store.
+// Legacy cron JSONL run-log migration into the authoritative task ledger.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { parseCronRunLogEntriesFromJsonl } from "../../../cron/run-log-jsonl.js";
-import {
-  appendCronRunLog,
-  readCronRunLogEntriesPage,
-  type CronRunLogEntry,
-} from "../../../cron/run-log.js";
+import type { CronRunLogEntry } from "../../../cron/run-log-types.js";
+import { cronStoreKey } from "../../../cron/store/key.js";
+import { parseCronRunLogEntryObject } from "../../../cron/task-run-detail.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "../../../infra/state-migrations.cron-run-logs.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 
 const LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX = ".migrated";
 
-function legacyRunLogKey(entry: CronRunLogEntry): string {
-  return [
-    entry.jobId,
-    entry.ts,
-    entry.runId ?? "",
-    entry.status ?? "",
-    entry.summary ?? "",
-    entry.error ?? "",
-  ].join("\0");
-}
-
-async function readExistingRunLogKeys(params: {
-  storePath: string;
-  jobId: string;
-}): Promise<Set<string>> {
-  const keys = new Set<string>();
-  let offset = 0;
-  while (true) {
-    const page = await readCronRunLogEntriesPage({
-      storePath: params.storePath,
-      jobId: params.jobId,
-      limit: 200,
-      offset,
-      sortDir: "asc",
-    });
-    for (const entry of page.entries) {
-      keys.add(legacyRunLogKey(entry));
-    }
-    if (!page.hasMore) {
-      return keys;
-    }
-    offset = page.nextOffset ?? offset + page.entries.length;
-  }
-}
-
-async function importLegacyCronRunLog(
-  filePath: string,
-  params: { storePath: string; jobId: string },
-) {
-  const resolved = path.resolve(filePath);
-  if (!fsSync.existsSync(resolved)) {
-    return;
-  }
-
-  const existingKeys = await readExistingRunLogKeys(params);
-  const raw = fsSync.readFileSync(resolved, "utf-8");
-  for (const entry of parseCronRunLogEntriesFromJsonl(raw, { jobId: params.jobId })) {
-    const key = legacyRunLogKey(entry);
-    if (existingKeys.has(key)) {
+function parseCronRunLogEntriesFromJsonl(
+  raw: string,
+  opts?: { jobId?: string },
+): CronRunLogEntry[] {
+  const entries: CronRunLogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
       continue;
     }
-    existingKeys.add(key);
-    await appendCronRunLog({
-      storePath: params.storePath,
-      entry,
-      opts: { keepLines: false },
-    });
+    try {
+      const entry = parseCronRunLogEntryObject(JSON.parse(trimmed), opts);
+      if (entry) {
+        entries.push(entry);
+      }
+    } catch {
+      // A malformed legacy line must not block import of the remaining history.
+    }
   }
-
-  archiveLegacyCronRunLogSync(resolved);
+  return entries;
 }
 
 function archiveLegacyCronRunLogSync(filePath: string): void {
@@ -81,11 +40,11 @@ function archiveLegacyCronRunLogSync(filePath: string): void {
   try {
     fsSync.renameSync(filePath, archivePath);
   } catch {
-    // Best-effort cleanup after durable SQLite import.
+    // Best-effort cleanup after durable task-ledger import.
   }
 }
 
-/** Import legacy per-job JSONL run logs into SQLite and archive migrated files. */
+/** Import legacy per-job JSONL run logs into task_runs and archive migrated files. */
 export async function migrateLegacyCronRunLogsToSqlite(
   storePath: string,
 ): Promise<{ importedFiles: number }> {
@@ -93,15 +52,42 @@ export async function migrateLegacyCronRunLogsToSqlite(
   const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");
   const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
   const jsonlFiles = files.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
-
-  for (const file of jsonlFiles) {
-    const jobId = path.basename(file.name, ".jsonl");
-    await importLegacyCronRunLog(path.join(runsDir, file.name), {
-      storePath: resolvedStorePath,
-      jobId,
-    });
+  if (jsonlFiles.length === 0) {
+    return { importedFiles: 0 };
   }
 
+  for (const file of jsonlFiles) {
+    const filePath = path.join(runsDir, file.name);
+    const jobId = path.basename(file.name, ".jsonl");
+    const entries = parseCronRunLogEntriesFromJsonl(fsSync.readFileSync(filePath, "utf-8"), {
+      jobId,
+    });
+
+    runOpenClawStateWriteTransaction(({ db }) => {
+      db.exec(`
+        CREATE TABLE cron_run_logs (
+          store_key TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          ts INTEGER NOT NULL,
+          entry_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (store_key, job_id, seq)
+        );
+      `);
+      const insert = db.prepare(
+        `INSERT INTO cron_run_logs
+          (store_key, job_id, seq, ts, entry_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      const storeKey = cronStoreKey(resolvedStorePath);
+      for (const [index, entry] of entries.entries()) {
+        insert.run(storeKey, jobId, index + 1, entry.ts, JSON.stringify(entry), Date.now());
+      }
+      migrateLegacyCronRunLogsToTaskRuns(db);
+    });
+    archiveLegacyCronRunLogSync(filePath);
+  }
   return { importedFiles: jsonlFiles.length };
 }
 

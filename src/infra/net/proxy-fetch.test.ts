@@ -2,7 +2,6 @@
 // FormData conversion, metadata markers, and proxy env recovery.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
@@ -149,12 +148,9 @@ describe("makeProxyFetch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resetActiveManagedProxyStateForTests();
   });
 
-  afterEach(() => {
-    resetActiveManagedProxyStateForTests();
-  });
+  afterEach(() => {});
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
@@ -338,12 +334,10 @@ describe("resolveProxyFetchFromEnv", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
-    resetActiveManagedProxyStateForTests();
     clearProxyEnv();
   });
   afterEach(() => {
     vi.unstubAllEnvs();
-    resetActiveManagedProxyStateForTests();
     restoreProxyEnv();
   });
 

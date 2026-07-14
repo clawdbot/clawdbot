@@ -53,8 +53,6 @@ import {
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
-export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
-
 type GatewayInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;

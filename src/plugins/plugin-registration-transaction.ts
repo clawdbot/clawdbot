@@ -96,7 +96,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   Object.assign(registry, snapshot);
 }
 
-export type PluginRegistrationTransaction = {
+type PluginRegistrationTransaction = {
   commit: (params: { activate: boolean }) => void;
   rollback: () => void;
 };

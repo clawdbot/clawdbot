@@ -29,6 +29,21 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
+    @Test func `worker allows a generous cold-start window`() async throws {
+        #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
+
+        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        let script = """
+        sleep 0.1
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
+        while IFS= read -r line; do :; done
+        """
+
+        let manifest = try await worker.start(command: ["/bin/sh", "-c", script])
+        #expect(manifest.version == "test")
+        await worker.stop()
+    }
+
     @Test func `Mac runtime forwards CLI node commands to the shared worker`() async {
         let worker = StubMacNodeHostWorker()
         let runtime = MacNodeRuntime(nodeHostWorker: worker)

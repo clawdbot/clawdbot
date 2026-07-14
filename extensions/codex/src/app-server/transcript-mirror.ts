@@ -1,4 +1,3 @@
-// Codex plugin module implements transcript mirror behavior.
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
@@ -21,8 +20,7 @@ import type { CodexThread, JsonValue } from "./protocol.js";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
-
-export type CodexAppServerTranscriptMirrorResult = {
+type CodexAppServerTranscriptMirrorResult = {
   assistantMirrorIdentitiesOwned: string[];
   userMessagesPresent: MirroredUserMessage[];
 };
@@ -46,12 +44,12 @@ const CODEX_HISTORY_ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export type CodexThreadHistoryImportResult = {
+type CodexThreadHistoryImportResult = {
   importedMessages: number;
   omittedMessages: number;
 };
 
-export type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
 };
@@ -293,7 +291,7 @@ export async function importCodexThreadHistoryToTranscript(params: {
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   if (projection.transcriptMessages.length > 0) {
-    await mirrorCodexAppServerTranscript({
+    await mirror({
       storePath: params.storePath,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -386,7 +384,7 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   );
 }
 
-export async function buildResolvedCodexUserPromptMessage(
+async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
 ): Promise<AgentMessage> {
   const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
@@ -396,7 +394,7 @@ export async function buildResolvedCodexUserPromptMessage(
   );
 }
 
-export async function mirrorTranscriptBestEffort(params: {
+async function mirrorBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
   notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
@@ -412,7 +410,7 @@ export async function mirrorTranscriptBestEffort(params: {
       messagesSnapshot: params.result.messagesSnapshot,
       turnId: params.turnId,
     });
-    const mirrorResult = await mirrorCodexAppServerTranscript({
+    const mirrorResult = await mirror({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
@@ -443,7 +441,7 @@ export async function mirrorTranscriptBestEffort(params: {
   }
 }
 
-export async function resolveFinalCodexMirrorMessages(params: {
+async function resolveFinalCodexMirrorMessages(params: {
   params: EmbeddedRunAttemptParams;
   messagesSnapshot: AgentMessage[];
   turnId: string;
@@ -505,7 +503,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         await buildResolvedCodexUserPromptMessage(params.params),
         `${params.turnId}:prompt`,
       );
-      const mirrorResult = await mirrorCodexAppServerTranscript({
+      const mirrorResult = await mirror({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,
@@ -577,7 +575,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
   return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
 }
 
-export async function mirrorCodexAppServerTranscript(params: {
+async function mirror(params: {
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
@@ -717,6 +715,8 @@ export async function mirrorCodexAppServerTranscript(params: {
 
   return { assistantMirrorIdentitiesOwned, userMessagesPresent };
 }
+
+export const codexTranscriptMirrorRuntime = { mirror, mirrorBestEffort };
 
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;

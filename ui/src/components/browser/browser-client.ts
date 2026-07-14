@@ -4,6 +4,7 @@
 // that is dispatched against the browser plugin's control routes, either
 // locally or via a browser-capable node. This module narrows the handful of
 // routes the browser panel needs and keeps route-path knowledge in one place.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
@@ -21,12 +22,12 @@ export type BrowserPanelTab = {
   url: string;
 };
 
-export type BrowserTabsSnapshot = {
+type BrowserTabsSnapshot = {
   running: boolean;
   tabs: BrowserPanelTab[];
 };
 
-export type BrowserScreenshotCapture = {
+type BrowserScreenshotCapture = {
   path: string;
   targetId: string;
   url: string;
@@ -61,12 +62,6 @@ type BrowserRequestEnvelope = {
 
 function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserRequestEnvelope) {
   return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function asString(value: unknown): string {

@@ -163,7 +163,3 @@ export function resolveMessageActionTurnCapability(params: {
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {
   return token ? capabilitiesByToken.delete(token) : false;
 }
-
-export function resetMessageActionTurnCapabilitiesForTest(): void {
-  capabilitiesByToken.clear();
-}

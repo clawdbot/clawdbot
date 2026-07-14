@@ -50,6 +50,7 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawProtocol",
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
@@ -59,7 +60,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "OpenClawKitTests",
-            dependencies: ["OpenClawKit", "OpenClawChatUI"],
+            dependencies: ["OpenClawKit", "OpenClawChatUI", "OpenClawProtocol"],
             path: "Tests/OpenClawKitTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

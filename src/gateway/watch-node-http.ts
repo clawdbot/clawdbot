@@ -1080,9 +1080,3 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   };
 }
-
-export const testing = {
-  createChallengeStore,
-  hasOnlyBoundedWatchSurface,
-  isCanonicalWatchNode,
-};

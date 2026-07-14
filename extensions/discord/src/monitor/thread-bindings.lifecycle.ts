@@ -1,12 +1,12 @@
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements thread bindings.lifecycle behavior.
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -52,37 +52,6 @@ type AcpThreadBindingHealthProbe = (params: {
 
 // Cap startup fan-out so large binding sets do not create unbounded ACP probe spikes.
 const ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT = 8;
-
-async function mapWithConcurrency<TItem, TResult>(params: {
-  items: TItem[];
-  limit: number;
-  worker: (item: TItem, index: number) => Promise<TResult>;
-}): Promise<TResult[]> {
-  if (params.items.length === 0) {
-    return [];
-  }
-  const limit = Math.max(1, Math.floor(params.limit));
-  const resultsByIndex = new Map<number, TResult>();
-  let nextIndex = 0;
-
-  const runWorker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= params.items.length) {
-        return;
-      }
-      const item = expectDefined(params.items[index], "bounded worker item index");
-      resultsByIndex.set(index, await params.worker(item, index));
-    }
-  };
-
-  const workers = Array.from({ length: Math.min(limit, params.items.length) }, () => runWorker());
-  await Promise.all(workers);
-  return params.items.map((_item, index) =>
-    expectDefined(resultsByIndex.get(index), "completed bounded worker result"),
-  );
-}
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
@@ -297,10 +266,9 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   }
 
   if (params.healthProbe && probeTargets.length > 0) {
-    const probeResults = await mapWithConcurrency({
-      items: probeTargets,
-      limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
-      worker: async ({ binding, sessionKey, session }) => {
+    const probeResults = await pMap(
+      probeTargets,
+      async ({ binding, sessionKey, session }) => {
         try {
           const result = await params.healthProbe?.({
             cfg: params.cfg,
@@ -321,7 +289,11 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
           };
         }
       },
-    });
+      {
+        concurrency: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
+        stopOnError: true,
+      },
+    );
 
     for (const probeResult of probeResults) {
       if (probeResult.status === "stale") {

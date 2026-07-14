@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { fetchSessionMenuWork, pickSessionMenuPullRequestUrl } from "./session-menu-work.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
 
 function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
   return {
@@ -14,19 +14,6 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
     ...overrides,
   };
 }
-
-describe("pickSessionMenuPullRequestUrl", () => {
-  it("prefers active PRs over merged and closed ones", () => {
-    expect(
-      pickSessionMenuPullRequestUrl([
-        pullRequest({ state: "closed", url: "https://example.test/closed" }),
-        pullRequest({ state: "merged", url: "https://example.test/merged" }),
-        pullRequest({ state: "draft", url: "https://example.test/draft" }),
-      ]),
-    ).toBe("https://example.test/draft");
-    expect(pickSessionMenuPullRequestUrl([])).toBeNull();
-  });
-});
 
 describe("fetchSessionMenuWork", () => {
   it("resolves the PR URL and worktree path in one pass", async () => {

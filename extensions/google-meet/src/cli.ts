@@ -11,6 +11,7 @@ import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import prettyMilliseconds from "pretty-ms";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -344,13 +345,11 @@ function formatDuration(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  const totalSeconds = Math.round(value / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return hours > 0
-    ? `${hours}h ${minutes.toString().padStart(2, "0")}m`
-    : `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  return prettyMilliseconds(Math.max(0, Math.round(value / 1000) * 1000), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }
 
 function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {

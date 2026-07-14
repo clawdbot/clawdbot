@@ -15,19 +15,19 @@ import {
 import { loadSessionEntry, type SessionAccessScope } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
-export type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {
+type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {
   now?: number;
   resetOverride?: SessionResetConfig;
   resetType: SessionResetType;
   sessionCfg?: SessionConfig;
 };
 
-export type SessionEntryLifecycleTimestamps = {
+type SessionEntryLifecycleTimestamps = {
   sessionStartedAt?: number;
   lastInteractionAt?: number;
 };
 
-export type ResolvedSessionEntryResetFreshness =
+type ResolvedSessionEntryResetFreshness =
   | {
       state: "missing";
       entry: undefined;

@@ -17,13 +17,13 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export type RestartSentinelLog = {
+type RestartSentinelLog = {
   stdoutTail?: string | null;
   stderrTail?: string | null;
   exitCode?: number | null;
 };
 
-export type RestartSentinelStep = {
+type RestartSentinelStep = {
   name: string;
   command: string;
   cwd?: string | null;
@@ -31,7 +31,7 @@ export type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
-export type RestartSentinelStats = {
+type RestartSentinelStats = {
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
@@ -74,7 +74,7 @@ export type RestartSentinelPayload = {
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinel = {
+type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
 };

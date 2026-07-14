@@ -72,14 +72,3 @@ export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env):
 export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
   return readExtensionRelayToken(env);
 }
-
-/**
- * Constant-time token comparison. Both sides are hashed to a fixed length
- * before timingSafeEqual so no length short-circuit leaks token length.
- */
-export function extensionRelayTokenMatches(expected: string, candidate: string): boolean {
-  return crypto.timingSafeEqual(
-    crypto.createHash("sha256").update(expected).digest(),
-    crypto.createHash("sha256").update(candidate).digest(),
-  );
-}

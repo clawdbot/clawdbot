@@ -1,8 +1,5 @@
 // Normalizes provider model compatibility metadata from plugins.
-import {
-  resolveUnsupportedToolSchemaKeywords,
-  shouldOmitEmptyArrayItems,
-} from "@openclaw/ai/internal/openai";
+import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
 import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
@@ -60,7 +57,7 @@ export function resolveToolCallArgumentsEncoding(
 
 // Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
 // re-export so existing core/plugin callers keep one canonical import site.
-export { resolveUnsupportedToolSchemaKeywords, shouldOmitEmptyArrayItems };
+export { resolveUnsupportedToolSchemaKeywords };
 
 function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";

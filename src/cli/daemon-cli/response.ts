@@ -10,10 +10,10 @@ import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 
 /** Gateway service action emitted by lifecycle commands. */
-export type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
+type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
 /** Stable hint category for machine-readable daemon command output. */
-export type DaemonHintKind =
+type DaemonHintKind =
   | "install"
   | "container-restart"
   | "container-foreground"
@@ -23,7 +23,7 @@ export type DaemonHintKind =
   | "generic";
 
 /** Classified daemon recovery hint item. */
-export type DaemonHintItem = {
+type DaemonHintItem = {
   kind: DaemonHintKind;
   text: string;
 };

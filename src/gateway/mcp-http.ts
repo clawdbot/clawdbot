@@ -50,11 +50,6 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
-export {
-  createMcpAttachGrantServerConfig,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-} from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
   port: number;
@@ -156,7 +151,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-export async function startMcpLoopbackServer(port = 0): Promise<{
+async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {

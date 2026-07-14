@@ -14,7 +14,7 @@ import {
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-registry.js";
 
-export type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
+type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
   startupPluginCount: number;
   deferredChannelPluginCount: number;
@@ -26,7 +26,7 @@ export type PluginLookUpTable = PluginMetadataSnapshot & {
   metrics: PluginLookUpTableMetrics;
 };
 
-export type LoadPluginLookUpTableParams = {
+type LoadPluginLookUpTableParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
@@ -36,15 +36,10 @@ export type LoadPluginLookUpTableParams = {
   workerProviderIds?: readonly string[];
 };
 
-let lookupTableMemoBySnapshot = new WeakMap<
+const lookupTableMemoBySnapshot = new WeakMap<
   PluginMetadataSnapshot,
   Map<string, PluginLookUpTable>
 >();
-
-export function clearPluginLookUpTableMemoForTest(): void {
-  lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
-}
-
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);

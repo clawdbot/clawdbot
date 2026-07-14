@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
-import { resolvePrecomputedSubcommandHelpCommand } from "./precomputed-help.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -130,6 +129,45 @@ describe("rewriteUpdateFlagArgv", () => {
       "--json",
     ]);
   });
+
+  it("does not rewrite --update after -- positional terminator", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
+  });
+
+  it("does not rewrite --update when a subcommand appears before it", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
+  });
+
+  it("does not rewrite --update that appears as a value after a subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--update"])).toEqual(
+      ["node", "entry.js", "config", "set", "foo", "--update"],
+    );
+  });
+
+  it("rewrites --update when it appears before any subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "config", "set", "foo"])).toEqual(
+      ["node", "entry.js", "update", "config", "set", "foo"],
+    );
+  });
+
+  it("rewrites --update after root boolean flags", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "--update"])).toEqual([
+      "node",
+      "entry.js",
+      "--no-color",
+      "update",
+    ]);
+  });
+
+  it("does not skip root boolean flag followers as option values", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "status", "--update"])).toEqual(
+      ["node", "entry.js", "--no-color", "status", "--update"],
+    );
+  });
 });
 
 describe("shouldEnsureCliPath", () => {
@@ -190,6 +228,16 @@ describe("shouldStartProxyForCli", () => {
     expect(shouldStartProxyForCli(["node", "openclaw", "devices"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
   });
+
+  it("skips managed proxy routing before shared-state SQLite maintenance", () => {
+    expect(
+      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite", "compact", "--json"]),
+    ).toBe(false);
+    expect(
+      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite=compact", "--json"]),
+    ).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "doctor", "--lint"])).toBe(true);
+  });
 });
 
 describe("shouldUseRootHelpFastPath", () => {
@@ -234,70 +282,6 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
     ).toBe(false);
-  });
-});
-
-describe("resolvePrecomputedSubcommandHelpCommand", () => {
-  it("matches only strict allowlisted parent command help", () => {
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help"])).toBe(
-      "doctor",
-    );
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-h"])).toBe(
-      "gateway",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand([
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "--no-color",
-        "models",
-        "-h",
-      ]),
-    ).toBe("models");
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "plugins", "--help"])).toBe(
-      "plugins",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "sessions", "--help"]),
-    ).toBe("sessions");
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "tasks", "-h"])).toBe(
-      "tasks",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-V"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand([
-        "node",
-        "openclaw",
-        "doctor",
-        "--help",
-        "--version",
-      ]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version", "-h"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "--bogus", "doctor", "--help"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "--bogus"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "extra"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "status", "--help"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "status", "--help"]),
-    ).toBeNull();
   });
 });
 

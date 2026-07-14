@@ -8,7 +8,7 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "../plugins/bundled-compat.js";
-import { testing as loaderTesting } from "../plugins/loader.js";
+import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -92,7 +92,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
     pluginIds,
     env: process.env,
   });
-  const { cacheKey } = loaderTesting.resolvePluginLoadCacheContext({
+  const cacheKey = resolvePluginRegistryLoadCacheKey({
     config: compatibleConfig,
     env: process.env,
   });

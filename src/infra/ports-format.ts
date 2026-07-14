@@ -127,7 +127,7 @@ function parseGatewayListeners(
 }
 
 /** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
-export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
+function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
   }
@@ -231,7 +231,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
 }
 
 /** Formats one listener row for CLI diagnostics. */
-export function formatPortListener(listener: PortListener): string {
+function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
   const command = listener.commandLine || listener.command || "unknown";

@@ -21,14 +21,14 @@ import type {
 } from "./embedding-provider-types.js";
 
 /** Provider id for OpenAI-compatible remote embedding servers. */
-export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 
 /** Normalized OpenAI-compatible embedding client configuration. */
-export type OpenAICompatibleEmbeddingClient = {
+type OpenAICompatibleEmbeddingClient = {
   providerId: string;
   baseUrl: string;
   headers: Record<string, string>;
@@ -442,7 +442,7 @@ async function createOpenAICompatibleEmbeddingClient(
 }
 
 /** Creates an OpenAI-compatible embedding provider and its backing client. */
-export async function createOpenAICompatibleEmbeddingProvider(
+async function createOpenAICompatibleEmbeddingProvider(
   options: EmbeddingProviderCreateOptions,
 ): Promise<{
   provider: EmbeddingProvider;

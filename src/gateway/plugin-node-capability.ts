@@ -119,7 +119,7 @@ export function buildPluginNodeCapabilityScopedHostUrl(
 }
 
 /** Replace the capability segment in an already scoped host URL. */
-export function replacePluginNodeCapabilityInScopedHostUrl(
+function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
 ): string | undefined {

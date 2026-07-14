@@ -988,7 +988,7 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   }
 }
 
-export function renderChatQueue(props: ChatQueueProps) {
+function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
   if (!visibleQueue.length) {
     return nothing;
@@ -1440,7 +1440,7 @@ type ComposerRunStatus =
 // readers get the composer's persistent sr-only run-status region).
 // Interrupted keeps a visible toast: the transcript shows nothing when a run
 // is killed, so silence would read as "finished".
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
   if (status?.phase !== "interrupted") {
     return nothing;
   }
@@ -1459,7 +1459,7 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
   `;
 }
 
-export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1491,7 +1491,7 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
   return nothing;
 }
 
-export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1627,11 +1627,7 @@ function getThemeNoticeColors() {
   return cachedThemeNoticeColors;
 }
 
-export function resetContextNoticeThemeCacheForTest(): void {
-  cachedThemeNoticeColors = null;
-}
-
-export function getContextNoticeViewModel(
+function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ): {
@@ -1828,6 +1824,11 @@ function renderQuotaGroup(
         ${icons.externalLink}
       </a>
     </div>
+    ${group.accountEmail
+      ? html`<div class="context-usage__account" data-chat-usage-account="true">
+          ${group.accountEmail}
+        </div>`
+      : nothing}
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
@@ -1835,7 +1836,7 @@ function renderQuotaGroup(
   `;
 }
 
-export function renderContextNotice(
+function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
@@ -2034,7 +2035,7 @@ export function renderContextNotice(
   `;
 }
 
-export type ChatRunControlsProps = {
+type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
   connected: boolean;
@@ -2129,7 +2130,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                       ?disabled=${!props.canSend || props.sending}
                       aria-label=${t("chat.runControls.queueMessage")}
                     >
-                      ${icons.send}
+                      ${icons.arrowUp}
                       <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
                     </button>
                   </openclaw-tooltip>
@@ -2159,7 +2160,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                     ? t("chat.runControls.queueMessage")
                     : t("chat.runControls.sendMessage")}
                 >
-                  ${icons.send}
+                  ${icons.arrowUp}
                   <span class="agent-chat__control-label"
                     >${props.isBusy
                       ? t("chat.runControls.queue")
@@ -2183,46 +2184,6 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 </button>
               </openclaw-tooltip>
             `}
-  `;
-}
-
-export function renderChatRunControls(props: ChatRunControlsProps) {
-  const showPrimary = props.showPrimary ?? true;
-  const showSecondary = props.showSecondary ?? true;
-
-  return html`
-    <div class="agent-chat__toolbar-right">
-      ${showSecondary && !props.canAbort
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onNewSession}
-                aria-label=${t("chat.runControls.newSession")}
-              >
-                ${icons.plus}
-                <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showSecondary
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.export")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onExport}
-                aria-label=${t("chat.runControls.exportChat")}
-                ?disabled=${!props.hasMessages}
-              >
-                ${icons.download}
-                <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showPrimary ? renderChatPrimaryActions(props) : nothing}
-    </div>
   `;
 }
 

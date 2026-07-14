@@ -73,10 +73,10 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       const response = await page.goto(`${server.baseUrl}config`);
       expect(response?.status()).toBe(200);
 
-      const modelCard = page.locator(".qs-card--model");
+      const modelCard = page.locator("#settings-general-model");
       const lowButton = modelCard.getByRole("button", { name: "Low", exact: true });
       await lowButton.waitFor();
-      expect(await lowButton.getAttribute("class")).toContain("qs-segmented__btn--active");
+      expect(await lowButton.getAttribute("class")).toContain("settings-segmented__btn--active");
 
       await modelCard.getByRole("button", { name: "High", exact: true }).click();
       await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -94,10 +94,10 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       });
       await freshPage.goto(`${server.baseUrl}config`);
       const highButton = freshPage
-        .locator(".qs-card--model")
+        .locator("#settings-general-model")
         .getByRole("button", { name: "High", exact: true });
       await highButton.waitFor();
-      expect(await highButton.getAttribute("class")).toContain("qs-segmented__btn--active");
+      expect(await highButton.getAttribute("class")).toContain("settings-segmented__btn--active");
     } finally {
       await context.close();
     }

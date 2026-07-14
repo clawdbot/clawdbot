@@ -83,6 +83,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   it("shows a protocol mismatch without reconnecting", async () => {
     const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
@@ -99,7 +100,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
-      await page.waitForTimeout(1_600);
+      await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {
       await closeContext(context);

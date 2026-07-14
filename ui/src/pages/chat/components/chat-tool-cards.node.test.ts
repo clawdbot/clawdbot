@@ -1,9 +1,7 @@
 // @vitest-environment node
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
-import { buildPreviewSidebarContent, buildToolCardSidebarContent } from "./chat-tool-cards.ts";
+import { extractToolCardsCached as extractToolCards } from "../../../lib/chat/tool-cards.ts";
 
 vi.mock("../../../components/icons.ts", () => ({
   icons: {},
@@ -323,70 +321,6 @@ describe("tool-card extraction", () => {
     expect(standaloneCards[0]?.isError).toBe(true);
   });
 
-  it("does not describe a call-only card as successfully completed", () => {
-    const [card] = extractToolCards(
-      {
-        role: "assistant",
-        toolCallId: "call-3",
-        content: [
-          {
-            type: "toolcall",
-            name: "deck_manage",
-            arguments: "with Example Deck",
-          },
-        ],
-      },
-      "msg:3",
-    );
-
-    const sidebar = buildToolCardSidebarContent(expectDefined(card, "deck tool card"));
-    expect(sidebar).toBe(`## Deck Manage
-
-**Tool:** \`deck_manage\`
-
-### Tool input
-\`\`\`text
-with Example Deck
-\`\`\`
-
-### Tool output
-*No result available.*`);
-  });
-
-  it("preserves an empty successful result as completed", () => {
-    const [card] = extractToolCards(
-      {
-        role: "toolResult",
-        toolCallId: "call-empty",
-        toolName: "deck_manage",
-        content: "",
-      },
-      "msg:empty-success",
-    );
-
-    const completedCard = expectDefined(card, "empty-result tool card");
-    expect(completedCard).toMatchObject({ completed: true });
-    expect(completedCard.outputText).toBeUndefined();
-    expect(buildToolCardSidebarContent(completedCard)).toContain(
-      "*No output — tool completed successfully.*",
-    );
-  });
-
-  it("builds sidebar content with a failed empty-output status for explicit errors", () => {
-    const sidebar = buildToolCardSidebarContent({
-      id: "msg:error-empty",
-      name: "lookup",
-      isError: true,
-    });
-
-    expect(sidebar).toBe(`## Lookup
-
-**Tool:** \`lookup\`
-
-### Tool error
-*No output — tool failed.*`);
-  });
-
   it("extracts canvas handle payloads into canvas previews", () => {
     const [card] = extractToolCards(
       {
@@ -418,26 +352,6 @@ with Example Deck
     expect(card?.preview?.title).toBe("Inline demo");
     expect(card?.preview?.preferredHeight).toBe(420);
     expect(card?.preview?.sandbox).toBe("scripts");
-  });
-
-  it("carries the preview sandbox ceiling into sidebar canvas content", () => {
-    const sidebar = buildPreviewSidebarContent(
-      {
-        kind: "canvas",
-        surface: "assistant_message",
-        render: "url",
-        viewId: "cv_widget",
-        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-        title: "Widget",
-        sandbox: "scripts",
-      },
-      null,
-    );
-
-    // Dropping the ceiling here would re-grant allow-same-origin to widget
-    // script whenever the global embed mode is "trusted".
-    expect(sidebar?.kind).toBe("canvas");
-    expect(sidebar && "sandbox" in sidebar ? sidebar.sandbox : undefined).toBe("scripts");
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {

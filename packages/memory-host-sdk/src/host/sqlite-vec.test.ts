@@ -119,7 +119,7 @@ describe("loadSqliteVecExtension", () => {
     expect(result).toEqual({
       ok: false,
       error: expect.stringMatching(
-        /^sqlite-vec package is not installed\. Set agents\.defaults\.memorySearch\.store\.vector\.extensionPath, or an agent-specific memorySearch\.store\.vector\.extensionPath, to a sqlite-vec loadable extension path\. Original error: (?:\[vitest\] There was an error when mocking a module\. If you are using "vi\.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file\. Read more: https:\/\/vitest\.dev\/api\/vi\.html#vi-mock \| )?Cannot find package 'sqlite-vec' imported from sqlite-vec\.test\.ts$/u,
+        /^sqlite-vec package is not installed\. Set agents\.defaults\.memorySearch\.store\.vector\.extensionPath, or an agent-specific memorySearch\.store\.vector\.extensionPath, to a sqlite-vec loadable extension path\. Original error: (?:\[vitest\] There was an error when mocking a module\. If you are using "vi\.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file\. Read more: https:\/\/vitest\.dev\/api\/vi\.html#vi-mock \| )?Cannot find package 'sqlite-vec' imported from sqlite-vec\.test\.ts \| ERR_MODULE_NOT_FOUND$/u,
       ),
     });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");

@@ -357,7 +357,9 @@ class SkillsPage extends OpenClawLightDomElement {
         </div>
       </section>
       ${renderSettingsWorkspace(html`
-        ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        </div>
         <div id="plugins-hub-panel" role="tabpanel" aria-labelledby="plugins-tab-skills">
           ${renderSkills({
             connected: this.connected,

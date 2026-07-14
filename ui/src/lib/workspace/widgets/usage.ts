@@ -9,12 +9,12 @@ import { formatCost, formatTokens } from "../../format.ts";
 import type { WorkspaceWidget } from "../types.ts";
 import { isRecord, toFiniteNumber } from "./types.ts";
 
-export type UsageModel = {
+type UsageModel = {
   cost: number;
   tokens: number;
 };
 
-export function mapUsage(_widget: WorkspaceWidget, value: unknown): UsageModel {
+function mapUsage(_widget: WorkspaceWidget, value: unknown): UsageModel {
   const totals = isRecord(value) && isRecord(value.totals) ? value.totals : {};
   const cost = toFiniteNumber(totals.totalCost) ?? 0;
   const tokens = toFiniteNumber(totals.totalTokens) ?? 0;

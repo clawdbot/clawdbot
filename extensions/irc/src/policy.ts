@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IrcChannelConfig } from "./types.js";
 
-export type IrcGroupMatch = {
+type IrcGroupMatch = {
   allowed: boolean;
   groupConfig?: IrcChannelConfig;
   wildcardConfig?: IrcChannelConfig;

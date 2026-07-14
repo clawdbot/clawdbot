@@ -34,6 +34,7 @@ describe("firecrawl tools", () => {
   const priorFetch = global.fetch;
   let fetchFirecrawlContent: typeof import("../api.js").fetchFirecrawlContent;
   let createFirecrawlWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlWebSearchProvider;
+  let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-free-search-provider.js").createFirecrawlFreeWebSearchProvider;
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
@@ -46,6 +47,8 @@ describe("firecrawl tools", () => {
     ({ fetchFirecrawlContent } = await import("../api.js"));
     ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
+    ({ createFirecrawlFreeWebSearchProvider } =
+      await import("./firecrawl-free-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
     ({
@@ -326,6 +329,193 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("firecrawl_scrape needs a Firecrawl API key");
   });
 
+  it("omits Firecrawl authorization for keyless search requests", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: { web: [] },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    await runActualFirecrawlSearch({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: {
+                  baseUrl: "https://api.firecrawl.dev",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      query: "keyless firecrawl search",
+      access: "keyless",
+    });
+
+    expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
+  });
+
+  it("never sends a configured Firecrawl key on keyless search", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ success: true, data: { web: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await runActualFirecrawlSearch({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: {
+                  apiKey: "fc-configured-paid-key",
+                  baseUrl: "https://api.firecrawl.dev",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      query: "keyless ignores configured key",
+      access: "keyless",
+    });
+
+    expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
+    expect(result.provider).toBe("firecrawl-free");
+  });
+
+  it("reports the keyed provider identity for credentialed search", async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, data: { web: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    const result = await runActualFirecrawlSearch({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: { apiKey: "fc-key", baseUrl: "https://api.firecrawl.dev" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      query: "keyed search identity",
+    });
+
+    expect(result.provider).toBe("firecrawl");
+  });
+
+  it("requires credentials for direct search requests", async () => {
+    await expect(
+      runActualFirecrawlSearch({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: {
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        query: "direct firecrawl search",
+      }),
+    ).rejects.toThrow("web_search (firecrawl) needs a Firecrawl API key");
+  });
+
+  it("rejects combining includeDomains and excludeDomains", async () => {
+    await expect(
+      runActualFirecrawlSearch({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        query: "conflicting domain filters",
+        includeDomains: ["firecrawl.dev"],
+        excludeDomains: ["example.com"],
+      }),
+    ).rejects.toThrow("includeDomains or excludeDomains, not both");
+  });
+
+  it("forwards domain, time, and location search filters to Firecrawl", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const rawBody = typeof init?.body === "string" ? init.body : "{}";
+      capturedBody = JSON.parse(rawBody) as Record<string, unknown>;
+      return new Response(JSON.stringify({ success: true, data: { web: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await runActualFirecrawlSearch({
+      cfg: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: {
+                  apiKey: "firecrawl-key",
+                  baseUrl: "https://api.firecrawl.dev",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      query: "openclaw",
+      count: 25,
+      excludeDomains: ["example.com"],
+      tbs: "qdr:w",
+      location: "Germany",
+      country: "DE",
+    });
+
+    expect(capturedBody).toMatchObject({
+      query: "openclaw",
+      limit: 25,
+      excludeDomains: ["example.com"],
+      tbs: "qdr:w",
+      location: "Germany",
+      country: "DE",
+    });
+    expect(capturedBody?.includeDomains).toBeUndefined();
+  });
+
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {
     expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
@@ -404,6 +594,36 @@ describe("firecrawl tools", () => {
       cfg: { test: true },
       query: "openclaw docs",
       count: 4,
+    });
+  });
+
+  it("is keyless and opt-in for the free search provider", () => {
+    const provider = createFirecrawlFreeWebSearchProvider();
+    expect(provider.id).toBe("firecrawl-free");
+    expect(provider.label).toBe("Firecrawl Search (Free)");
+    expect(provider.requiresCredential).toBe(false);
+    expect(provider.autoDetectOrder).toBeUndefined();
+  });
+
+  it("dispatches the free search provider with keyless access", async () => {
+    const provider = createFirecrawlFreeWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "openclaw docs",
+      count: 4,
+    });
+
+    expect(runFirecrawlSearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "openclaw docs",
+      count: 4,
+      access: "keyless",
     });
   });
 
@@ -567,6 +787,10 @@ describe("firecrawl tools", () => {
       timeoutSeconds: 12,
       sources: ["web", "", "news"],
       categories: ["research", ""],
+      includeDomains: ["firecrawl.dev", ""],
+      tbs: "qdr:w",
+      location: "Germany",
+      country: "DE",
       scrapeResults: true,
     });
 
@@ -577,6 +801,11 @@ describe("firecrawl tools", () => {
       timeoutSeconds: 12,
       sources: ["web", "news"],
       categories: ["research"],
+      includeDomains: ["firecrawl.dev"],
+      excludeDomains: undefined,
+      tbs: "qdr:w",
+      location: "Germany",
+      country: "DE",
       scrapeResults: true,
     });
     const details = result.details as { ok?: boolean; params?: unknown };
@@ -588,6 +817,11 @@ describe("firecrawl tools", () => {
       timeoutSeconds: 12,
       sources: ["web", "news"],
       categories: ["research"],
+      includeDomains: ["firecrawl.dev"],
+      excludeDomains: undefined,
+      tbs: "qdr:w",
+      location: "Germany",
+      country: "DE",
       scrapeResults: true,
     });
   });

@@ -135,6 +135,7 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "qwen",
   "raft",
   "reddit",
+  "reef",
   "runway",
   "searxng",
   "senseaudio",
@@ -255,7 +256,7 @@ export function pluginCategoryLabel(category: string): string {
   }
 }
 
-export type ConnectorMcpTemplate = {
+type ConnectorMcpTemplate = {
   serverName: string;
   config: {
     url?: string;

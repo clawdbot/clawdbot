@@ -155,8 +155,3 @@ function clearComputerUseHealthMonitor(
   monitor.disposeCloseHandler();
   getComputerUseHealthMonitorState().monitors.delete(client);
 }
-
-export const testing = {
-  clearComputerUseHealthMonitor,
-  getComputerUseHealthMonitorState,
-};

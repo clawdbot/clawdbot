@@ -103,7 +103,7 @@ describe("release wrapper scripts", () => {
       ],
       oldTarget,
     );
-    expect(plan.status).toBe(0);
+    expect(plan.status, plan.stderr).toBe(0);
     expect(JSON.parse(plan.stdout)).toMatchObject({
       bootstrapWorkflowSha: "b".repeat(40),
       bootstrap: { ref: "main", shouldDispatch: false },

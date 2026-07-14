@@ -4,7 +4,7 @@ import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isAbortError, mergeAbortSignals } from "../infra/abort-signal.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -210,13 +210,11 @@ async function fetchGuardedMediaResponse(
       : [{ dispatcherPolicy, lookupFn }];
   const responseHeaderDeadline = buildTimeoutAbortSignal({
     timeoutMs: responseHeaderTimeoutMs,
+    signal: requestInit?.signal ?? undefined,
     operation: "media response headers",
     url,
   });
-  const requestSignal = mergeAbortSignals([
-    requestInit?.signal ?? undefined,
-    responseHeaderDeadline.signal,
-  ]);
+  const requestSignal = responseHeaderDeadline.signal;
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
       (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
@@ -227,7 +225,7 @@ async function fetchGuardedMediaResponse(
         init: requestInit,
         maxRedirects,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(requestSignal.signal ? { signal: requestSignal.signal } : {}),
+        ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,
@@ -275,14 +273,12 @@ async function fetchGuardedMediaResponse(
       response: result.response,
       finalUrl: result.finalUrl,
       release: async () => {
-        requestSignal.dispose();
         await result.release();
       },
       sourceUrl,
     };
   } catch (err) {
     responseHeaderDeadline.cleanup();
-    requestSignal.dispose();
     throw new MediaFetchError(
       "fetch_failed",
       `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,

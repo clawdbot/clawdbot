@@ -18,9 +18,16 @@ vi.mock("./whatsapp/adapter.runtime.js", () => ({
   createWhatsAppQaTransportAdapter: createWhatsApp,
 }));
 
-import { slackQaAdapterFactory } from "./slack/cli.js";
-import { telegramQaAdapterFactory } from "./telegram/cli.js";
-import { whatsappQaAdapterFactory } from "./whatsapp/cli.js";
+import { slackQaCliRegistration } from "./slack/cli.js";
+import { telegramQaCliRegistration } from "./telegram/cli.js";
+import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
+
+const slackQaAdapterFactory = slackQaCliRegistration.adapterFactory;
+const telegramQaAdapterFactory = telegramQaCliRegistration.adapterFactory;
+const whatsappQaAdapterFactory = whatsappQaCliRegistration.adapterFactory;
+if (!slackQaAdapterFactory || !telegramQaAdapterFactory || !whatsappQaAdapterFactory) {
+  throw new Error("expected live transport adapter factories");
+}
 
 const factories = [
   telegramQaAdapterFactory,

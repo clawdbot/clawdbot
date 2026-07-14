@@ -42,6 +42,17 @@
   }
 }
 
+/* Shared by the login gate and the Sessions, Tasks, and Cron routes. */
+.session-link {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.session-link:hover {
+  text-decoration: underline;
+}
+
 /* ===========================================
    Login Gate
    =========================================== */
@@ -544,14 +555,6 @@
   line-height: 1.1;
 }
 
-.stat-value.ok {
-  color: var(--ok);
-}
-
-.stat-value.warn {
-  color: var(--warn);
-}
-
 .stat-card {
   display: grid;
   gap: 6px;
@@ -560,84 +563,6 @@
 .note-title {
   font-weight: 600;
   letter-spacing: -0.01em;
-}
-
-/* ===========================================
-   Status List
-   =========================================== */
-
-.status-list {
-  display: grid;
-  gap: 8px;
-}
-
-.status-list div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.status-list div:last-child {
-  border-bottom: none;
-}
-
-.account-count {
-  margin-top: 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.account-card-list {
-  margin-top: 16px;
-  display: grid;
-  gap: 12px;
-}
-
-.account-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--bg-elevated);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.account-card:hover {
-  border-color: var(--border-strong);
-}
-
-.account-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.account-card-title {
-  font-weight: 500;
-}
-
-.account-card-id {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.account-card-status {
-  margin-top: 10px;
-  font-size: 13px;
-}
-
-.account-card-status div {
-  padding: 4px 0;
-}
-
-.account-card-error {
-  margin-top: 8px;
-  color: var(--danger);
-  font-size: 12px;
 }
 
 /* ===========================================
@@ -1541,6 +1466,75 @@
   color: var(--ok);
 }
 
+/* Lazy route load failure — a centered panel state, not a stretched callout. */
+.lazy-view-error {
+  margin: auto;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  text-align: center;
+  max-width: 440px;
+  padding: 48px 24px;
+}
+
+.lazy-view-error--inline {
+  margin: 16px auto;
+  padding: 24px;
+}
+
+.lazy-view-error__icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  margin-bottom: 4px;
+}
+
+/* A stale-chunk reload prompt is routine after an update, not a failure. */
+.lazy-view-error--stale .lazy-view-error__icon {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.lazy-view-error__icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lazy-view-error__title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.lazy-view-error__subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.lazy-view-error__action {
+  margin-top: 8px;
+}
+
+.lazy-view-error__detail {
+  margin-top: 8px;
+  max-width: 100%;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* Compaction indicator */
 .compaction-indicator {
   align-self: center;
@@ -2105,6 +2099,23 @@
   min-width: 0;
 }
 
+.list-item__detail-button {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-item__detail-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .list-title {
   font-weight: 500;
 }
@@ -2131,21 +2142,6 @@
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
-}
-
-/* Debug event log payloads should use full width like other debug sections. */
-.debug-event-log__item {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.debug-event-log__meta {
-  min-width: 0;
-  text-align: left;
-}
-
-.debug-event-log__payload {
-  margin: 0;
-  max-width: 100%;
 }
 
 @container (max-width: 560px) {
@@ -2211,110 +2207,8 @@
 }
 
 /* ===========================================
-   Tables
-   =========================================== */
-
-.table {
-  display: grid;
-  container-type: inline-size;
-  gap: 6px;
-}
-
-.table-head,
-.table-row {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr 0.8fr 0.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.6fr;
-  gap: 12px;
-  align-items: center;
-}
-
-.table-head {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-  padding: 0 12px;
-}
-
-.table-row {
-  border: 1px solid var(--border);
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.table-row:hover {
-  border-color: var(--border-strong);
-}
-
-@media (max-width: 1100px) {
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-@container (max-width: 1100px) {
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-.worktrees-table .table-head,
-.worktrees-table .table-row {
-  grid-template-columns: 1fr 1fr 1.3fr 0.9fr 0.7fr 0.9fr 0.9fr;
-}
-
-.worktrees-create {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-
-.worktrees-create label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.worktrees-create input {
-  min-width: 180px;
-}
-
-/* Settings caps .settings-workspace at 1120px, so the table container is ~1080px
-   wide; a 1100px stack breakpoint would collapse the grid at every window size. */
-@media (max-width: 900px) {
-  .worktrees-table .table-head,
-  .worktrees-table .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-@container (max-width: 900px) {
-  .worktrees-table .table-head,
-  .worktrees-table .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ===========================================
    Data Table
    =========================================== */
-
-.data-table-wrapper {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  contain: layout paint;
-}
 
 .data-table-search {
   flex: 1;
@@ -3121,6 +3015,52 @@ td.data-table-key-col {
   max-width: 280px;
 }
 
+.agent-scope-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-scope-control__label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-scope-control__select {
+  min-width: 150px;
+  max-width: min(240px, 40vw);
+  height: 34px;
+  padding: 0 30px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-scope-control__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .agent-scope-control__label {
+    display: none;
+  }
+
+  .agent-scope-control__select {
+    min-width: 128px;
+    max-width: 44vw;
+  }
+}
+
 .agent-select {
   position: relative;
   width: 100%;
@@ -3362,22 +3302,6 @@ td.data-table-key-col {
   font-size: 12px;
 }
 
-.agent-pill {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 4px 10px;
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-  background: var(--secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.agent-pill.warn {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
 .agent-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3451,36 +3375,59 @@ td.data-table-key-col {
   opacity: 0.8;
 }
 
-.agents-overview-grid {
-  display: grid;
+.agent-identity-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  width: 100%;
+}
+
+.agent-identity-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-identity-editor__avatar {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 24px;
+}
+
+.agent-identity-editor__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agent-identity-editor__fields {
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-}
-
-.agent-kv {
-  display: grid;
-  gap: 6px;
+  flex: 1;
   min-width: 0;
 }
 
-.agent-kv > div {
+.agent-identity-editor__fields .field {
+  flex: 1 1 200px;
   min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
-.agent-kv-sub {
+.agent-identity-editor__fields .agent-identity-editor__emoji {
+  flex: 0 1 96px;
+}
+
+.agent-identity-editor__hint {
   font-size: 12px;
-}
-
-.agent-model-select {
-  display: grid;
-  gap: 10px;
-}
-
-.agent-model-fields {
-  display: grid;
-  gap: 10px;
 }
 
 .workspace-link {
@@ -3501,13 +3448,6 @@ td.data-table-key-col {
 .workspace-link:hover {
   opacity: 0.75;
   text-decoration: underline;
-}
-
-.agent-model-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .agent-chip-input {
@@ -3582,12 +3522,6 @@ td.data-table-key-col {
 .agent-chip-input .chip-remove:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-.agent-model-meta {
-  display: grid;
-  gap: 6px;
-  min-width: 200px;
 }
 
 .agent-file-field {
@@ -4093,58 +4027,6 @@ td.data-table-key-col {
   }
 }
 
-.agent-tools-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.agent-tools-header__intro {
-  min-width: 0;
-}
-
-.agent-tools-header__actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.agent-tools-overview {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1.75fr) minmax(280px, 0.9fr);
-  align-items: start;
-  margin-top: 16px;
-}
-
-.agent-tools-overview__primary {
-  display: grid;
-  gap: 12px;
-}
-
-.agent-tools-pane {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-
-.agent-tools-facts {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
-}
-
-.agent-tools-fact {
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-}
-
 .agent-tools-buttons {
   display: flex;
   gap: 8px;
@@ -4519,14 +4401,6 @@ td.data-table-key-col {
 }
 
 @media (max-width: 1180px) {
-  .agent-tools-overview {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-tools-facts {
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  }
-
   .agent-tool-summary {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -4815,55 +4689,7 @@ td.data-table-key-col {
   line-height: 1.4;
 }
 
-/* ===========================================
-   Connection settings (gateway access form)
-   =========================================== */
-
-.connection-form-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
-}
-
-.connection-form-grid .field {
-  min-width: 0;
-}
-
-.connection-form-grid .field input,
-.connection-form-grid .field select {
-  box-sizing: border-box;
-  min-width: 0;
-  width: 100%;
-}
-
-.connection-form-grid__full {
-  grid-column: 1 / -1;
-}
-
-.connection-secret-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.connection-secret-row input {
-  flex: 1 1 0%;
-  min-width: 0;
-}
-
-.connection-secret-row .btn--icon {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  box-sizing: border-box;
-}
-
 @media (max-width: 768px) {
-  .connection-form-grid {
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  }
-
   .agent-row {
     padding: 8px 10px;
     gap: 8px;
@@ -5007,6 +4833,67 @@ td.data-table-key-col {
   padding: 0 28px 24px;
 }
 
+.device-pair-setup__access {
+  display: grid;
+  width: min(440px, 100%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.device-pair-setup__access legend {
+  margin: 0 auto 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.device-pair-setup__access label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.device-pair-setup__access label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: var(--accent-subtle);
+}
+
+.device-pair-setup__access:disabled label {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.device-pair-setup__access input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.device-pair-setup__access span {
+  display: grid;
+  gap: 3px;
+}
+
+.device-pair-setup__access strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.device-pair-setup__access small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .device-pair-setup__loading {
   display: flex;
   min-height: 260px;
@@ -5046,6 +4933,15 @@ td.data-table-key-col {
   display: block;
   margin-top: 4px;
   overflow-wrap: anywhere;
+}
+
+.device-pair-setup__access-warning {
+  width: min(440px, 100%);
+}
+
+.device-pair-setup__access-warning span {
+  display: block;
+  margin-top: 4px;
 }
 
 .device-pair-setup__qr-frame {
@@ -5183,6 +5079,10 @@ td.data-table-key-col {
     width: min(300px, 100%);
     padding: 14px;
   }
+
+  .device-pair-setup__access {
+    grid-template-columns: 1fr;
+  }
 }
 
 .md-preview-expand-btn .when-fullscreen {
@@ -5195,12 +5095,6 @@ td.data-table-key-col {
 
 .md-preview-expand-btn.is-fullscreen .when-fullscreen {
   display: inline;
-}
-
-@media (max-width: 600px) {
-  .connection-form-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ── Session row primitives ──

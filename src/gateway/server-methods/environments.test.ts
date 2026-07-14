@@ -6,7 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel.js";
+import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({

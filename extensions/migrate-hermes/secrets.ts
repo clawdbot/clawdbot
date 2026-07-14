@@ -11,7 +11,8 @@ import {
   hasCurrentAuthProfileConfigConflict,
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
-import { isRecord, parseEnv, readString, readText } from "./helpers.js";
+import { collectHermesProviderSecretBindings } from "./config-providers.js";
+import { isRecord, parseEnv, readString, readText, sanitizeName } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -23,103 +24,14 @@ import {
   hermesItemSkipped,
   readHermesSecretDetails,
 } from "./items.js";
+import { normalizeHermesProviderId } from "./model.js";
+import {
+  SECRET_MAPPINGS,
+  type SecretCredentialMode,
+  type SecretMapping,
+} from "./secret-mappings.js";
 import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
-
-type SecretCredentialMode = "api_key" | "token";
-
-type SecretMapping = {
-  envVar: string;
-  provider: string;
-  profileId: string;
-  mode?: SecretCredentialMode;
-};
-
-const SECRET_MAPPINGS: readonly SecretMapping[] = [
-  { envVar: "OPENAI_API_KEY", provider: "openai", profileId: "openai:hermes-import" },
-  { envVar: "ANTHROPIC_API_KEY", provider: "anthropic", profileId: "anthropic:hermes-import" },
-  { envVar: "OPENROUTER_API_KEY", provider: "openrouter", profileId: "openrouter:hermes-import" },
-  { envVar: "GOOGLE_API_KEY", provider: "google", profileId: "google:hermes-import" },
-  { envVar: "GEMINI_API_KEY", provider: "google", profileId: "google:hermes-import" },
-  { envVar: "GROQ_API_KEY", provider: "groq", profileId: "groq:hermes-import" },
-  { envVar: "XAI_API_KEY", provider: "xai", profileId: "xai:hermes-import" },
-  { envVar: "MISTRAL_API_KEY", provider: "mistral", profileId: "mistral:hermes-import" },
-  { envVar: "DEEPSEEK_API_KEY", provider: "deepseek", profileId: "deepseek:hermes-import" },
-  { envVar: "ZAI_API_KEY", provider: "zai", profileId: "zai:hermes-import" },
-  { envVar: "Z_AI_API_KEY", provider: "zai", profileId: "zai:hermes-import" },
-  { envVar: "GLM_API_KEY", provider: "zai", profileId: "zai:hermes-import" },
-  { envVar: "KIMI_API_KEY", provider: "kimi-coding", profileId: "kimi-coding:hermes-import" },
-  { envVar: "KIMICODE_API_KEY", provider: "kimi-coding", profileId: "kimi-coding:hermes-import" },
-  { envVar: "MOONSHOT_API_KEY", provider: "moonshot", profileId: "moonshot:hermes-import" },
-  { envVar: "MINIMAX_API_KEY", provider: "minimax", profileId: "minimax:hermes-import" },
-  {
-    envVar: "MINIMAX_CODING_API_KEY",
-    provider: "minimax",
-    profileId: "minimax:hermes-import",
-  },
-  { envVar: "DASHSCOPE_API_KEY", provider: "qwen", profileId: "qwen:hermes-import" },
-  { envVar: "QWEN_API_KEY", provider: "qwen", profileId: "qwen:hermes-import" },
-  { envVar: "MODELSTUDIO_API_KEY", provider: "qwen", profileId: "qwen:hermes-import" },
-  { envVar: "KILOCODE_API_KEY", provider: "kilocode", profileId: "kilocode:hermes-import" },
-  {
-    envVar: "AI_GATEWAY_API_KEY",
-    provider: "vercel-ai-gateway",
-    profileId: "vercel-ai-gateway:hermes-import",
-  },
-  { envVar: "HF_TOKEN", provider: "huggingface", profileId: "huggingface:hermes-import" },
-  {
-    envVar: "HUGGINGFACE_HUB_TOKEN",
-    provider: "huggingface",
-    profileId: "huggingface:hermes-import",
-  },
-  { envVar: "TOGETHER_API_KEY", provider: "together", profileId: "together:hermes-import" },
-  { envVar: "FIREWORKS_API_KEY", provider: "fireworks", profileId: "fireworks:hermes-import" },
-  { envVar: "DEEPINFRA_API_KEY", provider: "deepinfra", profileId: "deepinfra:hermes-import" },
-  { envVar: "CEREBRAS_API_KEY", provider: "cerebras", profileId: "cerebras:hermes-import" },
-  { envVar: "NVIDIA_API_KEY", provider: "nvidia", profileId: "nvidia:hermes-import" },
-  { envVar: "VENICE_API_KEY", provider: "venice", profileId: "venice:hermes-import" },
-  { envVar: "XIAOMI_API_KEY", provider: "xiaomi", profileId: "xiaomi:hermes-import" },
-  { envVar: "ALIBABA_API_KEY", provider: "alibaba", profileId: "alibaba:hermes-import" },
-  { envVar: "ARCEEAI_API_KEY", provider: "arcee", profileId: "arcee:hermes-import" },
-  { envVar: "CHUTES_API_KEY", provider: "chutes", profileId: "chutes:hermes-import" },
-  {
-    envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-    provider: "cloudflare-ai-gateway",
-    profileId: "cloudflare-ai-gateway:hermes-import",
-  },
-  { envVar: "QIANFAN_API_KEY", provider: "qianfan", profileId: "qianfan:hermes-import" },
-  { envVar: "OPENCODE_API_KEY", provider: "opencode", profileId: "opencode:hermes-import" },
-  { envVar: "OPENCODE_API_KEY", provider: "opencode-go", profileId: "opencode-go:hermes-import" },
-  { envVar: "OPENCODE_ZEN_API_KEY", provider: "opencode", profileId: "opencode:hermes-import" },
-  {
-    envVar: "OPENCODE_ZEN_API_KEY",
-    provider: "opencode-go",
-    profileId: "opencode-go:hermes-import",
-  },
-  {
-    envVar: "OPENCODE_GO_API_KEY",
-    provider: "opencode-go",
-    profileId: "opencode-go:hermes-import",
-  },
-  {
-    envVar: "COPILOT_GITHUB_TOKEN",
-    provider: "github-copilot",
-    profileId: "github-copilot:github",
-    mode: "token",
-  },
-  {
-    envVar: "GH_TOKEN",
-    provider: "github-copilot",
-    profileId: "github-copilot:github",
-    mode: "token",
-  },
-  {
-    envVar: "GITHUB_TOKEN",
-    provider: "github-copilot",
-    profileId: "github-copilot:github",
-    mode: "token",
-  },
-] as const;
 
 type SecretCandidate = {
   id: string;
@@ -128,8 +40,9 @@ type SecretCandidate = {
   provider: string;
   profileId: string;
   mode: SecretCredentialMode;
-  sourceKind?: "hermes-env" | "opencode-auth-json";
+  sourceKind?: "hermes-auth-json" | "hermes-env" | "opencode-auth-json";
   sourceProvider?: string;
+  sourceCredentialId?: string;
   secretField?: string;
 };
 
@@ -155,30 +68,57 @@ function secretMode(mapping: SecretMapping): SecretCredentialMode {
 }
 
 function buildEnvSecretCandidates(params: {
+  config: Record<string, unknown>;
   env: Record<string, string>;
   envPath?: string;
 }): SecretCandidate[] {
-  return SECRET_MAPPINGS.flatMap((mapping) => {
-    const value = params.env[mapping.envVar]?.trim();
+  const configuredBindings = collectHermesProviderSecretBindings(params.config, params.env);
+  const claimedEnvVars = new Set(configuredBindings.map((binding) => binding.envVar));
+  const configured = configuredBindings.flatMap((binding) => {
+    const value = params.env[binding.envVar]?.trim();
     if (!value) {
       return [];
     }
     return [
       {
-        id: `secret:${mapping.provider}`,
+        id: `secret:${binding.provider}`,
+        source: params.envPath,
+        envVar: binding.envVar,
+        provider: binding.provider,
+        profileId: `${binding.provider}:hermes-import`,
+        mode: "api_key" as const,
+      },
+    ];
+  });
+  const standard = SECRET_MAPPINGS.flatMap((mapping) => {
+    if (claimedEnvVars.has(mapping.envVar)) {
+      return [];
+    }
+    const value = params.env[mapping.envVar]?.trim();
+    if (!value) {
+      return [];
+    }
+    const provider =
+      mapping.envVar === "KIMI_API_KEY" || mapping.envVar === "KIMI_CODING_API_KEY"
+        ? value.startsWith("sk-kimi-")
+          ? "kimi"
+          : "moonshot"
+        : mapping.provider;
+    return [
+      {
+        id: `secret:${provider}`,
         source: params.envPath,
         envVar: mapping.envVar,
-        provider: mapping.provider,
-        profileId: mapping.profileId,
+        provider,
+        profileId: provider === mapping.provider ? mapping.profileId : `${provider}:hermes-import`,
         mode: secretMode(mapping),
       },
     ];
   });
+  return [...configured, ...standard];
 }
 
-async function readOpenCodeAuthJson(
-  authPath: string | undefined,
-): Promise<Record<string, unknown>> {
+async function readAuthJson(authPath: string | undefined): Promise<Record<string, unknown>> {
   const raw = await readText(authPath);
   if (!raw) {
     return {};
@@ -197,7 +137,7 @@ async function buildOpenCodeSecretCandidates(
   if (!authPath) {
     return [];
   }
-  const auth = await readOpenCodeAuthJson(authPath);
+  const auth = await readAuthJson(authPath);
   const opencode = isRecord(auth.opencode) ? auth.opencode : {};
   const opencodeGo = isRecord(auth["opencode-go"]) ? auth["opencode-go"] : {};
   const githubCopilot = isRecord(auth["github-copilot"]) ? auth["github-copilot"] : {};
@@ -243,17 +183,81 @@ async function buildOpenCodeSecretCandidates(
   return candidates;
 }
 
+function normalizeHermesPoolProvider(provider: string): string {
+  return normalizeHermesProviderId(provider);
+}
+
+async function buildHermesPoolSecretCandidates(
+  authPath: string | undefined,
+  globalAuthPath: string | undefined,
+): Promise<SecretCandidate[]> {
+  if (!authPath && !globalAuthPath) {
+    return [];
+  }
+  const auth = await readAuthJson(authPath);
+  const globalAuth = await readAuthJson(globalAuthPath);
+  const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
+  const globalPool = isRecord(globalAuth.credential_pool) ? globalAuth.credential_pool : {};
+  const candidates: SecretCandidate[] = [];
+  const sourceProviders = new Set([...Object.keys(pool), ...Object.keys(globalPool)]);
+  for (const sourceProvider of [...sourceProviders].toSorted()) {
+    const profileEntries = Array.isArray(pool[sourceProvider]) ? pool[sourceProvider] : [];
+    const globalEntries = Array.isArray(globalPool[sourceProvider])
+      ? globalPool[sourceProvider]
+      : [];
+    const rawEntries = profileEntries.length > 0 ? profileEntries : globalEntries;
+    const sourcePath = profileEntries.length > 0 ? authPath : globalAuthPath;
+    if (sourceProvider === "openai-codex" || !sourcePath) {
+      continue;
+    }
+    for (const rawEntry of rawEntries) {
+      if (!isRecord(rawEntry)) {
+        continue;
+      }
+      const sourceCredentialId = readString(rawEntry.id);
+      const authType = readString(rawEntry.auth_type);
+      const source = readString(rawEntry.source);
+      if (
+        !sourceCredentialId ||
+        authType !== "api_key" ||
+        source !== "manual" ||
+        !readString(rawEntry.access_token)
+      ) {
+        continue;
+      }
+      const provider = normalizeHermesPoolProvider(sourceProvider);
+      const profileSuffix = sanitizeName(sourceCredentialId);
+      if (!provider || !profileSuffix) {
+        continue;
+      }
+      candidates.push({
+        id: `secret:${provider}:hermes-auth-json:${profileSuffix}`,
+        source: sourcePath,
+        provider,
+        profileId: `${provider}:hermes-${profileSuffix}`,
+        mode: "api_key",
+        sourceKind: "hermes-auth-json",
+        sourceProvider,
+        sourceCredentialId,
+        secretField: "access_token",
+      });
+    }
+  }
+  return candidates;
+}
+
 async function readSecretCandidateValue(
   details: {
     envVar?: string;
     sourceKind?: string;
     sourceProvider?: string;
+    sourceCredentialId?: string;
     secretField?: string;
   },
   source: string,
 ): Promise<string | undefined> {
   if (details.sourceKind === "opencode-auth-json") {
-    const auth = await readOpenCodeAuthJson(source);
+    const auth = await readAuthJson(source);
     const sourceProvider = details.sourceProvider;
     const secretField = details.secretField;
     if (!sourceProvider || !secretField) {
@@ -261,6 +265,18 @@ async function readSecretCandidateValue(
     }
     const provider = isRecord(auth[sourceProvider]) ? auth[sourceProvider] : {};
     return readString(provider[secretField]);
+  }
+  if (details.sourceKind === "hermes-auth-json") {
+    const auth = await readAuthJson(source);
+    const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
+    const entries = details.sourceProvider ? pool[details.sourceProvider] : undefined;
+    if (!Array.isArray(entries) || !details.sourceCredentialId) {
+      return undefined;
+    }
+    const entry = entries.find(
+      (candidate) => isRecord(candidate) && candidate.id === details.sourceCredentialId,
+    );
+    return isRecord(entry) ? readString(entry.access_token) : undefined;
   }
   if (!details.envVar) {
     return undefined;
@@ -270,6 +286,7 @@ async function readSecretCandidateValue(
 }
 
 export async function buildSecretItems(params: {
+  config: Record<string, unknown>;
   ctx: MigrationProviderContext;
   source: HermesSource;
   targets: PlannedTargets;
@@ -279,7 +296,15 @@ export async function buildSecretItems(params: {
   const seenProfiles = new Set<string>();
   const items: MigrationItem[] = [];
   const candidates = [
-    ...buildEnvSecretCandidates({ env, envPath: params.source.envPath }),
+    ...buildEnvSecretCandidates({
+      config: params.config,
+      env,
+      envPath: params.source.envPath,
+    }),
+    ...(await buildHermesPoolSecretCandidates(
+      params.source.authPath,
+      params.source.globalAuthPath,
+    )),
     ...(await buildOpenCodeSecretCandidates(params.source.opencodeAuthPath)),
   ];
   for (const candidate of candidates) {
@@ -307,6 +332,9 @@ export async function buildSecretItems(params: {
           ...(candidate.mode === "token" ? { mode: candidate.mode } : {}),
           ...(candidate.sourceKind ? { sourceKind: candidate.sourceKind } : {}),
           ...(candidate.sourceProvider ? { sourceProvider: candidate.sourceProvider } : {}),
+          ...(candidate.sourceCredentialId
+            ? { sourceCredentialId: candidate.sourceCredentialId }
+            : {}),
           ...(candidate.secretField ? { secretField: candidate.secretField } : {}),
         },
       }),

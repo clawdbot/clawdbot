@@ -27,28 +27,6 @@ function readPluginBoundaryConfigSafely() {
     return {};
   }
 }
-
-export function resolvePluginRuntimeRecord(
-  pluginId: string,
-  onMissing?: () => never,
-): PluginRuntimeRecord | null {
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: readPluginBoundaryConfigSafely(),
-  });
-  const record = manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
-  if (!record?.source) {
-    if (onMissing) {
-      onMissing();
-    }
-    return null;
-  }
-  return {
-    ...(record.origin ? { origin: record.origin } : {}),
-    rootDir: record.rootDir,
-    source: record.source,
-  };
-}
-
 export function resolvePluginRuntimeRecordByEntryBaseNames(
   entryBaseNames: string[],
   onMissing?: () => never,

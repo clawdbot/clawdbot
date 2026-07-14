@@ -48,11 +48,11 @@ describe("formatTokenScale", () => {
 
 describe("formatLongDuration", () => {
   it("scales from seconds to hours", () => {
-    expect(formatLongDuration(500)).toBe("0s");
+    expect(formatLongDuration(500)).toBe("500ms");
     expect(formatLongDuration(45_000)).toBe("45s");
     expect(formatLongDuration(12 * 60 * 1000)).toBe("12m");
     expect(formatLongDuration(3 * 60 * 60 * 1000)).toBe("3h");
-    expect(formatLongDuration(59 * 60 * 60 * 1000 + 4 * 60 * 1000)).toBe("59h 4m");
+    expect(formatLongDuration(59 * 60 * 60 * 1000 + 4 * 60 * 1000)).toBe("2d 11h");
   });
 });
 

@@ -23,6 +23,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowRuntimePluginLoad?: boolean;
+  registerStream?: boolean;
 }): StreamFn | undefined {
   // Plugin stream factories may capture model headers, so construction is the
   // last safe boundary for providers that do not expose the host fetch seam.
@@ -66,7 +67,9 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   }
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
-  ensureCustomApiRegistered(params.model.api, streamFn);
+  if (params.registerStream !== false) {
+    ensureCustomApiRegistered(params.model.api, streamFn);
+  }
   return streamFn;
 }
 

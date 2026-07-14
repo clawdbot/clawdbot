@@ -17,14 +17,6 @@ import {
   type DiscordComponentControlHandlers,
 } from "./agent-components.wildcard-controls.js";
 
-export { resolveDiscordComponentOriginatingTo } from "./agent-components.dispatch.js";
-export {
-  AgentComponentButton,
-  AgentSelectMenu,
-  createAgentComponentButton,
-  createAgentSelectMenu,
-} from "./agent-components.system-controls.js";
-
 type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
 
 function bindDiscordComponentControl<T extends BaseMessageInteractiveComponent>(

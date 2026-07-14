@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
@@ -256,6 +257,23 @@ final class ControlChannel {
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs,
+                retryTransportFailures: retryTransportFailures)
+            self.setStateThrottled(.connected)
+            return data
+        } catch {
+            let message = self.friendlyGatewayMessage(error)
+            self.setStateThrottled(.degraded(message))
+            throw ControlChannelError.badResponse(message)
+        }
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                request,
                 retryTransportFailures: retryTransportFailures)
             self.setStateThrottled(.connected)
             return data

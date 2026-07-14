@@ -9,8 +9,6 @@ import {
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 
-export { unwrapEnvInvocation } from "./command-carriers.js";
-
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);

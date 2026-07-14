@@ -9,7 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import type { WorkspaceWidget } from "../types.ts";
 import { widgetProps } from "./types.ts";
 
-export function mapMarkdownSource(widget: WorkspaceWidget, value: unknown): string {
+function mapMarkdownSource(widget: WorkspaceWidget, value: unknown): string {
   const props = widgetProps(widget);
   if (typeof value === "string") {
     return value;

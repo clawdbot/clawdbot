@@ -1,21 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { loadSettings } from "../../app/settings.ts";
+import { loadSettings, saveSettings } from "../../app/settings.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import {
-  RealtimeTalkSession,
-  type RealtimeTalkCallbacks,
-  type RealtimeTalkLaunchOptions,
-} from "./realtime-talk.ts";
+import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
+import { RealtimeTalkSession } from "./realtime-talk.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
   localOptions: { inputDeviceId?: string };
-  options: RealtimeTalkLaunchOptions;
 };
 
 function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSession {
@@ -26,35 +22,20 @@ function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSessio
   return session as unknown as InspectableRealtimeTalkSession;
 }
 
-function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
-  return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
-}
-
 function createState(): ChatRealtimeState {
-  const settings = loadSettings();
   const state = {
     client: {},
     connected: true,
-    settings,
+    settings: loadSettings(),
     sessionKey: "main",
     lastError: null,
     chatError: null,
-    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
+    ...createInitialChatRealtimeState(),
     requestUpdate: vi.fn(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);
   return state;
 }
-
-const vadThresholdCases: Array<[string, string, number | undefined]> = [
-  ["zero", "0", 0],
-  ["ordinary value", "0.35", 0.35],
-  ["blank", "", undefined],
-  ["whitespace", "  ", undefined],
-  ["non-number", "loud", undefined],
-  ["below range", "-0.1", undefined],
-  ["above range", "1.1", undefined],
-];
 
 describe("chat realtime actions", () => {
   // Capture the spy instead of re-reading it off the prototype so assertions do
@@ -70,35 +51,45 @@ describe("chat realtime actions", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    saveSettings(loadSettings());
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
-  it.each(vadThresholdCases)(
-    "normalizes a %s VAD threshold at the launch boundary",
-    async (_label, input, expected) => {
-      const state = createState();
-      state.updateRealtimeTalkOptions({ vadThreshold: input });
+  it("launches with the microphone persisted from the Settings page", async () => {
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    const state = createState();
 
-      await state.toggleRealtimeTalk();
+    await state.toggleRealtimeTalk();
 
-      expect(inspectSession(state).options.vadThreshold).toBe(expected);
-    },
-  );
+    expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
+    expect(startSpy).toHaveBeenCalledOnce();
+  });
 
-  it("keeps the selected input in memory when persistence fails and shares it across panes", async () => {
-    const firstPane = createState();
-    const secondPane = createState();
+  it("re-reads the persisted microphone on every launch instead of caching it", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    expect(inspectSession(state).localOptions.inputDeviceId).toBeUndefined();
+    await state.toggleRealtimeTalk();
+
+    // A microphone picked in Settings after the chat page mounted must apply
+    // to the next session without a reload.
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    await state.toggleRealtimeTalk();
+
+    expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
+  });
+
+  it("keeps a microphone picked while storage is blocked for the next launch", async () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    const state = createState();
 
-    firstPane.selectRealtimeTalkInput("usb-mic");
-    await secondPane.toggleRealtimeTalk();
+    await state.toggleRealtimeTalk();
 
-    expect(firstPane.realtimeTalkInputDeviceId).toBe("usb-mic");
-    expect(secondPane.realtimeTalkInputDeviceId).toBe("usb-mic");
-    expect(inspectSession(secondPane).localOptions.inputDeviceId).toBe("usb-mic");
-    expect(startSpy).toHaveBeenCalledOnce();
+    expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
   });
 
   it("propagates normalized microphone levels and resets them on error", async () => {
@@ -116,6 +107,37 @@ describe("chat realtime actions", () => {
 
     callbacks.onStatus?.("error", "capture failed");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
+  });
+
+  it("keeps a late final rewrite in its original user bubble", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "Can you tack", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Can you check?", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "Can you check?", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: true },
+    ]);
+  });
+
+  it("starts a new user bubble after assistant output for a distinct final turn", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "First request", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Second request", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "First request", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: false },
+      { role: "user", text: "Second request", isStreaming: false },
+    ]);
   });
 
   it("ignores a stopped session that rejects after its replacement starts", async () => {
@@ -147,62 +169,5 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkStatus).toBe("listening");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
     expect(state.realtimeTalkConversation).toEqual([]);
-  });
-
-  it("does not reject a persisted input from incomplete passive discovery", async () => {
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        enumerateDevices: vi.fn(async () => [
-          mediaDevice("audioinput", "built-in", "Built-in Microphone"),
-        ]),
-      },
-    });
-    const state = createState();
-    state.settings = { ...state.settings, gatewayUrl: "ws://passive-discovery.example" };
-    state.selectRealtimeTalkInput("usb-mic");
-
-    await state.refreshRealtimeTalkInputs(false);
-
-    expect(state.realtimeTalkInputDeviceId).toBe("usb-mic");
-    expect(state.realtimeTalkInputError).toBeNull();
-  });
-
-  it("reports a missing persisted input after successful permissioned discovery", async () => {
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        enumerateDevices: vi.fn(async () => [
-          mediaDevice("audioinput", "built-in", "Built-in Microphone"),
-        ]),
-      },
-    });
-    const state = createState();
-    state.settings = { ...state.settings, gatewayUrl: "ws://permissioned-discovery.example" };
-    state.selectRealtimeTalkInput("usb-mic");
-
-    await state.refreshRealtimeTalkInputs(true);
-
-    expect(state.realtimeTalkInputDeviceId).toBe("usb-mic");
-    expect(state.realtimeTalkInputError).toContain("The selected microphone is unavailable");
-  });
-
-  it("keeps permission guidance when permissioned discovery is incomplete", async () => {
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        enumerateDevices: vi.fn(async () => [
-          mediaDevice("audioinput", "built-in", "Built-in Microphone"),
-          mediaDevice("audioinput", "", ""),
-        ]),
-        getUserMedia: vi.fn(async () => {
-          throw new DOMException("denied", "NotAllowedError");
-        }),
-      },
-    });
-    const state = createState();
-    state.settings = { ...state.settings, gatewayUrl: "ws://blocked-discovery.example" };
-    state.selectRealtimeTalkInput("usb-mic");
-
-    await state.refreshRealtimeTalkInputs(true);
-
-    expect(state.realtimeTalkInputError).toContain("Microphone access is blocked");
   });
 });

@@ -14,7 +14,7 @@ type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
 };
 
-export type HookRunnerGlobalState = {
+type HookRunnerGlobalState = {
   hookRunner: HookRunner | null;
   registry: TrustedPolicyHookRunnerRegistry | null;
 };

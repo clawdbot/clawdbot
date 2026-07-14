@@ -1,5 +1,5 @@
 // SQLite trajectory runtime store owns session-scoped runtime event rows.
-import { sql } from "kysely";
+
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   executeSqliteQuerySync,
@@ -30,13 +30,7 @@ export type SqliteTrajectoryRuntimeScope = {
   storePath: string;
 };
 
-export type SqliteTrajectoryRuntimeStats = {
-  eventCount: number;
-  maxSeq: number;
-  sizeBytes: number;
-};
-
-export type SqliteTrajectoryRuntimeEventRow = {
+type SqliteTrajectoryRuntimeEventRow = {
   event: TrajectoryEvent;
   seq: number;
 };
@@ -88,7 +82,7 @@ export async function loadSqliteTrajectoryRuntimeEvents(
 }
 
 /** Loads runtime trajectory events synchronously for CLI and export paths. */
-export function loadSqliteTrajectoryRuntimeEventsSync(
+function loadSqliteTrajectoryRuntimeEventsSync(
   scope: Omit<SqliteTrajectoryRuntimeScope, "maxRuntimeBytes">,
 ): TrajectoryEvent[] {
   return loadSqliteTrajectoryRuntimeEventRowsSync(scope).map((row) => row.event);
@@ -120,30 +114,6 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     event: JSON.parse(row.event_json) as TrajectoryEvent,
     seq: row.seq,
   }));
-}
-
-/** Reads trajectory row count, max storage seq, and JSONL-compatible byte size. */
-export function readSqliteTrajectoryRuntimeStatsSync(
-  scope: Omit<SqliteTrajectoryRuntimeScope, "maxRuntimeBytes">,
-): SqliteTrajectoryRuntimeStats {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-  const db = getTrajectoryKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("trajectory_runtime_events")
-      .select((eb) => [
-        eb.fn.count<number>("seq").as("event_count"),
-        eb.fn.max<number>("seq").as("max_seq"),
-        sqliteTrajectoryJsonlByteSize(),
-      ])
-      .where("session_id", "=", scope.sessionId),
-  );
-  return {
-    eventCount: row?.event_count ?? 0,
-    maxSeq: row?.max_seq ?? 0,
-    sizeBytes: row?.size_bytes ?? 0,
-  };
 }
 
 function getTrajectoryKysely(database: import("node:sqlite").DatabaseSync) {
@@ -232,11 +202,6 @@ function oldestTrajectorySeqsPastByteWindow(
 
 function trajectoryJsonlRowBytes(eventJson: string): number {
   return Buffer.byteLength(eventJson, "utf8") + 1;
-}
-
-function sqliteTrajectoryJsonlByteSize() {
-  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
-    + CASE WHEN COUNT(*) > 0 THEN COUNT(*) ELSE 0 END`.as("size_bytes");
 }
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {

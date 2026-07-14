@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
@@ -40,6 +41,28 @@ export const fsHandlers: GatewayRequestHandlers = {
             false,
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, "node does not support directory browsing"),
+          );
+          return;
+        }
+        const allowed = isNodeCommandAllowed({
+          command: NODE_FS_LIST_DIR_COMMAND,
+          declaredCommands: node.commands,
+          allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+            ...node,
+            approvedCommands: node.commands,
+          }),
+        });
+        if (!allowed.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `node command not allowed: ${NODE_FS_LIST_DIR_COMMAND} (${allowed.reason})`,
+              {
+                details: { command: NODE_FS_LIST_DIR_COMMAND, reason: allowed.reason },
+              },
+            ),
           );
           return;
         }

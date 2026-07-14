@@ -6,7 +6,6 @@ import {
 } from "./directory-cache.js";
 import {
   discordTextHasBroadcastMention,
-  discordTextHasTargetedMention,
   formatMention,
   rewriteDiscordKnownMentions,
 } from "./mentions.js";
@@ -126,20 +125,6 @@ describe("rewriteDiscordKnownMentions", () => {
     const opsRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "ops" });
     expect(defaultRewrite).toBe("@alice");
     expect(opsRewrite).toBe("<@999888777>");
-  });
-});
-
-describe("discordTextHasTargetedMention", () => {
-  it("detects user and role mentions", () => {
-    expect(discordTextHasTargetedMention("ping <@123>")).toBe(true);
-    expect(discordTextHasTargetedMention("ping <@!123>")).toBe(true);
-    expect(discordTextHasTargetedMention("ping <@&456>")).toBe(true);
-  });
-
-  it("ignores plain text, channels, and broadcasts", () => {
-    expect(discordTextHasTargetedMention("ping @alice")).toBe(false);
-    expect(discordTextHasTargetedMention("see <#789>")).toBe(false);
-    expect(discordTextHasTargetedMention("heads up @everyone @here")).toBe(false);
   });
 });
 

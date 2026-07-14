@@ -100,7 +100,6 @@ const LOCAL_OUTPUT_TIMEOUT_MS = 300_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 360_000;
 const SUBMISSION_SETTLE_MS = 150;
-const SESSION_ROLLOVER_RETRY_TIMEOUT_MS = 5_000;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
@@ -122,34 +121,37 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const retryDeadline = Date.now() + SESSION_ROLLOVER_RETRY_TIMEOUT_MS;
-  while (true) {
-    const outputOffset = run.output().length;
+  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
+  let attempts = 0;
+  let outputOffset = run.output().length;
+  while (Date.now() < deadline) {
+    attempts += 1;
     await run.write("/new\r", { delay: false });
     const outcome = await waitFor({
-      timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+      timeoutMs: Math.max(1, deadline - Date.now()),
       read: () => {
-        const hasOutput = (needle: string) => run.output().slice(outputOffset).includes(needle);
-        if (hasOutput(newSessionPrefix)) {
-          return "created" as const;
+        const output = run.output();
+        if (output.includes(newSessionPrefix, outputOffset)) {
+          return "created";
         }
-        if (hasOutput(SESSION_ROLLOVER_BUSY_MESSAGE)) {
-          return "busy" as const;
-        }
-        return null;
+        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
       },
-      onTimeout: () => new Error(`timed out creating a fresh session\n${run.output()}`),
+      onTimeout: () =>
+        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
     });
     if (outcome === "created") {
       return;
     }
-    if (Date.now() >= retryDeadline) {
-      throw new Error(`session rollover stayed busy\n${run.output()}`);
+
+    // Redraws can repeat an old rejection after this attempt's offset. Keep
+    // watching that attempt through settle so an accepted /new is not retried.
+    await sleep(SUBMISSION_SETTLE_MS);
+    if (run.output().includes(newSessionPrefix, outputOffset)) {
+      return;
     }
-    // The response text can render before terminal lifecycle cleanup. Retry only
-    // after the command's explicit guard rejects the rollover, never while creation is pending.
-    await sleep(50);
+    outputOffset = run.output().length;
   }
+  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {

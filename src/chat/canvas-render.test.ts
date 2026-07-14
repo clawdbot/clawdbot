@@ -14,10 +14,27 @@ describe("extractCanvasFromText", () => {
           kind: "canvas",
           view: { id: "cv_app" },
           presentation: { target: "assistant_message", sandbox: "scripts" },
-          mcpApp: { viewId: "cv_app" },
+          mcpApp: {
+            viewId: "cv_app",
+            serverName: "demo",
+            toolName: "show",
+            uiResourceUri: "ui://demo/app",
+            toolCallId: "call-1",
+            resultMetaState: "unavailable",
+          },
         },
       }),
-    ).toMatchObject({ viewId: "cv_app", mcpApp: { viewId: "cv_app" } });
+    ).toMatchObject({
+      viewId: "cv_app",
+      mcpApp: {
+        viewId: "cv_app",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+        resultMetaState: "unavailable",
+      },
+    });
   });
 
   it("keeps MCP App previews opaque while preserving model-visible results", () => {

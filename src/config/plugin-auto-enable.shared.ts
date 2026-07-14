@@ -36,10 +36,6 @@ import type {
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-export type {
-  PluginAutoEnableCandidate,
-  PluginAutoEnableResult,
-} from "./plugin-auto-enable.types.js";
 
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   plugins: [],

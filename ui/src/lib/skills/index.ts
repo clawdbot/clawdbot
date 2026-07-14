@@ -74,7 +74,7 @@ export type ClawHubSkillSecurityVerdict = {
   };
 };
 
-export type SkillsState = {
+type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   skillsAgentId: string | null;

@@ -13,8 +13,8 @@ import {
 } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
-const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
-  execFileMock: vi.fn(),
+const { runExecMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+  runExecMock: vi.fn(),
   loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
     schema: { type: "object" },
     uiHints: undefined,
@@ -22,32 +22,14 @@ const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessModule } = await import("./node-child-process.test-support.js");
-  return mockNodeChildProcessModule({
-    execFile: Object.assign(execFileMock, {
-      __promisify__: vi.fn(),
-    }) as typeof import("node:child_process").execFile,
-  });
-});
+vi.mock("../../process/exec.js", () => ({ runExec: runExecMock }));
 
 vi.mock("../../config/runtime-schema.js", () => ({
   loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
 }));
 
-function invokeExecFileCallback(args: unknown[], error: Error | null) {
-  const callback = args.at(-1);
-  if (typeof callback !== "function") {
-    throw new Error("expected execFile callback");
-  }
-  callback(error);
-}
-
-function mockExecFileError(error: Error) {
-  execFileMock.mockImplementation((...args: unknown[]) => {
-    invokeExecFileCallback(args, error);
-    return {} as never;
-  });
+function mockRunExecError(error: Error) {
+  runExecMock.mockRejectedValue(error);
 }
 
 async function invokeConfigOpenFile() {
@@ -96,11 +78,10 @@ describe("resolveConfigOpenCommand", () => {
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
-      execFileMock.mockImplementation((...args: unknown[]) => {
-        expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
-        expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
-        invokeExecFileCallback(args, null);
-        return {} as never;
+      runExecMock.mockImplementation(async (command: string, args: string[]) => {
+        expect(["open", "xdg-open", "powershell.exe"]).toContain(command);
+        expect(args).toEqual(["/tmp/config $(touch pwned).json"]);
+        return { stdout: "", stderr: "" };
       });
 
       const { respond } = await invokeConfigOpenFile();
@@ -118,7 +99,7 @@ describe("config.openFile", () => {
 
   it("returns a detailed error and logs details when the opener fails", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockExecFileError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+      mockRunExecError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -140,7 +121,7 @@ describe("config.openFile", () => {
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: `${pathPrefix}😀tail.json` }, async () => {
-      mockExecFileError(new Error("open failed"));
+      mockRunExecError(new Error("open failed"));
 
       const { logGateway } = await invokeConfigOpenFile();
 
@@ -152,7 +133,7 @@ describe("config.openFile", () => {
 
   it("returns actionable headless environment error when xdg-open reports no method available", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
+      mockRunExecError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 

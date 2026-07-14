@@ -42,7 +42,10 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
-import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../embedded-agent-messaging.types.js";
 import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-types.js";
 import {
   extractAssistantThinking,
@@ -51,6 +54,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
 type ToolErrorWarningPolicy = {
@@ -374,7 +378,6 @@ function unwrapMarkdownInlineCodePadding(value: string): string {
   const unwrapped = value.slice(1, -1);
   return /\S/u.test(unwrapped) ? unwrapped : value;
 }
-
 function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {
   const value = prefix ?? "";
   const leading = [...value.matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
@@ -390,7 +393,6 @@ function extractRawExecContext(prefix: string | undefined, inlineCode: string): 
     .filter((part): part is string => Boolean(part));
   return { leading, trailing };
 }
-
 function shouldKeepRawExecTrailingContext(
   prefix: string,
   match: RegExpMatchArray,
@@ -415,18 +417,15 @@ function shouldKeepRawExecTrailingContext(
   }
   return isPathLikeCwdSuffix(suffix);
 }
-
 function isCompactCwdSuffix(suffix: string): boolean {
   return /^\((?:agent|repo|workspace)\)$/u.test(suffix);
 }
-
 function isPathLikeCwdSuffix(suffix: string): boolean {
   const cwd = suffix.match(/^\(in ([^)\r\n]+)\)$/u)?.[1]?.trim();
   return Boolean(
     cwd && (/^(?:\/|~|\.{1,2}(?:\/|$)|[A-Za-z]:[\\/]|\\\\)/u.test(cwd) || cwd.includes("/")),
   );
 }
-
 function isKnownLiteralRunSummary(subject: string): boolean {
   if (
     SEMANTIC_RUN_SUMMARIES.has(subject) ||
@@ -444,7 +443,6 @@ function isKnownLiteralRunSummary(subject: string): boolean {
   }
   return LITERAL_RUN_SUMMARY_PREFIXES.has(command);
 }
-
 function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
   const match = /^(.*?)( \((?:agent|repo|workspace|sandbox)\))$/u.exec(value);
   if (!match) {
@@ -452,7 +450,6 @@ function splitDisplayContextSuffix(value: string): { text: string; suffix: strin
   }
   return { text: match[1] ?? value, suffix: match[2] ?? "" };
 }
-
 function formatConciseExecExitSuffix(error: string | undefined): string {
   const normalized = normalizeOptionalString(error);
   const code = normalized?.match(
@@ -460,7 +457,6 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
   )?.[1];
   return code ? ` (exit ${code})` : "";
 }
-
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
   if (!markdown) {
     return value;
@@ -469,7 +465,6 @@ function maybeWrapInlineCode(value: string, markdown: boolean): string {
   const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
   return `${delimiter}${padding}${value}${padding}${delimiter}`;
 }
-
 function longestBacktickRun(value: string): number {
   let longest = 0;
   let current = 0;
@@ -483,7 +478,6 @@ function longestBacktickRun(value: string): number {
   }
   return longest;
 }
-
 /**
  * Chooses whether a tool failure needs a separate user-visible warning and
  * whether to include raw details. Mutating failures are stricter because a
@@ -550,7 +544,6 @@ function resolveToolErrorWarningPolicy(params: {
     includeDetails,
   };
 }
-
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -581,6 +574,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -592,73 +586,29 @@ export function buildEmbeddedRunPayloads(params: {
   if (params.heartbeatToolResponse) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
-
-  const replyItems: Array<{
-    text: string;
-    media?: string[];
-    mediaUrl?: string;
-    isError?: boolean;
-    isReasoning?: boolean;
-    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
-    isCommentary?: boolean;
-    audioAsVoice?: boolean;
-    replyToId?: string;
-    replyToTag?: boolean;
-    replyToCurrent?: boolean;
-    presentation?: ReplyPayload["presentation"];
-    interactive?: ReplyPayload["interactive"];
-    channelData?: Record<string, unknown>;
-    nonTerminalToolErrorWarning?: boolean;
-    sourceReplyMirror?: {
-      idempotencyKey?: string;
-    };
-  }> = [];
-
-  // Internal source replies always need transcript/UI mirror payloads. Only a
+  // Internal source replies always need transcript/UI mirrors. Only a
   // message_tool_only run suppresses the separate automatic final answer.
-  const sourceReplyPayloads = params.messagingToolSourceReplyPayloads ?? [];
-  const sourceReplyStartIndex = replyItems.length;
-  sourceReplyPayloads.forEach((payload, index) => {
-    const text = normalizeOptionalString(payload.text) ?? "";
-    const media = Array.from(
-      new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
-    ).filter((value) => value.trim().length > 0);
-    if (
-      !text &&
-      media.length === 0 &&
-      !payload.presentation &&
-      !payload.interactive &&
-      !payload.channelData
-    ) {
-      return;
-    }
-    // Message-tool-only replies were already sent by the tool. Mirror them into
-    // the transcript while marking payloads so channel delivery suppresses a duplicate send.
-    replyItems.push({
-      text,
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(media.length ? { media } : {}),
-      ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
-      ...(payload.presentation ? { presentation: payload.presentation } : {}),
-      ...(payload.interactive ? { interactive: payload.interactive } : {}),
-      ...(payload.channelData ? { channelData: payload.channelData } : {}),
-      sourceReplyMirror: {
-        idempotencyKey:
-          payload.idempotencyKey ??
-          (params.runId ? `${params.runId}:internal-source-reply:${index}` : undefined),
-      },
-    });
+  const {
+    replyItems,
+    hasSourceReplyPayload,
+    deliveredSourceReplyViaMessageTool,
+    explicitFinalSourceReply,
+    completedSourceReplyViaMessageTool,
+  } = buildSourceReplyPayloadState({
+    payloads: params.messagingToolSourceReplyPayloads,
+    sentTargets: params.messagingToolSentTargets,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
+    runId: params.runId,
   });
-  const hasSourceReplyPayload = replyItems.length > sourceReplyStartIndex;
-  const deliveredSourceReplyViaMessageTool =
-    params.sourceReplyDeliveryMode === "message_tool_only" &&
-    params.didDeliverSourceReplyViaMessageTool === true;
-
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
+  const suppressFailureArtifacts =
+    params.didSendDeterministicApprovalPrompt === true ||
+    (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
   const nonEmptyAssistantTexts = params.assistantTexts
     .map((text) => sanitizeAssistantVisibleStreamText(text))
     .filter((text) => text.trim().length > 0);
@@ -675,7 +625,7 @@ export function buildEmbeddedRunPayloads(params: {
     : undefined;
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
-      ? suppressAssistantArtifacts
+      ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
           ? formatUserFacingAssistantErrorText(assistantForPayload, {
@@ -711,7 +661,6 @@ export function buildEmbeddedRunPayloads(params: {
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
   }
-
   const inlineToolResults =
     params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
   if (inlineToolResults) {
@@ -735,7 +684,6 @@ export function buildEmbeddedRunPayloads(params: {
       }
     }
   }
-
   const reasoningText =
     suppressAssistantArtifacts || runAborted
       ? ""
@@ -745,7 +693,6 @@ export function buildEmbeddedRunPayloads(params: {
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
-
   const fallbackAnswerText = assistantForPayload
     ? extractAssistantVisibleText(assistantForPayload)
     : "";
@@ -842,8 +789,7 @@ export function buildEmbeddedRunPayloads(params: {
                 ? [fallbackAnswerText]
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
-
-  let hasUserFacingAssistantReply = hasSourceReplyPayload || deliveredSourceReplyViaMessageTool;
+  let hasUserFacingAssistantReply = completedSourceReplyViaMessageTool;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
@@ -871,7 +817,6 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
-
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
@@ -885,7 +830,6 @@ export function buildEmbeddedRunPayloads(params: {
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
-
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
@@ -915,7 +859,6 @@ export function buildEmbeddedRunPayloads(params: {
       }
     }
   }
-
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
@@ -931,6 +874,13 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (
+        item.isError === true &&
+        params.sourceReplyDeliveryMode === "message_tool_only" &&
+        explicitFinalSourceReply === false
+      ) {
+        markReplyPayloadForSourceSuppressionDelivery(payload);
       }
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {

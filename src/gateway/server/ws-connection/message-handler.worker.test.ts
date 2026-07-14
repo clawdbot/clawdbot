@@ -14,6 +14,12 @@ import {
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
+  type WorkerInferenceEventFrame,
+  type WorkerInferenceStartParams,
+  type WorkerInferenceTerminalFrame,
+  WORKER_INFERENCE_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -30,6 +36,7 @@ const HANDSHAKE = {
     "worker-heartbeat-v1",
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+    WORKER_INFERENCE_PROTOCOL_FEATURE,
   ],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
@@ -46,6 +53,7 @@ const WORKER_CONNECT: WorkerConnectParams = {
     environmentId: "worker-1",
     credential: CREDENTIAL,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: 1,
     handshake: HANDSHAKE,
@@ -56,6 +64,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "h".repeat(43),
   bundleHash: HANDSHAKE.bundleHash,
   sessionId: null,
+  runId: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
@@ -80,7 +89,40 @@ const LIVE_EVENT = {
   runId: "r",
   event: { kind: "assistant" as const, payload: { text: "x", delta: "x" } },
 };
+const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
+  ...IDENTITY,
+  sessionId: "session-1",
+  runId: "run-1",
+};
+const INFERENCE_IDS = {
+  runEpoch: 1,
+  sessionId: "session-1",
+  runId: "run-1",
+  turnId: "turn-1",
+} as const;
+const INFERENCE_START: WorkerInferenceStartParams = {
+  ...INFERENCE_IDS,
+  modelRef: { provider: "test-provider", model: "sonnet-4.6" },
+  context: {
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+  },
+  options: { maxTokens: 128, temperature: 0.2 },
+};
+const INFERENCE_EVENT: WorkerInferenceEventFrame = {
+  type: "event",
+  event: "worker.inference.event",
+  payload: {
+    ...INFERENCE_IDS,
+    seq: 1,
+    event: { type: "text_delta", contentIndex: 0, delta: "x" },
+  },
+};
 const cleanups: Array<() => void> = [];
+
+type InferenceSink = {
+  connectionId: string;
+  send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
+};
 
 function createLogger() {
   return { warn: vi.fn() };
@@ -92,6 +134,7 @@ function attachHarness(
     commitFailure?: WorkerTranscriptCommitErrorReason;
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
+    onInferenceLaunch?: (sink: InferenceSink) => void;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -117,8 +160,25 @@ function attachHarness(
         ? { ok: false as const, details: options.liveFailure }
         : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
+    startInference: vi.fn(
+      (
+        _identity: WorkerConnectionIdentity,
+        _request: WorkerInferenceStartParams,
+        sink: InferenceSink,
+      ) => {
+        return {
+          ok: true as const,
+          result: { status: "accepted" as const },
+          launch: () => options.onInferenceLaunch?.(sink),
+        };
+      },
+    ),
+    cancelInference: vi.fn(() => ({
+      ok: true as const,
+      result: { status: "cancelled" as const },
+    })),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
-  } as WorkerConnectionService;
+  };
   let client: GatewayWsClient | null = null;
   const setClient = vi.fn((next: GatewayWsClient) => {
     client = next;
@@ -155,8 +215,8 @@ function attachHarness(
     service,
     setClient,
     setLastFrameMeta,
-    sendRequest: (method: string, params: unknown) =>
-      send({ type: "req", id: "request-1", method, params }),
+    sendRequest: (method: string, params: unknown, id = "request-1") =>
+      send({ type: "req", id, method, params }),
     sendConnect: () =>
       send({ type: "req", id: "connect-1", method: "connect", params: WORKER_CONNECT }),
   };
@@ -224,6 +284,48 @@ describe("dedicated worker websocket protocol", () => {
       ok: true,
       payload: { status: "ok", ownerEpoch: 1 },
     });
+  });
+
+  it("gates inference independently", async () => {
+    const unsupported = attachHarness({
+      identity: {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: HANDSHAKE.protocolFeatures.filter(
+          (feature) => feature !== WORKER_INFERENCE_PROTOCOL_FEATURE,
+        ),
+      },
+    });
+    await admit(unsupported);
+    unsupported.sendRequest("worker.inference.start", INFERENCE_START);
+    await vi.waitFor(() =>
+      expect(unsupported.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
+    );
+    expect(unsupported.service.startInference).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges inference before forwarding synchronous stream frames", async () => {
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onInferenceLaunch: (sink) => sink.send(INFERENCE_EVENT),
+    });
+    await admit(harness);
+    harness.sendRequest("worker.inference.start", INFERENCE_START);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(3));
+    expect(harness.responses[1]).toMatchObject({
+      ok: true,
+      payload: { status: "accepted" },
+    });
+    expect(harness.responses[2]).toEqual(INFERENCE_EVENT);
+    expect(harness.service.startInference).toHaveBeenCalledOnce();
+
+    harness.sendRequest("worker.inference.cancel", INFERENCE_IDS, "cancel-1");
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(4));
+    expect(harness.responses[3]).toMatchObject({
+      ok: true,
+      payload: { status: "cancelled" },
+    });
+    expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
   });
 
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {

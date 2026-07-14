@@ -1,5 +1,4 @@
-// Adapts Node's sync sqlite API to Kysely.
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+// Build-only node:sqlite dialect for the synchronous execution helpers.
 import type {
   DatabaseConnection,
   DatabaseIntrospector,
@@ -8,40 +7,14 @@ import type {
   Driver,
   Kysely,
   QueryCompiler,
-  QueryResult,
   TransactionSettings,
 } from "kysely";
-import {
-  CompiledQuery,
-  IdentifierNode,
-  RawNode,
-  SqliteAdapter,
-  SqliteIntrospector,
-  SqliteQueryCompiler,
-  createQueryId,
-} from "kysely";
+import { SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from "kysely";
 
-// Kysely dialect for Node's synchronous node:sqlite API. The driver serializes
-// connection use because DatabaseSync is single-connection and blocking.
-type MaybePromise<T> = T | Promise<T>;
-
-/** Configuration for the node:sqlite Kysely dialect. */
-export type NodeSqliteKyselyDialectConfig = {
-  database: DatabaseSync | (() => MaybePromise<DatabaseSync>);
-  onCreateConnection?: (connection: DatabaseConnection) => MaybePromise<void>;
-  transactionMode?: "deferred" | "immediate" | "exclusive";
-};
-
-/** Kysely dialect backed by a node:sqlite DatabaseSync instance. */
+/** Kysely dialect that compiles node:sqlite queries without executing them. */
 export class NodeSqliteKyselyDialect implements Dialect {
-  readonly #config: NodeSqliteKyselyDialectConfig;
-
-  constructor(config: NodeSqliteKyselyDialectConfig) {
-    this.#config = Object.freeze({ ...config });
-  }
-
   createDriver(): Driver {
-    return new NodeSqliteKyselyDriver(this.#config);
+    return new CompileOnlySqliteDriver();
   }
 
   createQueryCompiler(): QueryCompiler {
@@ -49,7 +22,7 @@ export class NodeSqliteKyselyDialect implements Dialect {
   }
 
   createAdapter(): DialectAdapter {
-    return new SqliteAdapter();
+    return new CompileOnlySqliteAdapter();
   }
 
   createIntrospector(db: Kysely<unknown>): DatabaseIntrospector {
@@ -57,163 +30,44 @@ export class NodeSqliteKyselyDialect implements Dialect {
   }
 }
 
-class NodeSqliteKyselyDriver implements Driver {
-  readonly #config: NodeSqliteKyselyDialectConfig;
-  readonly #mutex = new ConnectionMutex();
-
-  #db?: DatabaseSync;
-  #connection?: DatabaseConnection;
-
-  constructor(config: NodeSqliteKyselyDialectConfig) {
-    this.#config = Object.freeze({ ...config });
-  }
-
-  async init(): Promise<void> {
-    this.#db =
-      typeof this.#config.database === "function"
-        ? await this.#config.database()
-        : this.#config.database;
-
-    this.#connection = new NodeSqliteKyselyConnection(this.#db);
-    await this.#config.onCreateConnection?.(this.#connection);
-  }
+class CompileOnlySqliteDriver implements Driver {
+  async init(): Promise<void> {}
 
   async acquireConnection(): Promise<DatabaseConnection> {
-    // Kysely expects async acquisition even though node:sqlite is sync; the
-    // mutex preserves transaction ordering across concurrent callers.
-    await this.#mutex.lock();
-    return this.#connection!;
+    throw createCompileOnlyExecutionError();
   }
 
   async beginTransaction(
-    connection: DatabaseConnection,
+    _connection: DatabaseConnection,
     _settings: TransactionSettings,
   ): Promise<void> {
-    const mode = this.#config.transactionMode ?? "deferred";
-    await connection.executeQuery(CompiledQuery.raw(`begin ${mode}`));
+    throw createCompileOnlyExecutionError();
   }
 
-  async commitTransaction(connection: DatabaseConnection): Promise<void> {
-    await connection.executeQuery(CompiledQuery.raw("commit"));
+  async commitTransaction(_connection: DatabaseConnection): Promise<void> {
+    throw createCompileOnlyExecutionError();
   }
 
-  async rollbackTransaction(connection: DatabaseConnection): Promise<void> {
-    await connection.executeQuery(CompiledQuery.raw("rollback"));
+  async rollbackTransaction(_connection: DatabaseConnection): Promise<void> {
+    throw createCompileOnlyExecutionError();
   }
 
-  async savepoint(
-    connection: DatabaseConnection,
-    savepointName: string,
-    compileQuery: QueryCompiler["compileQuery"],
-  ): Promise<void> {
-    await connection.executeQuery(
-      compileQuery(createSavepointCommand("savepoint", savepointName), createQueryId()),
-    );
-  }
+  async releaseConnection(_connection: DatabaseConnection): Promise<void> {}
 
-  async rollbackToSavepoint(
-    connection: DatabaseConnection,
-    savepointName: string,
-    compileQuery: QueryCompiler["compileQuery"],
-  ): Promise<void> {
-    await connection.executeQuery(
-      compileQuery(createSavepointCommand("rollback to", savepointName), createQueryId()),
-    );
-  }
-
-  async releaseSavepoint(
-    connection: DatabaseConnection,
-    savepointName: string,
-    compileQuery: QueryCompiler["compileQuery"],
-  ): Promise<void> {
-    await connection.executeQuery(
-      compileQuery(createSavepointCommand("release", savepointName), createQueryId()),
-    );
-  }
-
-  async releaseConnection(): Promise<void> {
-    this.#mutex.unlock();
-  }
-
-  async destroy(): Promise<void> {
-    this.#db?.close();
-    this.#db = undefined;
-    this.#connection = undefined;
-  }
+  async destroy(): Promise<void> {}
 }
 
-class NodeSqliteKyselyConnection implements DatabaseConnection {
-  readonly #db: DatabaseSync;
-
-  constructor(db: DatabaseSync) {
-    this.#db = db;
-  }
-
-  executeQuery<O>(compiledQuery: CompiledQuery): Promise<QueryResult<O>> {
-    const { sql, parameters } = compiledQuery;
-    const stmt = this.#db.prepare(sql);
-    const sqliteParameters = parameters as SQLInputValue[];
-
-    if (stmt.columns().length > 0) {
-      return Promise.resolve({ rows: stmt.all(...sqliteParameters) as O[] });
-    }
-
-    const { changes, lastInsertRowid } = stmt.run(...sqliteParameters);
-    const baseResult: QueryResult<O> = {
-      numAffectedRows: BigInt(changes),
-      rows: [],
-    };
-    if (isInsertStatement(sql) && changes > 0) {
-      return Promise.resolve({
-        ...baseResult,
-        insertId: BigInt(lastInsertRowid),
-      });
-    }
-    return Promise.resolve(baseResult);
-  }
-
-  async *streamQuery<O>(
-    compiledQuery: CompiledQuery,
-    _chunkSize?: number,
-  ): AsyncIterableIterator<QueryResult<O>> {
-    const { sql, parameters } = compiledQuery;
-    const stmt = this.#db.prepare(sql);
-
-    for (const row of stmt.iterate(...(parameters as SQLInputValue[]))) {
-      yield { rows: [row as O] };
-    }
-  }
+function createCompileOnlyExecutionError(): Error {
+  return new Error(
+    "getNodeSqliteKysely() returns a compile-only Kysely facade; use executeSqliteQuerySync() to execute node:sqlite queries.",
+  );
 }
 
-function isInsertStatement(sql: string): boolean {
-  return sql.trimStart().toLowerCase().startsWith("insert");
-}
-
-function createSavepointCommand(command: string, savepointName: string): RawNode {
-  return RawNode.createWithChildren([
-    RawNode.createWithSql(`${command} `),
-    IdentifierNode.create(savepointName),
-  ]);
-}
-
-class ConnectionMutex {
-  #promise?: Promise<void>;
-  #resolve?: () => void;
-
-  async lock(): Promise<void> {
-    while (this.#promise) {
-      await this.#promise;
-    }
-
-    this.#promise = new Promise((resolve) => {
-      this.#resolve = resolve;
-    });
-  }
-
-  unlock(): void {
-    const resolve = this.#resolve;
-    this.#promise = undefined;
-    this.#resolve = undefined;
-    resolve?.();
+class CompileOnlySqliteAdapter extends SqliteAdapter {
+  override get supportsMultipleConnections(): boolean {
+    // Kysely's SQLite adapter installs a single-connection mutex. This facade
+    // never opens a real connection, so direct execution should reject from
+    // acquisition without leaving controlled transaction calls wedged.
+    return true;
   }
 }

@@ -8,11 +8,11 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
-export const SLACK_CHART_TITLE_MAX = 50;
-export const SLACK_CHART_LABEL_MAX = 20;
-export const SLACK_CHART_AXIS_LABEL_MAX = 50;
-export const SLACK_CHART_SERIES_MAX = 12;
-export const SLACK_CHART_DATA_POINTS_MAX = 20;
+const SLACK_CHART_TITLE_MAX = 50;
+const SLACK_CHART_LABEL_MAX = 20;
+const SLACK_CHART_AXIS_LABEL_MAX = 50;
+const SLACK_CHART_SERIES_MAX = 12;
+const SLACK_CHART_DATA_POINTS_MAX = 20;
 // Slack's API rejects a third data_visualization block even though its public
 // reference does not currently document this per-message subtype limit.
 export const SLACK_DATA_VISUALIZATION_BLOCKS_MAX = 2;
@@ -34,7 +34,7 @@ type SlackSeriesChart = {
   };
 };
 
-export type SlackDataVisualizationBlock = Block & {
+type SlackDataVisualizationBlock = Block & {
   type: "data_visualization";
   title: string;
   chart: SlackPieChart | SlackSeriesChart;

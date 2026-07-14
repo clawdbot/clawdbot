@@ -4,10 +4,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
-import {
-  createUserTurnTranscriptRecorder,
-  takeRuntimeUserTurnTranscriptContext,
-} from "../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -23,6 +20,7 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
+import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";

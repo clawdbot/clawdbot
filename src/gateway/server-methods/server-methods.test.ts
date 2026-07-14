@@ -37,11 +37,13 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
+import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
+
+const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
@@ -593,72 +595,59 @@ describe("waitForAgentJob", () => {
     }
   });
 
-  it("caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop", () => {
-    agentJobTesting.resetAgentRunCache();
-    const max = agentJobTesting.agentRunCacheMaxEntries;
-    const overflow = 25;
-    const prefix = `cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    for (let i = 0; i < max + overflow; i++) {
+  it("evicts the oldest terminal snapshots when the agent-run cache reaches its limit", async () => {
+    const prefix = `cache-cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
       emitAgentEvent({
-        runId: `${prefix}-${i}`,
+        runId: `${prefix}-${index}`,
         stream: "lifecycle",
-        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+        data: { phase: "end", startedAt: index, endedAt: index + 1 },
       });
     }
-    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
-    agentJobTesting.resetAgentRunCache();
+
+    await expect(waitForAgentJob({ runId: `${prefix}-0`, timeoutMs: 0 })).resolves.toBeNull();
+    await expect(
+      waitForAgentJob({ runId: `${prefix}-${AGENT_RUN_CACHE_ENTRY_LIMIT + 24}`, timeoutMs: 0 }),
+    ).resolves.toMatchObject({ status: "ok", endedAt: AGENT_RUN_CACHE_ENTRY_LIMIT + 25 });
   });
 
-  it("does not evict cached terminal snapshots with active fresh waiters", async () => {
-    agentJobTesting.resetAgentRunCache();
-    const max = agentJobTesting.agentRunCacheMaxEntries;
-    const prefix = `cap-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  it("retains a cached snapshot while a fresh waiter is active", async () => {
+    const prefix = `cache-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitedRunId = `${prefix}-waited`;
     emitAgentEvent({
       runId: waitedRunId,
       stream: "lifecycle",
       data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
     });
-    const waitPromise = waitForAgentJob({
+    const freshWait = waitForAgentJob({
       runId: waitedRunId,
       timeoutMs: 5_000,
       ignoreCachedSnapshot: true,
     });
 
-    for (let i = 0; i < max + 25; i++) {
+    for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
       emitAgentEvent({
-        runId: `${prefix}-${i}`,
+        runId: `${prefix}-${index}`,
         stream: "lifecycle",
-        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+        data: { phase: "end", startedAt: index, endedAt: index + 1 },
       });
     }
-    const cached = await waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 });
-    expectRecordFields(cached, {
+    await expect(waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
       startedAt: 1_000,
       endedAt: 1_100,
     });
-    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
 
     emitAgentEvent({
       runId: waitedRunId,
       stream: "lifecycle",
       data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
     });
-
-    const waited = await waitPromise;
-    expectRecordFields(waited, {
+    await expect(freshWait).resolves.toMatchObject({
       status: "ok",
       startedAt: 10_000,
       endedAt: 10_100,
     });
-    emitAgentEvent({
-      runId: `${prefix}-after-waiter`,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 20_000, endedAt: 20_100 },
-    });
-    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
-    agentJobTesting.resetAgentRunCache();
   });
 });
 
@@ -2556,12 +2545,12 @@ describe("timestampOptsFromConfig", () => {
   it.each([
     {
       name: "extracts timezone from config",
-      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as OpenClawConfig,
       expected: "America/Chicago",
     },
     {
       name: "falls back gracefully with empty config",
-      cfg: {} as any,
+      cfg: {} as OpenClawConfig,
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
@@ -2638,11 +2627,15 @@ describe("gateway chat transcript writes (guardrail)", () => {
   it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
+    const persistenceTs = fileURLToPath(
+      new URL("./chat-transcript-persistence.ts", import.meta.url),
+    );
+    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
     const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
+    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
     expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
@@ -4786,14 +4779,16 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
-    pricingState.clearGatewayModelPricingCacheState();
+    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
+    pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });
 
   afterEach(() => {
-    pricingState.clearGatewayModelPricingCacheState();
+    pricingState.replaceGatewayModelPricingCache(new Map(), 0);
+    pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });

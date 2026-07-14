@@ -9,6 +9,7 @@ import {
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
 import { resolveIsNixMode } from "../config/paths.js";
+import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -58,7 +59,7 @@ import {
   planPluginUninstall,
 } from "./uninstall.js";
 
-export type ManagedPluginCatalogEntry = {
+type ManagedPluginCatalogEntry = {
   id: string;
   name: string;
   packageName?: string;
@@ -77,13 +78,13 @@ export type ManagedPluginCatalogEntry = {
   removable?: boolean;
 };
 
-export type ManagedPluginCatalog = {
+type ManagedPluginCatalog = {
   plugins: ManagedPluginCatalogEntry[];
   diagnostics: unknown[];
   mutationAllowed: boolean;
 };
 
-export type ManagedPluginInstallRequest =
+type ManagedPluginInstallRequest =
   | {
       source: "clawhub";
       packageName: string;
@@ -189,7 +190,7 @@ function matchesBundledCatalogIdentity(params: {
 }
 
 /** Overlay local runtime identity and editorial hints after an exact package/source match. */
-export function overlayBundledOfficialPluginCatalogMetadata(
+function overlayBundledOfficialPluginCatalogMetadata(
   entries: readonly OfficialExternalPluginCatalogEntry[],
   bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
 ): OfficialExternalPluginCatalogEntry[] {
@@ -258,9 +259,7 @@ function resolveCatalogInstallAction(params: {
 }
 
 /** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-export function derivePluginCategory(
-  manifest: PluginManifestRecord | undefined,
-): string | undefined {
+function derivePluginCategory(manifest: PluginManifestRecord | undefined): string | undefined {
   if (!manifest) {
     return undefined;
   }
@@ -864,6 +863,11 @@ export async function setManagedPluginEnabled(params: {
     const warnings: string[] = [];
     let policyPluginId = pluginId;
     if (params.enabled) {
+      // The admin-scoped enable RPC is an explicit trust action. Preserve the
+      // existing inventory while admitting only the selected installed plugin.
+      if ((next.plugins?.allow?.length ?? 0) > 0) {
+        next = ensurePluginAllowlisted(next, pluginId);
+      }
       const enableResult = enableExplicitlySelectedPluginInConfig(next, pluginId, {
         updateChannelConfig: false,
       });

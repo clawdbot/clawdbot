@@ -23,7 +23,7 @@ import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var
 
 const CHANNEL_PLUGIN_BLOCKERS_CHECK_ID = "core/doctor/channel-plugin-blockers";
 
-export type ChannelPluginBlockerHit = {
+type ChannelPluginBlockerHit = {
   /** Normalized configured channel id whose backing plugin is unavailable. */
   channelId: string;
   /** Plugin id that would provide the configured channel. */

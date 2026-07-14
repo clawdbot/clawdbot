@@ -84,6 +84,7 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
+  assertStableMediaFanout,
   planOutboundMediaMessageUnits,
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
@@ -109,8 +110,7 @@ import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
-export { normalizeOutboundPayloads } from "./payloads.js";
-export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -130,7 +130,7 @@ export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
-export type OutboundDurableDeliverySupport =
+type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
       ok: false;
@@ -407,13 +407,9 @@ function createPluginHandler(
         await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
       }
     : undefined;
-  const resolveCtx = (overrides?: {
-    replyToId?: string | null;
-    replyToIdSource?: "explicit" | "implicit";
-    threadId?: string | number | null;
-    audioAsVoice?: boolean;
-    formatting?: OutboundDeliveryFormattingOptions;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+  const resolveCtx = (
+    overrides?: OutboundMessageSendOverrides,
+  ): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
@@ -422,14 +418,13 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    deliveryPartIndex: overrides?.deliveryPartIndex,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
   });
-  const buildTargetRef = (overrides?: {
-    threadId?: string | number | null;
-  }): ChannelOutboundTargetRef => ({
+  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId ?? undefined,
@@ -870,7 +865,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
       return null;
     }
     if (text) {
@@ -2123,6 +2118,7 @@ async function deliverOutboundPayloadsCore(
   for (const { index: payloadIndex, payload } of normalizedPayloads) {
     const payloadResultStartIndex = results.length;
     let payloadSummary = buildPayloadSummary(payload);
+    const originalMediaCount = payloadSummary.mediaUrls.length;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -2244,7 +2240,9 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      payloadSummary = buildPayloadSummary(effectivePayload);
+      const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
+      assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
+      payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
       effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
@@ -2270,12 +2268,17 @@ async function deliverOutboundPayloadsCore(
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent({
-            presentation: effectivePayload.presentation,
-            interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
-            location: effectivePayload.location,
-          }) ||
+          hasReplyPayloadContent(
+            {
+              presentation: effectivePayload.presentation,
+              interactive: effectivePayload.interactive,
+              channelData: effectivePayload.channelData,
+              location: effectivePayload.location,
+            },
+            {
+              extraContent: effectivePayload.location != null,
+            },
+          ) ||
           effectivePayload.audioAsVoice === true ||
           effectivePayload.videoAsNote === true)
       ) {

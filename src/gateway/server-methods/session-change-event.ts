@@ -5,7 +5,7 @@ import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type SessionChangedPayload = {
+type SessionChangedPayload = {
   sessionKey?: string;
   agentId?: string;
   reason: string;

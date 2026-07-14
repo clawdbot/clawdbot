@@ -35,9 +35,9 @@ describe("hasAwsCredentials", () => {
   });
 
   it("requires AWS profile credentials to resolve through the credential chain", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => ({ accessKeyId: "resolved-access-key" }),
-    });
+    const loadCredentialProvider = vi
+      .fn()
+      .mockResolvedValue(() => async () => ({ accessKeyId: "resolved-access-key" }));
 
     await expect(hasAwsCredentials({ AWS_PROFILE: "work" }, loadCredentialProvider)).resolves.toBe(
       true,
@@ -47,10 +47,8 @@ describe("hasAwsCredentials", () => {
   });
 
   it("rejects AWS profile markers when the credential chain cannot resolve", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => {
-        throw new Error("Could not load credentials from any providers");
-      },
+    const loadCredentialProvider = vi.fn().mockResolvedValue(() => async () => {
+      throw new Error("Could not load credentials from any providers");
     });
 
     await expect(

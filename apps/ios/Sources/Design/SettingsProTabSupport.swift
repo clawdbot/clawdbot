@@ -10,6 +10,7 @@ enum SettingsRoute: Hashable {
     case approvals
     case permissions
     case channels
+    case skills
     case voice
     case diagnostics
     case privacy
@@ -92,12 +93,18 @@ struct SettingsBuildMetadataStrip: View {
         .accessibilityLabel(self.metadataAccessibilityLabel)
         .accessibilityActions {
             if self.metadata.gitCommit != nil {
-                Button("Copy full commit hash") {
+                Button {
                     self.copyCommit()
+                } label: {
+                    Text("Copy full commit hash")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             }
-            Button("Copy build info") {
+            Button {
                 self.copyBuildInfo()
+            } label: {
+                Text("Copy build info")
+                    .font(OpenClawType.subheadSemiBold)
             }
         }
         .contextMenu {
@@ -170,39 +177,39 @@ struct SettingsBuildMetadataStrip: View {
         }
     }
 
-    private var metadataAccessibilityLabel: Text {
+    private var metadataAccessibilityLabel: String {
         let version = self.metadata.versionDisplay
         let commit = self.metadata.spokenCommit
         let timestamp = self.metadata.buildTimestamp
         let built = self.metadata.localizedBuildDate() ?? timestamp
         if let commit, let timestamp, let built {
-            return Text(verbatim: String(
+            return String(
                 format: String(
                     localized: "Version %1$@, commit %2$@, built %3$@, timestamp %4$@"),
                 version,
                 commit,
                 built,
-                timestamp))
+                timestamp)
         }
         if let commit {
-            return Text(verbatim: String(
+            return String(
                 format: String(
                     localized: "Version %1$@, commit %2$@, build date unavailable"),
                 version,
-                commit))
+                commit)
         }
         if let timestamp, let built {
-            return Text(verbatim: String(
+            return String(
                 format: String(
                     localized: "Version %1$@, commit unavailable, built %2$@, timestamp %3$@"),
                 version,
                 built,
-                timestamp))
+                timestamp)
         }
-        return Text(verbatim: String(
+        return String(
             format: String(
                 localized: "Version %@, commit unavailable, build date unavailable"),
-            version))
+            version)
     }
 
     private func copyCommit() {

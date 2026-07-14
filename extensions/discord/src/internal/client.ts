@@ -10,7 +10,7 @@ import { dispatchInteraction } from "./interaction-dispatch.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, Message, User } from "./structures.js";
 
-export interface Route {
+interface Route {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: `/${string}`;
   handler(req: Request, ctx?: Context): Response | Promise<Response>;
@@ -18,7 +18,7 @@ export interface Route {
   disabled?: boolean;
 }
 
-export interface Context {
+interface Context {
   waitUntil?(promise: Promise<unknown>): void;
   env?: unknown;
 }

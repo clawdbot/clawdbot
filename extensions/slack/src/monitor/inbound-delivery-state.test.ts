@@ -1,17 +1,15 @@
 // Slack tests cover inbound delivery state plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearSlackRuntime, setSlackRuntime } from "../runtime.js";
+import { setSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
 import {
-  clearSlackInboundDeliveryStateForTest,
   hasSlackInboundMessageDelivery,
   recordSlackInboundMessageDeliveries,
 } from "./inbound-delivery-state.js";
 
 describe("slack inbound delivery state", () => {
   afterEach(() => {
-    clearSlackInboundDeliveryStateForTest();
-    clearSlackRuntime();
+    setSlackRuntime(null as never);
     vi.restoreAllMocks();
   });
 
@@ -51,22 +49,22 @@ describe("slack inbound delivery state", () => {
 
   it("scopes duplicate checks by account", async () => {
     await recordSlackInboundMessageDeliveries({
-      accountId: "A1",
-      messages: [message("C1", "100.001")],
+      accountId: "A-scope-1",
+      messages: [message("C-scope", "200.001")],
     });
 
     await expect(
       hasSlackInboundMessageDelivery({
-        accountId: "A1",
-        channelId: "C1",
-        ts: "100.001",
+        accountId: "A-scope-1",
+        channelId: "C-scope",
+        ts: "200.001",
       }),
     ).resolves.toBe(true);
     await expect(
       hasSlackInboundMessageDelivery({
-        accountId: "A2",
-        channelId: "C1",
-        ts: "100.001",
+        accountId: "A-scope-2",
+        channelId: "C-scope",
+        ts: "200.001",
       }),
     ).resolves.toBe(false);
   });

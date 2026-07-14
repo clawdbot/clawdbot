@@ -14,7 +14,7 @@ describe("ClickClack account resolution", () => {
         clickclack: {
           baseUrl: "https://app.clickclack.chat",
           workspace: "wsp_1",
-          token: "ccb_default",
+          token: "test-token-placeholder",
           accounts: {
             work: { enabled: false },
           },
@@ -24,14 +24,14 @@ describe("ClickClack account resolution", () => {
 
     expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultClickClackAccountId(cfg)).toBe("default");
-    expect(resolveClickClackAccount({ cfg }).token).toBe("ccb_default");
+    expect(resolveClickClackAccount({ cfg }).token).toBe("test-token-placeholder");
   });
 
   it("does not synthesize a partial top-level default account from inherited credentials", () => {
     const cfg = {
       channels: {
         clickclack: {
-          token: "ccb_shared",
+          token: "test-auth-token",
           accounts: {
             work: {
               baseUrl: "https://app.clickclack.chat",
@@ -57,7 +57,7 @@ describe("ClickClack account resolution", () => {
             work: {
               baseUrl: "https://app.clickclack.chat",
               workspace: "wsp_1",
-              token: "ccb_work",
+              token: "gateway-token",
             },
           },
         },
@@ -88,7 +88,7 @@ describe("ClickClack account resolution", () => {
       resolveClickClackAccount({
         cfg,
         accountId: "service",
-        env: { CLICKCLACK_SERVICE_TOKEN: "  ccb_live  " },
+        env: { CLICKCLACK_SERVICE_TOKEN: "  test-token-placeholder  " },
       }),
     ).toEqual({
       allowFrom: ["*"],
@@ -102,12 +102,19 @@ describe("ClickClack account resolution", () => {
         workspace: "wsp_1",
       },
       configured: true,
+      agentId: undefined,
+      botUserId: undefined,
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      model: undefined,
+      name: undefined,
       reconnectMs: 1_500,
       replyMode: "agent",
-      token: "ccb_live",
+      systemPrompt: undefined,
+      token: "test-token-placeholder",
+      timeoutSeconds: undefined,
+      toolsAllow: undefined,
       workspace: "wsp_1",
     });
   });
@@ -121,7 +128,7 @@ describe("ClickClack account resolution", () => {
           workspace: "wsp_1",
           accounts: {
             peter: {
-              token: "ccb_peter",
+              token: "token-oversized",
               agentId: "peter-bot",
               replyMode: "model",
               model: "openai/gpt-5.4-mini",
@@ -144,18 +151,22 @@ describe("ClickClack account resolution", () => {
         enabled: true,
         model: "openai/gpt-5.4-mini",
         replyMode: "model",
-        token: "ccb_peter",
+        token: "token-oversized",
         toolsAllow: ["web_search"],
         workspace: "wsp_1",
       },
       configured: true,
+      botUserId: undefined,
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
       model: "openai/gpt-5.4-mini",
+      name: undefined,
       reconnectMs: 1_500,
       replyMode: "model",
-      token: "ccb_peter",
+      systemPrompt: undefined,
+      token: "token-oversized",
+      timeoutSeconds: undefined,
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
@@ -168,10 +179,10 @@ describe("ClickClack account resolution", () => {
           enabled: true,
           baseUrl: "https://app.clickclack.chat",
           workspace: "wsp_1",
-          token: "ccb_default",
+          token: "test-token-placeholder",
           accounts: {
             bridge: {
-              token: "ccb_bridge",
+              token: "clawrouter-e2e-secret",
               agentActivity: true,
             },
           },
@@ -189,7 +200,7 @@ describe("ClickClack account resolution", () => {
         clickclack: {
           enabled: true,
           baseUrl: "https://app.clickclack.chat",
-          token: "ccb_global",
+          token: "very-long-browser-token-0123456789",
           workspace: "wsp_1",
           reconnectMs: 1,
           accounts: {

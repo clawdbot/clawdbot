@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
-import {
-  buildStrandedReplyRetryFollowupRun,
-  STRANDED_REPLY_RETRY_MARKER,
-} from "./stranded-reply-recovery.js";
+import { buildStrandedReplyRetryFollowupRun } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
+
+const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
   it("does not share the client turn's queuedLifecycle with the system retry", () => {

@@ -23,6 +23,7 @@ export function parseArgs(argv: unknown): {
   windowsNodeInstallerDigests: string;
   outputDir: string;
 };
+export function releaseBranchForTag(tag: string): string;
 export function run(command: unknown, args: unknown, options?: Record<string, unknown>): string;
 export function buildReleaseCandidateState(
   options: unknown,

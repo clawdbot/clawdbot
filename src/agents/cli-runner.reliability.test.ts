@@ -762,6 +762,7 @@ describe("runCliAgent reliability", () => {
     ]);
     expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2229,6 +2230,28 @@ describe("runCliAgent reliability", () => {
     expect(completion.finishReason).toBe("stop");
     expect(completion.stopReason).toBe("completed");
     expect(completion.refusal).toBe(false);
+    expect(result.meta.agentMeta?.contextTokens).toBeUndefined();
+  });
+
+  it("reports the prepared context budget for successful claude-cli runs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({ provider: "claude-cli", model: "claude-opus-4-7" }),
+    );
+
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
   });
 
   it("marks CLI runs as paused after sessions_yield", async () => {
@@ -3741,6 +3764,8 @@ describe("runCliAgent reliability", () => {
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
+        provider: "claude-cli",
+        model: "opus",
       });
       context.preparedBackend.backend.sessionMode = "none";
       const run = runPreparedCliAgent({
@@ -3774,6 +3799,7 @@ describe("runCliAgent reliability", () => {
       ]);
       expect(result.meta.livenessState).toBe("blocked");
       expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+      expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(

@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   type ExecutionEnv,
   ExecutionError,
@@ -26,7 +27,6 @@ import {
   type FileKind,
   ok,
   type Result,
-  toError,
 } from "../types.js";
 import { killProcessTree } from "./kill-tree.js";
 
@@ -100,7 +100,7 @@ function toFileError(error: unknown, path?: string): FileError {
   if (error instanceof FileError) {
     return error;
   }
-  const cause = toError(error);
+  const cause = toErrorObject(error, "Non-Error thrown");
   if (isNodeError(error)) {
     const message = error.message;
     switch (error.code) {
@@ -342,7 +342,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           windowsHide: true,
         });
       } catch (error) {
-        const cause = toError(error);
+        const cause = toErrorObject(error, "Non-Error thrown");
         settle(err(new ExecutionError("spawn_error", cause.message, cause)));
         return;
       }
@@ -373,7 +373,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
         try {
           options?.onStdout?.(chunk);
         } catch (error) {
-          const cause = toError(error);
+          const cause = toErrorObject(error, "Non-Error thrown");
           callbackError = new ExecutionError("callback_error", cause.message, cause);
           onAbort();
         }
@@ -383,7 +383,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
         try {
           options?.onStderr?.(chunk);
         } catch (error) {
-          const cause = toError(error);
+          const cause = toErrorObject(error, "Non-Error thrown");
           callbackError = new ExecutionError("callback_error", cause.message, cause);
           onAbort();
         }

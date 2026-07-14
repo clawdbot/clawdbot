@@ -8,12 +8,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
+import { mergeDeep } from "../infra/deep-merge.js";
 import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
-
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 /** Routing context used to layer global, agent, channel, and account TTS config. */
 export type TtsConfigResolutionContext = {
@@ -21,24 +20,6 @@ export type TtsConfigResolutionContext = {
   channelId?: string;
   accountId?: string;
 };
-
-function deepMergeDefined(base: unknown, override: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(override)) {
-    return override === undefined ? base : override;
-  }
-
-  const result: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    // TTS overrides are user-editable config. Skip prototype mutation keys while
-    // preserving deep merge semantics for real nested provider/persona config.
-    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
-      continue;
-    }
-    const existing = result[key];
-    result[key] = key in result ? deepMergeDefined(existing, value) : value;
-  }
-  return result;
-}
 
 function resolveAgentTtsOverride(
   cfg: OpenClawConfig,
@@ -134,7 +115,7 @@ export function resolveEffectiveTtsConfig(
   const accountOverride = resolveAccountTtsOverride(cfg, context);
   let merged: unknown = base;
   for (const override of [agentOverride, channelOverride, accountOverride]) {
-    merged = deepMergeDefined(merged, override ?? {});
+    merged = mergeDeep(merged, override ?? {});
   }
   return merged as TtsConfig;
 }

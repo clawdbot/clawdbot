@@ -312,7 +312,7 @@ function unacceptedDeliveryResult() {
 
 async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {}) {
   const params: BufferedReplyParams = {
-    cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+    cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
     context: { Body: "hi" },
     deliverReply: async () => acceptedDeliveryResult(),
@@ -1108,21 +1108,21 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
-  it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
+  it("maps WhatsApp streaming.block.enabled=true to disableBlockStreaming=false", async () => {
     await dispatchBufferedReply();
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
   });
 
-  it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
+  it("maps WhatsApp streaming.block.enabled=false to disableBlockStreaming=true", async () => {
     await dispatchBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
+      cfg: { channels: { whatsapp: { streaming: { block: { enabled: false } } } } } as never,
     });
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(true);
   });
 
-  it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
+  it("leaves disableBlockStreaming undefined when WhatsApp block streaming is unset", async () => {
     await dispatchBufferedReply({
       cfg: { channels: { whatsapp: {} } } as never,
     });
@@ -1155,7 +1155,7 @@ describe("whatsapp inbound dispatch", () => {
   it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
     await dispatchBufferedReply({
       cfg: {
-        channels: { whatsapp: { blockStreaming: true } },
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
         messages: { groupChat: { visibleReplies: "message_tool" } },
       } as never,
       context: {
@@ -1180,7 +1180,7 @@ describe("whatsapp inbound dispatch", () => {
   it("honors automatic visible replies for WhatsApp groups", async () => {
     await dispatchBufferedReply({
       cfg: {
-        channels: { whatsapp: { blockStreaming: true } },
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
         messages: { groupChat: { visibleReplies: "automatic" } },
       } as never,
       context: { Body: "hi", ChatType: "group" },
@@ -1327,7 +1327,7 @@ describe("whatsapp inbound dispatch", () => {
 
     await expect(
       dispatchWhatsAppBufferedReply({
-        cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+        cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
         connectionId: "conn",
         context: { Body: "hi" },
         deliverReply,

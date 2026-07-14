@@ -36,7 +36,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -46,6 +45,9 @@ type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type SendExecApprovalFollowupResult =
   typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+type BuildExecApprovalFollowupTarget =
+  typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
+type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,

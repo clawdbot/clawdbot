@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 
-export const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
+const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "--cache",
   "--loglevel",
   "--package",
@@ -142,7 +142,7 @@ export function normalizePackageManagerExecToken(token: string): string {
   return normalizeExecutableToken(token).replace(/\.(?:c|m)?js$/i, "");
 }
 
-export type PackageManagerExecInvocation =
+type PackageManagerExecInvocation =
   | { kind: "not-package-manager" }
   | { kind: "not-exec" }
   | { kind: "unsafe-exec" }

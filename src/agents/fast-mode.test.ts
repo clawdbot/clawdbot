@@ -1,13 +1,12 @@
 // Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatFastModeAutoLabel, normalizeFastModeSource } from "../shared/fast-mode.js";
 import {
-  formatFastModeAutoLabel,
   formatFastModeAutoProgressText,
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
   formatFastModeStatusValue,
-  normalizeFastModeSource,
   resolveFastModeForElapsed,
   resolveFastModeState,
 } from "./fast-mode.js";

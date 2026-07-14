@@ -33,7 +33,7 @@ function normalizeReplyToModeChatType(
 }
 
 /** Resolve configured reply-to mode from channel and chat-type config. */
-export function resolveConfiguredReplyToMode(
+function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
@@ -62,7 +62,7 @@ export function resolveConfiguredReplyToMode(
 }
 
 /** Resolve reply-to mode using channel threading adapter override when present. */
-export function resolveReplyToModeWithThreading(
+function resolveReplyToModeWithThreading(
   cfg: OpenClawConfig,
   threading: ChannelThreadingAdapter | undefined,
   params: {
@@ -149,7 +149,7 @@ export function createReplyDeliveryContext(
 }
 
 /** Create a payload filter that strips reply targets according to reply-to mode. */
-export function createReplyToModeFilter(
+function createReplyToModeFilter(
   mode: ReplyToMode,
   opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {

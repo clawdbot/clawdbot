@@ -22,7 +22,7 @@ import { widgetProps } from "./types.ts";
  */
 const EMBED_SANDBOX_CEILING = "scripts" as const;
 
-export type EmbedUrlDecision =
+type EmbedUrlDecision =
   | { status: "missing" }
   | { status: "blocked"; reason: "external" | "scheme"; url: string }
   | { status: "ok"; url: string; external: boolean };
@@ -33,7 +33,7 @@ export type EmbedUrlDecision =
  * different origin are external and require `allowExternalEmbedUrls`. Any other
  * scheme (javascript:, data:, file:, …) is rejected outright.
  */
-export function evaluateEmbedUrl(
+function evaluateEmbedUrl(
   rawUrl: unknown,
   policy: { allowExternalEmbedUrls: boolean },
   origin?: string,

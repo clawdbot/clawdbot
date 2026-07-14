@@ -449,12 +449,3 @@ export function cancelTalkTranscriptionRelayTurn(params: {
   });
   closeTranscriptionSession(session, "completed");
 }
-
-/** Clears process-local transcription relays between tests. */
-export function clearTalkTranscriptionRelaySessionsForTest(): void {
-  for (const session of transcriptionSessions.values()) {
-    clearTimeout(session.cleanupTimer);
-    session.sttSession.close();
-  }
-  transcriptionSessions.clear();
-}

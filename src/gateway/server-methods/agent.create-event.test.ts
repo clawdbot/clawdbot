@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearActiveSessionsForShutdownTracker } from "../active-sessions-shutdown-tracker.js";
+import {
+  forgetActiveSessionForShutdown,
+  listActiveSessionsForShutdown,
+} from "../active-sessions-shutdown-tracker.js";
 
 const configMocks = vi.hoisted(() => ({
   storePath: "",
@@ -67,7 +70,9 @@ describe("agent handler session create events", () => {
   });
 
   afterEach(async () => {
-    clearActiveSessionsForShutdownTracker();
+    for (const entry of listActiveSessionsForShutdown()) {
+      forgetActiveSessionForShutdown(entry.sessionId);
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

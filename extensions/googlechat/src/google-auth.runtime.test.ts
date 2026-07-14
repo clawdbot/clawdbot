@@ -36,8 +36,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
-vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
+vi.mock("google-auth-library", () => ({
+  gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
 
 let testing: typeof import("./google-auth.runtime.js").testing;
@@ -69,7 +69,7 @@ afterEach(() => {
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
   vi.resetModules();
 });
 

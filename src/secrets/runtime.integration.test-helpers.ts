@@ -1,7 +1,7 @@
 /** Integration-test helpers for preparing secrets runtime fixtures. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
 

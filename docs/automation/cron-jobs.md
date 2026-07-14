@@ -478,6 +478,12 @@ openclaw webhooks gmail setup --account openclaw@gmail.com
 
 This writes `hooks.gmail` config, enables the Gmail preset, and defaults to Tailscale Funnel for the push endpoint (`--tailscale funnel|serve|off`).
 
+<Warning>
+The Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
+
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, allow only the required agent-to-agent handoff. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+</Warning>
+
 ### Gateway auto-start
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
@@ -519,12 +525,14 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 {
   hooks: {
     gmail: {
-      model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-      thinking: "off",
+      model: "openai/gpt-5.6-sol",
+      thinking: "high",
     },
   },
 }
 ```
+
+Use the latest-generation, best-tier model available from your provider for untrusted inboxes. The value above is an example; the model must exist in your configured catalog and allowlist.
 
 ## Configuration
 
@@ -545,7 +553,6 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
     },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
-    runLog: { maxBytes: "2mb", keepLines: 2000 },
   },
 }
 ```
@@ -566,7 +573,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. `cron.runLog.keepLines` limits retained SQLite run-history rows per job; `maxBytes` is retained for config compatibility with older file-backed run logs.
+    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import legacy `~/.openclaw/cron/jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files into SQLite and rename them with a `.migrated` suffix. Malformed job rows are skipped from runtime and copied to `jobs-quarantine.json` for later repair or review.

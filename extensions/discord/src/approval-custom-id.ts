@@ -3,7 +3,7 @@ import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-referen
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ComponentData } from "./internal/discord.js";
 
-export type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
+type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 

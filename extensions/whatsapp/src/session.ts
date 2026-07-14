@@ -50,19 +50,10 @@ export { formatError, getStatusCode } from "./session-errors.js";
 export {
   getWebAuthAgeMs,
   logoutWeb,
-  logWebSelfId,
-  pickWebChannel,
-  readWebAuthSnapshot,
-  readWebAuthState,
-  readWebAuthExistsBestEffort,
   readWebAuthExistsForDecision,
-  readWebAuthSnapshotBestEffort,
-  readWebSelfIdentityForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
-  type WhatsAppWebAuthState,
-  webAuthExists,
 } from "./auth-store.js";
 export {
   waitForCredsSaveQueue,

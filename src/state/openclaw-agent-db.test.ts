@@ -1064,7 +1064,7 @@ describe("openclaw agent database", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "defers nested permission repair until the outer transaction commits",
+    "defers nested permission repair to the outer transaction boundary",
     () => {
       const stateDir = createTempStateDir();
       const options = {
@@ -1102,6 +1102,59 @@ describe("openclaw agent database", () => {
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
+  });
+
+  it("backfills per-entry status while migrating a v6 agent database", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = database.path;
+    database.db
+      .prepare(
+        `INSERT INTO sessions (
+           session_id, session_key, session_scope, created_at, updated_at, status
+         ) VALUES (?, ?, 'conversation', ?, ?, ?)`,
+      )
+      .run("shared-session", "agent:worker-1:running", 10, 10, "done");
+    database.db
+      .prepare(
+        `INSERT INTO session_entries (
+           session_key, session_id, entry_json, updated_at, status
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "agent:worker-1:running",
+        "shared-session",
+        JSON.stringify({ sessionId: "shared-session", status: "running", updatedAt: 10 }),
+        10,
+        "running",
+      );
+    closeOpenClawAgentDatabasesForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.exec(`
+        DROP INDEX idx_agent_session_entries_status;
+        ALTER TABLE session_entries DROP COLUMN status;
+        PRAGMA user_version = 6;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(
+      migrated.db
+        .prepare("SELECT status FROM session_entries WHERE session_key = ?")
+        .get("agent:worker-1:running"),
+    ).toEqual({ status: "running" });
+    expect(
+      migrated.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get("idx_agent_session_entries_status"),
+    ).toEqual({ name: "idx_agent_session_entries_status" });
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
   it("replaces the main v5 session indexes during migration", () => {

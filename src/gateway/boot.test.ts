@@ -25,8 +25,7 @@ const {
   replaceSessionEntry,
 } = await import("../config/sessions/session-accessor.js");
 const { stripInternalRuntimeContext } = await import("../agents/internal-runtime-context.js");
-const { getBootEchoContextForSession, resetBootEchoContextForTests } =
-  await import("./boot-echo-guard.js");
+const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {
   type BootWorkspaceOptions = {
@@ -223,7 +222,6 @@ describe("runBootOnce", () => {
   });
 
   it("registers the boot prompt with the echo guard during the run and clears it afterward", async () => {
-    resetBootEchoContextForTests();
     const sessionKeyHolder: { value?: string } = {};
     const content =
       "When you wake up each morning, send a thoughtful greeting to the operator and report the active project status.";
@@ -243,7 +241,6 @@ describe("runBootOnce", () => {
   });
 
   it("clears the echo-guard entry even when the agent run throws", async () => {
-    resetBootEchoContextForTests();
     let observedDuringRun: string | undefined;
     let observedSessionKey: string | undefined;
     await withBootWorkspace({ bootContent: "Wake up and report." }, async (workspaceDir) => {

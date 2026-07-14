@@ -9,11 +9,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -56,46 +57,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     }
   }
 
-  function resolveTelegramAccountId(cfg: OpenClawConfig): string {
-    const defaultAgentId = cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main";
-    const boundAccountId = cfg.bindings?.find(
-      (binding) =>
-        binding.agentId === defaultAgentId &&
-        binding.match?.channel === "telegram" &&
-        typeof binding.match.accountId === "string",
-    )?.match.accountId;
-    return boundAccountId ?? cfg.channels?.telegram?.defaultAccount ?? "default";
-  }
-
-  function detectTelegramAllowFromMigration(params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-  }) {
-    const root = params.env.OPENCLAW_STATE_DIR;
-    if (!root) {
-      return [];
-    }
-    const legacyPath = path.join(root, "credentials", "telegram-allowFrom.json");
-    if (!fileExists(legacyPath)) {
-      return [];
-    }
-    const targetPath = path.join(
-      root,
-      "credentials",
-      `telegram-${resolveTelegramAccountId(params.cfg)}-allowFrom.json`,
-    );
-    return fileExists(targetPath)
-      ? []
-      : [
-          {
-            kind: "copy" as const,
-            label: "Telegram pairing allowFrom",
-            sourcePath: legacyPath,
-            targetPath,
-          },
-        ];
-  }
-
   function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
     let entries: fs.Dirent[];
     try {
@@ -133,8 +94,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     ]),
     listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
       ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
-      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-        detectTelegramAllowFromMigration({ cfg, env }),
       () => mockedChannelMigrationPlans.plans,
     ]),
   };
@@ -207,12 +166,18 @@ function writeLegacyTelegramAllowFromStore(oauthDir: string) {
 async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenClawConfig }) {
   const oauthDir = ensureCredentialsDir(params.root);
   writeLegacyTelegramAllowFromStore(oauthDir);
+  const env = { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv;
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+    env,
   });
-  const result = await runLegacyStateMigrations({ detected, now: () => 123 });
-  return { oauthDir, detected, result };
+  const result = await runLegacyStateMigrations({
+    detected,
+    config: params.cfg,
+    env,
+    now: () => 123,
+  });
+  return { oauthDir, env, detected, result };
 }
 
 afterEach(async () => {
@@ -1366,21 +1331,42 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "creds.json"))).toBe(false);
   });
 
-  it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-default-allowFrom.json",
-    ]);
-    expect(result.warnings).toStrictEqual([]);
+  it("uses the channel-resolved default account for unscoped pairing allowFrom", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {},
+            alerts: {},
+          },
+        },
+      },
+    };
+    const oauthDir = ensureCredentialsDir(root);
+    const sourcePath = path.join(oauthDir, "whatsapp-allowFrom.json");
+    fs.writeFileSync(sourcePath, '["123456"]\n', "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
 
-    const target = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(target)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    const detected = await detectLegacyStateMigrations({ cfg, env });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env, now: () => 123 });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("whatsapp", env).allowFrom).toEqual({
+      work: ["123456"],
     });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy Telegram pairing allowFrom store to SQLite default account rows", async () => {
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      default: ["123456"],
+    });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("does not fan out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
@@ -1396,23 +1382,13 @@ describe("doctor legacy state migrations", () => {
         },
       },
     };
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-bot2-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
-    const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(bot1Target)).toBe(false);
-    expect(fs.existsSync(bot2Target)).toBe(true);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      bot2: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("migrates legacy Telegram pairing allowFrom store to the default agent bound account", async () => {
@@ -1432,23 +1408,13 @@ describe("doctor legacy state migrations", () => {
       },
     };
 
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-alerts-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
-    const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(alertsTarget)).toBe(true);
-    expect(fs.existsSync(backupTarget)).toBe(false);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(alertsTarget, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      alerts: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("no-ops when nothing detected", async () => {

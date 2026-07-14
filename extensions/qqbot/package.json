@@ -11,6 +11,8 @@
   "dependencies": {
     "@tencent-connect/qqbot-connector": "1.1.0",
     "mpg123-decoder": "1.0.3",
+    "p-map": "7.0.5",
+    "pretty-ms": "9.3.0",
     "silk-wasm": "3.7.1",
     "ws": "8.21.0",
     "zod": "4.4.3"

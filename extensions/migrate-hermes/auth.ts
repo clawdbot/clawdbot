@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
-  createMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
@@ -34,6 +33,11 @@ import {
   hasCurrentAuthProfileConfigConflict,
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
+import {
+  buildReauthenticationItems,
+  readHermesCodexAuthCandidates,
+  type HermesCodexAuthCandidate,
+} from "./auth-source.js";
 import { isRecord, readString, readText } from "./helpers.js";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -54,17 +58,6 @@ type AgentDefaultModelConfigs = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
 >;
 type AgentDefaultModelConfigEntry = AgentDefaultModelConfigs[string];
-
-type HermesCodexAuthCandidate = {
-  access: string;
-  accountId?: string;
-  refresh: string;
-  sourceKind: "opencode-auth-json";
-  sourceCredentialIndex?: number;
-  sourceLabel: string;
-  sourcePath: string;
-  updatedAt?: number;
-};
 
 type HermesCodexAuthProfile = {
   candidate: HermesCodexAuthCandidate;
@@ -120,50 +113,12 @@ async function readOpenCodeOpenAICandidates(
       ...(accountId ? { accountId } : {}),
       refresh,
       sourceKind: "opencode-auth-json",
+      sourceSlot: "opencode",
       sourceCredentialIndex: 0,
       sourceLabel: "OpenCode OpenAI OAuth credential",
       sourcePath: authPath,
     },
   ];
-}
-
-async function hasLegacyHermesAuthJson(authPath: string | undefined): Promise<boolean> {
-  const raw = await readText(authPath);
-  if (!raw) {
-    return false;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return (
-      isRecord(parsed) &&
-      (hasLegacyOpenAIOAuthTokenFields(parsed.providers, "providers") ||
-        hasLegacyOpenAIOAuthTokenFields(parsed.credential_pool, "credential_pool") ||
-        hasLegacyOpenAIOAuthTokenFields(parsed.tokens, "tokens"))
-    );
-  } catch {
-    return false;
-  }
-}
-
-function hasLegacyOpenAIOAuthTokenFields(value: unknown, keyHint = ""): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasLegacyOpenAIOAuthTokenFields(entry, keyHint));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  const provider = readString(value.provider)?.toLowerCase();
-  const normalizedKeyHint = keyHint.toLowerCase();
-  const isOpenAIRecord = normalizedKeyHint.includes("openai") || provider === OPENAI_PROVIDER_ID;
-  const hasTokenPair =
-    (readString(value.access) && readString(value.refresh)) ||
-    (readString(value.access_token) && readString(value.refresh_token));
-  if (isOpenAIRecord && hasTokenPair) {
-    return true;
-  }
-  return Object.entries(value).some(([key, entry]) =>
-    hasLegacyOpenAIOAuthTokenFields(entry, keyHint ? `${keyHint}.${key}` : key),
-  );
 }
 
 function buildAuthResult(
@@ -245,9 +200,23 @@ function authProfileDedupeKey(profile: HermesCodexAuthProfile): string {
 async function readCodexAuthProfilesFromSource(
   source: HermesSource,
 ): Promise<HermesCodexAuthProfile[]> {
-  const candidates = (await readOpenCodeOpenAICandidates(source.opencodeAuthPath)).toSorted(
-    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+  const profileHermesCandidates = await readHermesCodexAuthCandidates(source.authPath);
+  const globalHermesCandidates = await readHermesCodexAuthCandidates(source.globalAuthPath);
+  const profileProvider = profileHermesCandidates.find(
+    (candidate) => candidate.sourceSlot === "provider",
   );
+  const profilePool = profileHermesCandidates.filter(
+    (candidate) => candidate.sourceSlot === "pool",
+  );
+  const globalProvider = globalHermesCandidates.find(
+    (candidate) => candidate.sourceSlot === "provider",
+  );
+  const globalPool = globalHermesCandidates.filter((candidate) => candidate.sourceSlot === "pool");
+  const candidates = [
+    ...(profileProvider ? [profileProvider] : globalProvider ? [globalProvider] : []),
+    ...(profilePool.length > 0 ? profilePool : globalPool),
+    ...(await readOpenCodeOpenAICandidates(source.opencodeAuthPath)),
+  ].toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   const profiles: HermesCodexAuthProfile[] = [];
   const seen = new Set<string>();
   for (const [index, candidate] of candidates.entries()) {
@@ -285,7 +254,11 @@ async function readCodexAuthProfilesFromPath(params: {
       ...(params.sourcePath ? { opencodeAuthPath: params.sourcePath } : {}),
     });
   }
-  return [];
+  return await readCodexAuthProfilesFromSource({
+    root: "",
+    archivePaths: [],
+    ...(params.sourcePath ? { authPath: params.sourcePath } : {}),
+  });
 }
 
 function findMatchingProfile(
@@ -361,18 +334,7 @@ export async function buildAuthItems(params: {
   targets: PlannedTargets;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
-  if (await hasLegacyHermesAuthJson(params.source.authPath)) {
-    items.push(
-      createMigrationManualItem({
-        id: "manual:legacy-hermes-auth-json",
-        source: params.source.authPath ?? "auth.json",
-        message:
-          "Hermes auth.json contains legacy OAuth credentials. OpenClaw no longer imports those into live auth during Hermes migration.",
-        recommendation:
-          "Run openclaw models auth login --provider openai after migration, or run openclaw doctor --fix for existing OpenClaw legacy auth state.",
-      }),
-    );
-  }
+  items.push(...(await buildReauthenticationItems(params.source)));
   const profiles = await readCodexAuthProfilesFromSource(params.source);
   if (profiles.length === 0) {
     return items;
@@ -410,7 +372,7 @@ export async function buildAuthItems(params: {
             ? HERMES_REASON_AUTH_PROFILE_EXISTS
             : undefined,
         message: skipped
-          ? "OpenAI OAuth credentials detected in OpenCode."
+          ? `OpenAI OAuth credentials detected in ${profile.candidate.sourceKind === "hermes-auth-json" ? "Hermes" : "OpenCode"}.`
           : "Import OpenAI OAuth credentials and configure OpenAI models.",
         details: {
           provider: OPENAI_PROVIDER_ID,

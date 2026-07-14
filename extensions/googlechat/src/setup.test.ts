@@ -304,10 +304,10 @@ describe("googlechat setup", () => {
   });
 
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
-    const prompter = {
+    const prompter = createTestWizardPrompter({
       note: vi.fn(async () => {}),
       text: vi.fn(async () => "users/123456789"),
-    };
+    });
 
     const next = await googlechatSetupWizard.dmPolicy?.promptAllowFrom?.({
       cfg: {
@@ -328,7 +328,7 @@ describe("googlechat setup", () => {
           },
         },
       } as OpenClawConfig,
-      prompter: prompter as any,
+      prompter,
     });
 
     expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);

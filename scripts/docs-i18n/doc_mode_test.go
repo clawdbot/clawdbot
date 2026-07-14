@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,15 +36,15 @@ type docLeafFallbackTranslator struct{}
 
 func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
 	replacer := strings.NewReplacer(
-		"Gateway refuses to start unless `local`.", "Gateway 只有在 `local` 时才会启动。",
+		"Gateway refuses to start unless", "Gateway 只有在",
 		"`gateway.auth.mode: \"trusted-proxy\"`", "`gateway.auth.mode: \"trusted-proxy\"`",
 	)
 	return replacer.Replace(text), nil
 }
 
 func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	if strings.Contains(text, "Gateway refuses to start unless `local`.") {
-		return strings.Replace(text, "Gateway refuses to start unless `local`.", "<Tip>Gateway only starts in local mode.</Tip>", 1), nil
+	if strings.Contains(text, "Gateway refuses to start unless") {
+		return strings.Replace(text, "Gateway refuses to start unless", "<Tip>Gateway only starts in local mode.</Tip>", 1), nil
 	}
 	return text, nil
 }
@@ -177,7 +178,7 @@ func (t *docPromptBudgetTranslator) Translate(_ context.Context, text, _, _ stri
 func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	replacer := strings.NewReplacer(
-		"First chunk with `json5` and { braces }", "第一块，含 `json5` 和 { braces }",
+		"First chunk with", "第一块，含",
 		"Second chunk with | table | pipes |", "第二块，含 | table | pipes |",
 	)
 	return replacer.Replace(text), nil
@@ -256,6 +257,67 @@ func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ 
 }
 
 func (splitProtocolMarkerTranslator) Close() {}
+
+type fencedLiteralMaskingTranslator struct {
+	rawInputs []string
+}
+
+func (t *fencedLiteralMaskingTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	return strings.NewReplacer(
+		"Outside [Warning].", "Fuera [Advertencia].",
+		"Human prose.", "Prosa humana.",
+		"Speak this.", "Di esto.",
+		"[Replying to <sender>]", "[Respondiendo a <remitente>]",
+		"[/Replying]", "[/Respondiendo]",
+		"[[tts:text]]", "[[tts:texto]]",
+		"[Notice kind=system]", "[Aviso kind=system]",
+	).Replace(text), nil
+}
+
+func (t *fencedLiteralMaskingTranslator) Close() {}
+
+type docSyntaxMaskingTranslator struct {
+	rawInputs []string
+}
+
+func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
+	translated = regexp.MustCompile(`(?m)^\s+(__OC_I18N_\d+__)`).ReplaceAllString(translated, "$1")
+	return translated, nil
+}
+
+func (t *docSyntaxMaskingTranslator) Close() {}
+
+type duplicateFirstFencedPlaceholderTranslator struct {
+	rawCalls int
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawCalls++
+	if t.rawCalls == 1 {
+		placeholder := placeholderRe.FindString(text)
+		if placeholder != "" {
+			return strings.Replace(text, placeholder, placeholder+placeholder, 1), nil
+		}
+	}
+	return strings.ReplaceAll(text, "Human prose.", "Prosa humana."), nil
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) Close() {}
 
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
@@ -467,7 +529,7 @@ func TestTranslateDocBodyChunkedFallsBackToMaskedTranslateForLeafValidationFailu
 	if strings.Contains(translated, "<Tip>") {
 		t.Fatalf("expected masked fallback to remove hallucinated component tags:\n%s", translated)
 	}
-	if !strings.Contains(translated, "Gateway 只有在 `local` 时才会启动。") {
+	if !strings.Contains(translated, "Gateway 只有在 `local`.") {
 		t.Fatalf("expected fallback translation to be applied:\n%s", translated)
 	}
 }
@@ -499,6 +561,55 @@ func TestValidateDocChunkTranslationRejectsInventedI18NPlaceholder(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "protocol token leaked: __OC_I18N_") {
 		t.Fatalf("expected i18n placeholder leakage error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsAdditionalI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n__OC_I18N_900000__\n```\n"
+	translated := "```text\n__OC_I18N_900000__\n```\n__OC_I18N_900014__\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected additional i18n placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked: __OC_I18N_") {
+		t.Fatalf("expected i18n placeholder leakage error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsMalformedI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, leaked := range []string{"__oc_i18n_900014__", "__OC_I18N_invalid__", `\_\_OC\_I18N\_900014\_\_`} {
+		err := validateDocChunkTranslation("Regular paragraph.\n", "Обычный абзац.\n"+leaked+"\n")
+		if err == nil {
+			t.Fatalf("expected malformed i18n placeholder %q to be rejected", leaked)
+		}
+	}
+}
+
+func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	source := "Before.\n\n```ts\nconst value = \"<user-id>\";\n```\n\nAfter.\n"
+	translated := "До.\n\n__OC_I18N_900014__\n\nПосле.\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected restored placeholder leak to be rejected")
+	}
+}
+
+func TestFinalDocOutputRejectsI18NPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	if sameI18NProtocolMarkers("Regular prose.\n", "Обычный текст.\n__OC_I18N_900014__\n") {
+		t.Fatal("expected final output placeholder leak to be rejected")
+	}
+	if !sameI18NProtocolMarkers("Example __OC_I18N_42__.\n", "Пример __OC_I18N_42__.\n") {
+		t.Fatal("expected source-authored placeholder example to remain valid")
 	}
 }
 
@@ -662,6 +773,21 @@ func TestValidateDocChunkTranslationRejectsChangedTripleBacktickCodeSpan(t *test
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsChangedLineStartTripleBacktickCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "```foo``` is the value.\n```\ncode\n```\n"
+	translated := "```bar``` es el valor.\n```\ncode\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed line-start triple-backtick code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsChangedMultilineCodeSpan(t *testing.T) {
 	t.Parallel()
 
@@ -782,6 +908,20 @@ func TestValidateDocChunkTranslationRejectsCodeAfterComponentFence(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "inline code mismatch") {
 		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	source := "            ```json5\n                    provider: \"firecrawl\", // optional; omit for auto-detect\n            ```\n"
+	translated := "            ```json5\n                    provider: \"firecrawl\", // необязательно; опустите для автоопределения\n            ```\n"
+
+	if values := extractMarkdownInlineCodeValues(source); len(values) != 0 {
+		t.Fatalf("expected custom indented fence to be excluded from inline code, got %q", values)
+	}
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated fence prose to validate, got %v", err)
 	}
 }
 
@@ -1227,6 +1367,35 @@ func TestValidateDocBodyFencedLiteralsRejectsFenceBalanceChange(t *testing.T) {
 	}
 }
 
+func TestValidateDocBodyFencedLiteralsRejectsBalancedFenceCountChange(t *testing.T) {
+	t.Parallel()
+
+	source := "```json5\n{ session: { enabled: true } }\n```\n"
+	translated := "```json5\n{ session: {\n```\n```json5\nenabled: true } }\n```\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected recombined fence count change to be rejected")
+	}
+	if !strings.Contains(err.Error(), "code fence mismatch: source=2 translated=4") {
+		t.Fatalf("expected code fence mismatch, got %v", err)
+	}
+}
+
+func TestMergeSplitPureFencedDocTranslationsRejectsAdjacentFences(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nFirst block.\n```\n```text\nSecond block.\n```\n"
+	translatedGroups := []string{
+		"```text\nПервый блок.\n```\n",
+		"```text\nВторой блок.\n```\n",
+	}
+
+	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
+		t.Fatalf("expected adjacent source fences not to merge, got:\n%s", merged)
+	}
+}
+
 func TestValidateDocChunkTranslationAllowsFencedBracketLabelsToTranslate(t *testing.T) {
 	t.Parallel()
 
@@ -1451,25 +1620,96 @@ func TestValidateDocChunkTranslationStopsFencedLiteralsAtContainerBoundary(t *te
 	}
 }
 
-func TestTranslateDocBodyChunkedRevalidatesMarkersAfterSplit(t *testing.T) {
+func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	body := strings.Join([]string{
 		"```text",
-		"[Notice kind=system]",
 		"Line 01",
 		"Line 02",
 		"Line 03",
+		"Line 04",
+		"[Notice kind=system]",
 		"[/Notice]",
 		"```",
 		"",
 	}, "\n")
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "32")
+	translator := &fencedLiteralMaskingTranslator{}
 
-	_, err := translateDocBodyChunked(context.Background(), splitProtocolMarkerTranslator{}, "channels/example.md", body, "en", "es")
-	if err == nil {
-		t.Fatal("expected recombined split marker mutation to be rejected")
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected split translation to preserve masked protocol markers, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "final document validation") || !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
-		t.Fatalf("expected final fenced protocol validation error, got %v", err)
+	if !strings.Contains(translated, "[Notice kind=system]") || !strings.Contains(translated, "[/Notice]") {
+		t.Fatalf("expected original protocol markers after split translation:\n%s", translated)
+	}
+	if strings.Contains(translated, "[Aviso kind=system]") {
+		t.Fatalf("expected raw translator mutation to remain impossible after masking:\n%s", translated)
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "[Notice kind=system]") {
+			t.Fatalf("expected continuation-chunk marker to be masked before splitting:\n%s", input)
+		}
+	}
+}
+
+func TestTranslateDocBodyChunkedMasksFencedLiteralsBeforeTranslation(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"Outside [Warning].",
+		"",
+		"> ```text",
+		"> [Replying to <sender>]",
+		"> Human prose.",
+		"> [/Replying]",
+		"> [[tts:text]]Speak this.[[/tts:text]]",
+		"> ```",
+		"",
+	}, "\n")
+	translator := &fencedLiteralMaskingTranslator{}
+
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected fenced literals to survive translation, got %v", err)
+	}
+	for _, input := range translator.rawInputs {
+		for _, literal := range []string{"[Replying to <sender>]", "[/Replying]", "[[tts:text]]", "[[/tts:text]]"} {
+			if strings.Contains(input, literal) {
+				t.Fatalf("expected fenced literal %q to be masked from raw translator input:\n%s", literal, input)
+			}
+		}
+	}
+	for _, want := range []string{
+		"Fuera [Advertencia].",
+		"> [Replying to <sender>]",
+		"> Prosa humana.",
+		"> [/Replying]",
+		"> [[tts:text]]Di esto.[[/tts:text]]",
+	} {
+		if !strings.Contains(translated, want) {
+			t.Fatalf("expected translated output to contain %q:\n%s", want, translated)
+		}
+	}
+}
+
+func TestTranslateDocBodyChunkedRetriesDuplicatedFencedPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	body := "```text\n[Replying to <sender>]\nHuman prose.\n[/Replying]\n```\n"
+	translator := &duplicateFirstFencedPlaceholderTranslator{}
+
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected duplicate placeholder response to recover through chunk retry, got %v", err)
+	}
+	if translator.rawCalls < 2 {
+		t.Fatalf("expected duplicate placeholder to trigger a chunk retry, got %d raw call(s)", translator.rawCalls)
+	}
+	if strings.Count(translated, "[Replying to <sender>]") != 1 || strings.Count(translated, "[/Replying]") != 1 {
+		t.Fatalf("expected each restored marker exactly once:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Prosa humana.") {
+		t.Fatalf("expected human prose to remain translatable after retry:\n%s", translated)
 	}
 }
 
@@ -1796,7 +2036,7 @@ func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
 		t.Fatalf("translateDocBodyChunked returned error: %v", err)
 	}
 	for _, input := range translator.rawInputs {
-		if strings.Contains(input, "First chunk with `json5` and { braces }") && strings.Contains(input, "Second chunk with | table | pipes |") {
+		if strings.Contains(input, "First chunk with") && strings.Contains(input, "Second chunk with | table | pipes |") {
 			t.Fatalf("expected prompt budget guard to split before raw translation, saw combined input:\n%s", input)
 		}
 	}
@@ -1897,6 +2137,61 @@ func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testi
 	}
 }
 
+func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
+	body := strings.Join([]string{
+		"- Visible prose uses `openclaw config`.",
+		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"- Channel configs:",
+		"  - Telegram: Visible prose.",
+		"  - WhatsApp: Visible prose.",
+		"> - Visible prose inside a quote.",
+		"",
+		"```md",
+		"- Visible prose and `fenced example` stay exposed.",
+		"```",
+		"",
+		"> ```md",
+		"> - Visible prose and `quoted fenced example` stay exposed.",
+		"> ```",
+		"",
+	}, "\n")
+
+	translator := &docSyntaxMaskingTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration.md", body, "en", "ru")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) == 0 {
+		t.Fatal("expected raw translator inputs")
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") {
+			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
+		}
+		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
+			t.Fatalf("expected list prefixes outside fences to be masked:\n%s", input)
+		}
+		if regexp.MustCompile(`(?m)^(?:\s+|>\s*)__OC_I18N_\d+__`).MatchString(input) {
+			t.Fatalf("expected list indentation and quote containers to be masked with their markers:\n%s", input)
+		}
+	}
+	for _, exact := range []string{
+		"- Видимый текст uses `openclaw config`.",
+		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"- Channel configs:\n  - Telegram: Видимый текст.\n  - WhatsApp: Видимый текст.",
+		"> - Видимый текст inside a quote.",
+		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
+		"> ```md\n> - Видимый текст and `quoted fenced example` stay exposed.\n> ```",
+	} {
+		if !strings.Contains(translated, exact) {
+			t.Fatalf("expected restored syntax %q:\n%s", exact, translated)
+		}
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected final structure to validate: %v", err)
+	}
+}
+
 func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *testing.T) {
 	body := strings.Join([]string{
 		"```md",
@@ -1931,6 +2226,9 @@ func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *t
 	}
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 04") {
 		t.Fatalf("expected singleton fence retry to reassemble translated output:\n%s", translated)
+	}
+	if sourceCount, translatedCount := summarizeDocChunkStructure(body).fenceCount, summarizeDocChunkStructure(translated).fenceCount; sourceCount != translatedCount {
+		t.Fatalf("expected singleton fence retry to preserve one fenced block, source=%d translated=%d:\n%s", sourceCount, translatedCount, translated)
 	}
 }
 
@@ -2027,8 +2325,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 15") {
-		t.Fatalf("expected prompt version 15 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 24") {
+		t.Fatalf("expected prompt version 24 in output metadata:\n%s", text)
 	}
 }
 

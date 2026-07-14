@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
-import type { ResizableDivider } from "../../components/resizable-divider.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -26,6 +25,8 @@ type RenderedPane = HTMLElement & {
   narrow: boolean;
   onOpenSplitView?: () => void;
 };
+
+type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
@@ -177,7 +178,7 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    const dividers = page.querySelectorAll<ResizableDivider>("resizable-divider");
+    const dividers = page.querySelectorAll<RenderedDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
@@ -187,7 +188,6 @@ describe("chat page split layout host", () => {
         .querySelector(".chat-split-view__cell--active")
         ?.contains(itemAt(panes, 1, "rendered pane")),
     ).toBe(true);
-    // Panes own their in-flow header row (title + workspace/split/close).
     expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
   });

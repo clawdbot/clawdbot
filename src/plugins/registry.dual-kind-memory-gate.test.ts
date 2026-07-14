@@ -10,8 +10,8 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
-} from "./memory-state.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+} from "./memory-state.test-fixtures.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 afterEach(() => {
   clearMemoryPluginState();

@@ -1,9 +1,7 @@
 /** Platform-specific doctor notes for macOS gateway launchd state and startup tuning. */
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,16 +9,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
+import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
-
-const execFileAsync = promisify(execFile);
 
 function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
 /** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
-export function collectMacLaunchAgentOverrideWarning(deps?: {
+function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
   exists?: (candidate: string) => boolean;
@@ -53,7 +50,7 @@ export async function noteMacLaunchAgentOverrides() {
 }
 
 /** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
-export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
+async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
   env?: NodeJS.ProcessEnv;
@@ -107,8 +104,8 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
-    const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = normalizeOptionalString(result.stdout ?? "") ?? "";
+    const result = await runExec("/bin/launchctl", ["getenv", name], { logOutput: false });
+    const value = normalizeOptionalString(result.stdout) ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -128,7 +125,7 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
 }
 
 /** Returns a warning for host-wide launchctl gateway auth env overrides. */
-export async function collectMacLaunchctlGatewayEnvOverrideWarning(
+async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
   deps?: {
     platform?: NodeJS.Platform;

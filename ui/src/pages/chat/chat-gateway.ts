@@ -22,7 +22,7 @@ import {
   hasVisibleStreamParts,
 } from "./stream-reconciliation.ts";
 
-export type { ChatEventPayload, ChatState } from "./chat-history.ts";
+export type { ChatEventPayload } from "./chat-history.ts";
 
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
@@ -152,7 +152,7 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }

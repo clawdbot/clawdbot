@@ -2,7 +2,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import type { AgentRunLoopResult } from "./agent-runner-execution.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -101,6 +100,10 @@ vi.mock("./session-run-accounting.js", () => ({
 }));
 
 const { runReplyAgent } = await import("./agent-runner.js");
+
+type AgentRunLoopResult = Awaited<
+  ReturnType<typeof import("./agent-runner-execution.js").runAgentTurnWithFallback>
+>;
 
 function createReplyOperation(): ReplyOperation {
   return {

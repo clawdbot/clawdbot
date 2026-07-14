@@ -114,8 +114,12 @@ openclaw-chat-page {
   /* The tall top inset is a titlebar band: it keeps the floating rail
      openers (.chat-floating-toggles, 28px at top 10px) clear of the first
      message and gives the native macOS app an empty strip that starts a
-     window drag (see the thread mousedown handler in chat-thread.ts). */
-  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
+     window drag (see the thread mousedown handler in chat-thread.ts).
+     No horizontal padding: macOS overlay scrollbars render inside the
+     scroll container's padding, which floats the thumb away from the pane
+     edge (visible next to the sidebar divider). The side inset lives on
+     .chat-thread-inner instead so the scrollbar hugs the edge. */
+  padding: clamp(44px, 5vh, 52px) 0 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -145,7 +149,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-thread-inner {
   box-sizing: border-box;
-  width: calc(100% - 36px);
+  /* 36px shared gutter plus the responsive side inset that used to be
+     .chat-thread's horizontal padding (moved off the scroll container so
+     overlay scrollbars sit flush at the pane edge). */
+  width: calc(100% - 36px - 2 * clamp(6px, 1vw, 12px));
   max-width: var(--chat-thread-max-width);
   margin-inline: auto;
 }
@@ -372,6 +379,15 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: none;
+}
+
+.context-usage__account {
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .context-usage__limits {
@@ -1175,7 +1191,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-prs {
   display: grid;
   gap: 6px;
-  padding: 0 14px 8px;
+  /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input
+     stack and must not read as a full-pane banner above a narrower composer. */
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0 0 8px;
 }
 
 .chat-pr {
@@ -1655,7 +1676,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   justify-content: flex-end;
 }
 
-.chat-settings-popover-wrapper {
+.chat-view-menu-wrapper {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1677,7 +1698,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   width: 100%;
 }
 
-.chat-settings-chip {
+.chat-view-menu-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1692,22 +1713,16 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   color: var(--muted);
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
-.chat-settings-chip:hover,
-.chat-settings-chip--open {
+.chat-view-menu-trigger:hover,
+.chat-view-menu-trigger--open {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
 
-.chat-settings-chip__icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.chat-settings-chip svg {
+.chat-view-menu-trigger svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -1717,115 +1732,70 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   stroke-linejoin: round;
 }
 
-.chat-settings-popover {
+.chat-view-menu {
   position: absolute;
   left: 0;
-  right: auto;
   bottom: calc(100% + 10px);
   z-index: 60;
   display: none;
-  width: min(520px, calc(100vw - 42px));
-  max-height: min(680px, calc(100vh - 120px));
-  padding: 14px;
+  min-width: 200px;
+  padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--card));
   box-shadow: var(--shadow-lg);
-  overflow-y: auto;
 }
 
-.chat-settings-popover--open {
+.chat-view-menu--open {
   display: grid;
-  gap: 12px;
+  gap: 2px;
 }
 
-.chat-settings-popover__section {
-  display: grid;
+.chat-view-menu__item {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
 }
 
-.chat-settings-popover__section + .chat-settings-popover__section {
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+.chat-view-menu__item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
-.chat-settings-popover__label {
+.chat-view-menu__item:disabled {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0;
-  text-transform: uppercase;
+  opacity: 0.6;
 }
 
-.chat-settings-popover__toggles {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.chat-settings-popover__toggles .btn--icon.chat-settings-action {
+.chat-view-menu__check {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--card) 74%, transparent);
-  color: var(--muted);
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
 }
 
-.chat-settings-popover__toggles .btn--icon.chat-settings-action:hover:not(:disabled),
-.chat-settings-popover__toggles .btn.btn--icon.chat-settings-action.active {
-  border-color: color-mix(in srgb, var(--text) 22%, var(--border));
-  background: color-mix(in srgb, var(--text) 6%, var(--card));
-  color: color-mix(in srgb, var(--text) 82%, var(--muted));
-}
-
-.chat-settings-popover__toggles .btn.btn--icon.chat-settings-action.active svg {
+.chat-view-menu__check svg {
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
 }
 
-:root[data-theme-mode="light"]
-  .chat-settings-popover__toggles
-  .btn.btn--icon.chat-settings-action.active {
-  border-color: rgba(16, 24, 40, 0.18);
-  background: rgba(16, 24, 40, 0.045);
-  color: #475467;
-  box-shadow: none;
-}
-
-.chat-settings-action__text {
+.chat-view-menu__text {
   min-width: 0;
   overflow: hidden;
-  color: currentColor;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-settings-popover__preference {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.chat-settings-popover__preference select {
-  width: 100%;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 74%, transparent);
-  color: var(--text);
-  font: inherit;
 }
 
 .agent-chat__stt-interim {
@@ -1853,7 +1823,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 8px;
   min-height: 44px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  padding: 0 var(--chat-box-inset) var(--chat-box-inset);
+  /* Split the inset evenly so the settings chip sits centered between the
+     divider and the card edge instead of hugging the divider. */
+  padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
 }
 
 .agent-chat__composer-meta,
@@ -2174,338 +2146,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   opacity: 0.7;
 }
 
-.agent-chat__talk-options {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-}
-
-.agent-chat__talk-options--settings {
-  display: grid;
-  gap: 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.agent-chat__talk-options--settings .agent-chat__talk-options-primary {
-  width: 100%;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.agent-chat__talk-options--settings .agent-chat__talk-options-advanced {
-  width: 100%;
-  min-width: 0;
-}
-
-.agent-chat__talk-options-primary {
-  display: grid;
-  grid-template-columns: minmax(132px, 0.8fr) minmax(160px, 1fr) minmax(132px, 0.8fr);
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.agent-chat__talk-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  font-size: 0.68rem;
-  color: var(--muted);
-}
-
-.agent-chat__talk-options input,
-.agent-chat__talk-options select {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.78rem;
-  line-height: 1;
-  padding: 0 10px;
-  box-sizing: border-box;
-}
-
-.agent-chat__talk-options select {
-  appearance: none;
-  padding-right: 26px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 8px center;
-  background-repeat: no-repeat;
-}
-
-.agent-chat__talk-options input:focus-visible,
-.agent-chat__talk-options select:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.agent-chat__talk-settings-link {
-  height: 34px;
-  flex: 0 0 auto;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.75rem;
-}
-
-.agent-chat__talk-settings-link:hover,
-.agent-chat__talk-settings-link:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.agent-chat__talk-settings-link:disabled {
-  background: transparent;
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.75;
-}
-
-.agent-chat__talk-select {
-  position: relative;
-  min-width: 0;
-}
-
-.agent-chat__talk-select summary {
-  list-style: none;
-}
-
-.agent-chat__talk-select summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-chat__talk-select-trigger {
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  height: 34px;
-  min-height: 34px;
-  padding: 0 9px 0 10px;
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  color: var(--text);
-  font-size: 0.78rem;
-  line-height: 1.35;
-  overflow: hidden;
-  user-select: none;
-}
-
-.agent-chat__talk-select-trigger:hover {
-  border-color: color-mix(in srgb, var(--text) 18%, var(--input));
-  background: color-mix(in srgb, var(--card) 84%, var(--bg-elevated) 16%);
-}
-
-.agent-chat__talk-select-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.agent-chat__talk-select-label {
-  min-width: 0;
-  overflow: hidden;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-chat__talk-select-icon,
-.agent-chat__talk-select-check {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-
-.agent-chat__talk-select-check {
-  color: var(--accent);
-}
-
-.agent-chat__talk-select-icon svg,
-.agent-chat__talk-select-check svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.agent-chat__talk-select[open] .agent-chat__talk-select-icon {
-  transform: rotate(180deg);
-}
-
-.agent-chat__talk-select-menu {
-  position: absolute;
-  left: 0;
-  top: calc(100% + 6px);
-  z-index: 95;
-  display: grid;
-  gap: 2px;
-  width: max(100%, min(240px, calc(100vw - 32px)));
-  max-height: min(260px, calc(100vh - 140px));
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: var(--shadow-md);
-  overflow-y: auto;
-}
-
-.agent-chat__talk-select-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  min-height: 32px;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 0.78rem;
-  line-height: 1;
-  text-align: left;
-}
-
-.agent-chat__talk-select-option:hover,
-.agent-chat__talk-select-option:focus-visible {
-  border-color: color-mix(in srgb, var(--border) 76%, transparent);
-  background: var(--bg-hover);
-  outline: none;
-}
-
-.agent-chat__talk-select-option--selected {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-}
-
-.agent-chat__talk-input-setting {
-  display: grid;
-  grid-column: 1 / -1;
-  gap: 6px;
-}
-
-.agent-chat__talk-input-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  gap: 6px;
-  align-items: end;
-}
-
-.agent-chat__talk-input-refresh {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  color: var(--muted);
-}
-
-.agent-chat__talk-input-refresh:hover:not(:disabled),
-.agent-chat__talk-input-refresh:focus-visible {
-  border-color: color-mix(in srgb, var(--text) 18%, var(--input));
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.agent-chat__talk-input-refresh:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.agent-chat__talk-input-refresh:disabled {
-  cursor: wait;
-  opacity: 0.75;
-}
-
-.agent-chat__talk-input-refresh svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.agent-chat__talk-input-refresh:disabled svg {
-  animation: chat-run-status-spin 0.9s linear infinite;
-}
-
-.agent-chat__talk-input-spinner {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-  color: var(--muted);
-  animation: chat-run-status-spin 0.9s linear infinite;
-}
-
-.agent-chat__talk-input-spinner svg {
-  width: 100%;
-  height: 100%;
-}
-
-.agent-chat__talk-input-message {
-  padding: 0 2px;
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.4;
-}
-
-.agent-chat__talk-input-message--loading {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.agent-chat__talk-input-message--error {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 8px 9px;
-  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
-  border-radius: var(--radius-sm);
-  background: var(--danger-subtle);
-  color: var(--text);
-}
-
-.agent-chat__talk-input-message-icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-  margin-top: 1px;
-  color: var(--danger);
-}
-
-.agent-chat__talk-input-message-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
 .agent-chat__input-divider {
   width: 1px;
   height: 16px;
@@ -2577,6 +2217,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 }
 
+/* Send is the primary action of the whole surface, so it gets the same solid
+   accent treatment as .btn.primary; variants (--stop, --voice*) override the
+   fill instead of reintroducing borders. */
 .chat-send-btn {
   display: inline-flex;
   align-items: center;
@@ -2585,15 +2228,16 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   min-width: 36px;
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--accent);
-  background: transparent;
-  color: var(--accent);
+  border-radius: var(--radius-full);
+  border: none;
+  background: var(--accent);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 3px var(--accent-subtle);
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
     opacity var(--duration-fast) ease;
   padding: 0;
 }
@@ -2612,43 +2256,49 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-send-btn svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.5px;
+  stroke-width: 2px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 11%, transparent);
-  border-color: var(--accent-hover);
-  color: var(--accent-hover);
+  background: var(--accent-hover);
+  box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+/* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
+   overrides can never swallow the keyboard focus indicator. */
 .chat-send-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
+/* Muted fill (not a ghost outline) while there is nothing to send, so the
+   accent fill itself signals "ready". */
 .chat-send-btn:disabled {
-  border-color: color-mix(in srgb, var(--muted) 45%, transparent);
-  background: transparent;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
   color: var(--muted);
-  opacity: 0.55;
+  box-shadow: none;
+  opacity: 0.8;
   cursor: not-allowed;
 }
 
-/* Idle voice ring stays muted so the idle -> hover -> recording progression
-   escalates (40% -> 70% -> full ring via --stop); a full-strength idle ring
-   makes recording state indistinguishable at a glance. */
+/* Idle voice fill stays muted so the idle -> hover -> recording progression
+   escalates (10% -> 18% -> live meter + breathing glow); a full-strength idle
+   fill makes recording state indistinguishable at a glance. */
 .chat-send-btn--voice {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  box-shadow: none;
 }
 
 .chat-send-btn--voice:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: none;
 }
 
 /* Live voice input: the level meter itself is the control. Keeping it accent
@@ -2661,8 +2311,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   min-width: 64px;
   padding: 0 14px;
   border-radius: var(--radius-full);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  box-shadow: none;
 }
 
 .chat-send-btn--voice-live::after {
@@ -2677,8 +2328,8 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-send-btn--voice-live:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: none;
 }
 
 .chat-send-btn--voice-live .agent-chat__voice-activity {
@@ -2733,13 +2384,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   opacity: 0.25;
 }
 
-/* Filled square + soft danger fill so Stop generating reads as the one
-   destructive control; the outline-only square was ambiguous next to other
-   36px icon buttons. */
+/* Soft danger fill so Stop generating reads as the one destructive control
+   next to the accent-filled send button. */
 .chat-send-btn--stop {
-  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+  box-shadow: none;
 }
 
 .chat-send-btn--stop svg {
@@ -2750,9 +2400,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
-  border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: color-mix(in srgb, var(--danger) 82%, #fff);
+  box-shadow: none;
 }
 
 @media (min-width: 1600px) {
@@ -2856,13 +2506,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
     max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
   }
 
-  .chat-settings-popover-wrapper {
+  .chat-view-menu-wrapper {
     width: 40px;
     margin-left: 0;
     justify-self: start;
   }
 
-  .chat-settings-chip {
+  .chat-view-menu-trigger {
     width: 36px;
     min-width: 36px;
     max-width: 36px;
@@ -2897,13 +2547,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.chat-settings-popover--open),
+  .agent-chat__input:has(.chat-view-menu--open),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
   }
 
-  .agent-chat__input .chat-controls__inline-select-menu--combined,
-  .chat-settings-popover {
+  .agent-chat__input .chat-controls__inline-select-menu--combined {
     max-height: calc(100vh - 148px);
   }
 
@@ -2933,7 +2582,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.chat-settings-popover--open),
+  .agent-chat__input:has(.chat-view-menu--open),
   .agent-chat__input:has(.context-usage details[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
@@ -4235,14 +3884,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
     justify-content: flex-start;
   }
 
-  .chat-settings-popover {
+  .chat-view-menu {
     position: fixed;
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     bottom: calc(96px + var(--safe-area-bottom));
     width: auto;
-    max-height: min(480px, calc(100vh - var(--shell-topbar-height) - 116px));
-    overflow-y: auto;
   }
 
   .chat-controls__model-browser {

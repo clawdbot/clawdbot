@@ -5,7 +5,6 @@ import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { createEmptyUninstallActions } from "../plugins/uninstall.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -26,6 +25,20 @@ type UpdateNpmInstalledPluginsFn =
 type UpdateNpmInstalledHookPacksFn =
   (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
+
+function createEmptyUninstallActions() {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+    directory: false,
+  };
+}
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 
@@ -77,7 +90,6 @@ export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
-const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
@@ -482,18 +494,6 @@ vi.mock("../plugins/uninstall.js", async (importOriginal) => {
         applyPluginUninstallDirectoryRemoval,
         ...args,
       )) as (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"],
-    uninstallPlugin: ((
-      ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-    ) =>
-      invokeMock<
-        Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>,
-        ReturnType<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-      >(uninstallPlugin, ...args)) as (typeof import("../plugins/uninstall.js"))["uninstallPlugin"],
-    resolveUninstallDirectoryTarget: ({
-      installRecord,
-    }: {
-      installRecord?: { installPath?: string; sourcePath?: string };
-    }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
   };
 });
 
@@ -732,7 +732,6 @@ export function resetPluginsCliTestState() {
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
   applyPluginUninstallDirectoryRemoval.mockReset();
-  uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
   promptText.mockReset();
@@ -859,12 +858,6 @@ export function resetPluginsCliTestState() {
   applyPluginUninstallDirectoryRemoval.mockResolvedValue({
     directoryRemoved: false,
     warnings: [],
-  });
-  uninstallPlugin.mockResolvedValue({
-    ok: true,
-    config: {} as OpenClawConfig,
-    warnings: [],
-    actions: createEmptyUninstallActions(),
   });
   updateNpmInstalledPlugins.mockResolvedValue({
     outcomes: [],

@@ -275,6 +275,9 @@
       "@openclaw/normalization-core/*": [
         "../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"
       ],
+      "@openclaw/retry": [
+        "../dist/plugin-sdk/packages/retry/src/index.d.ts"
+      ],
       "@openclaw/acp-core": [
         "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
       ],

@@ -2,20 +2,29 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const detectBinaryMock = vi.hoisted(() => vi.fn(async () => false));
+const { detectBinaryMock, getWindowsInstallRootsMock } = vi.hoisted(() => ({
+  detectBinaryMock: vi.fn(async () => false),
+  getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
+}));
 
 vi.mock("./detect-binary.js", () => ({
   detectBinary: detectBinaryMock,
 }));
 
+vi.mock("./windows-install-roots.js", async () => {
+  const actual = await vi.importActual<typeof import("./windows-install-roots.js")>(
+    "./windows-install-roots.js",
+  );
+  return { ...actual, getWindowsInstallRoots: getWindowsInstallRootsMock };
+});
+
 import { resolveBrowserOpenCommand } from "./browser-open.js";
-import { resetWindowsInstallRootsForTests } from "./windows-install-roots.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);
-  resetWindowsInstallRootsForTests();
+  getWindowsInstallRootsMock.mockReset().mockReturnValue({ systemRoot: "C:\\Windows" });
 });
 
 describe("resolveBrowserOpenCommand", () => {
@@ -23,7 +32,6 @@ describe("resolveBrowserOpenCommand", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", ".\\fake-root");
     vi.stubEnv("windir", ".\\fake-windir");
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
 
     const resolved = await resolveBrowserOpenCommand();
 
@@ -33,19 +41,9 @@ describe("resolveBrowserOpenCommand", () => {
   });
 
   it("prefers the registry-backed Windows system root over process env", async () => {
+    getWindowsInstallRootsMock.mockReturnValue({ systemRoot: "D:\\Windows" });
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
-    resetWindowsInstallRootsForTests({
-      queryRegistryValue: (key, valueName) => {
-        if (
-          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
-          valueName === "SystemRoot"
-        ) {
-          return "D:\\Windows";
-        }
-        return null;
-      },
-    });
 
     const resolved = await resolveBrowserOpenCommand();
 

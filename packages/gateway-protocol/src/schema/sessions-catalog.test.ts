@@ -13,7 +13,11 @@ describe("SessionsCatalogListResultSchema", () => {
           {
             id: "claude",
             label: "Claude Code",
-            capabilities: { continueSession: true, archive: false },
+            capabilities: {
+              continueSession: true,
+              archive: false,
+              createSession: { model: "anthropic/claude-opus-4-8" },
+            },
             hosts: [
               {
                 hostId: "gateway:local",
@@ -31,6 +35,15 @@ describe("SessionsCatalogListResultSchema", () => {
 });
 
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts an optional agent scope", () => {
+    expect(
+      Value.Check(SessionsCatalogListParamsSchema, {
+        agentId: "research",
+        catalogId: "claude",
+      }),
+    ).toBe(true);
+  });
+
   it("requires a catalog selector for host cursors", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),

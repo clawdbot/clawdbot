@@ -42,4 +42,65 @@ describe("executeProviderOperationWithRetry", () => {
 
     expect(operation).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+  ])("retries %s network failures from structured errors", async (code) => {
+    const cause = Object.assign(new Error("connect failed"), { code });
+    const error =
+      code === "EPIPE"
+        ? Object.assign(new Error("socket closed"), { code })
+        : new Error("fetch failed", { cause });
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue("ok");
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["HTTP 400", Object.assign(new Error("Bad Request"), { status: 400 })],
+    ["ENOENT", new Error("ENOENT: no such file or directory")],
+  ])("does not retry %s failures", async (_label, error) => {
+    const operation = vi.fn(async () => {
+      throw error;
+    });
+
+    await expect(
+      executeProviderOperationWithRetry({
+        provider: "test",
+        stage: "read",
+        operation,
+        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).rejects.toThrow();
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry create operations by default", async () => {
+    const operation = vi.fn(async () => {
+      throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    });
+
+    await expect(
+      executeProviderOperationWithRetry({ provider: "test", stage: "create", operation }),
+    ).rejects.toThrow("EPIPE");
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
 });

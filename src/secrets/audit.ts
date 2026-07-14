@@ -44,17 +44,13 @@ import {
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 /** Stable finding codes emitted by `openclaw secrets audit`. */
-export type SecretsAuditCode =
-  | "PLAINTEXT_FOUND"
-  | "REF_UNRESOLVED"
-  | "REF_SHADOWED"
-  | "LEGACY_RESIDUE";
+type SecretsAuditCode = "PLAINTEXT_FOUND" | "REF_UNRESOLVED" | "REF_SHADOWED" | "LEGACY_RESIDUE";
 
 /** Audit severity used for CLI output and check-mode exit behavior. */
-export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
+type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
 /** One secret audit finding with file/path context. */
-export type SecretsAuditFinding = {
+type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
   file: string;
@@ -65,10 +61,10 @@ export type SecretsAuditFinding = {
 };
 
 /** Overall audit state derived from findings and unresolved refs. */
-export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
+type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-export type SecretsAuditReport = {
+type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
   resolution: {

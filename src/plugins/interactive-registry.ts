@@ -110,7 +110,7 @@ export function clearPluginInteractiveHandlers(): void {
 }
 
 /** Clears stored plugin interactive handler registrations. */
-export function clearPluginInteractiveHandlerRegistrations(): void {
+function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 

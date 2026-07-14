@@ -1,13 +1,18 @@
 // Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
   stripInboundMetadata,
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
+
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json

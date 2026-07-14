@@ -5,7 +5,6 @@ import { shortenHomeInString } from "../utils.js";
 import type { PluginRecord } from "./registry.js";
 import type { PluginSourceRoots } from "./roots.js";
 export { resolvePluginSourceRoots } from "./roots.js";
-export type { PluginSourceRoots } from "./roots.js";
 
 function tryRelative(root: string, filePath: string): string | null {
   if (!isPathInside(root, filePath)) {

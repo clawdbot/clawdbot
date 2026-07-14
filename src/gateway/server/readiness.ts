@@ -11,7 +11,7 @@ import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /** Snapshot returned by the gateway readiness probe. */
-export type ReadinessResult = {
+type ReadinessResult = {
   ready: boolean;
   failing: string[];
   suppressed?: string[];

@@ -5,6 +5,7 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -499,23 +500,6 @@ export function filterCurrentDirectChildCompletionRows(
   });
 }
 
-function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
 function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
@@ -571,7 +555,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       : undefined;
 
   const parts = [
-    `runtime ${formatDurationShort(runtimeMs)}`,
+    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
   ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {

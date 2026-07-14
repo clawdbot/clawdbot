@@ -1,6 +1,6 @@
 // Covers channel account summary rendering.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
 const isFixtureAccountConfigured = (account: unknown) =>

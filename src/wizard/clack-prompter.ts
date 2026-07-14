@@ -18,8 +18,8 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
-  stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
@@ -169,10 +169,8 @@ export function createClackPrompter(): WizardPrompter {
       process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
     },
     select: async (params) => {
-      const options = params.options.map((opt) => {
-        const base = { value: opt.value, label: opt.label };
-        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-      }) as Option<(typeof params.options)[number]["value"]>[];
+      const { message, options: styledOptions } = styleSelectParams(params);
+      const options = styledOptions as Option<(typeof params.options)[number]["value"]>[];
 
       if (params.searchable) {
         return await withHorizontalCursorActionsDisabled(
@@ -181,7 +179,7 @@ export function createClackPrompter(): WizardPrompter {
             await runPromptWithNavigation(params.navigation, async (signal) =>
               params.navigation
                 ? await autocompleteWithNavigationFooter({
-                    message: stylePromptMessage(params.message),
+                    message,
                     options,
                     initialValue: params.initialValue,
                     filter: tokenizedOptionFilter,
@@ -189,7 +187,7 @@ export function createClackPrompter(): WizardPrompter {
                     navigation: params.navigation,
                   })
                 : await autocomplete({
-                    message: stylePromptMessage(params.message),
+                    message,
                     options,
                     initialValue: params.initialValue,
                     filter: tokenizedOptionFilter,
@@ -205,14 +203,14 @@ export function createClackPrompter(): WizardPrompter {
           await runPromptWithNavigation(params.navigation, async (signal) =>
             params.navigation
               ? await selectWithNavigationFooter({
-                  message: stylePromptMessage(params.message),
+                  message,
                   options,
                   initialValue: params.initialValue,
                   signal,
                   navigation: params.navigation,
                 })
               : await select({
-                  message: stylePromptMessage(params.message),
+                  message,
                   options,
                   initialValue: params.initialValue,
                   signal,
@@ -221,10 +219,8 @@ export function createClackPrompter(): WizardPrompter {
       );
     },
     multiselect: async (params) => {
-      const options = params.options.map((opt) => {
-        const base = { value: opt.value, label: opt.label };
-        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-      }) as Option<(typeof params.options)[number]["value"]>[];
+      const { message, options: styledOptions } = styleSelectParams(params);
+      const options = styledOptions as Option<(typeof params.options)[number]["value"]>[];
 
       if (params.searchable) {
         return await withHorizontalCursorActionsDisabled(
@@ -233,7 +229,7 @@ export function createClackPrompter(): WizardPrompter {
             await runPromptWithNavigation(params.navigation, async (signal) =>
               params.navigation
                 ? await autocompleteMultiselectWithNavigationFooter({
-                    message: stylePromptMessage(params.message),
+                    message,
                     options,
                     initialValues: params.initialValues,
                     filter: tokenizedOptionFilter,
@@ -241,7 +237,7 @@ export function createClackPrompter(): WizardPrompter {
                     navigation: params.navigation,
                   })
                 : await autocompleteMultiselect({
-                    message: stylePromptMessage(params.message),
+                    message,
                     options,
                     initialValues: params.initialValues,
                     filter: tokenizedOptionFilter,
@@ -257,14 +253,14 @@ export function createClackPrompter(): WizardPrompter {
           await runPromptWithNavigation(params.navigation, async (signal) =>
             params.navigation
               ? await multiselectWithNavigationFooter({
-                  message: stylePromptMessage(params.message),
+                  message,
                   options,
                   initialValues: params.initialValues,
                   signal,
                   navigation: params.navigation,
                 })
               : await multiselect({
-                  message: stylePromptMessage(params.message),
+                  message,
                   options,
                   initialValues: params.initialValues,
                   signal,

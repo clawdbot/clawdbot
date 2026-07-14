@@ -2,7 +2,7 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
+import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;

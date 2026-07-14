@@ -6,7 +6,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   createChannelPairingChallengeIssuer,

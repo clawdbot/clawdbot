@@ -13,7 +13,7 @@ type DeliveryPayload = Pick<
 >;
 
 /** Normalized cron run payload state used for summaries, delivery, and failure classification. */
-export type CronPayloadOutcome = {
+type CronPayloadOutcome = {
   summary?: string;
   outputText?: string;
   synthesizedText?: string;

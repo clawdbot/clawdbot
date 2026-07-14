@@ -1,5 +1,4 @@
 // Imessage tests cover send plugin behavior.
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,13 +28,6 @@ const IMESSAGE_TEST_CFG = {
     },
   },
 };
-
-const spawnMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: spawnMock,
-}));
 
 function createClient(result: Record<string, unknown>): IMessageRpcClient {
   return {
@@ -87,7 +79,6 @@ describe("sendMessageIMessage receipts", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
-    spawnMock.mockReset();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -1277,26 +1268,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 });
 
-function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
-  const kill = vi.fn();
-  spawnMock.mockImplementationOnce(() => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
-      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
-      kill: (signal: string) => void;
-    };
-    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    child.kill = kill;
-    queueMicrotask(() => {
-      child[stream].emit("error", error);
-    });
-    return child;
-  });
-  return kill;
-}
-
-describe("sendMessageIMessage CLI stream errors", () => {
+describe("sendMessageIMessage CLI wrapper errors", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
     resetIMessageShortIdState();
@@ -1310,32 +1282,19 @@ describe("sendMessageIMessage CLI stream errors", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
-    spawnMock.mockReset();
   });
 
-  it("rejects on stdout stream error during attachment send", async () => {
-    const kill = mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
+  it("preserves canonical CLI wrapper errors during attachment send", async () => {
+    const wrapperError = new Error("imsg execution failed");
+    const runCliJson = vi.fn().mockRejectedValue(wrapperError);
 
     await expect(
       sendMessageIMessage("chat_guid:chat-1", "", {
         config: IMESSAGE_TEST_CFG,
         mediaUrl: "/tmp/image.png",
+        runCliJson,
         resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
       }),
-    ).rejects.toThrow("iMessage CLI stdout stream error: stdout pipe broken");
-    expect(kill).toHaveBeenCalledWith("SIGKILL");
-  });
-
-  it("rejects on stderr stream error during attachment send", async () => {
-    const kill = mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
-
-    await expect(
-      sendMessageIMessage("chat_guid:chat-1", "", {
-        config: IMESSAGE_TEST_CFG,
-        mediaUrl: "/tmp/image.png",
-        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
-      }),
-    ).rejects.toThrow("iMessage CLI stderr stream error: stderr pipe broken");
-    expect(kill).toHaveBeenCalledWith("SIGKILL");
+    ).rejects.toBe(wrapperError);
   });
 });

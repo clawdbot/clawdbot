@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
-export type CodexPluginAppCacheKeyParams = Omit<
+type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
 > & {
@@ -107,7 +107,7 @@ function resolveCodexAppServerConnectionHome(
 }
 
 /** Serializes app-server endpoint identity, including credential fingerprints. */
-export function resolveCodexPluginAppCacheEndpoint(
+function resolveCodexPluginAppCacheEndpoint(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
 ): string {
   return JSON.stringify({
@@ -120,7 +120,7 @@ export function resolveCodexPluginAppCacheEndpoint(
 }
 
 /** Resolves the CODEX_HOME value that scopes local app-server inventory. */
-export function resolveCodexPluginAppCacheCodexHome(
+function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {

@@ -12,7 +12,7 @@ import {
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

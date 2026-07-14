@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
-import type { PluginManifestProviderAuthChoice } from "../../src/plugins/manifest.js";
+import type { PluginManifest } from "../../src/plugins/manifest.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -20,6 +20,8 @@ type ApiKeyStyleChoice = PluginManifestProviderAuthChoice & {
   optionKey: string;
   cliFlag: string;
 };
+
+type PluginManifestProviderAuthChoice = NonNullable<PluginManifest["providerAuthChoices"]>[number];
 
 type ParityCase = {
   pluginId: string;

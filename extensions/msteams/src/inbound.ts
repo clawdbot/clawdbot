@@ -13,7 +13,7 @@ type MSTeamsQuoteInfo = {
 /**
  * Decode common HTML entities to plain text.
  */
-export function decodeHtmlEntities(html: string): string {
+function decodeHtmlEntities(html: string): string {
   return html
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -27,7 +27,7 @@ export function decodeHtmlEntities(html: string): string {
 /**
  * Strip HTML tags, preserving text content.
  */
-export function htmlToPlainText(html: string): string {
+function htmlToPlainText(html: string): string {
   return decodeHtmlEntities(
     html
       .replace(/<[^>]*>/g, " ")

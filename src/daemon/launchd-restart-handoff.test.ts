@@ -53,7 +53,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       waitForPid: 9876,
     });
 
-    expect(result).toEqual({ ok: true, pid: 4242 });
+    expect(result).toEqual({ ok: true, value: 4242 });
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = requireSpawnCall();
     expect(args[0]).toBe("-c");

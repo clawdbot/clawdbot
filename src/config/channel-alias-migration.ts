@@ -14,12 +14,18 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 export type StreamingAliasMode = "off" | "partial" | "block" | "progress";
 
-/** Streaming half of a channel alias-migration spec. */
-type StreamingAliasSpec = {
+/**
+ * Streaming half of a channel alias-migration spec.
+ *
+ * TMode widens the migrated `streaming.mode` value set for channels whose
+ * nested schema keeps channel-local modes (Matrix adds "quiet"); the generic
+ * default keeps the shared four-mode contract for everyone else.
+ */
+type StreamingAliasSpec<TMode extends string = StreamingAliasMode> = {
   /** Default passed to resolveLegacyAliasStreamingMode for mode-source migration. */
   defaultMode: StreamingAliasMode;
   /** Channel-specific mode resolver override (Slack maps legacy draft stream modes). */
-  resolveMode?: (entry: Record<string, unknown>) => StreamingAliasMode;
+  resolveMode?: (entry: Record<string, unknown>) => TMode;
   /**
    * The channel's runtime default when `streaming` is entirely absent, if it
    * differs from the object-without-mode default (Discord: progress vs off).
@@ -40,10 +46,10 @@ type StreamingAliasSpec = {
   deliveryOnly?: boolean;
 };
 
-export type ChannelAliasMigrationSpec = {
+export type ChannelAliasMigrationSpec<TMode extends string = StreamingAliasMode> = {
   /** Channel id under `channels.<id>`; also the doctor message path prefix. */
   channelId: string;
-  streaming: StreamingAliasSpec;
+  streaming: StreamingAliasSpec<TMode>;
   /**
    * Set when the channel's runtime account merge replaces the root `streaming`
    * object wholesale (Discord). Migration then seeds account objects it
@@ -62,7 +68,7 @@ export type ChannelAliasMigrationSpec = {
 };
 
 function buildAliasRuleMessage(params: {
-  streaming: StreamingAliasSpec;
+  streaming: StreamingAliasSpec<string>;
   prefix: string;
   root: boolean;
 }): string {
@@ -98,7 +104,9 @@ function buildAliasRuleMessage(params: {
  * detection rules (root + accounts), the per-entry matcher, and the config
  * normalizer. Channels with additional migrations compose around these pieces.
  */
-export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
+export function defineChannelAliasMigration<TMode extends string = StreamingAliasMode>(
+  spec: ChannelAliasMigrationSpec<TMode>,
+): {
   legacyConfigRules: LegacyConfigRule[];
   hasLegacyAliases: (value: unknown) => boolean;
   normalizeChannelConfig: (params: { cfg: OpenClawConfig; changes?: string[] }) => {

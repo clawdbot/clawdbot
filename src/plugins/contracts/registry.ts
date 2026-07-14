@@ -1,6 +1,5 @@
 // Plugin contract registry assembles bundled plugin fixtures for shared contract tests.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
@@ -131,20 +130,6 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
     }));
 }
 
-function resolveBundledProviderContractPluginIdsByProviderId(): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  for (const entry of resolveBundledManifestContracts()) {
-    for (const providerId of entry.providerIds) {
-      const existing = result.get(providerId) ?? [];
-      if (!existing.includes(entry.pluginId)) {
-        existing.push(entry.pluginId);
-      }
-      result.set(providerId, existing);
-    }
-  }
-  return result;
-}
-
 function resolveBundledProviderContractPluginIds(): string[] {
   return uniqueStrings(
     resolveBundledManifestContracts()
@@ -263,10 +248,6 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
   }
 }
 
-function loadProviderContractPluginIds(): string[] {
-  return [...resolveBundledProviderContractPluginIds()];
-}
-
 function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unknown {
   if (provider.requiresCredential === false) {
     return `${provider.id}-no-key-needed`;
@@ -374,28 +355,6 @@ function createLazyArrayView<T>(load: () => T[]): T[] {
     },
   });
 }
-
-export function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  const pluginIds = resolveBundledProviderContractPluginIdsByProviderId().get(providerId) ?? [];
-  const entries = loadProviderContractEntriesForPluginIds(pluginIds);
-  const provider = entries.find((entry) => entry.provider.id === providerId)?.provider;
-  if (!provider) {
-    const pluginScopedProviders = [
-      ...new Map(entries.map((entry) => [entry.provider.id, entry.provider])).values(),
-    ];
-    if (pluginIds.length === 1 && pluginScopedProviders.length === 1) {
-      return expectDefined(pluginScopedProviders[0], "plugin scoped providers entry at 0");
-    }
-    if (providerContractLoadError) {
-      throw new Error(
-        `provider contract entry missing for ${providerId}; bundled provider registry failed to load: ${providerContractLoadError.message}`,
-      );
-    }
-    throw new Error(`provider contract entry missing for ${providerId}`);
-  }
-  return provider;
-}
-
 export function resolveProviderContractPluginIdsForProviderAlias(
   providerId: string,
 ): string[] | undefined {
@@ -432,11 +391,6 @@ export function resolveProviderContractProvidersForPluginIds(
     ).values(),
   ];
 }
-
-export const providerContractPluginIds: string[] = createLazyArrayView(
-  loadProviderContractPluginIds,
-);
-
 function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
   return resolveBundledManifestContracts();
 }

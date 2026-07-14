@@ -18,6 +18,7 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -39,7 +40,7 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
-export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
@@ -496,11 +497,19 @@ async function noteSessionSqliteMigrationHealth(params: {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-  const report = await runDoctorSessionSqlite({
-    allAgents: true,
-    env: params.env,
-    mode: params.shouldRepair ? "import" : "dry-run",
-  });
+  const runSessionSqlite = async () =>
+    await runDoctorSessionSqlite({
+      allAgents: true,
+      env: params.env,
+      mode: params.shouldRepair ? "import" : "dry-run",
+    });
+  const report = params.shouldRepair
+    ? await withDoctorSqliteMaintenanceLock({
+        env: params.env,
+        operation: "session SQLite import",
+        run: runSessionSqlite,
+      })
+    : await runSessionSqlite();
   if (
     report.totals.legacyEntries === 0 &&
     report.totals.unreferencedJsonlFiles === 0 &&

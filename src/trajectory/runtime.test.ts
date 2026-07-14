@@ -8,7 +8,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES, resolveTrajectoryPointerOpenFlags } from "./paths.js";
+import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
@@ -408,16 +408,6 @@ describe("trajectory runtime", () => {
     expect(runtimeRecorder.describeFlushState()).toBe(
       "pendingWrites=2 queuedBytes=256 activeOperation=file-append yieldBeforeWrite=true activeWriteBytes=128 maxQueuedBytes=1024 maxFileBytes=1024",
     );
-  });
-
-  it("keeps pointer write flags usable when O_NOFOLLOW is unavailable", () => {
-    expect(
-      resolveTrajectoryPointerOpenFlags({
-        O_CREAT: 0x01,
-        O_TRUNC: 0x02,
-        O_WRONLY: 0x04,
-      }),
-    ).toBe(0x07);
   });
 
   it("does not record runtime events when explicitly disabled", () => {

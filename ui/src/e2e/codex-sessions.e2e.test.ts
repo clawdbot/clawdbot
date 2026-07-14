@@ -30,6 +30,124 @@ suite("Codex native session catalog", () => {
     await server?.close();
   });
 
+  it("omits empty native session catalogs from the sidebar", async () => {
+    const page = await browser.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true },
+              hosts: [
+                {
+                  hostId: "gateway:codex",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                },
+              ],
+            },
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:claude",
+                  label: "Local Claude",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThan(0);
+    expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
+    expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
+    await page.close();
+  });
+
+  it("shows a catalog Load More rejection without losing the retry cursor", async () => {
+    const page = await browser.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true },
+              hosts: [
+                {
+                  hostId: "gateway:codex",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "thread-1",
+                      name: "Newest session",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                  ],
+                  nextCursor: "page-2",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBe(1);
+      const loadMore = page.locator('[data-session-catalog-load-more="codex"]');
+      await loadMore.waitFor({ state: "visible" });
+      await gateway.deferNext("sessions.catalog.list");
+      await loadMore.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBe(2);
+      await gateway.rejectDeferred("sessions.catalog.list", {
+        code: "UNAVAILABLE",
+        message: "Second catalog page unavailable",
+      });
+
+      const section = page.locator('[data-session-section="catalog:codex"]');
+      await section.locator('[data-session-catalog-error="codex"]').waitFor({ state: "visible" });
+      await expect
+        .poll(() => section.locator(".sidebar-session-group-toggle").getAttribute("aria-label"))
+        .toContain("Second catalog page unavailable");
+      await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("false");
+      expect(await loadMore.isEnabled()).toBe(true);
+      expect(await page.getByText("Newest session", { exact: true }).count()).toBe(1);
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("adopts from the native chat composer, navigates, and auto-sends", async () => {
     const page = await browser.newPage();
     const gateway = await installMockGateway(page, {

@@ -183,6 +183,7 @@ func markdownListParentItemPath(list *ast.List) string {
 
 func extractMarkdownInlineCodeValues(body string) []string {
 	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
+	fencedRanges := markdownClosedLiteralFenceByteRanges(string(parseSource))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
 	values := []string{}
 	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -191,6 +192,9 @@ func extractMarkdownInlineCodeValues(body string) []string {
 		}
 		span, ok := node.(*ast.CodeSpan)
 		if ok {
+			if byteRange, found := markdownCodeSpanContentRange(span); found && rangeOverlapsAny(byteRange, fencedRanges) {
+				return ast.WalkContinue, nil
+			}
 			values = append(values, string(span.Text(parseSource)))
 		}
 		return ast.WalkContinue, nil
@@ -319,8 +323,12 @@ func parseMarkdownLiteralFenceOpening(line string) (markdownLiteralFenceState, b
 	if delimiter == "" {
 		return markdownLiteralFenceState{}, false
 	}
+	infoText := strings.TrimSpace(remaining[len(delimiter):])
+	if delimiter[0] == '`' && strings.Contains(infoText, "`") {
+		return markdownLiteralFenceState{}, false
+	}
 	info := ""
-	if fields := strings.Fields(strings.TrimSpace(remaining[len(delimiter):])); len(fields) > 0 {
+	if fields := strings.Fields(infoText); len(fields) > 0 {
 		info = strings.ToLower(fields[0])
 	}
 	return markdownLiteralFenceState{delimiter: delimiter, quoteDepth: quoteDepth, info: info, containerIndent: containerIndent}, true
@@ -620,7 +628,7 @@ func fencedMarkerName(value string) (string, bool) {
 }
 
 func extractFallbackBacktickValues(body string) []string {
-	fenced := markdownFencedCodeRanges(body)
+	fenced := append(markdownFencedCodeRanges(body), markdownClosedLiteralFenceByteRanges(body)...)
 	values := []string{}
 	for _, span := range markdownBlockBacktickRanges(body) {
 		if rangeOverlapsAny(span, fenced) {
@@ -636,6 +644,27 @@ func extractFallbackBacktickValues(body string) []string {
 		values = append(values, body[span[0]+runLength:span[1]-runLength])
 	}
 	return values
+}
+
+func markdownCodeSpanContentRange(span *ast.CodeSpan) ([2]int, bool) {
+	start, end := -1, -1
+	for child := span.FirstChild(); child != nil; child = child.NextSibling() {
+		textNode, ok := child.(*ast.Text)
+		if !ok {
+			continue
+		}
+		segment := textNode.Segment
+		if start < 0 || segment.Start < start {
+			start = segment.Start
+		}
+		if segment.Stop > end {
+			end = segment.Stop
+		}
+	}
+	if start < 0 || end < start {
+		return [2]int{}, false
+	}
+	return [2]int{start, end}, true
 }
 
 func markdownFencedCodeRanges(body string) [][2]int {
@@ -869,22 +898,8 @@ func markdownCodeSpanRanges(body string) [][2]int {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		start, end := -1, -1
-		for child := span.FirstChild(); child != nil; child = child.NextSibling() {
-			textNode, ok := child.(*ast.Text)
-			if !ok {
-				continue
-			}
-			segment := textNode.Segment
-			if start < 0 || segment.Start < start {
-				start = segment.Start
-			}
-			if segment.Stop > end {
-				end = segment.Stop
-			}
-		}
-		if start >= 0 && end >= start {
-			ranges = append(ranges, [2]int{start, end})
+		if byteRange, found := markdownCodeSpanContentRange(span); found {
+			ranges = append(ranges, byteRange)
 		}
 		return ast.WalkContinue, nil
 	})

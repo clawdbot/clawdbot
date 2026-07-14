@@ -595,7 +595,7 @@ describe("build-all timing output", () => {
         { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
-      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
+      "[build-all] phase timings: total 2m 13.6s; slowest tsdown 1m 39s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
     );
   });
 });

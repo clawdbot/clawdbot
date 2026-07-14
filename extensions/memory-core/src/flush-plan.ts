@@ -9,8 +9,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryCoreNowMs } from "./time.js";
 
-export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
-export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 const MEMORY_FLUSH_TARGET_HINT =
   "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
@@ -24,7 +24,7 @@ const MEMORY_FLUSH_REQUIRED_HINTS = [
   MEMORY_FLUSH_READ_ONLY_HINT,
 ];
 
-export const DEFAULT_MEMORY_FLUSH_PROMPT = [
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,

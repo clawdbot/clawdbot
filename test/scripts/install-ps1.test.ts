@@ -110,17 +110,28 @@ describe("install.ps1 failure handling", () => {
           scriptWithoutEntryPoint,
           "",
           "$cases = @{",
-          "  '22.18.9' = $false",
-          "  '22.19.0' = $true",
-          "  '23.7.0' = $false",
-          "  '23.10.9' = $false",
-          "  '23.11.0' = $true",
-          "  '24.0.0' = $true",
+          "  '22.22.2' = $false",
+          "  '22.22.3' = $true",
+          "  '23.11.0' = $false",
+          "  '24.14.1' = $false",
+          "  '24.15.0' = $true",
+          "  '25.8.1' = $false",
+          "  '25.9.0' = $true",
+          "  '26.0.0' = $true",
           "}",
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeVersionSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
           "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "node-sqlite-runtime",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "if (-not (Test-NodeSqliteSupported)) { throw 'Bundled SQLite runtime was rejected' }",
           "",
         ].join("\n"),
       },
@@ -198,6 +209,83 @@ describe("install.ps1 failure handling", () => {
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted token result=$result" }',
           '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=`"12288`"" -MinOldSpaceMb 8192',
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted value result=$result" }',
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "chocolatey-node-upgrade",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'choco') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "function choco {",
+          "  $script:chocoArgs = $args -join ' '",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Chocolatey output'",
+          "}",
+          "function Check-Node { return $true }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if ($script:chocoArgs -ne 'upgrade nodejs-lts -y --install-if-not-installed') {",
+          '  throw "Args=$script:chocoArgs"',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "scoop-node-update",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'scoop') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "$env:Path = 'C:\\session-bin'",
+          "$script:scoopCalls = @()",
+          "function scoop {",
+          "  $script:scoopCalls += ($args -join ' ')",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Scoop output'",
+          "}",
+          "function Check-Node { return $true }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (($script:scoopCalls -join '|') -ne 'update|install nodejs-lts|update nodejs-lts') {",
+          "  throw \"Calls=$($script:scoopCalls -join '|')\"",
+          "}",
+          "if (($env:Path -split ';') -notcontains 'C:\\session-bin') { throw \"Path=$env:Path\" }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-validation-failure",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'choco') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "function choco {",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Chocolatey output'",
+          "}",
+          "function Check-Node { return $false }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $false) { throw "Install-Node returned $result" }',
           "",
         ].join("\n"),
       },
@@ -347,17 +435,33 @@ describe("install.ps1 failure handling", () => {
 
   it("checks the full supported Node version range", () => {
     const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
+    const sqliteBody = extractFunctionBody(source, "Test-NodeSqliteSupported");
     const checkNodeBody = extractFunctionBody(source, "Check-Node");
     expect(versionBody).toContain("$major -eq 22");
-    expect(versionBody).toContain("$minor -ge 19");
-    expect(versionBody).toContain("$major -eq 23");
-    expect(versionBody).toContain("$minor -ge 11");
-    expect(versionBody).toContain("$major -gt 23");
+    expect(versionBody).toContain("$patch -ge 3");
+    expect(versionBody).toContain("$major -eq 24");
+    expect(versionBody).toContain("$minor -ge 15");
+    expect(versionBody).toContain("$major -eq 25");
+    expect(versionBody).toContain("$minor -ge 9");
+    expect(versionBody).toContain("$major -gt 25");
+    expect(sqliteBody).toContain("SELECT sqlite_version() AS version");
+    expect(sqliteBody).toContain("$probe | & node -");
+    expect(sqliteBody).not.toContain("& node -e");
+    expect(sqliteBody).toContain("patch >= 3");
     expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
+    expect(checkNodeBody).toContain("Test-NodeSqliteSupported");
+    expect(source).toContain("Please install Node.js 24.15+ manually:");
   });
 
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
+    expectBatchedPowerShellCase("node-sqlite-runtime");
+  });
+
+  runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
+    expectBatchedPowerShellCase("chocolatey-node-upgrade");
+    expectBatchedPowerShellCase("scoop-node-update");
+    expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {

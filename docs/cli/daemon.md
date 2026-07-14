@@ -26,7 +26,7 @@ openclaw daemon uninstall
 | Subcommand  | Options                                                                                          |
 | ----------- | ------------------------------------------------------------------------------------------------ |
 | `status`    | `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
-| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`            |
+| `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
 | `uninstall` | `--json`                                                                                         |
 | `start`     | `--json`                                                                                         |
 | `stop`      | `--json`, `--disable` (launchd only: persistently suppress KeepAlive/RunAtLoad until next start) |

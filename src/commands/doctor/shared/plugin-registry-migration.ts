@@ -30,12 +30,9 @@ const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
 
-export type PluginRegistryInstallMigrationPreflightAction =
-  | "disabled"
-  | "skip-existing"
-  | "migrate";
+type PluginRegistryInstallMigrationPreflightAction = "disabled" | "skip-existing" | "migrate";
 
-export type PluginRegistryInstallMigrationPreflight = {
+type PluginRegistryInstallMigrationPreflight = {
   /** Migration action selected before reading or writing registry state. */
   action: PluginRegistryInstallMigrationPreflightAction;
   /** Persisted plugin index path that migration will inspect or write. */
@@ -46,7 +43,7 @@ export type PluginRegistryInstallMigrationPreflight = {
   deprecationWarnings: readonly string[];
 };
 
-export type PluginRegistryInstallMigrationResult =
+type PluginRegistryInstallMigrationResult =
   | {
       status: "disabled" | "skip-existing" | "dry-run";
       migrated: false;
@@ -269,6 +266,9 @@ function listMigrationRelevantPluginRecords(params: {
       return true;
     }
     if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
+      return true;
+    }
+    if ((manifest?.contracts?.migrationProviders?.length ?? 0) > 0) {
       return true;
     }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
@@ -20,21 +20,22 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function assertRecoveryInitializerTypeContract(
-  create: ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"],
-): void {
-  // @ts-expect-error Recovery must return the final trusted plugin extension patch.
-  void create({
-    cfg: {},
-    key: "type-contract-only",
-    recoverMatchingInitialEntry: true,
-    initialEntry: { agentHarnessId: "codex" },
-    afterCreate: async () => {},
-  });
-}
-void assertRecoveryInitializerTypeContract;
-
 describe("plugin runtime session creation", () => {
+  it("requires recovery initialization to return the final trusted patch", () => {
+    type CreateSessionParams = Parameters<
+      ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"]
+    >[0];
+    const invalidRecoveryInitializer = {
+      cfg: {},
+      key: "type-contract-only",
+      recoverMatchingInitialEntry: true as const,
+      initialEntry: { agentHarnessId: "codex" },
+      afterCreate: async () => {},
+    };
+
+    expectTypeOf(invalidRecoveryInitializer).not.toMatchTypeOf<CreateSessionParams>();
+  });
+
   it("creates a canonical transcript with trusted initial session state", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create" }, async () => {
       const runtime = createRuntimeAgent();
@@ -129,6 +130,8 @@ describe("plugin runtime session creation", () => {
       const created = await runtime.session.createSessionEntry({
         cfg: {},
         key,
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         initialEntry: {
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
@@ -146,6 +149,9 @@ describe("plugin runtime session creation", () => {
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
         modelSelectionLocked: true,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source",

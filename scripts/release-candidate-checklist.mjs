@@ -109,6 +109,14 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+export function releaseBranchForTag(tag) {
+  if (tag.includes("-alpha.")) {
+    return "";
+  }
+  const version = tag.replace(/^v/u, "").split("-", 1)[0];
+  return `release/${version}`;
+}
+
 /**
  * Parses release-candidate validation options and enforces publish-scope policy.
  */
@@ -1283,8 +1291,10 @@ async function main() {
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
+    const targetContextRef = releaseBranchForTag(options.tag);
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: options.tag,
+      ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,

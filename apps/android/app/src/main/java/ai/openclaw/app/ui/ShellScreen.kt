@@ -191,6 +191,11 @@ fun ShellScreen(
           HomeDestination.Settings -> Tab.Settings
         },
       )
+      // Screenshot scenes can target a settings detail route alongside the tab.
+      viewModel.requestedSettingsRoute.value?.let { route ->
+        nav.openSettingsRoute(route)
+        viewModel.clearRequestedSettingsRoute()
+      }
       viewModel.clearRequestedHomeDestination()
     }
 

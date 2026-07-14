@@ -47,10 +47,6 @@ vi.mock("../browser/chrome.js", () => ({
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
 
-vi.mock("../browser/pw-ai-state.js", () => ({
-  isPwAiLoaded: vi.fn(() => false),
-}));
-
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
 const { stopBrowserControlService } = await import("../control-service.js");

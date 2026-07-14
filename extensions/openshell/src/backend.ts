@@ -207,7 +207,7 @@ export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
 }
 
-export type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+export type { OpenShellSandboxBackend } from "./backend.types.js";
 
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,

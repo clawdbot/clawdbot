@@ -421,6 +421,7 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         scope: "all",
+        agentId: "ops",
         limit: 25,
         statuses: ["ok", "error"],
         deliveryStatuses: ["delivered", "not-requested"],
@@ -428,6 +429,7 @@ describe("cron protocol validators", () => {
         sortDir: "desc",
       }),
     ).toBe(true);
+    expect(validateCronRunsParams({ scope: "all", agentId: "" })).toBe(false);
     expect(
       validateCronRunsParams({
         scope: "job",

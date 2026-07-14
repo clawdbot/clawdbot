@@ -7,7 +7,7 @@ export {
   createDurableInboundReceiveJournal,
   createDurableInboundReceiveJournalFromQueue,
 } from "./durable-receive.js";
-export { createChannelIngressQueue } from "./ingress-queue.js";
+
 export {
   listDeclaredChannelMessageLiveCapabilities,
   listDeclaredDurableFinalCapabilities,
@@ -67,7 +67,6 @@ export type {
   ChannelIngressQueueFailedRecord,
   ChannelIngressQueuePruneOptions,
   ChannelIngressQueueRecord,
-  CreateChannelIngressQueueOptions,
 } from "./ingress-queue.js";
 export type {
   ChannelMessageOutboundBridgeAdapter,
@@ -88,16 +87,7 @@ export type {
   LivePreviewFinalizerCapabilityProofMap,
   LivePreviewFinalizerCapabilityProofResult,
 } from "./contracts.js";
-export type {
-  ChannelReplyPipeline,
-  CreateChannelReplyPipelineParams,
-  CreateTypingCallbacksParams,
-  ReplyPrefixContext,
-  ReplyPrefixContextBundle,
-  ReplyPrefixOptions,
-  SourceReplyDeliveryMode,
-  TypingCallbacks,
-} from "./reply-pipeline.js";
+export type { CreateChannelReplyPipelineParams } from "./reply-pipeline.js";
 export type {
   MessageAckPolicy,
   MessageAckStage,

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -56,7 +57,7 @@ describe("account-scoped LINE groups", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
       "group:g1": { requireMention: false },
@@ -88,7 +89,7 @@ describe("line group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "r123" })).toBe(false);
     expect(resolveLineGroupRequireMention({ cfg, groupId: "room:r123" })).toBe(false);
@@ -117,7 +118,7 @@ describe("line group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "g123", accountId: "work" })).toBe(false);
   });

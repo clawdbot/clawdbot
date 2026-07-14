@@ -12,13 +12,7 @@ import {
   resolveStrictExistingPathsWithinRoot,
 } from "../sdk-security-runtime.js";
 import { CONFIG_DIR } from "../utils.js";
-export {
-  pathScope,
-  resolvePathsWithinRoot,
-  resolvePathWithinRoot,
-  resolveWritablePathWithinRoot,
-} from "../sdk-security-runtime.js";
-export { resolveExistingPathsWithinRoot, resolveStrictExistingPathsWithinRoot };
+export { resolveExistingPathsWithinRoot };
 
 const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
 

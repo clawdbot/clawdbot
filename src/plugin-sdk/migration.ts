@@ -190,6 +190,7 @@ export function createMigrationConfigPatchItem(params: {
   conflict?: boolean;
   reason?: string;
   source?: string;
+  sensitive?: boolean;
   details?: Record<string, unknown>;
 }): MigrationItem {
   return createMigrationItem({
@@ -201,6 +202,7 @@ export function createMigrationConfigPatchItem(params: {
     status: params.conflict ? "conflict" : "planned",
     reason: params.conflict ? (params.reason ?? MIGRATION_REASON_TARGET_EXISTS) : undefined,
     message: params.message,
+    sensitive: params.sensitive,
     details: { ...params.details, path: params.path, value: params.value },
   });
 }
@@ -318,8 +320,18 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
     return REDACTED_MIGRATION_VALUE;
   }
   seen.add(value);
+  const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
+  const redactSensitiveDetailsValue =
+    record.sensitive === true && isRecord(record.details) && Object.hasOwn(record.details, "value");
+  for (const [key, entry] of Object.entries(record)) {
+    if (key === "details" && redactSensitiveDetailsValue && isRecord(entry)) {
+      const details = redactMigrationValueInternal(entry, seen);
+      next[key] = isRecord(details)
+        ? { ...details, value: REDACTED_MIGRATION_VALUE }
+        : REDACTED_MIGRATION_VALUE;
+      continue;
+    }
     if (isSecretKey(key) && !isSecretReferenceLike(entry)) {
       next[key] = REDACTED_MIGRATION_VALUE;
       continue;

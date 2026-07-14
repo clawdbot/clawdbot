@@ -3,6 +3,8 @@
 // timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import pMap from "p-map";
+import prettyMilliseconds from "pretty-ms";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -445,10 +447,12 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) {
     return "";
   }
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  return `${(ms / 1000).toFixed(1)}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 1,
+    unitCount: 1,
+  });
 }
 
 function writeGroupedResult(result, output) {
@@ -496,43 +500,23 @@ export async function runChecks(
     outputMaxBytes = DEFAULT_OUTPUT_MAX_BYTES,
   } = {},
 ) {
-  const results = Array.from({ length: checks.length });
   const activeChildren = new Set();
   const removeActiveChildCleanup = installActiveChildCleanup(activeChildren);
-  let nextIndex = 0;
-  let active = 0;
+  let results;
 
   try {
-    await new Promise((resolve) => {
-      const launch = () => {
-        if (nextIndex >= checks.length && active === 0) {
-          resolve();
-          return;
-        }
-
-        while (active < concurrency && nextIndex < checks.length) {
-          const index = nextIndex;
-          const check = checks[nextIndex++];
-          active += 1;
-          void runSingleCheck(check, {
-            activeChildren,
-            checkTimeoutMs,
-            cwd,
-            env,
-            outputMaxBytes,
-          })
-            .then((result) => {
-              results[index] = result;
-            })
-            .finally(() => {
-              active -= 1;
-              launch();
-            });
-        }
-      };
-
-      launch();
-    });
+    results = await pMap(
+      checks,
+      (check) =>
+        runSingleCheck(check, {
+          activeChildren,
+          checkTimeoutMs,
+          cwd,
+          env,
+          outputMaxBytes,
+        }),
+      { concurrency, stopOnError: true },
+    );
   } finally {
     removeActiveChildCleanup();
   }

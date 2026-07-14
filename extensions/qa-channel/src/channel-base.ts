@@ -21,7 +21,7 @@ export const qaChannelRuntimeMeta = {
   docsPath: "/channels/qa-channel",
   blurb: "Synthetic QA channel for OpenClaw QA runs.",
 };
-export const qaChannelSetupMeta = qaChannelRuntimeMeta;
+const qaChannelSetupMeta = qaChannelRuntimeMeta;
 
 type QaChannelPluginBase = Pick<
   ChannelPlugin<ResolvedQaChannelAccount>,

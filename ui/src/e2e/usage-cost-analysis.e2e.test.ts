@@ -338,6 +338,12 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
         .poll(() => providerCards.filter({ hasText: "Anthropic" }).textContent())
         .toContain("claude-opus-4-8");
 
+      await page.locator(".usage-query-input").fill("missing-session");
+      await page.locator(".usage-query-input").press("Enter");
+      const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
+      await expect.poll(() => topProviders.textContent()).toContain("No provider data");
+      await expect.poll(() => topProviders.textContent()).not.toContain("openai");
+
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const artifactDir = path.join(
           process.cwd(),

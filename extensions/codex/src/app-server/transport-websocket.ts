@@ -103,12 +103,12 @@ export function createWebSocketTransport(
 }
 
 /** Opens the owner-scoped Codex control socket used by the WebSocket upgrade. */
-export function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
+function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
 /** Resolves the canonical or explicitly configured Codex control socket. */
-export function resolveCodexAppServerUnixSocketPath(
+function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
   if (options.transport !== "unix") {

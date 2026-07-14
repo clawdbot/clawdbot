@@ -5,7 +5,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import "../test-support/browser-security.mock.js";
-import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
@@ -22,6 +21,7 @@ import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 function requirePwMock<K extends keyof typeof pwMocks>(name: K): NonNullable<(typeof pwMocks)[K]> {
   return expectDefined(pwMocks[name], `Playwright mock ${name}`);
 }

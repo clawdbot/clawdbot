@@ -22,6 +22,7 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/config.css",
+    "ui/src/styles/settings.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
@@ -41,12 +42,9 @@ function controlsHtml() {
       <input class="settings-sidebar__search-input" value="settings search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
-      <input class="cfg-input" value="config input" />
-      <input class="cfg-input cfg-input--sm" value="small config input" />
-      <textarea class="cfg-textarea">config textarea</textarea>
-      <textarea class="cfg-textarea cfg-textarea--sm">small config textarea</textarea>
-      <label class="cfg-number"><input class="cfg-number__input" value="1" /></label>
-      <select class="cfg-select"><option>config select</option></select>
+      <input class="settings-input" value="config input" />
+      <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
+      <select class="settings-select"><option>settings select</option></select>
       <input class="usage-date-input" value="2026-05-31" />
       <select class="usage-select"><option>usage select</option></select>
       <input class="usage-query-input" value="usage query" />
@@ -98,12 +96,9 @@ describeBrowserLayout("touch-primary form controls", () => {
           ".settings-sidebar__search-input",
           ".settings-theme-import__input",
           ".config-raw-field textarea",
-          ".cfg-input",
-          ".cfg-input--sm",
-          ".cfg-textarea",
-          ".cfg-textarea--sm",
-          ".cfg-number__input",
-          ".cfg-select",
+          "input.settings-input",
+          ".settings-row__control > textarea.settings-input",
+          ".settings-select",
           ".usage-date-input",
           ".usage-select",
           ".usage-query-input",
@@ -139,7 +134,7 @@ describeBrowserLayout("touch-primary form controls", () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
     try {
-      const selects = await page.locator(".cfg-select, .field select").evaluateAll((nodes) =>
+      const selects = await page.locator(".field select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
@@ -150,7 +145,7 @@ describeBrowserLayout("touch-primary form controls", () => {
         }),
       );
 
-      expect(selects).toHaveLength(2);
+      expect(selects).toHaveLength(1);
       for (const select of selects) {
         expect(select.image).not.toBe("none");
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);

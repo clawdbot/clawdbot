@@ -1,19 +1,23 @@
 // Qa Lab tests cover live transport scenarios plugin behavior.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { __testing as discordTesting } from "../discord/discord-live.runtime.js";
-import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
-import { __testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
-import { __testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  findMissingLiveTransportStandardScenarios,
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
+import { describe, expect, it } from "vitest";
+import { discordQaLiveRuntime } from "../discord/discord-live.runtime.js";
+import { testing as slackTesting } from "../slack/slack-live.runtime.js";
+import { testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
+import { testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
+import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
-  findMissingLiveTransportStandardScenarios,
   loadNonYamlScenarioRefs,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
+
+const discordTesting = discordQaLiveRuntime.testing;
 
 describe("live transport scenario helpers", () => {
   it("loads every non-YAML scenario id exactly once", async () => {

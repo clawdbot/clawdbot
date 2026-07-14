@@ -24,7 +24,7 @@ type ExtendableZodObject = ZodTypeAny & {
 };
 
 /** Shared allowlist entry shape for channel sender/user ids. */
-export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
+const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 /** Optional allowlist array used by channel config schema builders. */
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 

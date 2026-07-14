@@ -25,6 +25,7 @@ import { isXaiProviderId } from "./provider-id.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
 import {
   readPluginCodeExecutionConfig,
@@ -283,6 +284,7 @@ export default defineSingleProviderPluginEntry({
     api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
     api.registerSpeechProvider(buildXaiSpeechProvider());
     api.registerRealtimeTranscriptionProvider(buildXaiRealtimeTranscriptionProvider());
+    api.registerRealtimeVoiceProvider(buildXaiRealtimeVoiceProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

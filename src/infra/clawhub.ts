@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parse as parseSemverVersion, prerelease as parseSemverPrerelease } from "semver";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -18,7 +19,7 @@ import {
   parseStrictPositiveInteger,
 } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
-import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { compareValidSemver } from "./semver.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
@@ -43,13 +44,13 @@ export type ClawHubPackageCompatibility = {
   pluginSdkVersion?: string;
   minGatewayVersion?: string;
 };
-export type ClawHubPackageHostTarget = {
+type ClawHubPackageHostTarget = {
   os?: string | null;
   arch?: string | null;
   libc?: string | null;
   key?: string | null;
 };
-export type ClawHubPackageEnvironmentSummary = {
+type ClawHubPackageEnvironmentSummary = {
   requiresLocalDesktop?: boolean;
   requiresBrowser?: boolean;
   requiresAudioDevice?: boolean;
@@ -73,14 +74,14 @@ export type ClawHubPackageArtifactSummary = {
   tarballUrl?: string | null;
   legacyDownloadUrl?: string | null;
 };
-export type ClawHubArtifactScanState =
+type ClawHubArtifactScanState =
   | "pending"
   | "clean"
   | "suspicious"
   | "malicious"
   | "not-run"
   | (string & {});
-export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
+type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
 export type ClawHubPackageSecurityTrust = {
   scanStatus?: ClawHubArtifactScanState | null;
   moderationState?: ClawHubArtifactModerationState | null;
@@ -163,7 +164,7 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
-export type ClawHubPackageListItem = {
+type ClawHubPackageListItem = {
   name: string;
   displayName: string;
   family: ClawHubPackageFamily;
@@ -342,7 +343,7 @@ export type ClawHubSkillInstallResolutionResponse =
       status: number;
     };
 
-export type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
+type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
 
 export type ClawHubSkillVerificationResponse = {
   schema: "clawhub.skill.verify.v1";
@@ -365,7 +366,7 @@ export type ClawHubSkillVerificationResponse = {
   signature: unknown;
 };
 
-export type ClawHubSkillSecurityVerdictRequestItem = {
+type ClawHubSkillSecurityVerdictRequestItem = {
   slug: string;
   ownerHandle?: string;
   version: string;
@@ -393,7 +394,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   };
 };
 
-export type ClawHubSkillSecurityVerdictsResponse = {
+type ClawHubSkillSecurityVerdictsResponse = {
   schema: "clawhub.skill.security-verdicts.v1";
   items: ClawHubSkillSecurityVerdictItem[];
 };
@@ -468,7 +469,6 @@ function normalizeBaseUrl(baseUrl?: string): string {
 
 function normalizeGitHubCodeloadBaseUrl(): string {
   const value =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
     normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
     DEFAULT_GITHUB_CODELOAD_URL;
   return value.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
@@ -493,7 +493,6 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
 
 function resolveClawHubConfigPaths(): string[] {
   const explicit =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_CONFIG_PATH) ||
     normalizeOptionalString(process.env.CLAWHUB_CONFIG_PATH) ||
     normalizeOptionalString(process.env.CLAWDHUB_CONFIG_PATH); // legacy misspelling from older clawhub CLI builds; keep for back-compat
   if (explicit) {
@@ -515,9 +514,8 @@ function resolveClawHubConfigPaths(): string[] {
   return [xdgPath];
 }
 
-export async function resolveClawHubAuthToken(): Promise<string | undefined> {
+async function resolveClawHubAuthToken(): Promise<string | undefined> {
   const envToken =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_TOKEN) ||
     normalizeOptionalString(process.env.CLAWHUB_TOKEN) ||
     normalizeOptionalString(process.env.CLAWHUB_AUTH_TOKEN);
   if (envToken) {
@@ -549,14 +547,13 @@ function normalizePartialComparableVersion(version: string): {
 }
 
 function compareSemver(left: string, right: string): number | null {
-  return compareComparableSemver(
-    parseComparableSemver(normalizePartialComparableVersion(left).version),
-    parseComparableSemver(normalizePartialComparableVersion(right).version),
-  );
+  const normalizedLeft = normalizePartialComparableVersion(left).version;
+  const normalizedRight = normalizePartialComparableVersion(right).version;
+  return compareValidSemver(normalizedLeft, normalizedRight);
 }
 
 function upperBoundForCaret(version: string): string | null {
-  const parsed = parseComparableSemver(normalizePartialComparableVersion(version).version);
+  const parsed = parseSemverVersion(normalizePartialComparableVersion(version).version);
   if (!parsed) {
     return null;
   }
@@ -579,9 +576,7 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
 }
 
 function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
-  return Boolean(
-    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
-  );
+  return Boolean(parseSemverPrerelease(normalizePartialComparableVersion(target).version));
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
@@ -601,7 +596,7 @@ function satisfiesComparator(version: string, token: string): boolean {
   }
   const wildcard = matchWildcardComparator(trimmed);
   if (wildcard) {
-    return wildcard === "any" && parseComparableSemver(version) != null;
+    return wildcard === "any" && parseSemverVersion(version) != null;
   }
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
@@ -1716,7 +1711,7 @@ export function satisfiesGatewayMinimum(
 // validated against the local provider catalog by the caller before any
 // install/auth action, so a malformed or hostile record cannot execute code.
 
-export type ClawHubPromotionModel = {
+type ClawHubPromotionModel = {
   modelRef: string;
   alias?: string;
   suggestedDefault?: boolean;
@@ -1745,7 +1740,7 @@ export type ClawHubPromotion = {
 // clients still window-filter on startsAt/endsAt).
 export type ClawHubPromotionsFeedEntry = Omit<ClawHubPromotion, "status" | "active">;
 
-export type ClawHubPromotionsFeed = {
+type ClawHubPromotionsFeed = {
   schemaVersion: number;
   id: string;
   generatedAt: string;
@@ -1851,7 +1846,7 @@ function parseClawHubPromotionCore(
   return promotion;
 }
 
-export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   const context = "promotion";
   if (!isJsonObject(value)) {
     throw new Error(`Malformed ClawHub ${context}: expected an object.`);
@@ -1951,7 +1946,7 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   return { schemaVersion, id, generatedAt, sequence, expiresAt, entries };
 }
 
-export type ClawHubPromotionsFeedFetchResult =
+type ClawHubPromotionsFeedFetchResult =
   | { status: "not-modified" }
   | { status: "ok"; feed: ClawHubPromotionsFeed; payload: string; etag?: string };
 

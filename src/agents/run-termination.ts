@@ -46,6 +46,12 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
   }
 }
 
+export function throwAgentRunRestartAbortReason(value: unknown): void {
+  if (isAgentRunRestartAbortReason(value)) {
+    throw value;
+  }
+}
+
 function isAgentRunTimeoutAbortReason(value: unknown): boolean {
   if (!value || typeof value !== "object") {
     return false;

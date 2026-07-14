@@ -25,6 +25,11 @@
       - any-glob-to-any-file:
           - "extensions/irc/**"
           - "docs/channels/irc.md"
+"channel: reef":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/reef/**"
+          - "docs/channels/reef.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
@@ -68,6 +73,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -207,6 +216,11 @@
           - "apps/macos/**"
           - "docs/platforms/macos.md"
           - "docs/platforms/mac/**"
+"app: linux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/linux/**"
+          - "docs/platforms/linux.md"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
@@ -354,6 +368,12 @@
           - "extensions/vault/**"
           - "docs/plugins/vault.md"
           - "docs/plugins/reference/vault.md"
+"extensions: onepassword":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onepassword/**"
+          - "docs/plugins/onepassword.md"
+          - "docs/plugins/reference/onepassword.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:

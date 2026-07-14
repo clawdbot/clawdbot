@@ -7,40 +7,37 @@ read_when:
   - Debugging release validation stage failures
 ---
 
-`Full Release Validation` is the release umbrella: the single manual entrypoint
-for pre-release proof. Most work happens in child workflows so a failed box can
-be rerun without restarting the whole release.
+`Full Release Validation` is the release product-validation umbrella. Most work
+happens in child workflows so a failed box can be rerun without restarting the
+whole release.
 
-Run it from a trusted workflow ref, normally `main`, and pass the release branch,
-tag, or full commit SHA as `ref`:
+Freeze the product-complete pre-changelog commit as the **Code SHA**, then run:
 
 ```bash
-gh workflow run full-release-validation.yml \
-  --ref main \
-  -f ref=release/YYYY.M.PATCH \
-  -f provider=openai \
-  -f mode=both \
-  -f release_profile=stable
+pnpm ci:full-release \
+  --sha <code-sha> \
+  --target-ref release/YYYY.M.PATCH
 ```
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. Reusable child jobs resolve the called workflow harness
-from `job.workflow_repository` and `job.workflow_sha`, while the input `ref`
-selects the candidate under test. This keeps current trusted validation logic
-available when validating an older release branch or tag.
+end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
+package versions and `stable` otherwise. Pass alternate workflow inputs with
+`-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
 
-Every dispatched child must report the same workflow SHA as the parent
-`Full Release Validation` run. If `main` moves between the parent and child
-dispatches, the umbrella fails closed even when the child itself succeeds. For
-an immutable exact-commit proof, use
-`pnpm ci:full-release --sha <target-sha>`. The helper creates a temporary
-`release-ci/*` ref pinned to current trusted `origin/main`, passes the target
-SHA only as the candidate `ref`, reuses strict exact-target evidence when
-available, and deletes the ref after validation. Pass
+The helper creates a temporary `release-ci/*` ref pinned to one trusted
+`origin/main` workflow SHA, passes the target SHA only as the candidate `ref`,
+and deletes the temporary ref after validation. Every dispatched child must
+report that same workflow SHA. Pass
 `-f reuse_evidence=false` to force a fresh run or
 `--workflow-sha <trusted-main-sha>` to select an older workflow commit still
 reachable from current `origin/main`. The workflow never creates or updates
 repository refs itself.
+
+When the Code SHA is green, generate and commit only `CHANGELOG.md`. This new
+commit is the **Release SHA**. Run the same helper for the Release SHA. Product
+evidence is reused only when GitHub proves the Release SHA descends from the
+Code SHA and the complete changed path set is exactly `CHANGELOG.md`; npm
+preflight and package/install acceptance still run on the Release SHA.
 
 `release_profile=stable` and `release_profile=full` always run the exhaustive
 live/Docker soak. Pass `run_release_soak=true` to include the same soak lanes
@@ -63,13 +60,13 @@ that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 ## Top-level stages
 
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
-first: it looks for the newest prior green full validation for the exact same
-target SHA, release profile, effective soak setting, and validation inputs.
-When such evidence exists, every lane is skipped and the umbrella verifier
-re-checks the immutable parent artifact, child runs, and dispatch logs. This is
-same-candidate rerun recovery only; it does not authorize cross-SHA reuse. For
-a changed candidate, rerun every package, artifact, install, Docker, or provider
-gate affected by that delta. Pass `reuse_evidence=false` to force a fresh full
+first. It looks for the newest prior green full validation with the same release
+profile, effective soak setting, and validation inputs. Exact-target reruns use
+`exact-target-full-validation-v1`. A descendant whose complete delta is exactly
+`CHANGELOG.md` uses `changelog-only-release-v1`; every product lane is skipped
+and the verifier independently rechecks the GitHub commit comparison, immutable
+parent artifact, child runs, and dispatch logs. Any other target change requires
+a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full
 run. Evidence reuse runs only from `main` or a canonical SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
@@ -251,6 +248,9 @@ need fresh QA evidence.
 Keep the `Full Release Validation` summary as the release-level index. It links
 child run ids and includes slowest-job tables. For failures, inspect the child
 workflow first, then rerun the smallest matching handle above.
+
+Record both Code SHA and Release SHA, the reuse policy and changed-path set, the
+green Code SHA parent run, and the lightweight Release SHA parent run.
 
 Useful artifacts:
 

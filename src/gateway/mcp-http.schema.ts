@@ -167,10 +167,6 @@ function warnSchemaOnce(message: string) {
   logWarn(message);
 }
 
-export function clearMcpToolSchemaWarningsForTest() {
-  emittedSchemaWarnings.clear();
-}
-
 /** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {

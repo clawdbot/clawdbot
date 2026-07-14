@@ -11,30 +11,28 @@ import {
 import * as containerClientModule from "./client-container.js";
 import * as nativeClientModule from "./client.js";
 
-const mockNativeCheck = vi.fn();
-const mockNativeRpcRequest = vi.fn();
-const mockNativeStreamEvents = vi.fn();
-const mockContainerCheck = vi.fn();
-const mockContainerRpcRequest = vi.fn();
-const mockContainerFetchAttachment = vi.fn();
-const mockStreamContainerEvents = vi.fn();
+const mockNativeCheck = vi.fn<typeof nativeClientModule.signalCheck>();
+const mockNativeRpcRequest = vi.fn<typeof nativeClientModule.signalRpcRequest>();
+const mockNativeStreamEvents = vi.fn<typeof nativeClientModule.streamSignalEvents>();
+const mockContainerCheck = vi.fn<typeof containerClientModule.containerCheck>();
+const mockContainerRpcRequest = vi.fn<typeof containerClientModule.containerRpcRequest>();
+const mockContainerFetchAttachment = vi.fn<typeof containerClientModule.containerFetchAttachment>();
+const mockStreamContainerEvents = vi.fn<typeof containerClientModule.streamContainerEvents>();
 let currentApiMode: SignalApiMode = "auto";
 
 beforeEach(() => {
-  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck as any);
-  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest as any);
-  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(
-    mockNativeStreamEvents as any,
-  );
-  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck as any);
+  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck);
+  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest);
+  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(mockNativeStreamEvents);
+  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck);
   vi.spyOn(containerClientModule, "containerRpcRequest").mockImplementation(
-    mockContainerRpcRequest as any,
+    mockContainerRpcRequest,
   );
   vi.spyOn(containerClientModule, "containerFetchAttachment").mockImplementation(
-    mockContainerFetchAttachment as any,
+    mockContainerFetchAttachment,
   );
   vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
-    mockStreamContainerEvents as any,
+    mockStreamContainerEvents,
   );
 });
 

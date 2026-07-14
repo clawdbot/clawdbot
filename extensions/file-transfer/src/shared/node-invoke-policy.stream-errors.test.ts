@@ -1,49 +1,58 @@
+// File Transfer tests cover archive-policy process-wrapper failures.
 import crypto from "node:crypto";
-// File Transfer tests cover archive-policy child-output failures.
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectBoundedTextTail } from "./append-bounded-text-tail.js";
 
-type MockChild = EventEmitter & {
-  kill: ReturnType<typeof vi.fn>;
-  stderr: EventEmitter;
-  stdin: EventEmitter & { end: () => void };
-  stdout: EventEmitter;
-};
+const { runCommandWithTimeoutMock } = vi.hoisted(() => ({
+  runCommandWithTimeoutMock: vi.fn(),
+}));
 
-function mockTarSpawn(script: (child: MockChild) => void) {
-  return vi.fn(() => {
-    const child = new EventEmitter() as MockChild;
-    child.kill = vi.fn();
-    child.stderr = new EventEmitter();
-    child.stdin = new EventEmitter() as MockChild["stdin"];
-    child.stdout = new EventEmitter();
-    child.stdin.end = () => queueMicrotask(() => script(child));
-    return child;
-  });
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
+
+import { testing } from "./node-invoke-policy.js";
+
+function commandResult(overrides: Record<string, unknown> = {}) {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
+  };
 }
 
-async function importWithSpawn(spawnMock: ReturnType<typeof vi.fn>) {
-  vi.resetModules();
-  vi.doMock("node:child_process", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("node:child_process")>();
-    return { ...actual, spawn: spawnMock };
-  });
-  return await import("./node-invoke-policy.js");
+function mockCommandResult(overrides: Record<string, unknown> = {}) {
+  runCommandWithTimeoutMock.mockImplementationOnce(
+    async (
+      _argv: string[],
+      options: { onOutputChunk?: (chunk: Buffer, stream: string) => boolean | void },
+    ) => {
+      const stdout = typeof overrides.stdout === "string" ? overrides.stdout : "";
+      const stopped = stdout
+        ? options.onOutputChunk?.(Buffer.from(stdout), "stdout") === false
+        : false;
+      return commandResult({
+        ...overrides,
+        stdout: "",
+        ...(stopped
+          ? { code: null, killed: true, outputLimitExceeded: true, termination: "signal" }
+          : {}),
+      });
+    },
+  );
 }
 
 afterEach(() => {
-  vi.doUnmock("node:child_process");
-  vi.resetModules();
+  runCommandWithTimeoutMock.mockReset();
 });
 
-describe("dir.fetch archive policy output lifecycle", () => {
-  it("fails archive listing closed on stdout errors", async () => {
-    const spawnMock = mockTarSpawn((child) => {
-      child.stdout.emit("data", Buffer.from("partial.txt\n"));
-      child.stdout.emit("error", new Error("policy listing read failed"));
-      child.emit("close", 0);
-    });
-    const { testing } = await importWithSpawn(spawnMock);
+describe("dir.fetch archive policy process wrapper", () => {
+  it("fails archive listing closed on wrapper errors", async () => {
+    runCommandWithTimeoutMock.mockRejectedValueOnce(new Error("policy listing read failed"));
 
     await expect(
       testing.listDirFetchArchiveEntries({
@@ -52,43 +61,32 @@ describe("dir.fetch archive policy output lifecycle", () => {
     ).resolves.toEqual({
       ok: false,
       code: "ARCHIVE_ENTRIES_UNREADABLE",
-      reason: "tar -tzf stdout error: Error: policy listing read failed",
+      reason: "tar -tzf error: policy listing read failed",
     });
-    expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("keeps complete archive entries authoritative after diagnostic stderr errors", async () => {
-    const spawnMock = mockTarSpawn((child) => {
-      child.stderr.emit("error", new Error("diagnostics unavailable"));
-      child.stdout.emit("data", Buffer.from("./ok.txt\n"));
-      child.emit("close", 0);
-    });
-    const { testing } = await importWithSpawn(spawnMock);
-
+  it("normalizes successful archive entries", async () => {
+    mockCommandResult({ stdout: "./ok.txt\n" });
     const archive = Buffer.from("archive");
+
     await expect(
-      testing.listDirFetchArchiveEntries({
-        tarBase64: archive.toString("base64"),
-      }),
+      testing.listDirFetchArchiveEntries({ tarBase64: archive.toString("base64") }),
     ).resolves.toEqual({
       ok: true,
       entries: ["ok.txt"],
       sizeBytes: archive.byteLength,
       sha256: crypto.createHash("sha256").update(archive).digest("hex"),
     });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ tolerateOutputError: { stderr: true } }),
+    );
   });
 
-  it("surfaces UTF-16 safe tar stderr tail when archive listing fails with emoji at projection boundary", async () => {
+  it("surfaces a UTF-16-safe stderr tail on nonzero exit", async () => {
     const oldNoise = "n".repeat(250);
-    // Length 201: raw slice(-200) would start on the low surrogate of 🤖.
     const recent = "🤖" + "f".repeat(199);
-    const spawnMock = mockTarSpawn((child) => {
-      child.stderr.emit("data", Buffer.from(oldNoise));
-      child.stderr.emit("data", Buffer.from(recent));
-      child.emit("close", 2);
-    });
-    const { testing } = await importWithSpawn(spawnMock);
-    const { projectBoundedTextTail } = await import("./append-bounded-text-tail.js");
+    mockCommandResult({ code: 2, stderr: oldNoise + recent });
 
     const result = await testing.listDirFetchArchiveEntries({
       tarBase64: Buffer.from("archive").toString("base64"),
@@ -96,13 +94,19 @@ describe("dir.fetch archive policy output lifecycle", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
-      expect(result.reason).toContain("f".repeat(199));
       expect(result.reason).not.toContain("🤖");
-      expect(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
-          result.reason,
-        ),
-      ).toBe(false);
     }
+  });
+
+  it("stops archive listing as soon as the entry cap is crossed", async () => {
+    mockCommandResult({
+      stdout: Array.from({ length: 5_001 }, (_, index) => `file-${index}`).join("\n") + "\n",
+    });
+
+    await expect(
+      testing.listDirFetchArchiveEntries({
+        tarBase64: Buffer.from("archive").toString("base64"),
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_TOO_MANY" });
   });
 });

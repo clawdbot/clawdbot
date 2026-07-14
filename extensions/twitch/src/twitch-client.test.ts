@@ -33,6 +33,15 @@ const authSuccessHandlers: Array<() => void> = [];
 const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
 const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
+type TwitchClientManagerState = {
+  clients: Map<string, unknown>;
+  messageHandlers: Map<string, (message: TwitchChatMessage) => void>;
+};
+
+function managerState(manager: TwitchClientManager): TwitchClientManagerState {
+  return manager as unknown as TwitchClientManagerState;
+}
+
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
@@ -339,7 +348,7 @@ describe("TwitchClientManager", () => {
       // The broken auth provider must not be cached as a usable client;
       // otherwise later sends fail with an opaque error instead of failing fast.
       const key = manager.getAccountKey(refreshingAccount);
-      expect((manager as any).clients.has(key)).toBe(false);
+      expect(managerState(manager).clients.has(key)).toBe(false);
     });
 
     it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
@@ -423,7 +432,7 @@ describe("TwitchClientManager", () => {
 
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
     });
 
     it("cleanup of an earlier handler does not remove a newer registered handler (#83888)", () => {
@@ -437,7 +446,7 @@ describe("TwitchClientManager", () => {
       // Running the first handler's cleanup must not drop handler2.
       cleanup1();
 
-      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
     });
 
     it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
@@ -448,7 +457,7 @@ describe("TwitchClientManager", () => {
       manager.onMessage(testAccount, handler);
       cleanup1();
 
-      expect((manager as any).messageHandlers.get(key)).toBe(handler);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler);
     });
 
     it("cleanup of the current handler removes it", () => {
@@ -458,7 +467,7 @@ describe("TwitchClientManager", () => {
       const cleanup = manager.onMessage(testAccount, handler);
       cleanup();
 
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
     });
   });
 
@@ -479,8 +488,8 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).clients.has(key)).toBe(false);
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).clients.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
     });
 
     it("clears pending client message handlers when disconnect cancels connection", async () => {
@@ -493,7 +502,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
       authSuccessHandlers[0]?.();
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
 
@@ -528,7 +537,7 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
 
       const key2 = manager.getAccountKey(testAccount2);
-      expect((manager as any).clients.has(key2)).toBe(true);
+      expect(managerState(manager).clients.has(key2)).toBe(true);
     });
   });
 
@@ -540,8 +549,8 @@ describe("TwitchClientManager", () => {
       await manager.disconnectAll();
 
       expect(mockQuit).toHaveBeenCalledTimes(2);
-      expect((manager as any).clients.size).toBe(0);
-      expect((manager as any).messageHandlers.size).toBe(0);
+      expect(managerState(manager).clients.size).toBe(0);
+      expect(managerState(manager).messageHandlers.size).toBe(0);
     });
 
     it("should handle empty client list gracefully", async () => {
@@ -617,7 +626,7 @@ describe("TwitchClientManager", () => {
 
     it("should create client if not already connected", async () => {
       // Clear the existing client
-      (manager as any).clients.clear();
+      managerState(manager).clients.clear();
 
       // Reset connect call count for this specific test
       const connectCallCountBefore = mockConnect.mock.calls.length;

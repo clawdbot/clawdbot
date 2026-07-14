@@ -4,11 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
-  describeBrowserScreenshot,
-  neutralizeMediaDirectives,
-} from "./vision.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
+
+const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+  "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 type DescribeFn = ReturnType<typeof vi.fn>;
 

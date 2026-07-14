@@ -1,7 +1,7 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,

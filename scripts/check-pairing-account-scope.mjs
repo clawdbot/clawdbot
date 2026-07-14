@@ -55,14 +55,6 @@ function findViolations(content, filePath) {
             reason: "readChannelAllowFromStore call must pass explicit accountId as 3rd arg",
           });
         }
-      } else if (
-        callName === "readLegacyChannelAllowFromStore" ||
-        callName === "readLegacyChannelAllowFromStoreSync"
-      ) {
-        violations.push({
-          line: toLine(sourceFile, node),
-          reason: `${callName} is legacy-only; use account-scoped readChannelAllowFromStore* APIs`,
-        });
       } else if (callName === "upsertChannelPairingRequest") {
         const firstArg = node.arguments[0];
         if (!firstArg || !hasRequiredAccountIdProperty(firstArg)) {

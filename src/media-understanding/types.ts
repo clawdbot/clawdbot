@@ -227,7 +227,7 @@ export type StructuredExtractionResult = {
   contentType?: "json" | "text";
 };
 
-export type MediaUnderstandingDocumentModelDefaults = {
+type MediaUnderstandingDocumentModelDefaults = {
   textExtraction?: string;
   image?: string | false;
 };

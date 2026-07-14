@@ -108,8 +108,6 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-export { extractGeneratedTranscriptSessionId };
-
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -364,7 +362,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -379,6 +377,31 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
   emitSessionTranscriptUpdate({ sessionFile: archived });
+  return archived;
+}
+
+export function archiveSessionTranscriptPaths(opts: {
+  paths: Iterable<string>;
+  reason: ArchiveFileReason;
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
+}): ArchivedSessionTranscript[] {
+  const archived: ArchivedSessionTranscript[] = [];
+  const paths = uniqueStrings(
+    Array.from(opts.paths, (candidate) => canonicalizePathForComparison(candidate)),
+  );
+  for (const sourcePath of paths) {
+    if (!fs.existsSync(sourcePath)) {
+      continue;
+    }
+    try {
+      archived.push({
+        sourcePath,
+        archivedPath: archiveFileOnDisk(sourcePath, opts.reason),
+      });
+    } catch (err) {
+      opts.onArchiveError?.(err, sourcePath);
+    }
+  }
   return archived;
 }
 
@@ -415,7 +438,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
    */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
-  const archived: ArchivedSessionTranscript[] = [];
+  const candidatePaths: string[] = [];
   const storeDir =
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
@@ -433,19 +456,13 @@ export function archiveSessionTranscriptsDetailed(opts: {
         continue;
       }
     }
-    if (!fs.existsSync(candidatePath)) {
-      continue;
-    }
-    try {
-      archived.push({
-        sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
-      });
-    } catch (err) {
-      opts.onArchiveError?.(err, candidatePath);
-    }
+    candidatePaths.push(candidatePath);
   }
-  return archived;
+  return archiveSessionTranscriptPaths({
+    paths: candidatePaths,
+    reason: opts.reason,
+    onArchiveError: opts.onArchiveError,
+  });
 }
 
 export function resolveStableSessionEndTranscript(params: {
@@ -487,7 +504,7 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
-export type SessionArchiveCleanupRule = {
+type SessionArchiveCleanupRule = {
   reason: ArchiveFileReason;
   olderThanMs: number;
 };

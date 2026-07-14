@@ -14,7 +14,7 @@ type VerifySetupInference = (params: {
 }) => Promise<BoundVerifySetupInferenceResult>;
 type RunGuidedOnboarding = typeof import("./onboard-guided.js").runGuidedOnboarding;
 
-export type CrestodianWithInferenceDeps = {
+type CrestodianWithInferenceDeps = {
   verifyInference?: VerifySetupInference;
   runGuidedOnboarding?: RunGuidedOnboarding;
   runCrestodian?: RunCrestodian;

@@ -153,6 +153,22 @@ private data class TalkStatus(
   val awaitingAgent: Boolean = false,
 )
 
+private sealed interface RealtimePlaybackItem {
+  data class Audio(
+    val bytes: ByteArray,
+  ) : RealtimePlaybackItem
+
+  data class Mark(
+    val name: String,
+  ) : RealtimePlaybackItem
+}
+
+private data class PendingRealtimePlaybackMark(
+  val sessionId: String,
+  val name: String,
+  var targetFrame: Long? = null,
+)
+
 class TalkModeManager internal constructor(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -165,6 +181,8 @@ class TalkModeManager internal constructor(
   private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(session = session),
   private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
+  private val realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
+  private val realtimeMarkAcknowledger: (suspend (sessionId: String, markName: String) -> Unit)? = null,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -298,9 +316,11 @@ class TalkModeManager internal constructor(
   private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
-  private var realtimeAudioQueue: Channel<ByteArray>? = null
+  private var realtimeAudioQueue: Channel<RealtimePlaybackItem>? = null
   private var realtimeAudioWriterJob: Job? = null
   private var realtimePlaybackIdleJob: Job? = null
+  private var realtimeWrittenFrames = 0L
+  private val pendingRealtimePlaybackMarks = LinkedHashMap<String, PendingRealtimePlaybackMark>()
 
   @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<Unit>? = null
   private val realtimeOutputCancellationMutex = Mutex()
@@ -1137,10 +1157,15 @@ class TalkModeManager internal constructor(
         playRealtimeAudio(bytes)
       }
       "clear" -> {
+        val marks = takePendingRealtimePlaybackMarks()
         stopRealtimePlayback()
+        acknowledgeRealtimePlaybackMarks(marks)
         pendingRealtimeOutputClear?.complete(Unit)
       }
-      "mark" -> Unit
+      "mark" -> {
+        val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
+        queueRealtimePlaybackMark(sessionId, markName)
+      }
       "transcript" -> {
         val role = obj["role"].asStringOrNull()
         val isFinal = obj["final"].asBooleanOrNull() == true
@@ -1219,26 +1244,48 @@ class TalkModeManager internal constructor(
   private fun playRealtimeAudio(bytes: ByteArray) {
     if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
     val queue = ensureRealtimeAudioQueue()
-    if (!queue.trySend(bytes).isSuccess) {
+    if (!queue.trySend(RealtimePlaybackItem.Audio(bytes)).isSuccess) {
       Log.w(tag, "realtime audio queue full")
     }
   }
 
-  private fun ensureRealtimeAudioQueue(): Channel<ByteArray> =
+  private fun queueRealtimePlaybackMark(
+    sessionId: String,
+    markName: String,
+  ) {
+    synchronized(realtimePlaybackLock) {
+      pendingRealtimePlaybackMarks[markName] =
+        PendingRealtimePlaybackMark(
+          sessionId = sessionId,
+          name = markName,
+        )
+    }
+    if (!ensureRealtimeAudioQueue().trySend(RealtimePlaybackItem.Mark(markName)).isSuccess) {
+      val mark = synchronized(realtimePlaybackLock) { pendingRealtimePlaybackMarks.remove(markName) }
+      acknowledgeRealtimePlaybackMarks(listOfNotNull(mark))
+    }
+  }
+
+  private fun ensureRealtimeAudioQueue(): Channel<RealtimePlaybackItem> =
     synchronized(realtimePlaybackLock) {
       realtimeAudioQueue
-        ?: Channel<ByteArray>(Channel.UNLIMITED).also { queue ->
+        ?: Channel<RealtimePlaybackItem>(Channel.UNLIMITED).also { queue ->
           realtimeAudioQueue = queue
           realtimeAudioWriterJob =
-            gatewayWorkScope.launch(Dispatchers.IO) {
-              for (chunk in queue) {
-                if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
-                try {
-                  writeRealtimeAudio(chunk)
-                } catch (err: CancellationException) {
-                  throw err
-                } catch (err: Throwable) {
-                  Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
+            gatewayWorkScope.launch(realtimePlaybackDispatcher) {
+              for (item in queue) {
+                when (item) {
+                  is RealtimePlaybackItem.Audio -> {
+                    if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
+                    try {
+                      writeRealtimeAudio(item.bytes)
+                    } catch (err: CancellationException) {
+                      throw err
+                    } catch (err: Throwable) {
+                      Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
+                    }
+                  }
+                  is RealtimePlaybackItem.Mark -> prepareRealtimePlaybackMark(item.name)
                 }
               }
             }
@@ -1281,6 +1328,7 @@ class TalkModeManager internal constructor(
               .setBufferSizeInBytes(bufferSizeBytes)
               .build()
           realtimeAudioTrack = created
+          realtimeWrittenFrames = 0L
           created
         }
       var writtenBytes = 0
@@ -1303,29 +1351,92 @@ class TalkModeManager internal constructor(
       _isSpeaking.value = true
       setStatus(nativeText("Speaking…"))
       val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
+      realtimeWrittenFrames += writtenBytes / 2L
       val now = SystemClock.elapsedRealtime()
       realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
       scheduleRealtimePlaybackIdle()
     }
   }
 
+  private fun prepareRealtimePlaybackMark(markName: String) {
+    val completed =
+      synchronized(realtimePlaybackLock) {
+        val mark = pendingRealtimePlaybackMarks[markName] ?: return
+        mark.targetFrame = realtimeWrittenFrames
+        takeCompletedRealtimePlaybackMarksLocked()
+      }
+    acknowledgeRealtimePlaybackMarks(completed)
+    scheduleRealtimePlaybackIdle()
+  }
+
+  private fun takeCompletedRealtimePlaybackMarksLocked(): List<PendingRealtimePlaybackMark> {
+    val playedFrames = realtimeAudioTrack?.playbackHeadPosition?.toLong()?.and(0xffff_ffffL) ?: realtimeWrittenFrames
+    val completed =
+      pendingRealtimePlaybackMarks.values.filter { mark ->
+        val targetFrame = mark.targetFrame
+        targetFrame != null && playedFrames >= targetFrame
+      }
+    completed.forEach { pendingRealtimePlaybackMarks.remove(it.name) }
+    return completed
+  }
+
+  private fun takePendingRealtimePlaybackMarks(): List<PendingRealtimePlaybackMark> =
+    synchronized(realtimePlaybackLock) {
+      val marks = pendingRealtimePlaybackMarks.values.toList()
+      pendingRealtimePlaybackMarks.clear()
+      marks
+    }
+
+  private fun acknowledgeRealtimePlaybackMarks(marks: List<PendingRealtimePlaybackMark>) {
+    for (mark in marks) {
+      gatewayWorkScope.launch {
+        try {
+          val acknowledge = realtimeMarkAcknowledger
+          if (acknowledge != null) {
+            acknowledge(mark.sessionId, mark.name)
+          } else {
+            val params =
+              buildJsonObject {
+                put("sessionId", JsonPrimitive(mark.sessionId))
+                put("markName", JsonPrimitive(mark.name))
+              }
+            requestGateway("talk.session.acknowledgeMark", params.toString(), timeoutMs = 8_000)
+          }
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
+          Log.d(tag, "realtime mark acknowledgement ignored: ${err.message ?: err::class.simpleName}")
+        }
+      }
+    }
+  }
+
   private fun scheduleRealtimePlaybackIdle() {
     realtimePlaybackIdleJob?.cancel()
-    val delayMs = maxOf(0L, realtimePlaybackEndsAtMs - SystemClock.elapsedRealtime())
     realtimePlaybackIdleJob =
       gatewayWorkScope.launch {
-        delay(delayMs)
-        val idle =
-          synchronized(realtimePlaybackLock) {
-            val playbackIdle = SystemClock.elapsedRealtime() >= realtimePlaybackEndsAtMs
-            if (playbackIdle) {
-              _isSpeaking.value = false
-              _outputLevel.value = null
+        while (true) {
+          delay(20)
+          val (completed, idle) =
+            synchronized(realtimePlaybackLock) {
+              val playbackTimeElapsed = SystemClock.elapsedRealtime() >= realtimePlaybackEndsAtMs
+              val completed = takeCompletedRealtimePlaybackMarksLocked()
+              // AudioTrack may lag the duration estimate by its device buffer. Keep
+              // polling until queued marks prove the speaker reached the barrier.
+              val awaitingPlaybackMark = pendingRealtimePlaybackMarks.values.any { it.targetFrame != null }
+              val playbackIdle = playbackTimeElapsed && !awaitingPlaybackMark
+              if (playbackIdle) {
+                _isSpeaking.value = false
+                _outputLevel.value = null
+              }
+              completed to playbackIdle
             }
-            playbackIdle
+          acknowledgeRealtimePlaybackMarks(completed)
+          if (idle) {
+            if (_isEnabled.value && realtimeSessionId != null) {
+              setStatus(nativeText("Listening"))
+            }
+            return@launch
           }
-        if (idle && _isEnabled.value && realtimeSessionId != null) {
-          setStatus(nativeText("Listening"))
         }
       }
   }
@@ -1351,6 +1462,7 @@ class TalkModeManager internal constructor(
         track.release()
       }
       realtimeAudioTrack = null
+      realtimeWrittenFrames = 0L
     }
     _isSpeaking.value = false
     _outputLevel.value = null
@@ -1396,6 +1508,7 @@ class TalkModeManager internal constructor(
     realtimeUserEntryAwaitingFinal = false
     realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
+    takePendingRealtimePlaybackMarks()
     _speechActive.value = false
     _inputLevel.value = 0f
     stopRealtimePlayback()

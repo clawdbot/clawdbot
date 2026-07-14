@@ -396,7 +396,7 @@ async function hydrateSendBufferMediaParams(params: {
 }
 
 /** Media access policy used when hydrating attachment action parameters. */
-export type AttachmentMediaPolicy =
+type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;

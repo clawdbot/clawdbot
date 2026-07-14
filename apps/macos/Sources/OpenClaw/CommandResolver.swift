@@ -81,6 +81,13 @@ enum CommandResolver {
             validatedExecutable: validatedExecutable)
     }
 
+    /// Version-manager trees can make discovery arbitrarily slow. Async callers
+    /// must leave their actor before touching the filesystem or the UI can stall.
+    @concurrent
+    static func preferredPathsAsync() async -> [String] {
+        self.preferredPaths()
+    }
+
     static func preferredPaths(
         home: URL,
         current: [String],

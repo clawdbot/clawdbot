@@ -86,6 +86,16 @@ export type SecurityConfig = {
   };
 };
 
+export type WorktreesConfig = {
+  /** Retention limits enforced by hourly managed-worktree cleanup. */
+  cleanup?: {
+    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
+    maxCount?: number;
+    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
+    maxTotalSizeGb?: number;
+  };
+};
+
 export type SurfaceConfigEntry = {
   /** Surface-specific silent reply policy for channels or UI integrations. */
   silentReply?: SilentReplyPolicyShape;
@@ -230,6 +240,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** Managed worktree retention settings. */
+  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */

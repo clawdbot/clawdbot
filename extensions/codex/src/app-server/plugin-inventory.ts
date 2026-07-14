@@ -36,7 +36,7 @@ export type CodexPluginMarketplaceRef = {
 };
 
 /** Machine-readable inventory diagnostic code used by thread config builders. */
-export type CodexPluginInventoryDiagnosticCode =
+type CodexPluginInventoryDiagnosticCode =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
@@ -83,7 +83,7 @@ export type CodexPluginInventory = {
 };
 
 /** Inputs for reading plugin marketplace/detail state and cached app inventory. */
-export type ReadCodexPluginInventoryParams = {
+type ReadCodexPluginInventoryParams = {
   pluginConfig?: unknown;
   policy?: ResolvedCodexPluginsPolicy;
   request: CodexPluginRuntimeRequest;

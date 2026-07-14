@@ -83,20 +83,4 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     parent.abort();
     expect(child.signal.aborted).toBe(false);
   });
-
-  it("bindAbortRelay() forwards abort through combined signals", () => {
-    // Simulates the combineAbortSignals pattern from agent-tools.abort.ts
-    const signalA = new AbortController();
-    const signalB = new AbortController();
-    const combined = new AbortController();
-
-    const onAbort = bindAbortRelay(combined);
-    signalA.signal.addEventListener("abort", onAbort, { once: true });
-    signalB.signal.addEventListener("abort", onAbort, { once: true });
-
-    expect(combined.signal.aborted).toBe(false);
-    signalA.abort();
-    expect(combined.signal.aborted).toBe(true);
-    expectDefaultAbortReason(combined);
-  });
 });

@@ -49,6 +49,10 @@ vi.mock("./doctor-config-audit-scrub.js", () => ({
   maybeScrubConfigAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-usage-cost-cache.js", () => ({
+  maybeRepairLegacyRuntimeFiles: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor/cron/index.js", () => ({
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),

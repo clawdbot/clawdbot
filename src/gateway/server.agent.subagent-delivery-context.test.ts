@@ -1,7 +1,7 @@
 // Subagent delivery-context tests protect route metadata inheritance for child
 // agent sessions and outbound delivery through channel plugins.
 import { describe, expect, test } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   createChannelTestPluginBase,

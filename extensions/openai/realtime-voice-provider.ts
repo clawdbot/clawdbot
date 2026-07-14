@@ -578,11 +578,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.requestResponseCreate();
   }
 
-  acknowledgeMark(): void {
-    if (this.markQueue.length === 0) {
-      return;
+  acknowledgeMark(markName?: string): void {
+    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
+    if (index >= 0) {
+      this.markQueue.splice(index, 1);
     }
-    this.markQueue.shift();
   }
 
   close(): void {

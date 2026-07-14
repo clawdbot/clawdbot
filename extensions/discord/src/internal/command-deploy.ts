@@ -451,4 +451,3 @@ function stableCommandSetHash(commands: SerializedCommand[]): string {
     );
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
-export { testing as __testing };

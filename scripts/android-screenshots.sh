@@ -37,7 +37,7 @@ KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
-SCENES=(home chat voice settings)
+SCENES=(home chat voice settings gateway)
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
@@ -455,6 +455,7 @@ scene_ready_text() {
     chat) printf '%s\n' "Ready when you are" ;;
     voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
+    gateway) printf '%s\n' "Add Gateway" ;;
     *)
       echo "Unknown Android screenshot scene: $1" >&2
       return 1

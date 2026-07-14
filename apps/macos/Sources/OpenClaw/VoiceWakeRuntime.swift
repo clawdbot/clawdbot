@@ -12,8 +12,6 @@ import AppKit
 actor VoiceWakeRuntime {
     static let shared = VoiceWakeRuntime()
 
-    enum ListeningState { case idle, voiceWake, pushToTalk }
-
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
 
     private var recognizer: SFSpeechRecognizer?
@@ -35,7 +33,6 @@ actor VoiceWakeRuntime {
     private var volatileTranscript: String = ""
     private var cooldownUntil: Date?
     private var currentConfig: RuntimeConfig?
-    private var listeningState: ListeningState = .idle
     private var overlayToken: UUID?
     private var activeTriggerEndTime: TimeInterval?
     private var activeTriggerWord: String?
@@ -252,7 +249,6 @@ actor VoiceWakeRuntime {
         self.haltRecognitionPipeline()
         self.recognizer = nil
         self.currentConfig = nil
-        self.listeningState = .idle
         self.activeTriggerEndTime = nil
         self.activeTriggerWord = nil
         self.logger.debug("voicewake runtime stopped")
@@ -572,7 +568,6 @@ actor VoiceWakeRuntime {
             await AppStateStore.shared.setTalkEnabled(true)
             return
         }
-        self.listeningState = .voiceWake
         self.isCapturing = true
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
         self.capturedTranscript = command
@@ -757,7 +752,6 @@ actor VoiceWakeRuntime {
     }
 
     func pauseForPushToTalk() {
-        self.listeningState = .pushToTalk
         self.stop(dismissOverlay: false)
     }
 

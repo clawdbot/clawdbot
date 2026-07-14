@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { testing as restartTesting } from "../infra/restart.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -131,7 +133,6 @@ function expectConfigMutationCall(params: {
 
 describe("gateway tool", () => {
   beforeEach(() => {
-    restartTesting.resetSigusr1State();
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
     callGatewayToolMock.mockImplementation(async (method: string) => {
@@ -298,12 +299,10 @@ describe("gateway tool", () => {
     );
   });
 
-  it("schedules SIGUSR1 restart", async () => {
+  it("schedules SIGUSR1 restart and writes the routed sentinel", async () => {
+    resetGatewayRestartStateForInProcessRestart();
+    setPreRestartDeferralCheck(() => 0);
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const restartSignalKillCalls = () =>
-      kill.mock.calls.filter(
-        ([pid, signal]) => pid === process.pid && (signal === "SIGUSR1" || signal === undefined),
-      );
     const sigusr1Handler = vi.fn();
     process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
@@ -312,9 +311,7 @@ describe("gateway tool", () => {
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
         async () => {
-          const tool = requireGatewayTool();
-
-          const result = await tool.execute("call1", {
+          const result = await requireGatewayTool().execute("call1", {
             action: "restart",
             delayMs: 0,
           });
@@ -325,13 +322,11 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
-          expect(restartSignalKillCalls()).toHaveLength(0);
-          expect(sigusr1Handler).not.toHaveBeenCalled();
           await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
             interval: 1,
             timeout: 1_000,
           });
-          expect(restartSignalKillCalls()).toHaveLength(0);
+          expect(kill).not.toHaveBeenCalled();
 
           const sentinel = await readRestartSentinel();
           expect(sentinel?.payload.kind).toBe("restart");
@@ -343,7 +338,8 @@ describe("gateway tool", () => {
     } finally {
       process.removeListener("SIGUSR1", sigusr1Handler);
       kill.mockRestore();
-      restartTesting.resetSigusr1State();
+      resetGatewayRestartStateForInProcessRestart();
+      setPreRestartDeferralCheck(() => 0);
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -499,18 +495,6 @@ describe("gateway tool", () => {
       sessionKey,
       replacePaths: ["agents.list[0]"],
     });
-  });
-
-  it("distinguishes explicit terminal array consent from indexed consent", () => {
-    expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
-    expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
-    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe("agents.list[].skills");
-    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
-      "bindings",
-    );
-    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]"))).toBe(
-      "bindings[0]",
-    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {

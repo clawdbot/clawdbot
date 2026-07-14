@@ -136,7 +136,7 @@ export type RealtimeVoiceBrowserAudioContract = {
   outputSampleRateHz: number;
 };
 
-export type RealtimeVoiceBrowserWebRtcSdpSession = {
+type RealtimeVoiceBrowserWebRtcSdpSession = {
   provider: RealtimeVoiceProviderId;
   transport: "webrtc";
   clientSecret: string;
@@ -147,7 +147,7 @@ export type RealtimeVoiceBrowserWebRtcSdpSession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
+type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
   provider: RealtimeVoiceProviderId;
   transport: "provider-websocket";
   protocol: string;
@@ -160,7 +160,7 @@ export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserGatewayRelaySession = {
+type RealtimeVoiceBrowserGatewayRelaySession = {
   provider: RealtimeVoiceProviderId;
   transport: "gateway-relay";
   relaySessionId: string;
@@ -170,7 +170,7 @@ export type RealtimeVoiceBrowserGatewayRelaySession = {
   expiresAt?: number;
 };
 
-export type RealtimeVoiceBrowserManagedRoomSession = {
+type RealtimeVoiceBrowserManagedRoomSession = {
   provider: RealtimeVoiceProviderId;
   transport: "managed-room";
   roomUrl: string;
@@ -205,7 +205,7 @@ export type RealtimeVoiceBridge = {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
-  acknowledgeMark(): void;
+  acknowledgeMark(markName?: string): void;
   close(): void;
   isConnected(): boolean;
 };

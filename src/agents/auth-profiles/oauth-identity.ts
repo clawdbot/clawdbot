@@ -78,7 +78,7 @@ export function isSafeToCopyOAuthIdentity(
   return true;
 }
 
-export type OAuthMirrorDecisionReason =
+type OAuthMirrorDecisionReason =
   | "no-existing-credential"
   | "incoming-fresher"
   | "non-oauth-existing-credential"
@@ -86,7 +86,7 @@ export type OAuthMirrorDecisionReason =
   | "identity-mismatch-or-regression"
   | "incoming-not-fresher";
 
-export type OAuthMirrorDecision =
+type OAuthMirrorDecision =
   | {
       shouldMirror: true;
       reason: Extract<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;

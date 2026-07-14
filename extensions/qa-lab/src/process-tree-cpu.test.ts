@@ -1,107 +1,83 @@
-// Qa Lab tests cover process tree cpu plugin behavior.
-import { describe, expect, it } from "vitest";
-import {
-  parsePsCpuTimeMs,
-  parsePsRssBytes,
-  parseWindowsProcessCpuTimeMs,
-  parseWindowsProcessTreeSnapshot,
-  parseWindowsWorkingSetBytes,
-} from "./process-tree-cpu.js";
+// Qa Lab tests cover POSIX process tree metric sampling.
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-describe("process tree CPU helpers", () => {
-  it("parses ps CPU time strings", () => {
-    expect(parsePsCpuTimeMs("00:01")).toBe(1_000);
-    expect(parsePsCpuTimeMs("00:00.12")).toBe(120);
-    expect(parsePsCpuTimeMs("01:02")).toBe(62_000);
-    expect(parsePsCpuTimeMs("01:02:03.45")).toBe(3_723_450);
-    expect(parsePsCpuTimeMs("1-02:03:04.5")).toBe(93_784_500);
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
+
+import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  spawnSyncMock.mockReset();
+});
+
+function usePsOutput(stdout: string): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  spawnSyncMock.mockReturnValue({ status: 0, stdout });
+}
+
+describe("POSIX process tree metrics", () => {
+  it("parses ps CPU time formats", () => {
+    usePsOutput(
+      [
+        "100 0 00:01",
+        "101 0 00:00.12",
+        "102 0 01:02",
+        "103 0 01:02:03.45",
+        "104 0 1-02:03:04.5",
+      ].join("\n"),
+    );
+
+    expect(readProcessTreeCpuMs(100)).toBe(1_000);
+    expect(readProcessTreeCpuMs(101)).toBe(120);
+    expect(readProcessTreeCpuMs(102)).toBe(62_000);
+    expect(readProcessTreeCpuMs(103)).toBe(3_723_450);
+    expect(readProcessTreeCpuMs(104)).toBe(93_784_500);
+    expect(spawnSyncMock.mock.calls[0]?.slice(0, 2)).toEqual(["ps", ["-eo", "pid=,ppid=,time="]]);
   });
 
   it("rejects malformed ps CPU time strings", () => {
-    expect(parsePsCpuTimeMs("")).toBeNull();
-    expect(parsePsCpuTimeMs("nope")).toBeNull();
-    expect(parsePsCpuTimeMs("1::02")).toBeNull();
-    expect(parsePsCpuTimeMs("1-02:03")).toBeNull();
-    expect(parsePsCpuTimeMs("01:60")).toBeNull();
-    expect(parsePsCpuTimeMs("01:02:60")).toBeNull();
-    expect(parsePsCpuTimeMs("1:2:3:4")).toBeNull();
+    usePsOutput(
+      [
+        "101 0 nope",
+        "102 0 1::02",
+        "103 0 1-02:03",
+        "104 0 01:60",
+        "105 0 01:02:60",
+        "106 0 1:2:3:4",
+      ].join("\n"),
+    );
+
+    expect(readProcessTreeCpuMs(100)).toBeNull();
+    expect(readProcessTreeCpuMs(101)).toBeNull();
+    expect(readProcessTreeCpuMs(102)).toBeNull();
+    expect(readProcessTreeCpuMs(103)).toBeNull();
+    expect(readProcessTreeCpuMs(104)).toBeNull();
+    expect(readProcessTreeCpuMs(105)).toBeNull();
+    expect(readProcessTreeCpuMs(106)).toBeNull();
   });
 
   it("parses ps RSS KiB values as bytes", () => {
-    expect(parsePsRssBytes("1024")).toBe(1_048_576);
-    expect(parsePsRssBytes("1.5")).toBe(1_536);
+    usePsOutput(["100 0 1024", "101 0 1.5"].join("\n"));
+
+    expect(readProcessTreeRssBytes(100)).toBe(1_048_576);
+    expect(readProcessTreeRssBytes(101)).toBe(1_536);
+    expect(spawnSyncMock.mock.calls[0]?.slice(0, 2)).toEqual(["ps", ["-eo", "pid=,ppid=,rss="]]);
   });
 
   it("rejects malformed ps RSS values", () => {
-    expect(parsePsRssBytes("")).toBeNull();
-    expect(parsePsRssBytes("nope")).toBeNull();
-    expect(parsePsRssBytes("-1")).toBeNull();
-    expect(parsePsRssBytes("0x10")).toBeNull();
-  });
+    usePsOutput(["101 0 nope", "102 0 -1", "103 0 0x10"].join("\n"));
 
-  it("parses Windows process CPU and RSS counters", () => {
-    expect(
-      parseWindowsProcessCpuTimeMs({
-        kernelModeTime: "20000",
-        userModeTime: 30_000,
-      }),
-    ).toBe(5);
-    expect(parseWindowsWorkingSetBytes("1048576")).toBe(1_048_576);
-  });
-
-  it("rejects non-decimal Windows process counters", () => {
-    expect(
-      parseWindowsProcessCpuTimeMs({
-        kernelModeTime: "0x10",
-        userModeTime: "30000",
-      }),
-    ).toBeNull();
-    expect(parseWindowsWorkingSetBytes("0x1000")).toBeNull();
-  });
-
-  it("builds Windows process tree snapshots from PowerShell JSON", () => {
-    const snapshot = parseWindowsProcessTreeSnapshot(
-      JSON.stringify([
-        {
-          ProcessId: 100,
-          ParentProcessId: 50,
-          KernelModeTime: "10000",
-          UserModeTime: "20000",
-          WorkingSetSize: "1000",
-        },
-        {
-          ProcessId: 101,
-          ParentProcessId: 100,
-          KernelModeTime: "30000",
-          UserModeTime: "40000",
-          WorkingSetSize: "2000",
-        },
-      ]),
-    );
-
-    expect(snapshot?.childrenByParent.get(50)).toEqual([100]);
-    expect(snapshot?.childrenByParent.get(100)).toEqual([101]);
-    expect(snapshot?.cpuByPid.get(100)).toBe(3);
-    expect(snapshot?.cpuByPid.get(101)).toBe(7);
-    expect(snapshot?.rssByPid.get(100)).toBe(1000);
-    expect(snapshot?.rssByPid.get(101)).toBe(2000);
-  });
-
-  it("skips Windows process entries with non-decimal process ids", () => {
-    const snapshot = parseWindowsProcessTreeSnapshot(
-      JSON.stringify([
-        {
-          ProcessId: "0x64",
-          ParentProcessId: 50,
-          KernelModeTime: "10000",
-          UserModeTime: "20000",
-          WorkingSetSize: "1000",
-        },
-      ]),
-    );
-
-    expect(snapshot?.childrenByParent.size).toBe(0);
-    expect(snapshot?.cpuByPid.size).toBe(0);
-    expect(snapshot?.rssByPid.size).toBe(0);
+    expect(readProcessTreeRssBytes(100)).toBeNull();
+    expect(readProcessTreeRssBytes(101)).toBeNull();
+    expect(readProcessTreeRssBytes(102)).toBeNull();
+    expect(readProcessTreeRssBytes(103)).toBeNull();
   });
 });

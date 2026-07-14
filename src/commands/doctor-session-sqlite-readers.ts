@@ -10,25 +10,25 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
-export type ReadOnlySqliteSessionSummary = {
+type ReadOnlySqliteSessionSummary = {
   entry: SessionEntry;
   sessionKey: string;
 };
 
-export type ReadOnlySqliteSessionEntriesResult =
+type ReadOnlySqliteSessionEntriesResult =
   | { exists: false; ok: true; summaries: [] }
   | { exists: true; ok: true; summaries: ReadOnlySqliteSessionSummary[] }
   | { error: unknown; exists: true; ok: false };
 
-export type ReadOnlySqliteExactSessionEntryResult =
+type ReadOnlySqliteExactSessionEntryResult =
   | { entry?: ReadOnlySqliteSessionSummary; ok: true }
   | { error: unknown; ok: false };
 
-export type ReadOnlySqliteTranscriptEventCountResult =
+type ReadOnlySqliteTranscriptEventCountResult =
   | { events: number; exists: boolean; ok: true }
   | { error: unknown; exists: true; ok: false };
 
-export type ReadOnlySqliteDbStatsResult =
+type ReadOnlySqliteDbStatsResult =
   | {
       ok: true;
       stats: {
@@ -41,7 +41,7 @@ export type ReadOnlySqliteDbStatsResult =
     }
   | { error: unknown; ok: false };
 
-export type TranscriptEventCountResult =
+type TranscriptEventCountResult =
   | { status: "ok"; events: number }
   | { status: "missing" }
   | { status: "malformed"; message: string };

@@ -3,8 +3,6 @@
  *
  * Moves legacy single-account channel config into account-scoped config records.
  */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import { getLoadedChannelPlugin } from "./registry.js";
 import {
@@ -89,38 +87,4 @@ export function resolveSingleAccountKeysToMove(params: {
     return keysToMove;
   }
   return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
-}
-
-/**
- * Resolves the account id that should receive promoted single-account config.
- */
-export function resolveSingleAccountPromotionTarget(params: {
-  channelKey: string;
-  channel: ChannelSectionBase;
-}): string {
-  const accounts = params.channel.accounts ?? {};
-  const resolveExistingAccountId = (targetAccountId: string): string => {
-    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
-    const matchedAccountId = Object.keys(accounts).find(
-      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
-    );
-    return matchedAccountId ?? normalizedTargetAccountId;
-  };
-  const loadedSurface = getLoadedChannelSetupPromotionSurface(params.channelKey);
-  // Prefer loaded plugin setup hooks. Only consult bundled setup metadata when
-  // no loaded plugin supplied a target resolver for this channel.
-  const bundledSurface = loadedSurface?.resolveSingleAccountPromotionTarget
-    ? undefined
-    : getBundledChannelSetupPromotionSurface(params.channelKey);
-  const resolvePromotionTarget =
-    loadedSurface?.resolveSingleAccountPromotionTarget ??
-    bundledSurface?.resolveSingleAccountPromotionTarget;
-  const resolved = resolvePromotionTarget?.({
-    channel: params.channel,
-  });
-  const normalizedResolved = normalizeOptionalString(resolved);
-  if (normalizedResolved) {
-    return resolveExistingAccountId(normalizedResolved);
-  }
-  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }

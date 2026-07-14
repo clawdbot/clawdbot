@@ -7,11 +7,11 @@ import type {
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
-export type SessionMenuWorkClient = {
+type SessionMenuWorkClient = {
   request: <T>(method: string, params?: unknown) => Promise<T>;
 };
 
-export type SessionMenuWorkParams = {
+type SessionMenuWorkParams = {
   client: SessionMenuWorkClient;
   /** controlUi.sessionPullRequests is optional gateway surface; skip when absent. */
   pullRequestsAvailable: boolean;
@@ -20,7 +20,7 @@ export type SessionMenuWorkParams = {
   worktreeId?: string;
 };
 
-export type SessionMenuWorkResult = {
+type SessionMenuWorkResult = {
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -34,7 +34,7 @@ const PR_STATE_ORDER: ReadonlyArray<ControlUiSessionPullRequest["state"]> = [
   "closed",
 ];
 
-export function pickSessionMenuPullRequestUrl(
+function pickSessionMenuPullRequestUrl(
   pullRequests: readonly ControlUiSessionPullRequest[],
 ): string | null {
   for (const state of PR_STATE_ORDER) {

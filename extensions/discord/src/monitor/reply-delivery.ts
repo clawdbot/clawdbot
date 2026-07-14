@@ -38,6 +38,21 @@ export type DiscordThreadBindingLookup = {
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
+export function formatDiscordReplyDeliveryFailure(params: {
+  kind: string;
+  err: unknown;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
+
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
     return undefined;

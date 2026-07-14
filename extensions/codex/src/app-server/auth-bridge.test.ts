@@ -19,7 +19,6 @@ import {
   resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
-  resolveCodexAppServerNativeHomeDir,
   resolveCodexAppServerPreparedAuthHandoff,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
   resolveCodexAppServerPreparedApiKeyCacheKey,
@@ -219,7 +218,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const startOptions = createStartOptions();
     try {
       const codexHome = resolveCodexAppServerHomeDir(agentDir);
-      const nativeHome = resolveCodexAppServerNativeHomeDir(agentDir);
 
       await expect(
         bridgeCodexAppServerStartOptions({
@@ -233,7 +231,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
         },
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
-      await expectPathMissing(nativeHome);
       expect(startOptions.env).toBeUndefined();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });

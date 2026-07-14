@@ -665,6 +665,8 @@ export type ProviderUsageAuthToken = {
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
 };
 
 /**
@@ -701,6 +703,8 @@ export type ProviderFetchUsageSnapshotContext = {
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };

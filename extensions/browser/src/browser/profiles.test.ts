@@ -5,13 +5,25 @@ import { resolveBrowserConfig } from "./config.js";
 import {
   allocateCdpPort,
   allocateColor,
-  CDP_PORT_RANGE_END,
-  CDP_PORT_RANGE_START,
   getUsedColors,
   getUsedPorts,
   isValidProfileName,
-  PROFILE_COLORS,
 } from "./profiles.js";
+
+const CDP_PORT_RANGE_START = 18800;
+const CDP_PORT_RANGE_END = 18899;
+const PROFILE_COLORS = [
+  "#FF4500",
+  "#0066CC",
+  "#00AA00",
+  "#9933FF",
+  "#FF6699",
+  "#00CCCC",
+  "#FF9900",
+  "#6666FF",
+  "#CC3366",
+  "#339966",
+];
 
 describe("profile name validation", () => {
   it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(

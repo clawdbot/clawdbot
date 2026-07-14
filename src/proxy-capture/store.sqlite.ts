@@ -30,7 +30,7 @@ import type {
 } from "./types.js";
 
 // Capture rows and compressed payload BLOBs live in the shared global state DB.
-export type DebugProxyCaptureStoreOptions = {
+type DebugProxyCaptureStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
@@ -792,11 +792,11 @@ export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPa
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
 
-export type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord;
 };
 
-export type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): SharedCaptureBlobRecord;
 };
 

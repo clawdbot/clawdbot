@@ -2,7 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -65,7 +65,6 @@ const bundledMocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 

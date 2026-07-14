@@ -4,10 +4,9 @@
  * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
@@ -1221,12 +1220,9 @@ export class DefaultPackageManager implements PackageManager {
         return [resolve(root, entry)];
       }
 
-      return globSync(entry, {
-        cwd: root,
-        absolute: true,
-        dot: false,
-        nodir: false,
-      }).map((match) => resolve(match));
+      // The supported Node floor has stable fs globbing; its defaults exclude
+      // hidden paths and retain directories, matching package manifests.
+      return globSync(entry, { cwd: root }).map((match) => resolve(root, match));
     });
     return this.collectFilesFromPaths(
       this.filterManifestResourcePaths(resolved, root),

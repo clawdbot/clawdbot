@@ -2,15 +2,13 @@
  * ACPX process ownership checks and cleanup. The reaper only terminates
  * OpenClaw-owned wrapper trees after validating paths, packages, and lease ids.
  */
-import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
-const execFileAsync = promisify(execFile);
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
   "codex-acp-wrapper.mjs",
@@ -218,7 +216,8 @@ async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
+  const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
+    logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
   });
   return parseProcessList(stdout);

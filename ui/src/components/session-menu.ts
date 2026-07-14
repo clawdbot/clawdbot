@@ -7,7 +7,7 @@ import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
-export type SessionMenuData = {
+type SessionMenuData = {
   key: string;
   label: string;
   pinned: boolean;

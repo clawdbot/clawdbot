@@ -28,7 +28,7 @@ import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { ExecFn } from "./windows-acl.js";
 
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -36,9 +36,6 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-type CollectPluginsTrustFindingsParams = Parameters<
-  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
->[0];
 type SkillScanSummary = Awaited<
   ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
@@ -77,17 +74,6 @@ const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
   () => import("../agents/sandbox/constants.js"),
   "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
 );
-
-const loadAuditPluginsTrustModule = createLazyRuntimeModule(
-  () => import("./audit-plugins-trust.js"),
-);
-
-export async function collectPluginsTrustFindings(
-  params: CollectPluginsTrustFindingsParams,
-): Promise<SecurityAuditFinding[]> {
-  const { collectPluginsTrustFindings: collect } = await loadAuditPluginsTrustModule();
-  return await collect(params);
-}
 
 // --------------------------------------------------------------------------
 // Helpers

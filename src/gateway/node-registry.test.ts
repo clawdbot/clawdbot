@@ -7,16 +7,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getActiveNodeContext,
-  resetActiveNodeContextForTests,
-} from "../infra/active-node-context.js";
+import { getActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  listConnectedNodePluginTools,
-  resetConnectedNodePluginToolsForTest,
-} from "./node-plugin-tool-snapshot.js";
+import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -24,6 +18,24 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
+const activeTestRegistries = new Set<NodeRegistry>();
+
+function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
+  const registry = new NodeRegistry(options);
+  activeTestRegistries.add(registry);
+  return registry;
+}
+
+afterEach(() => {
+  for (const registry of activeTestRegistries) {
+    for (const session of registry.listConnected()) {
+      registry.unregister(session.connId);
+    }
+  }
+  activeTestRegistries.clear();
+  testNodeHostCommands = [];
+  setActiveNodeContext(null);
+});
 
 function makeClient(
   connId: string,
@@ -86,12 +98,6 @@ function makeClient(
   };
 }
 
-afterEach(() => {
-  testNodeHostCommands = [];
-  resetConnectedNodePluginToolsForTest();
-  resetActiveNodeContextForTests();
-});
-
 function registerDemoNodePluginTool(params: {
   name: string;
   command: string;
@@ -121,7 +127,7 @@ function registerDemoNodePluginTool(params: {
 }
 
 function createTestNodeRegistry(): NodeRegistry {
-  return new NodeRegistry({
+  return createNodeRegistry({
     listRegisteredNodePluginToolCommands: () => testNodeHostCommands,
   });
 }
@@ -401,7 +407,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     const replacementFrames: string[] = [];
     registry.register(makeClient("conn-old", "node-1"), {});
     registry.register(makeClient("conn-new", "node-1", replacementFrames), {});
@@ -508,7 +514,7 @@ describe("gateway/node-registry", () => {
 
   it("keeps zero-timeout invokes pending until the node responds", async () => {
     vi.useFakeTimers();
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     try {
       const frames = registerNode(registry);
       const invoke = registry.invoke({
@@ -542,7 +548,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects zero-timeout invokes when the node disconnects", async () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
       nodeId: "node-1",
@@ -557,8 +563,305 @@ describe("gateway/node-registry", () => {
     expect((error as Error).message).toBe("node disconnected (debug.ping)");
   });
 
-  it("returns a structured unavailable result when a node disconnects during an MCP call", async () => {
+  it("orders streamed invoke progress and drops state after the final result", async () => {
     const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const chunks: string[] = [];
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: (chunk) => chunks.push(chunk),
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 1,
+        chunk: "second",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual([]);
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "first",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual(["first", "second"]);
+    expect(
+      registry.handleInvokeResult({
+        id: invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 2,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects duplicate buffered progress frames without resetting the idle deadline", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "start",
+        }),
+      ).toBe(true);
+      // seq 2 buffers behind the missing seq 1; replaying it forever must not
+      // extend the idle deadline, or a stalled sender could suppress it.
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 2,
+          chunk: "gap",
+        }),
+      ).toBe(true);
+      for (let round = 0; round < 3; round += 1) {
+        await vi.advanceTimersByTimeAsync(20);
+        expect(
+          registry.handleInvokeProgress({
+            invokeId,
+            nodeId: "node-1",
+            connId: "conn-1",
+            seq: 2,
+            chunk: "gap",
+          }),
+        ).toBe(false);
+      }
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops draining buffered progress once onProgress aborts the invoke", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const abortController = new AbortController();
+    const chunks: string[] = [];
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      signal: abortController.signal,
+      onProgress: (chunk) => {
+        chunks.push(chunk);
+        abortController.abort();
+      },
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 1,
+        chunk: "buffered",
+      }),
+    ).toBe(true);
+    // seq 0 drains and aborts the invoke; the buffered seq 1 must not reach
+    // the consumer after cancellation.
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "first",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual(["first"]);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+  });
+
+  it("resets streamed invoke idle timeout on progress", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 1_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+
+      // Approval can outlive the idle window; inactivity starts with execution progress.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "still running",
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 1,
+          chunk: "still running",
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(51);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans streamed invoke state when the node disconnects", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: () => {},
+    });
+    const disconnected = invoke.catch((error: unknown) => error);
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(registry.unregister("conn-1")).toBe("node-1");
+    await expect(disconnected).resolves.toBeInstanceOf(Error);
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("forwards cancellation and drops streamed invoke state", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: () => {},
+      signal: controller.signal,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    controller.abort();
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+    const cancel = JSON.parse(frames[1] ?? "{}") as {
+      event?: string;
+      payload?: { invokeId?: string; nodeId?: string };
+    };
+    expect(cancel).toMatchObject({
+      event: "node.invoke.cancel",
+      payload: { invokeId, nodeId: "node-1" },
+    });
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("cancels the node when a streamed progress consumer fails", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      onProgress: () => {
+        throw new Error("parser failed");
+      },
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "bad jsonl",
+      }),
+    ).toBe(true);
+    await expect(invoke).rejects.toThrow("parser failed");
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.cancel",
+      payload: { invokeId, nodeId: "node-1" },
+    });
+  });
+
+  it("returns a structured unavailable result when a node disconnects during an MCP call", async () => {
+    const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
       nodeId: "node-1",
@@ -1141,7 +1444,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("ignores published node tools when gateway publication is disabled", () => {
-    const registry = new NodeRegistry({ nodePluginToolsEnabled: false });
+    const registry = createNodeRegistry({ nodePluginToolsEnabled: false });
     registry.register(
       makeClient("conn-1", "node-1", [], {
         commands: ["demo.echo"],
@@ -1228,7 +1531,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("ignores node skills when publication is disabled or the connection is stale", () => {
-    const disabled = new NodeRegistry({ nodeSkillsEnabled: false });
+    const disabled = createNodeRegistry({ nodeSkillsEnabled: false });
     disabled.register(makeClient("conn-1", "node-1"), {});
     expect(publishNodeSkills(disabled, [nodeSkill("disabled")])?.nodeSkills).toEqual([]);
 
@@ -1260,7 +1563,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("preserves a legacy session feature ceiling across surface approvals", () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     const client = makeClient("conn-1", "node-1", [], {
       caps: [],
       commands: [],

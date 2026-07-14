@@ -25,7 +25,7 @@ const HOOK_MD_MAX_BYTES = 1024 * 1024;
 const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
 
 /** Logger contract used by hook install and update operations. */
-export type HookInstallLogger = {
+type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };

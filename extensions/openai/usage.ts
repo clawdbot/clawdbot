@@ -11,6 +11,7 @@ import {
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const OPENAI_COMPLETIONS_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
@@ -433,7 +434,16 @@ export async function fetchOpenAIUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeAdminToken(ctx.token);
   if (!adminKey) {
-    return await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    if (snapshot.error) {
+      return snapshot;
+    }
+    // ChatGPT access tokens carry the account email as a JWT claim; the auth
+    // profile stores no email for these logins.
+    const { token: accessToken, email: profileEmail } = ctx;
+    const accountEmail =
+      resolveCodexAuthIdentity({ accessToken, email: profileEmail }).email ?? profileEmail;
+    return accountEmail ? { ...snapshot, accountEmail } : snapshot;
   }
   return await fetchOpenAIAdminUsage({
     apiKey: adminKey,

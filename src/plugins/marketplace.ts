@@ -46,14 +46,14 @@ type MarketplaceEntrySource =
   | { kind: "git-subdir"; url: string; path: string; ref?: string }
   | { kind: "url"; url: string };
 
-export type MarketplacePluginEntry = {
+type MarketplacePluginEntry = {
   name: string;
   version?: string;
   description?: string;
   source: MarketplaceEntrySource;
 };
 
-export type MarketplaceManifest = {
+type MarketplaceManifest = {
   name?: string;
   version?: string;
   plugins: MarketplacePluginEntry[];
@@ -80,7 +80,7 @@ type KnownMarketplaceRecord = {
   source?: unknown;
 };
 
-export type MarketplacePluginListResult =
+type MarketplacePluginListResult =
   | {
       ok: true;
       manifest: MarketplaceManifest;
@@ -91,7 +91,7 @@ export type MarketplacePluginListResult =
       error: string;
     };
 
-export type MarketplaceInstallResult =
+type MarketplaceInstallResult =
   | ({
       ok: true;
       marketplaceName?: string;
@@ -102,7 +102,7 @@ export type MarketplaceInstallResult =
     } & Extract<InstallPluginResult, { ok: true }>)
   | Extract<InstallPluginResult, { ok: false }>;
 
-export type MarketplaceShortcutResolution =
+type MarketplaceShortcutResolution =
   | {
       ok: true;
       plugin: string;

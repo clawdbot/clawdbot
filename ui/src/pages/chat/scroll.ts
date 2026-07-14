@@ -1,5 +1,4 @@
 // Control UI module implements app scroll behavior.
-import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../app/settings.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
@@ -23,9 +22,6 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
-  settings?: {
-    chatAutoScroll?: ChatAutoScrollMode;
-  };
 };
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
@@ -131,7 +127,6 @@ export function scheduleCommittedChatScroll(
     const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
     host.chatLastScrollHeight = target.scrollHeight;
     const contentChanged = options.contentChanged ?? options.source !== "resize";
-    const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
     const manualScroll = options.source === "manual";
 
     // force=true only overrides when we haven't auto-scrolled yet (initial load).
@@ -139,11 +134,9 @@ export function scheduleCommittedChatScroll(
     const effectiveForce = force && !host.chatHasAutoScrolled;
     const shouldStick =
       manualScroll ||
-      autoScrollMode === "always" ||
-      (autoScrollMode === "near-bottom" &&
-        (effectiveForce ||
-          (!host.chatFollowLocked &&
-            (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
+      effectiveForce ||
+      (!host.chatFollowLocked &&
+        (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
     if (!shouldStick) {
       if (contentChanged || (options.source === "resize" && contentGrew)) {
@@ -186,11 +179,9 @@ export function scheduleCommittedChatScroll(
       const latestDistanceFromBottom = latest.scrollHeight - latest.scrollTop - latest.clientHeight;
       const shouldStickRetry =
         manualScroll ||
-        autoScrollMode === "always" ||
-        (autoScrollMode === "near-bottom" &&
-          (effectiveForce ||
-            (!host.chatFollowLocked &&
-              (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
+        effectiveForce ||
+        (!host.chatFollowLocked &&
+          (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
       if (!shouldStickRetry) {
         return;
       }

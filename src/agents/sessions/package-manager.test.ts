@@ -60,6 +60,33 @@ describe("DefaultPackageManager", () => {
     expect(skillPaths).not.toContain(outsideSkill);
   });
 
+  it("expands manifest resource globs without hidden paths", async () => {
+    const root = await makeTempDir("openclaw-package-manager-");
+    const packageRoot = join(root, "package");
+    const visibleSkill = join(packageRoot, "skills", "visible", "SKILL.md");
+    const hiddenSkill = join(packageRoot, "skills", ".hidden", "SKILL.md");
+    await mkdir(join(packageRoot, "skills", "visible"), { recursive: true });
+    await mkdir(join(packageRoot, "skills", ".hidden"), { recursive: true });
+    await writeFile(visibleSkill, "# Visible\n", "utf-8");
+    await writeFile(hiddenSkill, "# Hidden\n", "utf-8");
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ openclaw: { skills: ["skills/*"] } }),
+      "utf-8",
+    );
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
+    });
+
+    const skillPaths = (await manager.resolve()).skills.map((skill) => skill.path);
+
+    expect(skillPaths).toContain(visibleSkill);
+    expect(skillPaths).not.toContain(hiddenSkill);
+  });
+
   it("keeps convention-discovered resource entries inside the package root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const packageRoot = join(root, "package");

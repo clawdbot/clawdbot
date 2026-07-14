@@ -68,6 +68,7 @@ Skills own workflows; root owns hard policy and routing.
 - Config/env surface bar is high; `openclaw.json` and environment variables are already large. Before adding a config option or env var, first prove existing product behavior, provider selection, defaults, or doctor migration cannot solve it. Prefer removing or consolidating config/env options when touching these surfaces. Core supports only the latest config shape; `openclaw doctor --fix` migrates older shipped shapes into the current one.
 - CLI setup flows are public API when external docs, installers, or integrations can copy them. Changes to `openclaw onboard`, `openclaw configure`, their documented flags, non-interactive behavior, or generated config shape are compatibility-sensitive API contract changes; prefer additive flags/aliases, deprecation windows, and backward-preserving migrations over breaking existing snippets.
 - Fix shape: default to clean bounded refactor, not smallest patch. Move ownership to right boundary; delete stale abstractions, duplicate policy, dead branches, wrappers, fallback stacks.
+- New binary fallible-operation results use `Result` from `@openclaw/normalization-core/result`; domain-rich outcomes keep named discriminated unions.
 - Fix observed local failures with generic product rules; do not hardcode names, ids, log phrases, or user examples in prod code unless they are an explicit contract.
 - Tests may use observed examples, but prod literals need a short contract reason.
 - Compatibility is opt-in. "Shipped" means reachable from a release Git tag; main/GitHub/PR/unreleased code is not shipped.
@@ -112,7 +113,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Commands
 
-- Runtime: Node 22.19+; Node 24 recommended. Keep Node + Bun paths working.
+- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 24 recommended. Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched). Agent dependency installation for tests/builds defaults to the selected remote box; do not reconcile a local Codex worktree just to run validation.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
@@ -151,8 +152,8 @@ Skills own workflows; root owns hard policy and routing.
 - QA CLI `--output-dir` must be repo-relative.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - If an allowed local fallback fans out or becomes expensive, stop it and move the work to the pre-warmed remote box.
-- Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
-- Release-branch full validation: use `node scripts/full-release-validation-at-sha.mjs --sha <exact-sha> --target-ref release/<branch>`; no raw dispatch without `target_context_ref`.
+- Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
+- Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -162,7 +163,7 @@ Skills own workflows; root owns hard policy and routing.
 ## GitHub / PRs
 
 - Fresh GitHub items: read `CONTRIBUTING.md`, the issue chooser/form, PR template, and `.github/CODEOWNERS`; blank issues are disabled; preserve templates and evidence requirements.
-- Agent-authored/non-trivial work: create or reuse the issue first; tiny fixes may go direct. PRs use the template, link context, and keep durable problem/impact/evidence sections.
+- Issue first for bugs, user-facing features, architecture/product decisions, or work needing durable discussion. Bounded maintainer-requested refactor may go direct; agent decides whether an issue adds value. PRs use the template, link context, and keep durable problem/impact/evidence sections.
 - Route support to Discord and security through `SECURITY.md`. Use listed maintainer areas/`CODEOWNERS`; never guess mentions.
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
@@ -211,7 +212,7 @@ Skills own workflows; root owns hard policy and routing.
 - GitHub issue/PR create: read `$agent-transcript`; ask about sanitized transcript logs when available.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
-- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need. Never `gh run watch`; its 3s polling exhausts API quota. Use sparse GraphQL rollups.
 - Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
 - Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
 - Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
@@ -301,7 +302,15 @@ Skills own workflows; root owns hard policy and routing.
 - Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
 - Release versions use `YYYY.M.PATCH`, where `PATCH` is a sequential monthly release-train number, never the calendar day. Stable and beta tags determine the current train; alpha-only tags do not consume or advance the beta/stable patch number. After `2026.6.5`, the next beta train is `2026.6.6-beta.1` even if higher alpha-only tags exist.
 - Alpha/nightly versions use the next unreleased train plus an incrementing prerelease number. Repeated nightlies for the same train increment only `alpha.N`; they must not mint a new patch number from the date.
-- Backport means apply to newest open `release/` branch unless user names another target.
+- Backports are optional. Apply only the operator-selected set; when requested without a target, use the newest open `release/` branch.
+- Regular beta/stable flow has two immutable identities:
+  - **Code SHA**: version prep plus any optional backports/release fixes, with no release changelog mutation. Full product validation belongs here.
+  - **Release SHA**: a descendant of the green Code SHA whose complete diff is exactly `CHANGELOG.md`. Tag, npm preflight, package/install acceptance, and publish belong here.
+- Never generate the release changelog before the Code SHA has green Full Release Validation. A product/code failure changes the Code SHA and restarts product validation. A workflow/harness/infrastructure failure is fixed in trusted tooling and rerun against the same Code SHA; do not mutate the candidate to satisfy newer tooling.
+- After green Code SHA validation, generate and review `CHANGELOG.md` once. Dispatch Full Release Validation for the Release SHA with evidence reuse enabled; `changelog-only-release-v1` may reuse the Code SHA product evidence only when GitHub independently proves the entire descendant delta is `CHANGELOG.md`. Any other path change requires a new Code SHA and fresh full validation.
+- Release-SHA proof is intentionally narrow: release-note/provenance checks, npm preflight/package bytes, install/update acceptance, and publish readiness. Do not rerun the full product matrix merely because the changelog changed.
+- Pass the successful Release-SHA validation run and npm preflight run into `release:candidate`; do not let the candidate helper dispatch duplicate copies of evidence that already passed.
+- Keep one release operator and one watcher per release identity. Resume partial publish from successful immutable child artifacts/runs; never rebuild or republish an already-published package version.
 - GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
 - Beta tag/version match: `vYYYY.M.PATCH-beta.N` -> npm `YYYY.M.PATCH-beta.N --tag beta`.
 

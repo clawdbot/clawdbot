@@ -37,6 +37,17 @@ describe("createLazyGatewayCronState", () => {
     hoisted.buildGatewayCronService.mockClear();
   });
 
+  it("resolves its default store path from the prepared env", () => {
+    const stateRoot = "/tmp/openclaw-candidate-state";
+    const lazy = createLazyGatewayCronState({
+      ...createParams(),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
+    });
+
+    expect(lazy.storePath).toBe(`${stateRoot}/cron/jobs.json`);
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
     const cron = createCronService();
     const state = createCronState(cron);

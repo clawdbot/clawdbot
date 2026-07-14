@@ -4,7 +4,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
+import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
+import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
 import {
@@ -24,7 +26,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
   truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
@@ -32,7 +33,6 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -69,10 +69,12 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   maxFileBytes: 0,
 };
 
-export function ensureDir(dir: string): string {
+function ensureMemoryHostDir(dir: string): string {
   fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+export { ensureMemoryHostDir as ensureDir };
 
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
@@ -106,7 +108,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === CANONICAL_ROOT_MEMORY_FILENAME || normalized.toLowerCase() === "dreams.md") {
+  if (normalized === MEMORY_HOST_ROOT_FILENAME || normalized.toLowerCase() === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -539,17 +541,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
+export function runMemoryHostTasksWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+  return runWithConcurrencyImpl(tasks, limit);
 }
+
+export { runMemoryHostTasksWithConcurrency as runWithConcurrency };

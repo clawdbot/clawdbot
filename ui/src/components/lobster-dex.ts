@@ -9,7 +9,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
 
-export type LobsterdexEntry = {
+type LobsterdexEntry = {
   firstSeenAt: number | null;
   name: string | null;
 };
@@ -91,7 +91,7 @@ export function recordLobsterVisit(paletteId: string, details: { name?: string }
 
 // ---- Familiarity ----
 
-export type LobsterFamiliarityTier = "shy" | "regular" | "friend";
+type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
 export type LobsterFamiliarity = {
   tier: LobsterFamiliarityTier;

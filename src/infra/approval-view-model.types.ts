@@ -22,11 +22,6 @@ export type ApprovalActionView = {
   command: string;
 };
 
-/** Internal refinement for host-built actions with canonical approval ownership. */
-export type TypedApprovalActionView = ApprovalActionView & {
-  action: Extract<MessagePresentationAction, { type: "approval" }>;
-};
-
 /** Label/value metadata row rendered with an approval prompt. */
 export type ApprovalMetadataView = {
   label: string;

@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
@@ -19,8 +20,8 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
+import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
-import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
@@ -33,7 +34,6 @@ import {
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
-  runCapability,
 } from "./runner.js";
 import type {
   MediaUnderstandingCapability,
@@ -560,24 +560,24 @@ export async function applyMediaUnderstanding(params: {
   });
 
   try {
-    const tasks = CAPABILITY_ORDER.map((capability) => async () => {
-      const config = cfg.tools?.media?.[capability];
-      return await runCapability({
-        capability,
-        cfg,
-        ctx,
-        attachments: cache,
-        media: attachments,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        providerRegistry,
-        config,
-        activeModel: params.activeModel,
-      });
-    });
-
-    const results = await runWithConcurrency(tasks, resolveConcurrency(cfg));
+    const results = await pMap(
+      CAPABILITY_ORDER,
+      async (capability) =>
+        await runMediaCapability({
+          capability,
+          cfg,
+          ctx,
+          attachments: cache,
+          media: attachments,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          providerRegistry,
+          config: cfg.tools?.media?.[capability],
+          activeModel: params.activeModel,
+        }),
+      { concurrency: resolveConcurrency(cfg), stopOnError: false },
+    );
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     for (const entry of results) {

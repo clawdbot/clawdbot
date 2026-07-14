@@ -131,7 +131,3 @@ export function consumeReplyUsageState(runId?: string): PluginHookReplyUsageStat
   const value = store.get(runId);
   return value && value.expiresAt >= Date.now() ? value.snapshot : undefined;
 }
-
-export function clearReplyUsageStateForTest(): void {
-  store.clear();
-}

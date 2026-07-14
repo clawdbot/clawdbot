@@ -26,7 +26,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 /** Filesystem adapter used by attachment MIME probes and tests. */
-export const attachmentProbeFs = {
+const attachmentProbeFs = {
   open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
 };
 const MAX_ATTACHMENT_FILES = 10;
@@ -89,7 +89,7 @@ async function readMimeSniffBuffer(
 }
 
 /** Resolves channel-specific attachment delivery options from caption format and hints. */
-export function resolveAttachmentDelivery(params: {
+function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
   channelHints?: PluginAttachmentChannelHints;
@@ -213,7 +213,7 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
 }
 
 /** Resolves the thread id used when delivering a plugin session attachment. */
-export function resolveSessionAttachmentThreadId(params: {
+function resolveSessionAttachmentThreadId(params: {
   deliveryThreadId?: unknown;
   explicitThreadId?: unknown;
   fallbackThreadId?: unknown;

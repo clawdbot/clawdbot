@@ -1,12 +1,15 @@
 // Feishu tests cover client plugin behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
+
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
 type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;
-type ClearClientCache = typeof import("./client.js").clearClientCache;
-type SetFeishuClientRuntimeForTest = typeof import("./client.js").setFeishuClientRuntimeForTest;
+type GetFeishuUserAgent = typeof import("./client.js").getFeishuUserAgent;
 
 const requestInterceptorState = vi.hoisted(() => {
   let registered: ((req: unknown) => unknown) | undefined;
@@ -73,12 +76,7 @@ const registerFeishuSubagentHooksMock = vi.hoisted(() => vi.fn());
 
 let createFeishuClient: CreateFeishuClient;
 let createFeishuWSClient: CreateFeishuWSClient;
-let clearClientCache: ClearClientCache;
-let setFeishuClientRuntimeForTest: SetFeishuClientRuntimeForTest;
-let FEISHU_HTTP_TIMEOUT_MS: number;
-let FEISHU_HTTP_TIMEOUT_MAX_MS: number;
-let FEISHU_HTTP_TIMEOUT_ENV_VAR: string;
-let FEISHU_USER_AGENT: string;
+let getFeishuUserAgent: GetFeishuUserAgent;
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 let priorFeishuTimeoutEnv: string | undefined;
@@ -206,16 +204,7 @@ beforeAll(async () => {
     ),
   }));
 
-  ({
-    createFeishuClient,
-    createFeishuWSClient,
-    clearClientCache,
-    setFeishuClientRuntimeForTest,
-    FEISHU_HTTP_TIMEOUT_MS,
-    FEISHU_HTTP_TIMEOUT_MAX_MS,
-    FEISHU_HTTP_TIMEOUT_ENV_VAR,
-    FEISHU_USER_AGENT,
-  } = await import("./client.js"));
+  ({ createFeishuClient, createFeishuWSClient, getFeishuUserAgent } = await import("./client.js"));
 });
 
 beforeEach(() => {
@@ -227,21 +216,6 @@ beforeEach(() => {
     setFeishuTestEnvValue(key, undefined);
   }
   vi.clearAllMocks();
-  clearClientCache();
-  setFeishuClientRuntimeForTest({
-    sdk: {
-      AppType: { SelfBuild: "self" } as never,
-      Domain: {
-        Feishu: "https://open.feishu.cn",
-        Lark: "https://open.larksuite.com",
-      } as never,
-      LoggerLevel: { info: "info" } as never,
-      Client: clientCtorMock as never,
-      WSClient: wsClientCtorMock as never,
-      EventDispatcher: vi.fn() as never,
-      defaultHttpInstance: mockBaseHttpInstance as never,
-    },
-  });
 });
 
 afterEach(() => {
@@ -249,7 +223,6 @@ afterEach(() => {
     setFeishuTestEnvValue(key, priorProxyEnv[key]);
   }
   setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, priorFeishuTimeoutEnv);
-  setFeishuClientRuntimeForTest();
 });
 
 afterAll(() => {
@@ -274,7 +247,7 @@ describe("Feishu default User-Agent interceptor", () => {
     const req = { headers: { "User-Agent": "oapi-node-sdk/1.0.0" } };
     expect(requestInterceptorState.registered?.(req)).toBe(req);
 
-    expect(req.headers["User-Agent"]).toBe(FEISHU_USER_AGENT);
+    expect(req.headers["User-Agent"]).toBe(getFeishuUserAgent());
   });
 
   it("sets the User-Agent on AxiosHeaders-like request headers", () => {
@@ -283,7 +256,7 @@ describe("Feishu default User-Agent interceptor", () => {
 
     expect(requestInterceptorState.registered?.(req)).toBe(req);
 
-    expect(headers.set).toHaveBeenCalledWith("User-Agent", FEISHU_USER_AGENT);
+    expect(headers.set).toHaveBeenCalledWith("User-Agent", getFeishuUserAgent());
   });
 });
 
@@ -435,31 +408,6 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
       timeout: 45_000,
     });
-  });
-
-  it("evicts client cache when SDK is replaced via setFeishuClientRuntimeForTest (#83911)", () => {
-    const ctorCountA = clientCtorMock.mock.calls.length;
-
-    // First client gets cached
-    createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
-    expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 1);
-
-    // SDK swap via setFeishuClientRuntimeForTest should clear the cache
-    setFeishuClientRuntimeForTest({
-      sdk: {
-        AppType: { SelfBuild: "self" } as never,
-        Client: clientCtorMock as never,
-        Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" } as never,
-        LoggerLevel: { info: "info" } as never,
-        WSClient: vi.fn() as never,
-        EventDispatcher: vi.fn() as never,
-        defaultHttpInstance: mockBaseHttpInstance as never,
-      },
-    });
-
-    // Same credentials — would hit cache before the fix; now evicted
-    createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
-    expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 2);
   });
 });
 

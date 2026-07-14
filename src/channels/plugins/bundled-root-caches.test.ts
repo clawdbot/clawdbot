@@ -77,11 +77,9 @@ describe("bundled root-aware plugin lookups", () => {
     );
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootA.pluginsDir;
-    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
     expect(bundledIds.listBundledChannelIds()).toEqual(["alpha-chat"]);
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootB.pluginsDir;
-    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["beta"]);
     expect(bundledIds.listBundledChannelIds()).toEqual(["beta-chat"]);
   });
 

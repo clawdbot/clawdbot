@@ -529,13 +529,15 @@ final class TalkModeManager: NSObject {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if trimmed == self.mainSessionKey { return false }
-        let shouldRestartTalk = self.isEnabled &&
-            (self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner)
+        let hasTalkOwner = self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner
+        let shouldRestartTalk = self.isEnabled && hasTalkOwner
         if let captureId = self.activePTTCaptureId {
             _ = self.cancelPushToTalk(captureId: captureId)
         }
         self.cancelFinishingPushToTalk()
-        if shouldRestartTalk {
+        if hasTalkOwner {
+            // Session identity owns every in-flight relay/capture generation, even while
+            // Talk is disabled. Leaving one alive can publish work into the replacement session.
             self.cancelPendingStart()
             self.resetRealtimeRestartState()
             self.stopRealtimeSession()
@@ -2408,24 +2410,17 @@ final class TalkModeManager: NSObject {
         gatewayRoute: GatewayNodeSessionRoute,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
-        let payload: [String: Any] = [
-            "sessionKey": sessionKey,
-            "message": message,
-            "thinking": "low",
-            "timeoutMs": 30000,
-            "idempotencyKey": idempotencyKey,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(
-                domain: "TalkModeManager",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
-        }
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: sessionKey,
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: message,
+            thinking: "low",
+            idempotencyKey: idempotencyKey,
+            attachments: [],
+            runTimeoutMs: 30000)
         let res = try await gateway.request(
-            method: "chat.send",
-            paramsJSON: json,
-            timeoutSeconds: 30,
+            request,
             ifCurrentRoute: gatewayRoute)
         guard await gateway.currentRoute() == gatewayRoute else { throw CancellationError() }
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
@@ -2517,10 +2512,9 @@ final class TalkModeManager: NSObject {
         runId: String,
         since: Double? = nil) async throws -> String?
     {
+        let request = OpenClawChatGatewayRequests.history(sessionKey: sessionKey, agentID: nil)
         let res = try await gateway.request(
-            method: "chat.history",
-            paramsJSON: "{\"sessionKey\":\"\(sessionKey)\"}",
-            timeoutSeconds: 15,
+            request,
             ifCurrentRoute: gatewayRoute)
         guard await gateway.currentRoute() == gatewayRoute else { throw CancellationError() }
         guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return nil }

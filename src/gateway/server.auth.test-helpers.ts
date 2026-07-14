@@ -430,6 +430,6 @@ export {
   writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
-export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
+export { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 export { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

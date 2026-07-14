@@ -5,28 +5,11 @@ import path from "node:path";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type EdgeTTSRuntimeConfig = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-  saveSubtitles?: boolean;
-  proxy?: string;
-  rate?: string;
-  pitch?: string;
-  volume?: string;
-  timeout?: number;
-};
-
 type EdgeTTSDeps = {
-  EdgeTTS: new (config: EdgeTTSRuntimeConfig) => {
-    ttsPromise: (text: string, outputPath: string) => Promise<unknown>;
-  };
+  EdgeTTS: new (
+    ...args: ConstructorParameters<typeof import("node-edge-tts").EdgeTTS>
+  ) => Pick<import("node-edge-tts").EdgeTTS, "ttsPromise">;
 };
-
-async function loadDefaultEdgeTTSDeps(): Promise<EdgeTTSDeps> {
-  const { EdgeTTS } = await import("node-edge-tts");
-  return { EdgeTTS };
-}
 
 function isMissingOutputFileError(error: unknown): boolean {
   return (
@@ -89,8 +72,8 @@ export async function edgeTTS(
     throw new Error("Microsoft TTS text cannot be empty");
   }
 
-  const resolvedDeps = deps ?? (await loadDefaultEdgeTTSDeps());
-  const tts = new resolvedDeps.EdgeTTS({
+  const EdgeTTSClass = deps?.EdgeTTS ?? (await import("node-edge-tts")).EdgeTTS;
+  const tts = new EdgeTTSClass({
     voice: config.voice,
     lang: config.lang,
     outputFormat: config.outputFormat,

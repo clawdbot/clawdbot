@@ -65,6 +65,7 @@ OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Hourly cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Manual worktrees are never automatically removed.
+- When `worktrees.cleanup.maxCount` or `worktrees.cleanup.maxTotalSizeGb` is configured, cleanup also snapshots and removes the least recently active Workboard- and session-owned worktrees until the total count and disk size fit the limits. All managed worktrees count toward the totals, but manual and otherwise protected worktrees are never limit-evicted, so a limit can remain exceeded until eligible worktrees exist. 0 or unset disables a limit.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
@@ -80,7 +81,7 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot. Its **Cleanup** section edits the `worktrees.cleanup` retention limits described in the [configuration reference](/gateway/configuration-reference#worktrees).
 
 ## Gateway methods
 

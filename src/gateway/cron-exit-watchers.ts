@@ -1,6 +1,7 @@
 import type { CronJob } from "../cron/types.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
+import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 
 /**
  * Safety bound for a watched command, so a hung/never-exiting command cannot
@@ -26,7 +27,7 @@ export type CronExitResult = {
   noOutputTimedOut: boolean;
 };
 
-export type CronExitWatchers = {
+type CronExitWatchers = {
   reconcile: (jobs: CronJob[]) => void;
   cancel: (jobId: string) => void;
   cancelAll: () => void;
@@ -41,24 +42,6 @@ function scopeKey(jobId: string): string {
 
 function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
   return job.enabled && job.schedule.kind === "on-exit";
-}
-
-/**
- * Resolve the shell used to run watched commands. Native Windows gateways use
- * cmd.exe; POSIX gateways keep bash -lc.
- */
-export function resolveExitWatchShell(platform: NodeJS.Platform = process.platform): {
-  command: string;
-  argsFor: (command: string) => string[];
-} {
-  if (platform === "win32") {
-    return {
-      command: process.env.ComSpec ?? "cmd.exe",
-      // /d skip AutoRun, /s strip outer quotes, /c run then exit.
-      argsFor: (command: string) => ["/d", "/s", "/c", command],
-    };
-  }
-  return { command: "bash", argsFor: (command: string) => ["-lc", command] };
 }
 
 export function createCronExitWatchers(params: {

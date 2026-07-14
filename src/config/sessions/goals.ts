@@ -9,7 +9,7 @@ import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
-export type SessionGoalSnapshot = {
+type SessionGoalSnapshot = {
   status: "missing" | "found";
   goal?: SessionGoal;
 };

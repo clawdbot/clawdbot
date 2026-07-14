@@ -7,7 +7,7 @@ import type { GatewayServiceEnv } from "./service-types.js";
 
 export const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
 
-export type GatewayLogPaths = {
+type GatewayLogPaths = {
   logDir: string;
   stdoutPath: string;
   stderrPath: string;

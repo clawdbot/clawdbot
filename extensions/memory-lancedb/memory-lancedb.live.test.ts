@@ -62,7 +62,7 @@ describeLive("memory plugin live tests", () => {
     };
 
     // Register plugin
-    memoryPlugin.register(mockApi as any);
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
 
     // Check registration
     expect(registeredTools.length).toBe(3);

@@ -1,28 +1,15 @@
-/* Profile settings page: agent hero, stat strip, token heatmap, insights. */
+/* Profile settings page leftovers: agent hero, stat strip, token heatmap,
+   tool bars. Structural surfaces come from settings.css. */
 
-.profile-page {
-  display: grid;
-  gap: 16px;
-  container-type: inline-size;
-}
-
-.profile-page > * {
-  min-width: 0;
-}
-
-.profile-note--error {
-  color: var(--danger);
-}
-
-/* Hero */
+/* Hero (custom identity content inside one settings group) */
 
 .profile-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 6px;
-  padding: 28px 18px 22px;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4) var(--space-5);
 }
 
 .profile-hero__avatar {
@@ -35,8 +22,7 @@
   overflow: hidden;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 0 24px var(--accent-glow);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
 }
 
 .profile-hero__avatar-image {
@@ -66,13 +52,13 @@
 .profile-hero__handle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .profile-hero__badge {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -87,12 +73,12 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .profile-hero__chip {
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted-strong);
   background: var(--panel);
   border: 1px solid var(--border);
@@ -106,15 +92,17 @@
   background: var(--accent-2-subtle);
 }
 
-/* Stat strip */
+/* Stat strip (escape hatch inside one settings group) */
 
 .profile-stats {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
 }
 
 .profile-stats__cell {
+  min-width: 0;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -123,16 +111,24 @@
   gap: 2px;
 }
 
-.profile-stats__cell .stat-value {
-  margin-top: 0;
+.profile-stats__value {
+  font-size: var(--control-ui-text-lg);
+  font-weight: 650;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-stats__label {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
 }
 
 .profile-stats__sub {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
-@container (max-width: 760px) {
+@media (max-width: 760px) {
   .profile-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -144,20 +140,16 @@
 
 /* Heatmap */
 
-.profile-heatmap__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+.profile-heatmap {
+  padding: var(--space-3) var(--space-4);
 }
 
 .profile-heatmap__legend {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   white-space: nowrap;
 }
 
@@ -214,59 +206,27 @@
   background: var(--accent);
 }
 
-/* Insights + tools */
+/* Tool usage bars (escape hatch inside one settings group) */
 
-.profile-columns {
+.profile-tools {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-@container (max-width: 700px) {
-  .profile-columns {
-    grid-template-columns: 1fr;
-  }
-}
-
-.profile-insights__rows,
-.profile-tools__rows {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.profile-insights__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
-}
-
-.profile-insights__label {
-  color: var(--muted);
-}
-
-.profile-insights__value {
-  color: var(--text-strong);
-  font-weight: 600;
-  text-align: right;
-  overflow-wrap: anywhere;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
 }
 
 .profile-tools__row {
   display: grid;
   grid-template-columns: minmax(72px, auto) 1fr auto;
   align-items: center;
-  gap: 10px;
-  font-size: 13px;
+  gap: var(--space-3);
+  font-size: var(--control-ui-text-sm);
 }
 
 .profile-tools__name {
   color: var(--text-strong);
   font-weight: 600;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -290,10 +250,4 @@
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-}
-
-.profile-tools__empty {
-  color: var(--muted);
-  font-size: 13px;
-  margin-top: 14px;
 }

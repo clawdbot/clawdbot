@@ -12,10 +12,10 @@
  */
 import http, { type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { extensionRelayTokenMatches } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -61,7 +61,7 @@ export function requestExtensionProtocolToken(req: IncomingMessage): string {
 }
 
 /** Extract relay auth from a CDP header, extension subprotocol, or legacy query. */
-export function requestToken(req: IncomingMessage): string {
+function requestToken(req: IncomingMessage): string {
   const auth = firstHeader(req.headers.authorization);
   if (auth.startsWith("Bearer ")) {
     return auth.slice("Bearer ".length).trim();
@@ -85,7 +85,7 @@ export function requestToken(req: IncomingMessage): string {
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
   const candidate = requestToken(req);
-  return candidate.length > 0 && extensionRelayTokenMatches(token, candidate);
+  return candidate.length > 0 && safeEqualSecret(token, candidate);
 }
 
 /** Reject cross-origin websocket upgrades; the extension side must come from Chrome. */

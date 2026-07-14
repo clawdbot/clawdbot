@@ -8,6 +8,9 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",

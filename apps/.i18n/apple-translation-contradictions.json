@@ -326,11 +326,75 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "All",
+      "translations": [
+        "Todas",
+        "Todo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "All",
+      "translations": [
+        "Tous",
+        "Tout"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "All",
+      "translations": [
+        "Tutte",
+        "Tutti"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "All",
+      "translations": [
+        "모두",
+        "전체"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "All",
+      "translations": [
+        "Alle",
+        "Alles"
+      ]
+    },
+    {
       "locale": "pl",
       "source": "All",
       "translations": [
         "Wszystkie",
         "Wszystko"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "All",
+      "translations": [
+        "Todos",
+        "Tudo"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Allow",
+      "translations": [
+        "السماح",
+        "سماح"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Allow",
+      "translations": [
+        "İzin Ver",
+        "İzin ver"
       ]
     },
     {
@@ -1382,6 +1446,22 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Continue",
+      "translations": [
+        "続ける",
+        "続行"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Continue",
+      "translations": [
+        "Dalej",
+        "Kontynuuj"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Continue",
       "translations": [
@@ -1876,6 +1956,46 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Disable",
+      "translations": [
+        "غیرفعال کردن",
+        "غیرفعال‌کردن"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Disable",
+      "translations": [
+        "अक्षम करें",
+        "बंद करें"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Disable",
+      "translations": [
+        "Выключить",
+        "Отключить"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Disable",
+      "translations": [
+        "ปิดใช้",
+        "ปิดใช้งาน"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Disable",
+      "translations": [
+        "停用",
+        "禁用"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Discovered",
       "translations": [
@@ -1913,38 +2033,6 @@
       "translations": [
         "已探索",
         "已發現"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Discovered Gateways",
-      "translations": [
-        "검색된 Gateway",
-        "발견된 Gateway"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Discovered Gateways",
-      "translations": [
-        "Gevonden Gateways",
-        "Ontdekte Gateways"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Discovered Gateways",
-      "translations": [
-        "Gateway ที่ค้นพบ",
-        "Gateway ที่พบ"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Discovered Gateways",
-      "translations": [
-        "发现的 Gateway",
-        "已发现的 Gateway"
       ]
     },
     {
@@ -2495,6 +2583,30 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Enable",
+      "translations": [
+        "Activar",
+        "Habilitar"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Enable",
+      "translations": [
+        "فعال‌سازی",
+        "فعال‌کردن"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Enable",
+      "translations": [
+        "有効にする",
+        "有効化"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Enable Talk",
       "translations": [
@@ -2567,27 +2679,11 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Enabled",
-      "translations": [
-        "مفعّل",
-        "مُمكّن"
-      ]
-    },
-    {
       "locale": "es",
       "source": "Enabled",
       "translations": [
         "Activado",
         "Habilitado"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Enabled",
-      "translations": [
-        "चालू",
-        "सक्षम"
       ]
     },
     {
@@ -2599,35 +2695,11 @@
       ]
     },
     {
-      "locale": "pl",
-      "source": "Enabled",
-      "translations": [
-        "Włączone",
-        "Włączono"
-      ]
-    },
-    {
       "locale": "pt-BR",
       "source": "Enabled",
       "translations": [
         "Ativado",
         "Habilitado"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Enabled",
-      "translations": [
-        "Aktiverad",
-        "Aktiverat"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Enabled",
-      "translations": [
-        "เปิดใช้งานแล้ว",
-        "เปิดใช้แล้ว"
       ]
     },
     {
@@ -2947,7 +3019,16 @@
       "source": "Gateway offline",
       "translations": [
         "Gateway がオフラインです",
-        "Gateway オフライン"
+        "Gateway オフライン",
+        "Gatewayはオフラインです"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway jest offline",
+        "Gateway offline"
       ]
     },
     {
@@ -2956,6 +3037,14 @@
       "translations": [
         "Gateway не в сети",
         "Gateway офлайн"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway offline",
+        "Gateway är offline"
       ]
     },
     {
@@ -3122,6 +3211,102 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Installed",
+      "translations": [
+        "المثبتة",
+        "مثبّت"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Installed",
+      "translations": [
+        "Instaladas",
+        "Instalado"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Installed",
+      "translations": [
+        "Installé",
+        "Installés"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Installed",
+      "translations": [
+        "इंस्टॉल किए गए",
+        "इंस्टॉल किया गया"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Installed",
+      "translations": [
+        "Terinstal",
+        "Terpasang"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Installed",
+      "translations": [
+        "Installate",
+        "Installato"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Installed",
+      "translations": [
+        "Zainstalowane",
+        "Zainstalowano"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Installed",
+      "translations": [
+        "Instaladas",
+        "Instalado"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Installed",
+      "translations": [
+        "Установленные",
+        "Установлено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Installed",
+      "translations": [
+        "Installerad",
+        "Installerade"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Installed",
+      "translations": [
+        "Yüklendi",
+        "Yüklü"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Installed",
+      "translations": [
+        "Встановлено",
+        "Установлені"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Instances",
       "translations": [
@@ -3151,6 +3336,207 @@
       "translations": [
         "執行個體",
         "實例"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Limited",
+      "translations": [
+        "制限あり",
+        "制限付き"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Limited",
+      "translations": [
+        "Ograniczone",
+        "Ograniczony"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Limited",
+      "translations": [
+        "Ограниченный",
+        "Ограниченный доступ",
+        "Ограничено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Limited",
+      "translations": [
+        "Begränsad",
+        "Begränsat"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Limited",
+      "translations": [
+        "Обмежений",
+        "Обмежено"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Limited",
+      "translations": [
+        "Giới hạn",
+        "Hạn chế"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Limited",
+      "translations": [
+        "受限",
+        "有限"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "اسرد التذكيرات وأضِفها وأكملها.",
+        "عرض التذكيرات وإضافتها وإكمالها."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Erinnerungen auflisten, hinzufügen und abschließen.",
+        "Erinnerungen auflisten, hinzufügen und als erledigt markieren."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Consulta, añade y completa recordatorios.",
+        "Enumera, añade y completa recordatorios."
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "فهرست‌کردن، افزودن و تکمیل یادآورها.",
+        "یادآورها را فهرست، اضافه و کامل کنید."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Lister, ajouter et terminer des rappels.",
+        "Répertoriez, ajoutez et terminez des rappels."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।",
+        "रिमाइंडर सूचीबद्ध करें, जोड़ें और पूर्ण करें।"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Cantumkan, tambahkan, dan selesaikan pengingat.",
+        "Lihat, tambahkan, dan selesaikan pengingat."
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Elenca, aggiungi e completa i promemoria.",
+        "Elenca, aggiungi e completa promemoria."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "リマインダーの一覧表示、追加、完了を行います。",
+        "リマインダーを一覧表示、追加、完了します。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "미리 알림을 나열하고, 추가하고, 완료 처리합니다.",
+        "미리 알림을 조회하고 추가하거나 완료합니다."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Bekijk, voeg toe en voltooi herinneringen.",
+        "Geef herinneringen weer, voeg ze toe en voltooi ze."
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Wyświetlaj listę przypomnień, dodawaj je i oznaczaj jako wykonane.",
+        "Wyświetlanie, dodawanie i oznaczanie przypomnień jako ukończone."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Просматривайте список напоминаний, добавляйте и отмечайте их как выполненные.",
+        "Просмотр, добавление и выполнение напоминаний."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Lista, lägg till och slutför påminnelser.",
+        "Visa, lägg till och slutför påminnelser."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จ",
+        "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จสิ้น"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Перегляд, додавання та виконання нагадувань.",
+        "Переглядайте список, додавайте й позначайте нагадування як виконані."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Liệt kê, thêm và hoàn thành lời nhắc.",
+        "Liệt kê, thêm và hoàn tất lời nhắc."
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "列出、新增並完成提醒事項。",
+        "列出、新增及完成提醒事項。"
       ]
     },
     {
@@ -3346,6 +3732,30 @@
       "translations": [
         "Loading",
         "載入中"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Location",
+      "translations": [
+        "Localisation",
+        "Position"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Location",
+      "translations": [
+        "Геопозиция",
+        "Местоположение"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Location",
+      "translations": [
+        "Геодані",
+        "Місцезнаходження"
       ]
     },
     {
@@ -3674,6 +4084,38 @@
       "translations": [
         "ไม่พบ %@",
         "ไม่มี %@"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Missing: %@",
+      "translations": [
+        "مفقود: %@",
+        "مورد مفقود: %@"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Missing: %@",
+      "translations": [
+        "Manca: %@",
+        "Mancante: %@"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Missing: %@",
+      "translations": [
+        "Brak: %@",
+        "Brakuje: %@"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Missing: %@",
+      "translations": [
+        "ขาด: %@",
+        "ขาดหาย: %@"
       ]
     },
     {
@@ -4128,6 +4570,94 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "No skills found",
+      "translations": [
+        "لم يتم العثور على Skills",
+        "لم يتم العثور على مهارات"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "No skills found",
+      "translations": [
+        "هیچ Skillsی پیدا نشد",
+        "هیچ Skillی یافت نشد"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "No skills found",
+      "translations": [
+        "कोई Skill नहीं मिला",
+        "कोई skills नहीं मिलीं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "No skills found",
+      "translations": [
+        "Tidak ada skill yang ditemukan",
+        "Tidak ada skills ditemukan"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "No skills found",
+      "translations": [
+        "Skills를 찾을 수 없음",
+        "스킬을 찾을 수 없음"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No skills found",
+      "translations": [
+        "Geen Skills gevonden",
+        "Geen skills gevonden"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "No skills found",
+      "translations": [
+        "Nie znaleziono Skills",
+        "Nie znaleziono umiejętności"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "No skills found",
+      "translations": [
+        "Nenhuma Skill encontrada",
+        "Nenhuma skill encontrada"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "No skills found",
+      "translations": [
+        "Skills не найдены",
+        "Навыки не найдены"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No skills found",
+      "translations": [
+        "Inga Skills hittades",
+        "Inga färdigheter hittades"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "No skills found",
+      "translations": [
+        "未找到 Skills",
+        "未找到技能"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Node",
       "translations": [
@@ -4181,6 +4711,14 @@
       "translations": [
         "未启用",
         "未激活"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Notifications",
+      "translations": [
+        "Benachrichtigungen",
+        "Mitteilungen"
       ]
     },
     {
@@ -4523,11 +5061,43 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Open Settings",
+      "translations": [
+        "Ouvrir Réglages",
+        "Ouvrir les paramètres"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Open Settings",
+      "translations": [
+        "Settings खोलें",
+        "सेटिंग्स खोलें"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Open Settings",
       "translations": [
         "Apri Impostazioni",
         "Apri impostazioni"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Open Settings",
+      "translations": [
+        "Instellingen openen",
+        "Open Instellingen"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Open Settings",
+      "translations": [
+        "Otwórz Ustawienia",
+        "Otwórz ustawienia"
       ]
     },
     {
@@ -4539,11 +5109,43 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Open Settings",
+      "translations": [
+        "Открыть Настройки",
+        "Открыть настройки"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Open Settings",
+      "translations": [
+        "Öppna Inställningar",
+        "Öppna inställningar"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Open Settings",
+      "translations": [
+        "Відкрити Параметри",
+        "Відкрити налаштування"
+      ]
+    },
+    {
       "locale": "vi",
       "source": "Open Settings",
       "translations": [
         "Mở Cài đặt",
         "Mở cài đặt"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Open Settings",
+      "translations": [
+        "開啟「設定」",
+        "開啟設定"
       ]
     },
     {
@@ -4857,22 +5459,6 @@
       ]
     },
     {
-      "locale": "nl",
-      "source": "Photos",
-      "translations": [
-        "Foto's",
-        "Foto’s"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Photos",
-      "translations": [
-        "Bilder",
-        "Foton"
-      ]
-    },
-    {
       "locale": "de",
       "source": "Pin",
       "translations": [
@@ -5039,6 +5625,14 @@
       "translations": [
         "QR 扫描器不可用",
         "二维码扫描器不可用"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Ready",
+      "translations": [
+        "Pronta",
+        "Pronto"
       ]
     },
     {
@@ -5818,6 +6412,70 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Search ClawHub",
+      "translations": [
+        "جستجو در ClawHub",
+        "جستجوی ClawHub"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Search ClawHub",
+      "translations": [
+        "ClawHub खोजें",
+        "ClawHub में खोजें"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Search ClawHub",
+      "translations": [
+        "Cari ClawHub",
+        "Cari di ClawHub"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Search ClawHub",
+      "translations": [
+        "ClawHub zoeken",
+        "Zoeken in ClawHub"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Search ClawHub",
+      "translations": [
+        "Przeszukaj ClawHub",
+        "Wyszukaj w ClawHub"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Search ClawHub",
+      "translations": [
+        "Buscar no ClawHub",
+        "Pesquisar no ClawHub"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Search ClawHub",
+      "translations": [
+        "ค้นหา ClawHub",
+        "ค้นหาใน ClawHub"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Search ClawHub",
+      "translations": [
+        "Tìm kiếm ClawHub",
+        "Tìm kiếm trên ClawHub"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Search agents",
       "translations": [
@@ -6056,22 +6714,6 @@
       "translations": [
         "Configurar",
         "Configuração"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Setup Code",
-      "translations": [
-        "Einrichtungscode",
-        "Setup-Code"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Setup Code",
-      "translations": [
-        "設定代碼",
-        "設定碼"
       ]
     },
     {

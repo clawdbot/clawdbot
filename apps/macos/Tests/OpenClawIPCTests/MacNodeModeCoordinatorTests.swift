@@ -129,7 +129,9 @@ struct MacNodeModeCoordinatorTests {
             if await condition() {
                 return
             }
-            await Task.yield()
+            // Some callers run on MainActor; a real suspension lets the
+            // notification task make progress instead of polling it out.
+            try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(description)")
     }
@@ -146,22 +148,26 @@ struct MacNodeModeCoordinatorTests {
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
+        let notificationCenter = NotificationCenter()
         let coordinator = MacNodeModeCoordinator(
             session: session,
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
             observeNotifications: true)
-        _ = coordinator
+        // The full parallel suite can keep MainActor busy for several seconds.
+        let restartTimeout: Duration = .seconds(15)
+        defer { withExtendedLifetime(coordinator) {} }
 
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 1
         }
 
-        NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 2
         }
     }

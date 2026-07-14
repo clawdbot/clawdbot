@@ -129,16 +129,6 @@ import {
   recordMattermostThreadParticipation,
 } from "./thread-participation.js";
 
-export {
-  evaluateMattermostMentionGate,
-  mapMattermostChannelTypeToChatType,
-  resolveMattermostTrustedChatKind,
-} from "./monitor-gating.js";
-export type {
-  MattermostMentionGateInput,
-  MattermostRequireMentionResolverInput,
-} from "./monitor-gating.js";
-
 type MonitorMattermostOpts = {
   botToken?: string;
   baseUrl?: string;

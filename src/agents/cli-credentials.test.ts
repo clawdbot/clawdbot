@@ -287,6 +287,79 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  function claudeAccessFixture(): string {
+    return ["claude", "access"].join("-");
+  }
+
+  function claudeRefreshFixture(): string {
+    return ["claude", "refresh"].join("-");
+  }
+
+  it("attaches the CLI config account email to Claude credentials", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-email-"));
+    const expires = Date.parse("2036-04-25T12:00:00Z");
+    fs.mkdirSync(path.join(tempDir, ".claude"), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(tempDir, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: claudeAccessFixture(),
+          refreshToken: claudeRefreshFixture(),
+          expiresAt: expires,
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tempDir, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "cli-login@example.com" } }),
+      "utf8",
+    );
+
+    const cliLogin = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: 0,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expectFields(cliLogin, {
+      type: "oauth",
+      provider: "anthropic",
+      access: claudeAccessFixture(),
+      email: "cli-login@example.com",
+    });
+  });
+
+  it("leaves Claude credentials email-less without the CLI config file", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-email-"));
+    const expires = Date.parse("2036-04-25T12:00:00Z");
+    fs.mkdirSync(path.join(tempDir, ".claude"), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(tempDir, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: claudeAccessFixture(),
+          refreshToken: claudeRefreshFixture(),
+          expiresAt: expires,
+        },
+      }),
+      "utf8",
+    );
+
+    const cliLogin = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: 0,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expectFields(cliLogin, { type: "oauth", provider: "anthropic", access: claudeAccessFixture() });
+    expect(cliLogin && "email" in cliLogin ? cliLogin.email : undefined).toBeUndefined();
+  });
+
   it("keeps no-prompt Claude reads on the file credential path after a keychain read", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));

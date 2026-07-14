@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionName,
   ChannelMessageCapability,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 function sortStrings(values: readonly string[]) {

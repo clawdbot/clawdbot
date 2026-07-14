@@ -27,6 +27,7 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
 const SHRINKWRAP_POLICY_PATH_RE =
@@ -314,6 +315,16 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  if (result.paths.some(isProductionTypeScriptFile)) {
+    // Deliberately omit --head here: local changed checks must inspect worktree and untracked
+    // content. Exact-tree CI calls check:loc directly with both refs.
+    add("TypeScript LOC ratchet", [
+      "check:loc",
+      ...(options.staged ? ["--staged"] : ["--base", options.base ?? "origin/main"]),
+      "--",
+      ...result.paths,
+    ]);
+  }
   add("changelog attributions", ["check:changelog-attributions"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);

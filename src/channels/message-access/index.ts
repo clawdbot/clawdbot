@@ -9,7 +9,7 @@ export {
   resolveStableChannelMessageIngress,
 } from "./runtime.js";
 export { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
-export { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
+
 export { resolveChannelIngressState } from "./state.js";
 export type {
   ChannelIngressAccessGroupMembershipResolver,

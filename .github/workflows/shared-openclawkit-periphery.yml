@@ -1,0 +1,279 @@
+name: Shared OpenClawKit Periphery
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  workflow_dispatch:
+
+concurrency:
+  group: shared-openclawkit-periphery-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    name: Detect shared OpenClawKit scan scope
+    runs-on: ubuntu-24.04
+    outputs:
+      should-scan: ${{ steps.scope.outputs.should-scan }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Ensure base commit
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Detect changed paths
+        id: scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            if (context.eventName === "workflow_dispatch") {
+              core.setOutput("should-scan", "true");
+              return;
+            }
+            if (context.payload.pull_request?.draft) {
+              core.setOutput("should-scan", "false");
+              return;
+            }
+
+            const baseSha = context.payload.pull_request?.base?.sha;
+            if (!baseSha) {
+              throw new Error("missing pull request base SHA");
+            }
+            const result = await exec.getExecOutput("git", [
+              "diff",
+              "--quiet",
+              baseSha,
+              "HEAD",
+              "--",
+              "apps/ios/",
+              "apps/macos/",
+              "apps/shared/OpenClawKit/",
+              ".github/workflows/shared-openclawkit-periphery.yml",
+              "scripts/periphery-intersection.mjs",
+              "scripts/ios-configure-signing.sh",
+              "scripts/ios-write-swift-filelist.mjs",
+              "scripts/ios-write-version-xcconfig.sh",
+              "test/scripts/periphery-intersection.test.ts",
+            ], { ignoreReturnCode: true, silent: true });
+            if (result.exitCode !== 0 && result.exitCode !== 1) {
+              throw new Error(`git diff failed with exit code ${result.exitCode}`);
+            }
+            core.setOutput("should-scan", String(result.exitCode === 1));
+
+  scan-ios:
+    name: Scan shared kit from iOS
+    needs: scope
+    if: ${{ needs.scope.outputs.should-scan == 'true' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify Xcode
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.* ]]; then
+            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Install iOS scan tooling
+        run: |
+          brew update
+          brew install xcodegen periphery
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
+
+      - name: Generate iOS project
+        run: |
+          set -euo pipefail
+          ./scripts/ios-configure-signing.sh
+          ./scripts/ios-write-version-xcconfig.sh
+          node scripts/ios-write-swift-filelist.mjs
+          cd apps/ios
+          xcodegen generate
+
+      - name: Scan shared kit
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/shared-periphery-ios"
+          mkdir -p "$output_dir"
+          cd apps/ios
+          set +e
+          periphery scan \
+            --config .periphery.yml \
+            --clean-build \
+            --format json \
+            --report-include '../shared/OpenClawKit/Sources/**' \
+            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --write-results "$output_dir/periphery.json" \
+            >"$output_dir/periphery.stdout.json" \
+            2>"$output_dir/periphery.stderr.log"
+          periphery_status="$?"
+          set -e
+          printf '%s\n' "$periphery_status" >"$output_dir/periphery.status"
+          if [ ! -s "$output_dir/periphery.json" ]; then
+            cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
+          fi
+
+      - name: Upload iOS consumer report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shared-periphery-ios
+          if-no-files-found: error
+          retention-days: 14
+
+  scan-macos:
+    name: Scan shared kit from macOS
+    needs: scope
+    if: ${{ needs.scope.outputs.should-scan == 'true' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify Xcode
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.* ]]; then
+            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Install Periphery
+        run: |
+          brew update
+          brew install periphery
+
+      - name: Scan shared kit
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/shared-periphery-macos"
+          mkdir -p "$output_dir"
+          cd apps/macos
+          set +e
+          periphery scan \
+            --config .periphery.yml \
+            --clean-build \
+            --format json \
+            --report-include '../shared/OpenClawKit/Sources/**' \
+            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --write-results "$output_dir/periphery.json" \
+            >"$output_dir/periphery.stdout.json" \
+            2>"$output_dir/periphery.stderr.log"
+          periphery_status="$?"
+          set -e
+          printf '%s\n' "$periphery_status" >"$output_dir/periphery.status"
+          if [ ! -s "$output_dir/periphery.json" ]; then
+            cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
+          fi
+
+      - name: Upload macOS consumer report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shared-periphery-macos
+          if-no-files-found: error
+          retention-days: 14
+
+  intersect:
+    name: Intersect shared OpenClawKit dead code
+    needs: [scope, scan-ios, scan-macos]
+    if: ${{ always() && needs.scope.outputs.should-scan == 'true' && needs.scan-ios.result != 'cancelled' && needs.scan-macos.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Download iOS consumer report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shared-periphery-ios
+
+      - name: Download macOS consumer report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shared-periphery-macos
+
+      - name: Intersect exact Swift identities
+        run: |
+          node scripts/periphery-intersection.mjs \
+            --ios-results "$RUNNER_TEMP/shared-periphery-ios/periphery.json" \
+            --ios-status "$RUNNER_TEMP/shared-periphery-ios/periphery.status" \
+            --macos-results "$RUNNER_TEMP/shared-periphery-macos/periphery.json" \
+            --macos-status "$RUNNER_TEMP/shared-periphery-macos/periphery.status" \
+            --output "$RUNNER_TEMP/shared-periphery-intersection/periphery.json"
+
+      - name: Upload shared intersection
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shared-periphery-intersection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/shared-periphery-intersection
+          if-no-files-found: warn
+          retention-days: 14

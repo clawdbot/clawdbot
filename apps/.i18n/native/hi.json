@@ -1074,6 +1074,11 @@
       "translated": "मॉडल अपडेट नहीं किया जा सका।"
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "चिंतन स्तर अपडेट नहीं किया जा सका।"
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "रन शुरू होने से पहले चैट विफल हो गई; फिर से कोशिश करें।"
@@ -3929,11 +3934,6 @@
       "translated": "cron job लोड हो रहा है…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "एजेंट"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "इस gateway पर उपलब्ध सहायकों को चुनें और उनका निरीक्षण करें।"
@@ -4157,11 +4157,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "दर सीमा"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "पहुँच"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4424,44 @@
       "translated": "ऑनलाइन"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "पहुँच"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "पता"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "उपलब्ध नहीं"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "खोजा गया"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "डिफ़ॉल्ट एजेंट"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "एजेंट"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "इंस्टेंस ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "पेयर करने के लिए QR स्कैन करें"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "सीमित Gateway एक्सेस"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4472,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "डिस्कनेक्ट करें"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "समस्या का निदान करें"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway जोड़ें"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR स्कैन करें"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "सेटअप कोड"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "मुझे सेटअप कोड कहाँ मिलेगा?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android मौजूदा सेटअप कोड को स्कैन या पेस्ट कर सकता है, लेकिन यह gateway अभी ऐप को सेटअप-कोड जनरेशन उपलब्ध नहीं कराता है। gateway host पर openclaw qr के साथ QR/कोड जनरेट करें, फिर उसे यहाँ स्कैन करें या नीचे सेटअप कोड पेस्ट करें।"
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "अभी तक कोई Gateway नहीं मिला। यदि खोज अवरुद्ध है, तो मैन्युअल सेटअप का उपयोग करें।"
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "कनेक्ट करें"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4534,9 @@
       "translated": "भूलें"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway सेटअप"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gateway जोड़ें"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "सेटअप कोड"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android मौजूदा सेटअप कोड को स्कैन या पेस्ट कर सकता है, लेकिन यह gateway अभी ऐप को सेटअप-कोड जनरेशन उपलब्ध नहीं कराता है। gateway host पर openclaw qr के साथ QR/कोड जनरेट करें, फिर उसे यहाँ स्कैन करें या नीचे सेटअप कोड पेस्ट करें।"
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "कनेक्शन सेटअप"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "सेटअप कोड"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "मैन्युअल Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4587,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "मान्य सेटअप कोड या gateway पता दर्ज करें।"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "उपलब्ध नहीं"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "एक सुरक्षित wss:// या Tailscale Serve Gateway का उपयोग करें, Control UI में या openclaw qr के साथ एक फुल-एक्सेस सेटअप कोड जनरेट करें, फिर उसे नीचे स्कैन या पेस्ट करें और सेटिंग्स तथा अपग्रेड सक्षम करने के लिए फिर से कनेक्ट करें।"
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4987,6 +5047,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "डिफ़ॉल्ट"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -10974,6 +11039,11 @@
       "translated": "चैनल"
     },
     {
+      "id": "native.apple.e2eaba9832a2fad7",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.fd44d6742909f55c",
       "source": "Voice & Talk",
       "translated": "वॉइस और टॉक"
@@ -11289,6 +11359,11 @@
       "translated": "चैनल"
     },
     {
+      "id": "native.apple.1f52746515df3fa5",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.1573249126ddd84f",
       "source": "Diagnostics",
       "translated": "डायग्नोस्टिक्स"
@@ -11309,11 +11384,6 @@
       "translated": "लाइसेंस"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
       "id": "native.apple.800b6502b5b49941",
       "source": "Address",
       "translated": "पता"
@@ -11332,6 +11402,51 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "एजेंट"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "एक्सेस"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "एक्सेस अपग्रेड करें"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "इस फ़ोन के पास सीमित Gateway एक्सेस है।"
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "एक सुरक्षित wss:// या Tailscale Serve Gateway का उपयोग करें, फिर Control UI या openclaw qr से एक फुल-एक्सेस सेटअप कोड स्कैन करें और सेटिंग्स तथा अपग्रेड सक्षम करने के लिए फिर से कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "फुल-एक्सेस कोड स्कैन करें"
+    },
+    {
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.34444b9c6d74f472",
+      "source": "Scan QR to Pair",
+      "translated": "पेयर करने के लिए QR स्कैन करें"
     },
     {
       "id": "native.apple.88835de05348122a",
@@ -11634,14 +11749,14 @@
       "translated": "नए Chat और Talk सत्रों के लिए उपयोग किया जाता है।"
     },
     {
-      "id": "native.apple.313eb24efcb8d4a0",
-      "source": "Paste setup code",
-      "translated": "Setup Code पेस्ट करें"
-    },
-    {
       "id": "native.apple.19552e71de246322",
       "source": "Scan QR",
       "translated": "QR स्कैन करें"
+    },
+    {
+      "id": "native.apple.313eb24efcb8d4a0",
+      "source": "Paste setup code",
+      "translated": "Setup Code पेस्ट करें"
     },
     {
       "id": "native.apple.f4afcfbe4e4a72f8",
@@ -11649,19 +11764,14 @@
       "translated": "कनेक्ट करें"
     },
     {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "Setup Code"
-    },
-    {
-      "id": "native.apple.adb22453596f1d78",
-      "source": "Discovered Gateways",
-      "translated": "खोजे गए Gateways"
-    },
-    {
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "अभी तक कोई gateway नहीं मिला। यदि Bonjour ब्लॉक है, तो मैनुअल सेटअप का उपयोग करें।"
+    },
+    {
+      "id": "native.apple.784220b48f5c4af8",
+      "source": "Add Gateway",
+      "translated": "Gateway जोड़ें"
     },
     {
       "id": "native.apple.75c61c4ee1ecc6d8",
@@ -12102,6 +12212,336 @@
       "id": "native.apple.f439c34a9ce3a332",
       "source": "Discovered gateways and manual setup live here when the gateway has not connected yet.",
       "translated": "जब Gateway अभी तक कनेक्ट नहीं हुआ हो, तो खोजे गए gateways और मैन्युअल सेटअप यहाँ दिखाई देते हैं।"
+    },
+    {
+      "id": "native.apple.acf33c8c3efde926",
+      "source": "Browse",
+      "translated": "ब्राउज़ करें"
+    },
+    {
+      "id": "native.apple.57f55061e45f732b",
+      "source": "All",
+      "translated": "सभी"
+    },
+    {
+      "id": "native.apple.02a59c6d5de241c6",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
+      "id": "native.apple.de33b4b220a48b7b",
+      "source": "Connect to manage Gateway skills.",
+      "translated": "Gateway Skills प्रबंधित करने के लिए कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.395f4d55dfb4b1bf",
+      "source": "Loading installed skills and readiness.",
+      "translated": "इंस्टॉल किए गए Skills और उनकी तैयारी लोड की जा रही है।"
+    },
+    {
+      "id": "native.apple.b5a47111394ae9d2",
+      "source": "%@ ready · %@ need setup",
+      "translated": "%@ तैयार · %@ को सेटअप की आवश्यकता है"
+    },
+    {
+      "id": "native.apple.06c8a70b3321dd77",
+      "source": "offline",
+      "translated": "ऑफ़लाइन"
+    },
+    {
+      "id": "native.apple.bbf921f4a20e6d64",
+      "source": "loading",
+      "translated": "लोड हो रहा है"
+    },
+    {
+      "id": "native.apple.50af4928abeb5493",
+      "source": "Skills section",
+      "translated": "Skills अनुभाग"
+    },
+    {
+      "id": "native.apple.5be2a1662a9d8454",
+      "source": "Installed",
+      "translated": "इंस्टॉल किए गए"
+    },
+    {
+      "id": "native.apple.493e64eee96d3b2c",
+      "source": "Refresh Skills",
+      "translated": "Skills रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.2fc9bfee92bad603",
+      "source": "Search installed skills",
+      "translated": "इंस्टॉल किए गए Skills खोजें"
+    },
+    {
+      "id": "native.apple.b7a9e8ede061b45c",
+      "source": "Installed skill filter",
+      "translated": "इंस्टॉल किए गए Skills का फ़िल्टर"
+    },
+    {
+      "id": "native.apple.d5075a70296450e1",
+      "source": "Connect to load and manage installed skills.",
+      "translated": "इंस्टॉल किए गए Skills लोड और प्रबंधित करने के लिए कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.d23235f31ddc7d87",
+      "source": "Loading skills",
+      "translated": "Skills लोड किए जा रहे हैं"
+    },
+    {
+      "id": "native.apple.ad8ceb4f98255843",
+      "source": "Reading the Gateway skill catalog.",
+      "translated": "Gateway की Skills कैटलॉग पढ़ी जा रही है।"
+    },
+    {
+      "id": "native.apple.0550dad32f8ef785",
+      "source": "No matching skills",
+      "translated": "कोई मेल खाता Skill नहीं मिला"
+    },
+    {
+      "id": "native.apple.adcee8faa45b0365",
+      "source": "No skills installed",
+      "translated": "कोई Skill इंस्टॉल नहीं है"
+    },
+    {
+      "id": "native.apple.e7e5b1011a14fc4b",
+      "source": "Browse ClawHub to discover and install skills.",
+      "translated": "Skills खोजने और इंस्टॉल करने के लिए ClawHub ब्राउज़ करें।"
+    },
+    {
+      "id": "native.apple.f54b778b8ea52ece",
+      "source": "Change the search or readiness filter.",
+      "translated": "खोज या तैयारी फ़िल्टर बदलें।"
+    },
+    {
+      "id": "native.apple.44d2b179910face4",
+      "source": "ClawHub",
+      "translated": "ClawHub"
+    },
+    {
+      "id": "native.apple.8e161683e7efa2a4",
+      "source": "Search ClawHub",
+      "translated": "ClawHub में खोजें"
+    },
+    {
+      "id": "native.apple.c7050536b0ee103f",
+      "source": "Search",
+      "translated": "खोजें"
+    },
+    {
+      "id": "native.apple.a390ab96444bced8",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway डाउनलोड से पहले समीक्षा किए गए सटीक रिलीज़ की पुष्टि करता है।"
+    },
+    {
+      "id": "native.apple.85d609abe4548150",
+      "source": "Gateway offline",
+      "translated": "Gateway ऑफ़लाइन है"
+    },
+    {
+      "id": "native.apple.37ce41bbd2c854dd",
+      "source": "Connect to search and install ClawHub skills.",
+      "translated": "ClawHub Skills खोजने और इंस्टॉल करने के लिए कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.a21337a8fba8d90c",
+      "source": "Gateway update required",
+      "translated": "Gateway अपडेट आवश्यक है"
+    },
+    {
+      "id": "native.apple.503fadc03e3b4090",
+      "source": "Update the Gateway to search and install ClawHub skills from iOS.",
+      "translated": "iOS से ClawHub Skills खोजने और इंस्टॉल करने के लिए Gateway अपडेट करें।"
+    },
+    {
+      "id": "native.apple.b542672608467c0a",
+      "source": "Searching ClawHub",
+      "translated": "ClawHub में खोज की जा रही है"
+    },
+    {
+      "id": "native.apple.5acf38408914a884",
+      "source": "Loading verified skill releases.",
+      "translated": "सत्यापित Skill रिलीज़ लोड किए जा रहे हैं।"
+    },
+    {
+      "id": "native.apple.c0261398045e7911",
+      "source": "No skills found",
+      "translated": "कोई Skill नहीं मिला"
+    },
+    {
+      "id": "native.apple.eb605facc8feeed7",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "कोई अन्य खोज आज़माएँ या कैटलॉग रीफ़्रेश करें।"
+    },
+    {
+      "id": "native.apple.29c8087ab70bedcd",
+      "source": "Could not load skills",
+      "translated": "Skills लोड नहीं किए जा सके"
+    },
+    {
+      "id": "native.apple.cf8f37f9d39bf57b",
+      "source": "ClawHub unavailable",
+      "translated": "ClawHub उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.apple.43406555e5144718",
+      "source": "Could not review skill",
+      "translated": "Skill की समीक्षा नहीं की जा सकी"
+    },
+    {
+      "id": "native.apple.1633604644edf7b3",
+      "source": "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
+      "translated": "फिर से कनेक्ट करें, Skills रीफ़्रेश करें, फिर दोबारा कोशिश करें। Gateway अभी भी चल रहे मेल खाते इंस्टॉलेशन से सुरक्षित रूप से जुड़ जाता है।"
+    },
+    {
+      "id": "native.apple.3cc22b37bdb9fcd1",
+      "source": "Gateway blocked install",
+      "translated": "Gateway ने इंस्टॉलेशन रोक दिया"
+    },
+    {
+      "id": "native.apple.95223294a767ccd7",
+      "source": "The Gateway installed the reviewed version.",
+      "translated": "Gateway ने समीक्षा किया गया संस्करण इंस्टॉल कर दिया।"
+    },
+    {
+      "id": "native.apple.71d7b3860ab9f02c",
+      "source": "Install result unknown",
+      "translated": "इंस्टॉल का परिणाम अज्ञात है"
+    },
+    {
+      "id": "native.apple.e69ba6c4d73eb72f",
+      "source": "Skill disabled",
+      "translated": "Skill अक्षम किया गया"
+    },
+    {
+      "id": "native.apple.8677a968b0a7729d",
+      "source": "Skill enabled",
+      "translated": "Skill सक्षम किया गया"
+    },
+    {
+      "id": "native.apple.b4577e30f257ad79",
+      "source": "Could not enable skill",
+      "translated": "Skill सक्षम नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.b9d22e7d493eb2bb",
+      "source": "Could not disable skill",
+      "translated": "Skill अक्षम नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.1f06ad201d9b6bed",
+      "source": "Disable",
+      "translated": "अक्षम करें"
+    },
+    {
+      "id": "native.apple.b284f85f4efc0fa7",
+      "source": "Enable",
+      "translated": "सक्षम करें"
+    },
+    {
+      "id": "native.apple.0d4cc831b423aa98",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.apple.c63a20f1143b62ca",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
+      "id": "native.apple.892d7433a4468f5a",
+      "source": "Needs Setup",
+      "translated": "सेटअप आवश्यक है"
+    },
+    {
+      "id": "native.apple.113dacafa42bb62e",
+      "source": "Missing: %@",
+      "translated": "अनुपलब्ध: %@"
+    },
+    {
+      "id": "native.apple.1824681020aa336b",
+      "source": "Install",
+      "translated": "इंस्टॉल करें"
+    },
+    {
+      "id": "native.apple.7d9b36be7a7df9a8",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "डाउनलोड से पहले Gateway, ClawHub के साथ इसी रिलीज़ को सत्यापित करेगा।"
+    },
+    {
+      "id": "native.apple.4fb1f26e4de787dd",
+      "source": "This gateway connection needs operator.admin to install skills.",
+      "translated": "Skills इंस्टॉल करने के लिए इस Gateway कनेक्शन को operator.admin की आवश्यकता है।"
+    },
+    {
+      "id": "native.apple.0f902fcad255ae3f",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub Skill की समीक्षा करें"
+    },
+    {
+      "id": "native.apple.8f61d18ceca765da",
+      "source": "Verify and install",
+      "translated": "सत्यापित करके इंस्टॉल करें"
+    },
+    {
+      "id": "native.apple.64ac6815468e764b",
+      "source": "Gateway warning",
+      "translated": "Gateway चेतावनी"
+    },
+    {
+      "id": "native.apple.cfb4fe56e0a7f93b",
+      "source": "The Gateway requires explicit acknowledgement for this release.",
+      "translated": "Gateway को इस रिलीज़ के लिए स्पष्ट स्वीकृति की आवश्यकता है।"
+    },
+    {
+      "id": "native.apple.91447e88c95f0f72",
+      "source": "Review warning details",
+      "translated": "चेतावनी के विवरण की समीक्षा करें"
+    },
+    {
+      "id": "native.apple.9ad3235988108fce",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "इसी संस्करण को स्वीकार करने से पहले Gateway चेतावनी को विस्तृत करके उसकी समीक्षा करें।"
+    },
+    {
+      "id": "native.apple.b79b3886a801b83e",
+      "source": "Review Gateway warning",
+      "translated": "Gateway चेतावनी की समीक्षा करें"
+    },
+    {
+      "id": "native.apple.8a3adec4b6d6eb15",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.30304ca2865ea3b4",
+      "source": "Acknowledge and install",
+      "translated": "स्वीकार करें और इंस्टॉल करें"
+    },
+    {
+      "id": "native.apple.c1499a39573b3633",
+      "source": "Version",
+      "translated": "संस्करण"
+    },
+    {
+      "id": "native.apple.4789ad34a901e14e",
+      "source": "Publisher",
+      "translated": "प्रकाशक"
+    },
+    {
+      "id": "native.apple.ba780a0a9b2fd426",
+      "source": "The connected Gateway changed. Refresh Skills and try again.",
+      "translated": "कनेक्ट किया गया Gateway बदल गया है। Skills को रीफ़्रेश करें और फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.af9d5bb3dd35cfff",
+      "source": "Could not encode the Gateway request.",
+      "translated": "Gateway अनुरोध को एन्कोड नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.7a5a1b9342f01954",
+      "source": "ClawHub did not report an installable version for this skill.",
+      "translated": "ClawHub ने इस स्किल के लिए इंस्टॉल करने योग्य संस्करण की जानकारी नहीं दी।"
     },
     {
       "id": "native.apple.798c3584ad95f8da",
@@ -12979,6 +13419,46 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
+      "id": "native.apple.9dcd64ab340a6c15",
+      "source": "Allow access",
+      "translated": "ऐक्सेस की अनुमति दें"
+    },
+    {
+      "id": "native.apple.933a2ac28d1d2aec",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "translated": "चुनें कि आपका एजेंट इस iPhone पर किन चीज़ों का उपयोग कर सकता है। आपकी अनुमति के बिना कुछ भी चालू नहीं होगा।"
+    },
+    {
+      "id": "native.apple.47114a39f7a71c3b",
+      "source": "You can change any of these later in Settings.",
+      "translated": "आप बाद में Settings में इनमें से किसी को भी बदल सकते हैं।"
+    },
+    {
+      "id": "native.apple.eabf54e2b640a4a1",
+      "source": "Continue",
+      "translated": "जारी रखें"
+    },
+    {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.c5db9e6eae115f7a",
+      "source": "Allow",
+      "translated": "अनुमति दें"
+    },
+    {
+      "id": "native.apple.f591e16105268e99",
+      "source": "Open Settings",
+      "translated": "Settings खोलें"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "प्रबंधित करें"
+    },
+    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "होम नेटवर्क"
@@ -13159,24 +13639,24 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.c9419426ba8c2a2e",
-      "source": "Securely connect this iPhone to your gateway.",
-      "translated": "इस iPhone को अपने gateway से सुरक्षित रूप से कनेक्ट करें।"
+      "id": "native.apple.9b414850baa618da",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
+      "translated": "आपका एजेंट, आपकी जेब में। शुरू करने के लिए इस iPhone को अपने Gateway के साथ पेयर करें।"
     },
     {
-      "id": "native.apple.3e233ba3ed3181d4",
-      "source": "Connect to your gateway",
-      "translated": "अपने gateway से कनेक्ट करें"
+      "id": "native.apple.7248e67848beebd9",
+      "source": "Your agent runs on your own computer",
+      "translated": "आपका एजेंट आपके अपने कंप्यूटर पर चलता है"
     },
     {
-      "id": "native.apple.b6978424ac0a4d14",
-      "source": "Choose device permissions",
-      "translated": "डिवाइस अनुमतियाँ चुनें"
+      "id": "native.apple.acbdc9332988fa64",
+      "source": "Pair this iPhone by scanning a setup code",
+      "translated": "सेटअप कोड स्कैन करके इस iPhone को पेयर करें"
     },
     {
-      "id": "native.apple.4109460a5b8927d8",
-      "source": "Use OpenClaw from your phone",
-      "translated": "अपने फ़ोन से OpenClaw का उपयोग करें"
+      "id": "native.apple.feb3e155748c2f05",
+      "source": "Chat, talk, and approve actions from anywhere",
+      "translated": "कहीं से भी चैट करें, बात करें और कार्रवाइयों को मंज़ूरी दें"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -13444,6 +13924,101 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.0e07e7044608f954",
+      "source": "Allowed",
+      "translated": "अनुमति है"
+    },
+    {
+      "id": "native.apple.86796a6df9d0ff63",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.4c7f5404e9c42402",
+      "source": "Off in Settings",
+      "translated": "Settings में बंद"
+    },
+    {
+      "id": "native.apple.96d65a5563690719",
+      "source": "Notifications",
+      "translated": "सूचनाएँ"
+    },
+    {
+      "id": "native.apple.d290a46515add091",
+      "source": "Camera",
+      "translated": "कैमरा"
+    },
+    {
+      "id": "native.apple.0eeedbc8aaafcd2c",
+      "source": "Microphone",
+      "translated": "माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.apple.14fadad23dd36e44",
+      "source": "Photos",
+      "translated": "फ़ोटो"
+    },
+    {
+      "id": "native.apple.f0cfa9dcc57133b7",
+      "source": "Contacts",
+      "translated": "संपर्क"
+    },
+    {
+      "id": "native.apple.5ec2597d0b4a06fb",
+      "source": "Calendar",
+      "translated": "कैलेंडर"
+    },
+    {
+      "id": "native.apple.9ed5c19cf1e84490",
+      "source": "Reminders",
+      "translated": "रिमाइंडर"
+    },
+    {
+      "id": "native.apple.866b9df8afcadf07",
+      "source": "Location",
+      "translated": "स्थान"
+    },
+    {
+      "id": "native.apple.f205ac6778705a7d",
+      "source": "Pairing approvals and replies from your agent.",
+      "translated": "आपके एजेंट से पेयरिंग की स्वीकृतियाँ और जवाब।"
+    },
+    {
+      "id": "native.apple.061a17077ee3be94",
+      "source": "Scan setup codes and take photos on request.",
+      "translated": "सेटअप कोड स्कैन करें और अनुरोध पर फ़ोटो लें।"
+    },
+    {
+      "id": "native.apple.c735ac6b282765f9",
+      "source": "Talk with your agent using voice.",
+      "translated": "आवाज़ का उपयोग करके अपने एजेंट से बात करें।"
+    },
+    {
+      "id": "native.apple.ebe8aadcf512ecdb",
+      "source": "Share recent photos when you ask.",
+      "translated": "आपके कहने पर हाल की फ़ोटो साझा करें।"
+    },
+    {
+      "id": "native.apple.4c4bc12c0787383c",
+      "source": "Look up and add people you mention.",
+      "translated": "आपके द्वारा उल्लेखित लोगों को खोजें और जोड़ें।"
+    },
+    {
+      "id": "native.apple.5a4006fbb9b23db1",
+      "source": "Check and add calendar events.",
+      "translated": "कैलेंडर ईवेंट जाँचें और जोड़ें।"
+    },
+    {
+      "id": "native.apple.2b2a4f1aab6a12ec",
+      "source": "List, add, and complete reminders.",
+      "translated": "रिमाइंडर सूचीबद्ध करें, जोड़ें और पूर्ण करें।"
+    },
+    {
+      "id": "native.apple.3854ae1f0606bafe",
+      "source": "Answer location and nearby questions.",
+      "translated": "स्थान और आस-पास से जुड़े प्रश्नों के उत्तर दें।"
+    },
+    {
       "id": "native.apple.e5f6435b9cb5a2d8",
       "source": "unknown relay error",
       "translated": "unknown relay error"
@@ -13709,94 +14284,14 @@
       "translated": "कस्टम हेडर"
     },
     {
-      "id": "native.apple.e5a601c8fe47e9ed",
-      "source": "Add-Only",
-      "translated": "केवल जोड़ें"
-    },
-    {
-      "id": "native.apple.32aabe66f916a809",
-      "source": "Allowed",
-      "translated": "अनुमति है"
-    },
-    {
-      "id": "native.apple.7b551f40d1a6148c",
-      "source": "Enabled",
-      "translated": "चालू"
-    },
-    {
-      "id": "native.apple.94208c3068dae5b9",
-      "source": "Limited",
-      "translated": "सीमित"
-    },
-    {
-      "id": "native.apple.92223852c90e286d",
-      "source": "Not Allowed",
-      "translated": "अनुमति नहीं है"
-    },
-    {
-      "id": "native.apple.aa6ff8becab99fdc",
-      "source": "Not Set",
-      "translated": "सेट नहीं है"
-    },
-    {
-      "id": "native.apple.03e2f7265119d263",
-      "source": "Unknown",
-      "translated": "अज्ञात"
-    },
-    {
-      "id": "native.apple.4dac301c7e0c921c",
-      "source": "Contacts",
-      "translated": "संपर्क"
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "गोपनीयता और एक्सेस"
     },
     {
       "id": "native.apple.01f362d70f6ddb4e",
       "source": "Search and add contacts from the assistant.",
       "translated": "असिस्टेंट से संपर्क खोजें और जोड़ें।"
-    },
-    {
-      "id": "native.apple.eda8d96e40bcc36a",
-      "source": "Photos",
-      "translated": "फ़ोटो"
-    },
-    {
-      "id": "native.apple.df0159ff34744870",
-      "source": "Calendar (Add Events)",
-      "translated": "कैलेंडर (इवेंट जोड़ें)"
-    },
-    {
-      "id": "native.apple.c6db4240083c0435",
-      "source": "Add events with least privilege.",
-      "translated": "न्यूनतम विशेषाधिकार के साथ इवेंट जोड़ें।"
-    },
-    {
-      "id": "native.apple.dc62e22f0b2726c5",
-      "source": "Calendar (View Events)",
-      "translated": "कैलेंडर (इवेंट देखें)"
-    },
-    {
-      "id": "native.apple.650091bc632b3120",
-      "source": "List and read calendar events.",
-      "translated": "कैलेंडर इवेंट की सूची देखें और उन्हें पढ़ें।"
-    },
-    {
-      "id": "native.apple.7a81d1f17d9d90c0",
-      "source": "Reminders",
-      "translated": "रिमाइंडर"
-    },
-    {
-      "id": "native.apple.d6fd5e9f85b0e298",
-      "source": "List, add, and complete reminders.",
-      "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
-    },
-    {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "स्वास्थ्य सारांश"
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "गोपनीयता और एक्सेस"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -13809,24 +14304,44 @@
       "translated": "असिस्टेंट के लिए हाल की फ़ोटो पढ़ें।"
     },
     {
-      "id": "native.apple.ac3ff8e4c6df7a2a",
-      "source": "Manage Access",
-      "translated": "ऐक्सेस प्रबंधित करें"
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "सीमित"
     },
     {
-      "id": "native.apple.c557c95fa2789089",
-      "source": "Request Full Access",
-      "translated": "पूर्ण ऐक्सेस का अनुरोध करें"
+      "id": "native.apple.df0159ff34744870",
+      "source": "Calendar (Add Events)",
+      "translated": "कैलेंडर (इवेंट जोड़ें)"
     },
     {
-      "id": "native.apple.4e50e2ab4c869464",
-      "source": "Request Access",
-      "translated": "ऐक्सेस का अनुरोध करें"
+      "id": "native.apple.c6db4240083c0435",
+      "source": "Add events with least privilege.",
+      "translated": "न्यूनतम विशेषाधिकार के साथ इवेंट जोड़ें।"
     },
     {
-      "id": "native.apple.a9f30d4e86060dca",
-      "source": "Upgrade to Full Access",
-      "translated": "पूर्ण ऐक्सेस में अपग्रेड करें"
+      "id": "native.apple.650091bc632b3120",
+      "source": "List and read calendar events.",
+      "translated": "कैलेंडर इवेंट की सूची देखें और उन्हें पढ़ें।"
+    },
+    {
+      "id": "native.apple.d6fd5e9f85b0e298",
+      "source": "List, add, and complete reminders.",
+      "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
+    },
+    {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "केवल जोड़ें"
+    },
+    {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "स्वास्थ्य सारांश"
+    },
+    {
+      "id": "native.apple.0b10201d7e452dc4",
+      "source": "Allow",
+      "translated": "अनुमति दें"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",
@@ -15734,6 +16249,111 @@
       "translated": "कोई Telegram टोकन कॉन्फ़िगर नहीं किया गया है।"
     },
     {
+      "id": "native.apple.48155cd3182d0fc1",
+      "source": "Browse ClawHub",
+      "translated": "ClawHub ब्राउज़ करें"
+    },
+    {
+      "id": "native.apple.2a63044f55e90b32",
+      "source": "Discover skills",
+      "translated": "स्किल खोजें"
+    },
+    {
+      "id": "native.apple.5fef1d6003e5df6f",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway डाउनलोड से पहले समीक्षा की गई सटीक रिलीज़ को सत्यापित करता है।"
+    },
+    {
+      "id": "native.apple.f5aa33a76f62e6e9",
+      "source": "Search ClawHub",
+      "translated": "ClawHub में खोजें"
+    },
+    {
+      "id": "native.apple.1b08dbd63dadda23",
+      "source": "Search",
+      "translated": "खोजें"
+    },
+    {
+      "id": "native.apple.84bdcdb604ccadd6",
+      "source": "Results",
+      "translated": "परिणाम"
+    },
+    {
+      "id": "native.apple.2539b847d0cc4326",
+      "source": "Searching ClawHub…",
+      "translated": "ClawHub में खोजा जा रहा है…"
+    },
+    {
+      "id": "native.apple.ce42e5d6c37b59e8",
+      "source": "No skills found",
+      "translated": "कोई स्किल नहीं मिली"
+    },
+    {
+      "id": "native.apple.c27ee52f9350a02f",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "कोई अन्य खोज आज़माएँ या कैटलॉग को रीफ़्रेश करें।"
+    },
+    {
+      "id": "native.apple.fc107db526febdee",
+      "source": "Installed",
+      "translated": "इंस्टॉल किया गया"
+    },
+    {
+      "id": "native.apple.101103e2d97e04cd",
+      "source": "Review",
+      "translated": "समीक्षा करें"
+    },
+    {
+      "id": "native.apple.8976aca17f4dfbdc",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub स्किल की समीक्षा करें"
+    },
+    {
+      "id": "native.apple.b5a521cd4f77fff0",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "डाउनलोड से पहले Gateway इस सटीक रिलीज़ को ClawHub से सत्यापित करेगा।"
+    },
+    {
+      "id": "native.apple.86078f1c84e735d7",
+      "source": "Verify and install",
+      "translated": "सत्यापित करें और इंस्टॉल करें"
+    },
+    {
+      "id": "native.apple.fbbba0a83466864c",
+      "source": "Gateway warning",
+      "translated": "Gateway चेतावनी"
+    },
+    {
+      "id": "native.apple.8957dc102983dbb0",
+      "source": "Review warning details",
+      "translated": "चेतावनी का विवरण देखें"
+    },
+    {
+      "id": "native.apple.1b9020d8308c0563",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "इस सटीक संस्करण को स्वीकार करने से पहले Gateway चेतावनी को विस्तृत करके उसकी समीक्षा करें।"
+    },
+    {
+      "id": "native.apple.ee2577b784c64ac6",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.9fa34dc1057cbcee",
+      "source": "Acknowledge and install",
+      "translated": "स्वीकार करें और इंस्टॉल करें"
+    },
+    {
+      "id": "native.apple.5e36364c63057778",
+      "source": "Version",
+      "translated": "संस्करण"
+    },
+    {
+      "id": "native.apple.cac171668ece3a4d",
+      "source": "Publisher",
+      "translated": "प्रकाशक"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "कोई कॉन्फ़िग सेक्शन उपलब्ध नहीं है।"
@@ -16994,9 +17614,9 @@
       "translated": "Peekaboo Bridge सक्षम करें"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "हस्ताक्षरित टूल (जैसे `peekaboo`) को PeekabooBridge के माध्यम से UI ऑटोमेशन चलाने की अनुमति दें।"
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "हस्ताक्षरित टूल (उदा. `peekaboo`) को PeekabooBridge के माध्यम से UI automation चलाने की अनुमति दें। इसके लिए Computer Control आवश्यक है; अन्यथा Peekaboo का अपना Mac app चलाएँ।"
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -18759,6 +19379,16 @@
       "translated": "Mac"
     },
     {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "डिवाइस"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "नोड"
+    },
+    {
       "id": "native.apple.6223e5f12aa9464b",
       "source": "Permissions",
       "translated": "अनुमतियाँ"
@@ -19334,9 +19964,14 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.0f62bd687b786431",
-      "source": "Optional capabilities that become available when their requirements are met.",
-      "translated": "वैकल्पिक क्षमताएँ जो उनकी आवश्यकताएँ पूरी होने पर उपलब्ध हो जाती हैं।"
+      "id": "native.apple.50be0aae3f54705e",
+      "source": "Manage installed capabilities or discover verified releases on ClawHub.",
+      "translated": "इंस्टॉल की गई क्षमताओं को प्रबंधित करें या ClawHub पर सत्यापित रिलीज़ खोजें।"
+    },
+    {
+      "id": "native.apple.5a3f840bde899fbe",
+      "source": "Skills section",
+      "translated": "Skills अनुभाग"
     },
     {
       "id": "native.apple.d40a7bb04c5534ec",
@@ -19379,6 +20014,11 @@
       "translated": "रिफ्रेश"
     },
     {
+      "id": "native.apple.90f5eb0762593f89",
+      "source": "Search installed skills",
+      "translated": "इंस्टॉल किए गए Skills खोजें"
+    },
+    {
       "id": "native.apple.85a9941ff7a30fbe",
       "source": "Loading…",
       "translated": "लोड हो रहा है…"
@@ -19402,6 +20042,16 @@
       "id": "native.apple.2beddcc70ea0d96a",
       "source": "Filter",
       "translated": "फ़िल्टर"
+    },
+    {
+      "id": "native.apple.ebbf5e9abc1fd8b9",
+      "source": "Installed",
+      "translated": "इंस्टॉल किए गए"
+    },
+    {
+      "id": "native.apple.a4b3ea71236c5789",
+      "source": "Browse",
+      "translated": "ब्राउज़ करें"
     },
     {
       "id": "native.apple.eb868667821fbf7c",
@@ -20997,6 +21647,11 @@
       "id": "native.apple.2f45f005d2a7c3c2",
       "source": "Apple Watch",
       "translated": "Apple Watch"
+    },
+    {
+      "id": "native.apple.3fe61126fd4ca8aa",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway ने किसी अन्य ClawHub रिलीज़ का मूल्यांकन किया था। इंस्टॉल करने से पहले Skill की दोबारा समीक्षा करें।"
     },
     {
       "id": "native.apple.e97067187c9a359d",

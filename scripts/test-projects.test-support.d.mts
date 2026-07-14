@@ -156,7 +156,11 @@ export function shouldAcquireLocalHeavyCheckLock(
   env?: Record<string, string | undefined>,
 ): boolean;
 
-export function writeVitestIncludeFile(filePath: string, includePatterns: string[]): void;
+export function writeVitestIncludeFile(
+  filePath: string,
+  includePatterns: string[],
+  options?: { cwd?: string; expandGlobs?: boolean },
+): void;
 
 export function formatFailedShardDigest(
   failures: FailedVitestShard[],

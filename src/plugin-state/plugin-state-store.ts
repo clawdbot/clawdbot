@@ -25,25 +25,20 @@ import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
 // ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
+// Public plugin-state facade over the sqlite-backed store. It validates plugin
+// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
   PluginStateKeyedStore,
-  PluginStateOverflowPolicy,
   PluginStateSyncKeyedStore,
-  PluginStateStoreErrorCode,
-  PluginStateStoreOperation,
-  PluginStateStoreProbeResult,
-  PluginStateStoreProbeStep,
 } from "./plugin-state-store.types.js";
-export { PluginStateStoreError } from "./plugin-state-store.types.js";
+
 export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
-  probePluginStateStore,
-  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 

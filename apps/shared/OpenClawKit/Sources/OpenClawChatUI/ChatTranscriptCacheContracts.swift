@@ -71,7 +71,7 @@ extension OpenClawChatTranscriptCache {
 /// Optional atomic merge seam for cache owners that also provide a durable
 /// outbox. Keeping this separate preserves source compatibility for read-only
 /// transcript-cache conformers.
-public protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
+protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
     func mergeCanonicalTranscriptMessage(
         sessionKey: String,
         agentID: String?,

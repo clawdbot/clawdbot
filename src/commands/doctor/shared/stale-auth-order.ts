@@ -496,7 +496,7 @@ function removeAuthOrderKeys(cfg: OpenClawConfig, providers: ReadonlySet<string>
 }
 
 /** Find nonempty config orders that only reference removed profiles. */
-export function scanStaleConfiguredAuthOrders(params: {
+function scanStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
   activeStores?: readonly AuthProfileStore[];

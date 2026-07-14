@@ -36,6 +36,7 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
@@ -54,6 +55,7 @@ export {
   type AuthProfilePortabilityReason,
 } from "./auth-profiles/portability.js";
 export {
+  clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,

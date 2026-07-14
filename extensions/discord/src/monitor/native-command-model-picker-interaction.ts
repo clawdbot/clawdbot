@@ -25,12 +25,14 @@ import {
   findProviderBucketId,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
+  type DiscordModelPickerState,
+} from "./model-picker.state.js";
+import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
   toDiscordModelPickerMessagePayload,
-  type DiscordModelPickerState,
-} from "./model-picker.js";
+} from "./model-picker.view.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import { applyDiscordModelPickerSelection } from "./native-command-model-picker-apply.js";
 import {
@@ -300,7 +302,7 @@ function resolveDiscordModelPickerSubmissionRuntime(params: {
   );
 }
 
-export async function handleDiscordModelPickerInteraction(params: {
+async function handleDiscordModelPickerInteraction(params: {
   interaction: ButtonInteraction | StringSelectMenuInteraction;
   data: ComponentData;
   ctx: DiscordModelPickerContext;

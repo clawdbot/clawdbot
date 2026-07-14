@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
-export type SessionTranscriptUpdateTarget = {
+type SessionTranscriptUpdateTarget = {
   agentId: string;
   sessionId: string;
   sessionKey: string;
@@ -62,15 +62,6 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
   const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
   if (publicUpdate) {
     emitPublicSessionTranscriptUpdate(publicUpdate);
-  }
-  emitInternalTranscriptUpdate(nextUpdate);
-}
-
-/** Emits an internal transcript update, including identity-only updates. */
-export function emitInternalSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
-  const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
-  if (!nextUpdate) {
-    return;
   }
   emitInternalTranscriptUpdate(nextUpdate);
 }

@@ -37,7 +37,7 @@ export type ControlUiGitHubPreview = {
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
-export type ControlUiSessionPullRequestChecks = {
+type ControlUiSessionPullRequestChecks = {
   state: "pending" | "passing" | "failing";
   passed: number;
   failed: number;

@@ -22,8 +22,6 @@ import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js"
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-export { handleContextCommand } from "./commands-context-command.js";
-export { handleWhoamiCommand } from "./commands-whoami.js";
 
 async function resolveSkillCommands(
   params: HandleCommandsParams,

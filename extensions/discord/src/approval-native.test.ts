@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   createDiscordNativeApprovalAdapter,
   getDiscordApprovalCapability,
-  shouldHandleDiscordApprovalRequest,
 } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {

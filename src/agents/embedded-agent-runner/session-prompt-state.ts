@@ -9,7 +9,7 @@ export type ToolResultPromptProjectionState = {
   sourceTextByKey: Map<string, string[]>;
 };
 
-export type EmbeddedSessionPromptState = {
+type EmbeddedSessionPromptState = {
   toolResults: ToolResultPromptProjectionState;
   sentUserTurnIds: Set<string>;
 };

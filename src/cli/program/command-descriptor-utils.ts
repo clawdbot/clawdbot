@@ -4,12 +4,12 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Minimal descriptor shape used before a command is fully registered. */
-export type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
+type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
 
 const SAFE_COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /** Descriptor catalog plus derived name lists used by lazy command registration. */
-export type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor> = {
+type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor> = {
   descriptors: readonly TDescriptor[];
   getDescriptors: () => readonly TDescriptor[];
   getNames: () => string[];
@@ -37,23 +37,19 @@ export function sanitizeCommandDescriptorDescription(description: string): strin
 }
 
 /** Return descriptor names in registration order. */
-export function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
+function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
   return descriptors.map((descriptor) => descriptor.name);
 }
 
 /** Return descriptor names that should remain parent commands with subcommands. */
-export function getCommandsWithSubcommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getCommandsWithSubcommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
 /** Return descriptors whose parent command should show help by default. */
-export function getParentDefaultHelpCommands(
-  descriptors: readonly NamedCommandDescriptor[],
-): string[] {
+function getParentDefaultHelpCommands(descriptors: readonly NamedCommandDescriptor[]): string[] {
   return descriptors
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name);

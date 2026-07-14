@@ -1,81 +1,95 @@
 // Policy tests cover cli plugin behavior.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { Command } from "commander";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { policyCheckCommand, policyCompareCommand, policyWatchCommand } from "./cli.js";
-import { resetPolicyDoctorChecksForTest } from "./doctor/register.js";
-import {
-  policyAttestationHash,
-  policyWorkspaceHash,
-  policyDocumentHash,
-  policyFindingsHash,
-} from "./policy-state.js";
+import { registerPolicyCli } from "./cli.js";
+import { createPolicyAttestation, policyDocumentHash } from "./policy-state.js";
 
 let workspaceDir: string;
 
-async function runPolicyCheckJson(options: Parameters<typeof policyCheckCommand>[0] = {}) {
+type PolicyCheckCliOptions = {
+  readonly severityMin?: string;
+};
+
+type PolicyWatchCliOptions = {
+  readonly intervalMs?: string;
+};
+
+type PolicyCompareCliOptions = {
+  readonly baseline: string;
+  readonly policy?: string;
+};
+
+async function runPolicyCli(args: readonly string[]) {
   const output: string[] = [];
-  const exitCode = await policyCheckCommand(
-    { cwd: workspaceDir, json: true, ...options },
-    {
-      writeStdout(value) {
-        output.push(value);
-      },
-      error(value) {
-        output.push(value);
-      },
-    },
-  );
-  return { exitCode, parsed: JSON.parse(output.at(-1) ?? "{}"), output };
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+    output.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    const program = new Command().name("openclaw");
+    registerPolicyCli(program);
+    await program.parseAsync(["policy", ...args], { from: "user" });
+    const lastOutput = output.at(-1) ?? "";
+    const parsed = /^[{[]/.test(lastOutput.trimStart()) ? JSON.parse(lastOutput) : {};
+    return { exitCode: process.exitCode ?? 0, parsed, output };
+  } finally {
+    process.exitCode = previousExitCode;
+    stdout.mockRestore();
+    stderr.mockRestore();
+  }
 }
 
-async function runPolicyWatchJson(options: Parameters<typeof policyWatchCommand>[0] = {}) {
-  const output: string[] = [];
-  const exitCode = await policyWatchCommand(
-    { cwd: workspaceDir, json: true, once: true, ...options },
-    {
-      writeStdout(value) {
-        output.push(value);
-      },
-      error(value) {
-        output.push(value);
-      },
-      async sleep() {
-        throw new Error("policy watch should not sleep in --once mode");
-      },
-    },
-  );
-  return { exitCode, parsed: JSON.parse(output.at(-1) ?? "{}"), output };
+async function runPolicyCheckJson(options: PolicyCheckCliOptions = {}) {
+  return runPolicyCli([
+    "check",
+    "--json",
+    ...(options.severityMin === undefined ? [] : ["--severity-min", options.severityMin]),
+  ]);
 }
 
-async function runPolicyCompareJson(options: Parameters<typeof policyCompareCommand>[0]) {
-  const output: string[] = [];
-  const exitCode = await policyCompareCommand(
-    { cwd: workspaceDir, json: true, ...options },
-    {
-      writeStdout(value) {
-        output.push(value);
-      },
-      error(value) {
-        output.push(value);
-      },
-    },
-  );
-  return { exitCode, parsed: JSON.parse(output.at(-1) ?? "{}"), output };
+async function runPolicyWatchJson(options: PolicyWatchCliOptions = {}) {
+  return runPolicyCli([
+    "watch",
+    "--json",
+    "--once",
+    ...(options.intervalMs === undefined ? [] : ["--interval-ms", options.intervalMs]),
+  ]);
+}
+
+function workspacePath(value: string): string {
+  return isAbsolute(value) ? value : join(workspaceDir, value);
+}
+
+async function runPolicyCompareJson(options: PolicyCompareCliOptions) {
+  return runPolicyCli([
+    "compare",
+    "--json",
+    "--baseline",
+    workspacePath(options.baseline),
+    ...(options.policy === undefined ? [] : ["--policy", workspacePath(options.policy)]),
+  ]);
 }
 
 describe("policy commands", () => {
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-cli-"));
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaceDir);
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
     clearConfigCache();
     await fs.rm(workspaceDir, { recursive: true, force: true });
-    resetPolicyDoctorChecksForTest();
   });
 
   it("checks policy rules and emits an attestation", async () => {
@@ -96,29 +110,18 @@ describe("policy commands", () => {
       modelRefs: [],
       network: [],
     };
-    const workspaceHash = policyWorkspaceHash(evidence);
-    const findingsHash = policyFindingsHash([]);
+    const attestation = createPolicyAttestation({
+      ok: true,
+      checkedAt: parsed.attestation.checkedAt,
+      policyPath: "policy.jsonc",
+      policyHash,
+      evidence,
+      findings: [],
+    });
     expect(typeof parsed.attestation.checkedAt).toBe("string");
     expect(parsed).toMatchObject({
       ok: true,
-      attestation: {
-        checkedAt: parsed.attestation.checkedAt,
-        policy: {
-          path: "policy.jsonc",
-          hash: policyHash,
-        },
-        workspace: {
-          scope: "policy",
-          hash: workspaceHash,
-        },
-        findingsHash,
-        attestationHash: policyAttestationHash({
-          ok: true,
-          policyHash,
-          workspaceHash,
-          findingsHash,
-        }),
-      },
+      attestation,
       evidence,
       findings: [],
     });
@@ -134,22 +137,10 @@ describe("policy commands", () => {
       }),
       "utf-8",
     );
-    const output: string[] = [];
-
-    const exitCode = await policyCheckCommand(
-      { cwd: workspaceDir, json: true },
-      {
-        writeStdout(value) {
-          output.push(value);
-        },
-        error(value) {
-          output.push(value);
-        },
-      },
-    );
+    const { exitCode, parsed } = await runPolicyCheckJson();
 
     expect(exitCode).toBe(0);
-    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+    expect(parsed).toMatchObject({
       ok: true,
       evidence: {
         channels: [],
@@ -271,8 +262,24 @@ describe("policy commands", () => {
     const attestedFinding = { ...parsed.findings[0] };
     expect(attestedFinding.policy).toBeDefined();
     delete attestedFinding.policy;
-    expect(parsed.attestation.findingsHash).toBe(policyFindingsHash([attestedFinding]));
-    expect(parsed.attestation.findingsHash).not.toBe(policyFindingsHash(parsed.findings));
+    const attestedOutput = createPolicyAttestation({
+      ok: false,
+      checkedAt: parsed.attestation.checkedAt,
+      policyPath: "policy.jsonc",
+      policyHash: parsed.attestation.policy.hash,
+      evidence: parsed.evidence,
+      findings: [attestedFinding],
+    });
+    const reportedOutput = createPolicyAttestation({
+      ok: false,
+      checkedAt: parsed.attestation.checkedAt,
+      policyPath: "policy.jsonc",
+      policyHash: parsed.attestation.policy.hash,
+      evidence: parsed.evidence,
+      findings: parsed.findings,
+    });
+    expect(parsed.attestation.findingsHash).toBe(attestedOutput.findingsHash);
+    expect(parsed.attestation.findingsHash).not.toBe(reportedOutput.findingsHash);
   });
 
   it("attests underlying policy findings when the accepted attestation is stale", async () => {
@@ -308,15 +315,16 @@ describe("policy commands", () => {
     expect(parsed.findings).toEqual([
       expect.objectContaining({ checkId: "policy/attestation-hash-mismatch" }),
     ]);
-    expect(parsed.attestation.findingsHash).not.toBe(policyFindingsHash([]));
-    expect(parsed.attestation.attestationHash).toBe(
-      policyAttestationHash({
-        ok: false,
-        policyHash: parsed.attestation.policy.hash,
-        workspaceHash: parsed.attestation.workspace.hash,
-        findingsHash: parsed.attestation.findingsHash,
-      }),
-    );
+    const emptyOutput = createPolicyAttestation({
+      ok: false,
+      checkedAt: parsed.attestation.checkedAt,
+      policyPath: "policy.jsonc",
+      policyHash: parsed.attestation.policy.hash,
+      evidence: parsed.evidence,
+      findings: [],
+    });
+    expect(parsed.attestation.findingsHash).not.toBe(emptyOutput.findingsHash);
+    expect(parsed.attestation.attestationHash).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("reports stale accepted attestations in policy watch", async () => {
@@ -357,36 +365,14 @@ describe("policy commands", () => {
   });
 
   it("rejects partial policy watch intervals before evaluating policy", async () => {
-    const output: string[] = [];
-    const exitCode = await policyWatchCommand(
-      { cwd: workspaceDir, json: true, once: true, intervalMs: "500ms" },
-      {
-        writeStdout(value) {
-          output.push(value);
-        },
-        error(value) {
-          output.push(value);
-        },
-      },
-    );
+    const { exitCode, output } = await runPolicyWatchJson({ intervalMs: "500ms" });
 
     expect(exitCode).toBe(2);
     expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
   });
 
   it("rejects sub-floor policy watch intervals before evaluating policy", async () => {
-    const output: string[] = [];
-    const exitCode = await policyWatchCommand(
-      { cwd: workspaceDir, json: true, once: true, intervalMs: "249" },
-      {
-        writeStdout(value) {
-          output.push(value);
-        },
-        error(value) {
-          output.push(value);
-        },
-      },
-    );
+    const { exitCode, output } = await runPolicyWatchJson({ intervalMs: "249" });
 
     expect(exitCode).toBe(2);
     expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
@@ -442,21 +428,11 @@ describe("policy commands", () => {
   });
 
   it("rejects invalid severity thresholds", async () => {
-    const errors: string[] = [];
-
-    const exitCode = await policyCheckCommand(
-      { cwd: workspaceDir, severityMin: "warnng" },
-      {
-        writeStdout() {},
-        error(value) {
-          errors.push(value);
-        },
-      },
-    );
+    const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
 
     expect(exitCode).toBe(2);
-    expect(errors).toEqual([
-      "Invalid --severity-min value. Expected one of: info, warning, error.",
+    expect(output).toEqual([
+      "Invalid --severity-min value. Expected one of: info, warning, error.\n",
     ]);
   });
 
@@ -932,19 +908,9 @@ describe("policy commands", () => {
       "utf-8",
     );
 
-    const output: string[] = [];
-    const exitCode = await policyCompareCommand(
-      { baseline: join(workspaceDir, "baseline.policy.jsonc"), json: true },
-      {
-        writeStdout(value) {
-          output.push(value);
-        },
-        error(value) {
-          output.push(value);
-        },
-      },
-    );
-    const parsed = JSON.parse(output.at(-1) ?? "{}");
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: join(workspaceDir, "baseline.policy.jsonc"),
+    });
 
     expect(exitCode).toBe(0);
     expect(parsed).toMatchObject({

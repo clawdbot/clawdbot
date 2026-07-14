@@ -15,11 +15,11 @@ import {
 // Supervisors usually restart immediately. Three unclean boots in this window
 // means the gateway should come up without auto-start sidecars so operators
 // can inspect a stable process instead of a flap.
-export const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
-export const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
+const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
+const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 // Keep enough history for operator forensics while bounding one-row-per-boot
 // growth. Retention must comfortably exceed GATEWAY_BOOT_LOOP_WINDOW_MS.
-export const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
+const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
 
@@ -27,7 +27,7 @@ const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
 type GatewayBootLifecycleDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 
-export type GatewayBootLifecycleOutcome =
+type GatewayBootLifecycleOutcome =
   | "clean_stop"
   | "planned_restart"
   | "startup_failed"

@@ -33,7 +33,7 @@ export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buff
   return decoded;
 }
 
-export type SubagentInlineAttachment = {
+type SubagentInlineAttachment = {
   name: string;
   content: string;
   encoding?: "utf8" | "base64";

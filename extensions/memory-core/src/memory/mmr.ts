@@ -1,5 +1,5 @@
 // Memory Core plugin module implements mmr behavior.
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { jaccardSimilarity, tokenize } from "./tokenize.js";
 
 /**
  * Maximal Marginal Relevance (MMR) re-ranking algorithm.
@@ -10,7 +10,7 @@ import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
  * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
  */
 
-export type MMRItem = {
+type MMRItem = {
   id: string;
   score: number;
   content: string;
@@ -27,11 +27,6 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   enabled: false,
   lambda: 0.7,
 };
-
-// Re-export the shared CJK-aware tokenizer + Jaccard helpers so existing
-// `import { tokenize, jaccardSimilarity, textSimilarity } from "./mmr.js"`
-// callers (including `mmr.test.ts`) continue to work without churn.
-export { jaccardSimilarity, textSimilarity, tokenize };
 
 /**
  * Compute the maximum similarity between an item and all selected items.
@@ -63,7 +58,7 @@ function maxSimilarityToSelected(
  * Compute MMR score for a candidate item.
  * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
  */
-export function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
+function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
   return lambda * relevance - (1 - lambda) * maxSimilarity;
 }
 
@@ -79,7 +74,7 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @param config - MMR configuration (lambda, enabled)
  * @returns Re-ranked items in MMR order
  */
-export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
+function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
   // Early exits

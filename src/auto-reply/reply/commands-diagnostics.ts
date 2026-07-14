@@ -65,7 +65,7 @@ const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
 };
 
 /** Creates a diagnostics command handler with injectable private-route dependencies. */
-export function createDiagnosticsCommandHandler(
+function createDiagnosticsCommandHandler(
   deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
   const resolvedDeps: DiagnosticsCommandDeps = {

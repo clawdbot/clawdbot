@@ -2,10 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
+import type { ProcessedAttachments } from "./inbound-attachments.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
 import type { QueuedMessage } from "./message-queue.js";
-import type { GatewayAccount, GatewayPluginRuntime, ProcessedAttachments } from "./types.js";
+import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const getRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string) => RefIndexEntry | null>());
 const setRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string, entry: RefIndexEntry) => void>());

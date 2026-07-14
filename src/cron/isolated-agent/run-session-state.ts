@@ -13,7 +13,7 @@ import type { resolveCronSession } from "./session.js";
 type MutableSessionStore = Record<string, SessionEntry>;
 
 /** Mutable cron session entry updated by an isolated run before persistence. */
-export type MutableCronSessionEntry = SessionEntry;
+type MutableCronSessionEntry = SessionEntry;
 /** Resolved cron session plus its mutable backing store and active entry. */
 export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
   store: MutableSessionStore;

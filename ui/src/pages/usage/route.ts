@@ -34,7 +34,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     endDate: startDate,
     scope: "family",
     timeZone: "local",
-    agentId: null,
+    agentId: context.agentSelection.state.scopeId,
   };
   if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
     return {
@@ -57,7 +57,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       gatewaySnapshot.client.request<CostUsageSummary>("usage.cost", {
         startDate: query.startDate,
         endDate: query.endDate,
-        agentScope: "all",
+        ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
         ...buildSessionUsageDateParams(query.timeZone),
       }),
       gatewaySnapshot.client.request<ProviderUsageSummary>("usage.status").catch(() => null),

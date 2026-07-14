@@ -455,11 +455,3 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   }
   return binding;
 }
-
-/** Internal sizing helpers exposed for startup-binding regression tests. */
-export const testing = {
-  parseCodexAppServerByteLimit,
-  readCodexAppServerRolloutTokenSnapshotLine,
-  resolveCodexAppServerNativeThreadTokenFuse,
-  resolveCodexAppServerNativeThreadReserveTokens,
-};

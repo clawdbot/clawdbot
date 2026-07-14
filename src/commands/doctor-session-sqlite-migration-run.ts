@@ -32,14 +32,14 @@ export type SessionSqliteMigrationTargetInput = {
   storePath: string;
 };
 
-export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
+type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
   completedMoves: SessionSqliteMigrationMove[];
   issues: DoctorSessionSqliteIssue[];
   plannedMoves: SessionSqliteMigrationMove[];
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
-export type SessionSqliteMigrationManifest = {
+type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
@@ -470,10 +470,7 @@ export function createSessionSqliteMigrationFailureIssue(
   };
 }
 
-export function sessionSqliteMigrationTargetKey(target: {
-  agentId: string;
-  storePath: string;
-}): string {
+function sessionSqliteMigrationTargetKey(target: { agentId: string; storePath: string }): string {
   return `${target.agentId}\u0000${canonicalMigrationFilePath(target.storePath)}`;
 }
 
@@ -672,7 +669,7 @@ function filterRestoreManifestTargets(
   );
 }
 
-export function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
+function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
   const runsDir = resolveSessionSqliteMigrationRunsDir(env);
   let entries: string[];
   try {
@@ -687,7 +684,7 @@ export function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv):
     .toSorted((left, right) => right.localeCompare(left));
 }
 
-export function readSessionSqliteMigrationManifest(
+function readSessionSqliteMigrationManifest(
   manifestPath: string,
 ): SessionSqliteMigrationManifest | undefined {
   try {

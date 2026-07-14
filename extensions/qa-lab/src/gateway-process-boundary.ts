@@ -13,7 +13,7 @@ const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
 export const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
 export const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 
-export type QaGatewayLinuxProcessBoundary = {
+type QaGatewayLinuxProcessBoundary = {
   kind: "linux-proc-v1";
   evidenceDir: string;
   expectedGid: number;
@@ -85,7 +85,7 @@ export type QaGatewayVerifiedProcessIdentity = {
   preEntryCmdlineSha256: string;
 };
 
-export type QaGatewayProcessBoundaryPreparedSpawn = {
+type QaGatewayProcessBoundaryPreparedSpawn = {
   command: QaGatewayProcessCommand;
   commandBytes: Buffer;
   commandFilePath: string;

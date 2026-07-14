@@ -6,11 +6,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { toRepoRelativePath } from "../../extensions/qa-lab/src/cli-paths.js";
+import { resolveQaEvidenceEnvironment } from "../../extensions/qa-lab/src/evidence-environment.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-  resolveQaEvidenceEnvironment,
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,

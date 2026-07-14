@@ -89,7 +89,7 @@ const AcpBindingSchema = z
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
 
-export const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
 
 export const BroadcastSchema = z
   .object({

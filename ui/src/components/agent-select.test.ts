@@ -5,13 +5,9 @@ import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { AgentSelect } from "./agent-select.ts";
 
-const AGENT_SELECT_TEST_TAG = "test-openclaw-agent-select";
+const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}`;
 
-// The shared jsdom registry outlives Vitest's per-file module reset. Use the
-// freshly imported class so locale state and the element controller stay paired.
-if (!customElements.get(AGENT_SELECT_TEST_TAG)) {
-  customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
-}
+customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
 
 type AgentSelectElement = HTMLElement & {
   agents: GatewayAgentRow[];

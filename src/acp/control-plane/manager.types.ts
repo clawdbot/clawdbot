@@ -150,7 +150,7 @@ export type TurnLatencyStats = {
 
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
-  readSessionEntry: typeof readAcpSessionEntry;
+  loadSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
@@ -205,7 +205,7 @@ export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
-  readSessionEntry: readAcpSessionEntry,
+  loadSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
   getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,

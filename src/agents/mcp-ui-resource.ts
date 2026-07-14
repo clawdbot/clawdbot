@@ -105,6 +105,27 @@ function measureViewBytes(html: string, toolInput: unknown, toolResult: CallTool
   return byteSize;
 }
 
+function assertBoundedViewDescriptor(value: {
+  viewId?: string;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId?: string;
+}): void {
+  if (
+    (value.viewId && (value.viewId.length > 128 || !value.viewId.startsWith("mcp-app-"))) ||
+    !value.serverName ||
+    value.serverName.length > 256 ||
+    !value.toolName ||
+    value.toolName.length > 256 ||
+    !value.uiResourceUri.startsWith("ui://") ||
+    value.uiResourceUri.length > 2_048 ||
+    (value.toolCallId !== undefined && value.toolCallId.length > 512)
+  ) {
+    throw new Error("MCP App preview descriptor exceeds safe limits");
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -176,12 +197,25 @@ export async function fetchMcpAppView(params: {
   serverName: string;
   toolName: string;
   uiResourceUri: string;
+  toolCallId?: string;
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
-}): Promise<{ viewId: string; title: string } | undefined> {
+  viewId?: string;
+}): Promise<
+  | {
+      viewId: string;
+      title: string;
+      serverName: string;
+      toolName: string;
+      uiResourceUri: string;
+      toolCallId?: string;
+    }
+  | undefined
+> {
   let releaseRuntimeLease: (() => void) | undefined;
   try {
+    assertBoundedViewDescriptor(params);
     if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
       return undefined;
     }
@@ -209,8 +243,9 @@ export async function fetchMcpAppView(params: {
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
-    const viewId = `mcp-app-${randomUUID()}`;
+    const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
     releaseRuntimeLease = params.runtime.acquireLease?.();
+    deleteView(viewId);
     pruneViewStore(byteSize, { reserveEntry: true });
     const view: McpAppViewLease = {
       viewId,
@@ -241,7 +276,14 @@ export async function fetchMcpAppView(params: {
     }, MCP_APP_VIEW_TTL_MS);
     view.expiryTimer.unref?.();
     getViewStore().set(viewId, view);
-    return { viewId, title };
+    return {
+      viewId,
+      title,
+      serverName: params.serverName,
+      toolName: params.toolName,
+      uiResourceUri: params.uiResourceUri,
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    };
   } catch (error) {
     releaseRuntimeLease?.();
     logWarn(
@@ -290,7 +332,16 @@ export function acquireMcpAppViewRequest(
   };
 }
 
-export function buildMcpAppCanvasPayload(view: { viewId: string; title: string }) {
+export function buildMcpAppCanvasPayload(view: {
+  viewId: string;
+  title: string;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId?: string;
+  resultMetaState?: "unavailable";
+}) {
+  assertBoundedViewDescriptor(view);
   return {
     kind: "canvas",
     view: { id: view.viewId, title: view.title },
@@ -300,7 +351,14 @@ export function buildMcpAppCanvasPayload(view: { viewId: string; title: string }
       preferred_height: 600,
       sandbox: "scripts",
     },
-    mcpApp: { viewId: view.viewId },
+    mcpApp: {
+      viewId: view.viewId,
+      serverName: view.serverName,
+      toolName: view.toolName,
+      uiResourceUri: view.uiResourceUri,
+      ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
+    },
   };
 }
 

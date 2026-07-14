@@ -90,30 +90,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_run_logs_store_ts",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, seq, ts
-          FROM cron_run_logs
-         WHERE store_key = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_cron_run_logs_job_status",
-      params: ["/state/cron/jobs.json", "job-1", "completed"],
-      sql: `
-        SELECT seq, ts, status
-          FROM cron_run_logs
-         WHERE store_key = ? AND job_id = ? AND status = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_delivery_queue_pending",
       params: ["outbound", "pending"],
       sql: `
@@ -203,6 +179,16 @@ describe("sqlite hot query plans", () => {
          WHERE session_id = ?
          ORDER BY updated_at DESC, session_key ASC
          LIMIT 1
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_status",
+      params: ["running"],
+      sql: `
+        SELECT session_key, entry_json
+          FROM session_entries
+         WHERE status = ?
       `,
     });
     const latestMessagePlan = explainQueryPlan(

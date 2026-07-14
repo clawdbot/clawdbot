@@ -3,14 +3,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
+import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
   type DeliverFn,
   drainPendingDeliveries,
   enqueueDelivery,
   failDelivery,
-  loadPendingDeliveries,
-  MAX_RETRIES,
   markDeliveryPlatformOutcomeUnknown,
   type RecoveryLogger,
   recoverPendingDeliveries,
@@ -23,6 +21,8 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+const RECOVERY_REPLAY_SPACING_MS = 250;
+const MAX_RETRIES = 5;
 const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 

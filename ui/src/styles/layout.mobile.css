@@ -214,15 +214,6 @@
     display: none;
   }
 
-  .nav-section {
-    display: grid;
-    margin-bottom: 16px;
-  }
-
-  .sidebar-nav .nav-section__label {
-    display: flex;
-  }
-
   .nav-item {
     margin: 0;
     min-height: 40px;
@@ -497,11 +488,6 @@
   }
 
   /* Stats */
-  .stat-grid {
-    gap: 8px;
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   .stat {
     padding: 10px;
     border-radius: var(--radius-md);
@@ -513,12 +499,6 @@
 
   .stat-value {
     font-size: 18px;
-  }
-
-  /* Notes */
-  .note-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 
   /* Forms */
@@ -570,7 +550,13 @@
 
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-thread-inner {
+    width: calc(100% - 36px - 16px);
   }
 
   .chat-msg {

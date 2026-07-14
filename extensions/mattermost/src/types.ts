@@ -1,9 +1,6 @@
 // Mattermost type declarations define plugin contracts.
-import type {
-  ChannelPreviewStreamingConfig,
-  StreamingMode,
-} from "openclaw/plugin-sdk/channel-outbound";
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
+import type { DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
@@ -54,14 +51,8 @@ export type MattermostAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Preview streaming mode/config. */
-  streaming?: StreamingMode | boolean | ChannelPreviewStreamingConfig;
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Preview streaming config (nested-only; scalar modes migrate via doctor). */
+  streaming?: ChannelPreviewStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

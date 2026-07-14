@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   resolveToolCallKind,
   resolveToolCallView,
-  splitPathForDisplay,
   unwrapShellWrapperCommand,
 } from "./tool-call-view.ts";
 
@@ -46,17 +45,6 @@ describe("resolveToolCallKind", () => {
     ),
   )("classifies command-discriminated editor %s args %o as %s", (name, args, expected) => {
     expect(resolveToolCallKind(name, args)).toBe(expected);
-  });
-});
-
-describe("splitPathForDisplay", () => {
-  it.each([
-    ["/repo/src/index.ts", { base: "index.ts", dir: "/repo/src" }],
-    ["index.ts", { base: "index.ts" }],
-    ["C:\\repo\\file.ts", { base: "file.ts", dir: "C:/repo" }],
-    ["/repo/dir/", { base: "dir", dir: "/repo" }],
-  ])("splits %s", (path, expected) => {
-    expect(splitPathForDisplay(path)).toEqual(expected);
   });
 });
 

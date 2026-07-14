@@ -1,7 +1,7 @@
 // Approval resolution references compact exact IDs for transport-private callbacks.
 import { createHash } from "node:crypto";
 
-export const APPROVAL_RESOLUTION_REF_LENGTH = 43;
+const APPROVAL_RESOLUTION_REF_LENGTH = 43;
 
 /** Build the full SHA-256 base64url locator used only when a transport cannot carry the exact id. */
 export function buildApprovalResolutionRef(params: {

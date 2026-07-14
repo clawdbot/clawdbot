@@ -24,7 +24,7 @@ import {
 } from "./config-state.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
-export type ClaudeBundleCommandSpec = {
+type ClaudeBundleCommandSpec = {
   pluginId: string;
   rawName: string;
   description: string;

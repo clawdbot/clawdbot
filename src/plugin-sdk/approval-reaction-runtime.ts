@@ -242,20 +242,6 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
   };
 }
 
-/**
- * Resolve a stored target while retaining shipped id-based ownership inference.
- * @deprecated Use resolveTypedApprovalReactionTarget with an explicit approvalKind.
- */
-export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
-  target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
-  reactionKey: string;
-}): ApprovalReactionTargetResolution<TRoute> | null {
-  return resolveApprovalReactionTargetInternal({
-    ...params,
-    allowLegacyKindInference: true,
-  });
-}
-
 /** Resolve an explicitly typed target without deriving ownership from its id. */
 export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
   target:

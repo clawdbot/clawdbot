@@ -4,7 +4,7 @@ import { isRecord, parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 /** Tokenized segment in a secret target path pattern. */
-export type PathPatternToken =
+type PathPatternToken =
   | { kind: "literal"; value: string }
   | { kind: "wildcard" }
   | { kind: "array"; field: string };
@@ -18,7 +18,7 @@ export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
 };
 
 /** Concrete config value matched by expanding a path pattern. */
-export type ExpandedPathMatch = {
+type ExpandedPathMatch = {
   segments: string[];
   captures: string[];
   value: unknown;

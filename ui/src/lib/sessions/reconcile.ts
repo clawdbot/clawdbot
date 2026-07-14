@@ -1,3 +1,4 @@
+import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
@@ -175,12 +176,6 @@ function recordValue(record: Record<string, unknown>, key: string): unknown {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {

@@ -3,11 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
-import {
-  mergeConsecutiveUserTurns,
-  validateAnthropicTurns,
-  validateGeminiTurns,
-} from "./embedded-agent-helpers.js";
+import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers.js";
+import { mergeConsecutiveUserTurns } from "./embedded-agent-helpers/turns.js";
 
 function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];

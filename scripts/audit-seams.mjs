@@ -618,7 +618,6 @@ function describeCronSeamKinds(relativePath, source) {
       "./state.js",
       "../schedule.js",
       "../store.js",
-      "../run-log.js",
     ]);
 
   if (

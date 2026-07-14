@@ -66,7 +66,7 @@ export const pluginRegistrationContractCases = {
   firecrawl: {
     pluginId: "firecrawl",
     webFetchProviderIds: ["firecrawl"],
-    webSearchProviderIds: ["firecrawl"],
+    webSearchProviderIds: ["firecrawl", "firecrawl-free"],
     toolNames: ["firecrawl_search", "firecrawl_scrape"],
   },
   google: {

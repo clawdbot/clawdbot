@@ -4,8 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
+  listConnectedNodePluginTools,
+  removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
-  resetConnectedNodePluginToolsForTest,
 } from "../gateway/node-plugin-tool-snapshot.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
@@ -29,7 +30,9 @@ function replaceNodePluginTools(
 }
 
 afterEach(() => {
-  resetConnectedNodePluginToolsForTest();
+  for (const nodeId of new Set(listConnectedNodePluginTools().map((tool) => tool.nodeId))) {
+    removeConnectedNodePluginTools(nodeId);
+  }
   vi.mocked(callGatewayTool).mockReset();
 });
 

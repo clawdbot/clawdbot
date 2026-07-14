@@ -17,13 +17,13 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  testApi as backupCreateInternals,
-  buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -196,40 +196,54 @@ describe("formatBackupCreateSummary", () => {
   });
 });
 
-describe("isTarEofRaceError", () => {
-  const { isTarEofRaceError } = backupCreateInternals;
-
-  it.each([
-    "did not encounter expected EOF",
-    "encountered unexpected EOF",
-    "TAR_BAD_ARCHIVE: Unrecognized archive format",
-    "Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)",
-  ])("matches tar-specific EOF-class error: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(true);
-  });
-
-  it("matches errors by code even when the message is empty", () => {
-    expect(isTarEofRaceError(Object.assign(new Error(""), { code: "EOF" }))).toBe(true);
-  });
-
-  it.each([
-    "EOF occurred in violation of protocol",
-    "unexpected eof while reading",
-    "ran out of EOF markers",
-    "permission denied",
-    "",
-  ])("does not match unrelated errors: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(false);
-  });
-
-  it("rejects non-object inputs", () => {
-    expect(isTarEofRaceError(null)).toBe(false);
-    expect(isTarEofRaceError(undefined)).toBe(false);
-    expect(isTarEofRaceError("did not encounter expected EOF")).toBe(false);
-  });
-});
-
 describe("writeTarArchiveWithRetry", () => {
+  it.each([
+    new Error("did not encounter expected EOF"),
+    new Error("encountered unexpected EOF"),
+    new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
+    new Error("Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)"),
+    Object.assign(new Error(""), { code: "EOF" }),
+  ])("retries tar-specific EOF-class errors: $message", async (error) => {
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    new Error("EOF occurred in violation of protocol"),
+    new Error("unexpected eof while reading"),
+    new Error("ran out of EOF markers"),
+    new Error("permission denied"),
+    new Error(""),
+    null,
+    undefined,
+    "did not encounter expected EOF",
+  ])("does not retry unrelated errors: %s", async (error) => {
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValueOnce(error);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/Backup archive write failed/);
+    expect(runTar).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",
@@ -242,7 +256,7 @@ describe("writeTarArchiveWithRetry", () => {
     const log = vi.fn();
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
-    await backupCreateInternals.writeTarArchiveWithRetry({
+    await writeTarArchiveWithRetry({
       tempArchivePath: "/tmp/backup.tar.gz.tmp",
       runTar,
       log,
@@ -271,7 +285,7 @@ describe("writeTarArchiveWithRetry", () => {
     });
 
     try {
-      const completedTempArchivePath = await backupCreateInternals.writeTarArchiveWithRetry({
+      const completedTempArchivePath = await writeTarArchiveWithRetry({
         tempArchivePath,
         runTar,
         log,
@@ -304,7 +318,7 @@ describe("writeTarArchiveWithRetry", () => {
 
     try {
       await expect(
-        backupCreateInternals.writeTarArchiveWithRetry({
+        writeTarArchiveWithRetry({
           tempArchivePath,
           runTar,
           sleepMs: sleep,
@@ -327,7 +341,7 @@ describe("writeTarArchiveWithRetry", () => {
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
     await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
+      writeTarArchiveWithRetry({
         tempArchivePath: "/tmp/backup.tar.gz.tmp",
         runTar,
         sleepMs: sleep,
@@ -361,7 +375,7 @@ describe("writeTarArchiveWithRetry", () => {
     });
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
-    await backupCreateInternals.writeTarArchiveWithRetry({
+    await writeTarArchiveWithRetry({
       tempArchivePath: "/tmp/backup.tar.gz.tmp",
       runTar,
       sleepMs: sleep,
@@ -378,7 +392,7 @@ describe("writeTarArchiveWithRetry", () => {
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
     await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
+      writeTarArchiveWithRetry({
         tempArchivePath: "/tmp/backup.tar.gz.tmp",
         runTar,
         sleepMs: sleep,
@@ -402,7 +416,7 @@ describe("createBackupVolatileStatCache", () => {
         await state.writeText("settings.json", '{"keep":true}\n');
         const archivePath = state.path("volatile-stat-cache.tar.gz");
         const volatilePlan = { stateDirs: [state.stateDir] };
-        const statCache = backupCreateInternals.createBackupVolatileStatCache(volatilePlan);
+        const statCache = createBackupVolatileStatCache(volatilePlan);
         const getCachedStat = statCache.get.bind(statCache);
         let removedBeforeStat = false;
 
@@ -432,28 +446,6 @@ describe("createBackupVolatileStatCache", () => {
         expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
       },
     );
-  });
-});
-
-describe("buildExtensionsNodeModulesFilter", () => {
-  it("excludes dependency trees only under state extensions", () => {
-    const filter = buildExtensionsNodeModulesFilter("/state/");
-
-    expect(filter("/state/extensions/demo/openclaw.plugin.json")).toBe(true);
-    expect(filter("/state/extensions/demo/src/index.js")).toBe(true);
-    expect(filter("/state/extensions/demo/node_modules/dep/index.js")).toBe(false);
-    expect(filter("/state/extensions/demo/vendor/node_modules/dep/index.js")).toBe(false);
-    expect(filter("/state/node_modules/dep/index.js")).toBe(true);
-    expect(filter("/state/extensions-node_modules/demo/index.js")).toBe(true);
-  });
-
-  it("normalizes Windows path separators", () => {
-    const filter = buildExtensionsNodeModulesFilter("C:\\Users\\me\\.openclaw\\");
-
-    expect(filter(String.raw`C:\Users\me\.openclaw\extensions\demo\index.js`)).toBe(true);
-    expect(
-      filter(String.raw`C:\Users\me\.openclaw\extensions\demo\node_modules\dep\index.js`),
-    ).toBe(false);
   });
 });
 

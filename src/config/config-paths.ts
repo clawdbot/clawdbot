@@ -19,11 +19,9 @@ function setOwnConfigProperty(node: PathNode, key: string, value: unknown): void
 }
 
 /** Parses CLI/config dot-notation paths and rejects unsafe object-key segments. */
-export function parseConfigPath(raw: string): {
-  ok: boolean;
-  path?: string[];
-  error?: string;
-} {
+export function parseConfigPath(
+  raw: string,
+): { ok: true; path: string[] } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return {

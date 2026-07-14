@@ -514,7 +514,7 @@ export async function legacyCronStoreFilesExist(storePath: string): Promise<bool
   );
 }
 
-export type LegacyCronArchiveResult =
+type LegacyCronArchiveResult =
   | { ok: true }
   | { ok: false; failures: Array<{ path: string; reason: string }> };
 

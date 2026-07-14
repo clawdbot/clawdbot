@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 // Gateway Protocol schema module defines durable cross-surface approval shapes.
 import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
@@ -95,19 +96,16 @@ export const ExecApprovalPresentationSchema = Type.Object(
 );
 
 /** Plugin-supplied reviewer text safe to persist and render across surfaces. */
-export const PluginApprovalPresentationSchema = Type.Object(
-  {
-    kind: Type.Literal("plugin"),
-    title: Type.String({ minLength: 1, maxLength: 80 }),
-    description: Type.String({ minLength: 1, maxLength: 512 }),
-    severity: PluginApprovalSeveritySchema,
-    pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    allowedDecisions: ApprovalAllowedDecisionsSchema,
-  },
-  { additionalProperties: false },
-);
+export const PluginApprovalPresentationSchema = closedObject({
+  kind: Type.Literal("plugin"),
+  title: Type.String({ minLength: 1, maxLength: 80 }),
+  description: Type.String({ minLength: 1, maxLength: 512 }),
+  severity: PluginApprovalSeveritySchema,
+  pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  allowedDecisions: ApprovalAllowedDecisionsSchema,
+});
 
 /** Reviewer-safe presentation discriminated by the approval owner. */
 export const ApprovalPresentationSchema = Type.Union([
@@ -128,56 +126,44 @@ const ApprovalResolutionFields = {
 };
 
 /** Approval that has not yet accepted a reviewer decision. */
-export const PendingApprovalSnapshotSchema = Type.Object(
-  { ...ApprovalRecordCommonFields, status: Type.Literal("pending") },
-  { additionalProperties: false },
-);
+export const PendingApprovalSnapshotSchema = closedObject({
+  ...ApprovalRecordCommonFields,
+  status: Type.Literal("pending"),
+});
 
 /** Approval whose first recorded reviewer decision allows the operation. */
-export const AllowedApprovalSnapshotSchema = Type.Object(
-  {
-    ...ApprovalRecordCommonFields,
-    ...ApprovalResolutionFields,
-    status: Type.Literal("allowed"),
-    decision: ApprovalAllowDecisionSchema,
-    reason: ApprovalAllowedReasonSchema,
-  },
-  { additionalProperties: false },
-);
+export const AllowedApprovalSnapshotSchema = closedObject({
+  ...ApprovalRecordCommonFields,
+  ...ApprovalResolutionFields,
+  status: Type.Literal("allowed"),
+  decision: ApprovalAllowDecisionSchema,
+  reason: ApprovalAllowedReasonSchema,
+});
 
 /** Approval whose first recorded reviewer decision denies the operation. */
-export const DeniedApprovalSnapshotSchema = Type.Object(
-  {
-    ...ApprovalRecordCommonFields,
-    ...ApprovalResolutionFields,
-    status: Type.Literal("denied"),
-    decision: Type.Literal("deny"),
-    reason: ApprovalDeniedReasonSchema,
-  },
-  { additionalProperties: false },
-);
+export const DeniedApprovalSnapshotSchema = closedObject({
+  ...ApprovalRecordCommonFields,
+  ...ApprovalResolutionFields,
+  status: Type.Literal("denied"),
+  decision: Type.Literal("deny"),
+  reason: ApprovalDeniedReasonSchema,
+});
 
 /** Approval that reached its deadline and therefore failed closed. */
-export const ExpiredApprovalSnapshotSchema = Type.Object(
-  {
-    ...ApprovalRecordCommonFields,
-    ...ApprovalResolutionFields,
-    status: Type.Literal("expired"),
-    reason: ApprovalExpiredReasonSchema,
-  },
-  { additionalProperties: false },
-);
+export const ExpiredApprovalSnapshotSchema = closedObject({
+  ...ApprovalRecordCommonFields,
+  ...ApprovalResolutionFields,
+  status: Type.Literal("expired"),
+  reason: ApprovalExpiredReasonSchema,
+});
 
 /** Approval cancelled by its runtime owner before a reviewer decision. */
-export const CancelledApprovalSnapshotSchema = Type.Object(
-  {
-    ...ApprovalRecordCommonFields,
-    ...ApprovalResolutionFields,
-    status: Type.Literal("cancelled"),
-    reason: ApprovalCancelledReasonSchema,
-  },
-  { additionalProperties: false },
-);
+export const CancelledApprovalSnapshotSchema = closedObject({
+  ...ApprovalRecordCommonFields,
+  ...ApprovalResolutionFields,
+  status: Type.Literal("cancelled"),
+  reason: ApprovalCancelledReasonSchema,
+});
 
 /** Durable approval projection returned identically to every authorized surface. */
 export const ApprovalSnapshotSchema = Type.Union([
@@ -197,35 +183,23 @@ export const TerminalApprovalSnapshotSchema = Type.Union([
 ]);
 
 /** Lookup payload for one approval by its exact full id. */
-export const ApprovalGetParamsSchema = Type.Object(
-  { id: ApprovalRecordCommonFields.id },
-  { additionalProperties: false },
-);
+export const ApprovalGetParamsSchema = closedObject({ id: ApprovalRecordCommonFields.id });
 
 /** Current durable state for one authorized approval lookup. */
-export const ApprovalGetResultSchema = Type.Object(
-  { approval: ApprovalSnapshotSchema },
-  { additionalProperties: false },
-);
+export const ApprovalGetResultSchema = closedObject({ approval: ApprovalSnapshotSchema });
 
 /** Reviewer decision for one approval identified by its exact full id. */
-export const ApprovalResolveParamsSchema = Type.Object(
-  {
-    id: ApprovalRecordCommonFields.id,
-    kind: ApprovalKindSchema,
-    decision: ApprovalDecisionSchema,
-  },
-  { additionalProperties: false },
-);
+export const ApprovalResolveParamsSchema = closedObject({
+  id: ApprovalRecordCommonFields.id,
+  kind: ApprovalKindSchema,
+  decision: ApprovalDecisionSchema,
+});
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
-export const ApprovalResolveResultSchema = Type.Object(
-  {
-    applied: Type.Boolean(),
-    approval: TerminalApprovalSnapshotSchema,
-  },
-  { additionalProperties: false },
-);
+export const ApprovalResolveResultSchema = closedObject({
+  applied: Type.Boolean(),
+  approval: TerminalApprovalSnapshotSchema,
+});
 
 const SessionApprovalEventCommonFields = {
   sessionKey: NonEmptyString,
@@ -234,24 +208,18 @@ const SessionApprovalEventCommonFields = {
 };
 
 /** Sanitized pending transition delivered only to an opted-in session audience. */
-export const PendingSessionApprovalEventSchema = Type.Object(
-  {
-    ...SessionApprovalEventCommonFields,
-    phase: Type.Literal("pending"),
-    approval: PendingApprovalSnapshotSchema,
-  },
-  { additionalProperties: false },
-);
+export const PendingSessionApprovalEventSchema = closedObject({
+  ...SessionApprovalEventCommonFields,
+  phase: Type.Literal("pending"),
+  approval: PendingApprovalSnapshotSchema,
+});
 
 /** Sanitized terminal transition delivered only to an opted-in session audience. */
-export const TerminalSessionApprovalEventSchema = Type.Object(
-  {
-    ...SessionApprovalEventCommonFields,
-    phase: Type.Literal("terminal"),
-    approval: TerminalApprovalSnapshotSchema,
-  },
-  { additionalProperties: false },
-);
+export const TerminalSessionApprovalEventSchema = closedObject({
+  ...SessionApprovalEventCommonFields,
+  phase: Type.Literal("terminal"),
+  approval: TerminalApprovalSnapshotSchema,
+});
 
 /** Sanitized approval transition delivered only to an opted-in session audience. */
 export const SessionApprovalEventSchema = Type.Union([
@@ -260,15 +228,12 @@ export const SessionApprovalEventSchema = Type.Union([
 ]);
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
-export const SessionApprovalReplaySchema = Type.Object(
-  {
-    sessionKey: NonEmptyString,
-    updatedAtMs: Type.Integer({ minimum: 0 }),
-    approvals: Type.Array(PendingApprovalSnapshotSchema),
-    truncated: Type.Boolean(),
-  },
-  { additionalProperties: false },
-);
+export const SessionApprovalReplaySchema = closedObject({
+  sessionKey: NonEmptyString,
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+  approvals: Type.Array(PendingApprovalSnapshotSchema),
+  truncated: Type.Boolean(),
+});
 
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.

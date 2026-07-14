@@ -15,6 +15,7 @@ openclaw qr
 openclaw qr --setup-code-only
 openclaw qr --json
 openclaw qr --remote
+openclaw qr --limited
 openclaw qr --url wss://gateway.example/ws
 ```
 
@@ -34,24 +35,30 @@ openclaw devices approve <requestId>
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
+- `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
 `--token` and `--password` are mutually exclusive.
 
 ## Setup code contents
 
-The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. The built-in bootstrap flow issues:
+The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. For a `wss://` endpoint (or same-host loopback), the default bootstrap flow issues:
 
 - a primary `node` token with `scopes: []`
-- a bounded `operator` handoff token limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
+- a full native-mobile `operator` handoff token with `operator.admin`, `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
 
-Pairing-mutation scopes and `operator.admin` still require a separate approved operator pairing or token flow.
+Use `--limited` to keep the same node token while omitting `operator.admin` from the operator handoff. Pairing-mutation scope is never handed off by a setup code.
+
+Plaintext LAN `ws://` setup remains available, but OpenClaw automatically uses
+the limited profile because a network observer could capture and race the bearer
+bootstrap token. Configure `wss://` or Tailscale Serve, then generate a new code
+to get full access.
 
 ## Gateway URL resolution
 
-Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`.
+Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
 
 When the selected Gateway URL comes from `gateway.bind=lan`, OpenClaw also checks persistent `tailscale serve status --json` routes. Any HTTPS Serve root that proxies the active Gateway's loopback port is included as a fallback. The QR command adds this fallback only for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. Current iOS clients probe the advertised routes in order and save the first reachable one; the legacy `url` field remains unchanged for older clients.
 

@@ -3,20 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
-import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
-import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   evaluateSessionFreshness,
+  getSessionEntry,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveStorePath,
   resolveThreadFlag,
-} from "./config.runtime.js";
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   debugMention,
   isBotMentionedFromTargets,

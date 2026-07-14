@@ -21,7 +21,7 @@ const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
 };
 
 /** Normalize a kind field to an array for uniform iteration. */
-export function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
+function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
   if (!kind) {
     return [];
   }
@@ -47,7 +47,7 @@ export function kindsEqual(
 }
 
 /** Return all slot keys that a plugin's kind field maps to. */
-export function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[] {
+function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[] {
   return normalizeKinds(kind)
     .map((k) => SLOT_BY_KIND[k])
     .filter((k): k is PluginSlotKey => k != null);
@@ -58,7 +58,7 @@ export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
   return DEFAULT_SLOT_BY_KEY[slotKey];
 }
 
-export type SlotSelectionResult = {
+type SlotSelectionResult = {
   config: OpenClawConfig;
   warnings: string[];
   changed: boolean;

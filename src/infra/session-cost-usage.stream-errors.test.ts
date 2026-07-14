@@ -7,11 +7,8 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  loadCostUsageSummaryFromCache,
-  loadSessionLogs,
-  refreshCostUsageCache,
-} from "./session-cost-usage.js";
+import { readSessionCostUsageCacheJson } from "./session-cost-usage-cache.sqlite.js";
+import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -53,7 +50,7 @@ describe("session cost usage stream errors", () => {
     expect(logs).toEqual([]);
   });
 
-  it("does not persist a partial durable cache entry after a stream error", async () => {
+  it("does not persist a partial durable cache entry after a background stream error", async () => {
     const tempDir = tempDirs.make("openclaw-session-cost-cache-stream-");
     const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -70,9 +67,15 @@ describe("session cost usage stream errors", () => {
     await fs.writeFile(sessionFile, `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`, "utf-8");
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-      await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cacheBefore = await fs.readFile(cachePath, "utf-8");
+      const range = {
+        startMs: Date.UTC(2026, 6, 6),
+        endMs: Date.UTC(2026, 6, 7),
+      };
+      await loadCostUsageSummaryFromCache({
+        ...range,
+        refreshMode: "sync-when-empty",
+      });
+      const cacheBefore = readSessionCostUsageCacheJson();
 
       const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
       await fs.appendFile(sessionFile, appendedEntry, "utf-8");
@@ -85,16 +88,18 @@ describe("session cost usage stream errors", () => {
         return stream as unknown as nodeFs.ReadStream;
       });
 
-      await expect(refreshCostUsageCache()).rejects.toThrow("stream read failed");
-      expect(await fs.readFile(cachePath, "utf-8")).toBe(cacheBefore);
+      await loadCostUsageSummaryFromCache(range);
+      let summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+      await vi.waitFor(
+        async () => {
+          summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+          expect(summary.cacheStatus?.status).toBe("partial");
+        },
+        { interval: 5, timeout: 1_000 },
+      );
 
-      const summary = await loadCostUsageSummaryFromCache({
-        startMs: Date.UTC(2026, 6, 6),
-        endMs: Date.UTC(2026, 6, 7),
-        requestRefresh: false,
-      });
+      expect(readSessionCostUsageCacheJson()).toBe(cacheBefore);
       expect(summary.totals.totalTokens).toBe(10);
-      expect(summary.cacheStatus?.status).toBe("partial");
       expect(summary.cacheStatus?.pendingFiles).toBe(1);
     });
   });

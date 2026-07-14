@@ -13,10 +13,11 @@ import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_ACPX_LEASE_ID_ENV,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
 } from "./process-lease.js";
+
+const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
 
 function makeLease(index: number): AcpxProcessLease {
   return {

@@ -102,7 +102,7 @@ export function resolveBackgroundTaskContext(params: {
   requestId: string;
   text: string;
 }): BackgroundTaskContext | null {
-  const childEntry = params.deps.readSessionEntry({
+  const childEntry = params.deps.loadSessionEntry({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   })?.entry;
@@ -111,7 +111,7 @@ export function resolveBackgroundTaskContext(params: {
   if (!requesterSessionKey) {
     return null;
   }
-  const parentEntry = params.deps.readSessionEntry({
+  const parentEntry = params.deps.loadSessionEntry({
     cfg: params.cfg,
     sessionKey: requesterSessionKey,
   })?.entry;

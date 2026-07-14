@@ -15,18 +15,21 @@ import {
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import {
-  archiveLocalCodexSession,
-  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
-  continueLocalCodexSession,
+  codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
-  listCodexSessionCatalog,
-  registerCodexSessionCatalog,
-  readCodexSessionTranscript,
-  type CodexSessionCatalogControl,
 } from "./session-catalog.js";
+
+const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
+const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+type CodexSessionCatalogControl = ReturnType<typeof createCodexSessionCatalogControl>;
+
+const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
+const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
+const listCodexSessionCatalog = codexSessionCatalogRuntime.list;
+const readCodexSessionTranscript = codexSessionCatalogRuntime.readTranscript;
+const registerCodexSessionCatalog = codexSessionCatalogRuntime.register;
 
 const commandRpcMocks = vi.hoisted(() => ({
   codexControlRequest: vi.fn(),

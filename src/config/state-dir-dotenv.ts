@@ -108,15 +108,13 @@ export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDir
  * a filtered record of key-value pairs suitable for a managed service
  * environment source.
  */
-export function readStateDirDotEnvVars(
-  env: Record<string, string | undefined>,
-): Record<string, string> {
+function readStateDirDotEnvVars(env: Record<string, string | undefined>): Record<string, string> {
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
   return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
 
 /** Split view of durable gateway service env sources before precedence is applied. */
-export type DurableServiceEnvVarSources = {
+type DurableServiceEnvVarSources = {
   stateDirDotEnvEnvironment: Record<string, string>;
   configEnvironment: Record<string, string>;
   durableEnvironment: Record<string, string>;

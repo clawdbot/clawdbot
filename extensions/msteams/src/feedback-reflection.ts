@@ -10,9 +10,7 @@ import { formatUnknownError } from "./errors.js";
 import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
 import {
   DEFAULT_COOLDOWN_MS,
-  clearReflectionCooldowns,
   isReflectionAllowed,
-  loadSessionLearnings,
   recordReflectionTime,
   storeSessionLearning,
 } from "./feedback-reflection-store.js";
@@ -261,12 +259,3 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }
 }
-
-export {
-  buildReflectionPrompt,
-  clearReflectionCooldowns,
-  isReflectionAllowed,
-  loadSessionLearnings,
-  parseReflectionResponse,
-  recordReflectionTime,
-};

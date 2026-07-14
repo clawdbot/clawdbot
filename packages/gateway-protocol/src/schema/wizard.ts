@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /** Runtime state reported for gateway-driven setup wizard sessions. */
@@ -12,39 +13,32 @@ const WizardRunStatusSchema = Type.Union([
 ]);
 
 /** Starts a setup wizard, optionally scoped to a local or remote workspace. */
-export const WizardStartParamsSchema = Type.Object(
-  {
-    mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
-    workspace: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+export const WizardStartParamsSchema = closedObject({
+  mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
+  workspace: Type.Optional(Type.String()),
+  // "setup" (default) runs full onboarding; "channels" runs the guided
+  // channel-setup flow (openclaw channels add) over the same step protocol.
+  flow: Type.Optional(Type.Union([Type.Literal("setup"), Type.Literal("channels")])),
+  // Preselected channel id for flow "channels" (e.g. "telegram").
+  channel: Type.Optional(NonEmptyString),
+});
 
 /** Client answer payload for the current wizard step. */
-export const WizardAnswerSchema = Type.Object(
-  {
-    stepId: NonEmptyString,
-    value: Type.Optional(Type.Unknown()),
-  },
-  { additionalProperties: false },
-);
+export const WizardAnswerSchema = closedObject({
+  stepId: NonEmptyString,
+  value: Type.Optional(Type.Unknown()),
+});
 
 /** Advances a wizard session, with an answer when the previous step requested input. */
-export const WizardNextParamsSchema = Type.Object(
-  {
-    sessionId: NonEmptyString,
-    answer: Type.Optional(WizardAnswerSchema),
-  },
-  { additionalProperties: false },
-);
+export const WizardNextParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  answer: Type.Optional(WizardAnswerSchema),
+});
 
 /** Shared session-id-only params for cancel and status requests. */
-const WizardSessionIdParamsSchema = Type.Object(
-  {
-    sessionId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+const WizardSessionIdParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+});
 
 /** Cancels an active wizard session. */
 export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
@@ -53,50 +47,47 @@ export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
 export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
 /** Selectable value shown in a choice-based wizard step. */
-export const WizardStepOptionSchema = Type.Object(
-  {
-    value: Type.Unknown(),
-    label: NonEmptyString,
-    hint: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+export const WizardStepOptionSchema = closedObject({
+  value: Type.Unknown(),
+  label: NonEmptyString,
+  hint: Type.Optional(Type.String()),
+});
 
-const WizardDeviceCodeSchema = Type.Object(
-  {
-    code: NonEmptyString,
-    expiresInMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
-    message: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+const WizardDeviceCodeSchema = closedObject({
+  code: NonEmptyString,
+  expiresInMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
+  message: Type.Optional(Type.String()),
+});
 
 /** UI contract for one wizard step rendered by gateway clients. */
-export const WizardStepSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    type: Type.Union([
-      Type.Literal("note"),
-      Type.Literal("select"),
-      Type.Literal("text"),
-      Type.Literal("confirm"),
-      Type.Literal("multiselect"),
-      Type.Literal("progress"),
-      Type.Literal("action"),
-    ]),
-    title: Type.Optional(Type.String()),
-    message: Type.Optional(Type.String()),
-    format: Type.Optional(Type.Union([Type.Literal("plain")])),
-    options: Type.Optional(Type.Array(WizardStepOptionSchema)),
-    initialValue: Type.Optional(Type.Unknown()),
-    placeholder: Type.Optional(Type.String()),
-    sensitive: Type.Optional(Type.Boolean()),
-    executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
-    externalUrl: Type.Optional(Type.String()),
-    deviceCode: Type.Optional(WizardDeviceCodeSchema),
-  },
-  { additionalProperties: false },
-);
+export const WizardStepSchema = closedObject({
+  id: NonEmptyString,
+  type: Type.Union([
+    Type.Literal("note"),
+    Type.Literal("select"),
+    Type.Literal("text"),
+    Type.Literal("confirm"),
+    Type.Literal("multiselect"),
+    Type.Literal("progress"),
+    Type.Literal("action"),
+  ]),
+  title: Type.Optional(Type.String()),
+  message: Type.Optional(Type.String()),
+  format: Type.Optional(Type.Union([Type.Literal("plain")])),
+  options: Type.Optional(Type.Array(WizardStepOptionSchema)),
+  initialValue: Type.Optional(Type.Unknown()),
+  placeholder: Type.Optional(Type.String()),
+  sensitive: Type.Optional(Type.Boolean()),
+  executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
+  externalUrl: Type.Optional(Type.String()),
+  deviceCode: Type.Optional(WizardDeviceCodeSchema),
+});
+
+/** Channel/account pair the channels flow actually configured. */
+const WizardConfiguredAccountSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+});
 
 /** Common response fields for start and next calls. */
 const WizardResultFields = {
@@ -104,30 +95,28 @@ const WizardResultFields = {
   step: Type.Optional(WizardStepSchema),
   status: Type.Optional(WizardRunStatusSchema),
   error: Type.Optional(Type.String()),
+  // What the flow actually configured; set on the terminal result of
+  // wizard.start flow "channels" sessions so clients run channel-specific
+  // completion (e.g. WhatsApp QR linking for the right account) from the
+  // real outcome rather than the preselection.
+  channels: Type.Optional(Type.Array(NonEmptyString)),
+  accounts: Type.Optional(Type.Array(WizardConfiguredAccountSchema)),
 };
 
 /** Result after advancing a wizard session. */
-export const WizardNextResultSchema = Type.Object(WizardResultFields, {
-  additionalProperties: false,
-});
+export const WizardNextResultSchema = closedObject(WizardResultFields);
 
 /** Result returned when a wizard session is created. */
-export const WizardStartResultSchema = Type.Object(
-  {
-    sessionId: NonEmptyString,
-    ...WizardResultFields,
-  },
-  { additionalProperties: false },
-);
+export const WizardStartResultSchema = closedObject({
+  sessionId: NonEmptyString,
+  ...WizardResultFields,
+});
 
 /** Minimal status poll result used when the client does not need the next step. */
-export const WizardStatusResultSchema = Type.Object(
-  {
-    status: WizardRunStatusSchema,
-    error: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+export const WizardStatusResultSchema = closedObject({
+  status: WizardRunStatusSchema,
+  error: Type.Optional(Type.String()),
+});
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.

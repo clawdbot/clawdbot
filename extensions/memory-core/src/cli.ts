@@ -29,7 +29,7 @@ const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
-export async function runMemoryStatus(
+async function runMemoryStatus(
   opts: MemoryCommandOptions,
   hostOptions?: MemoryCoreLocalServiceHost,
 ) {

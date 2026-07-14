@@ -2,6 +2,7 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
 import { parseCustomId, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
@@ -15,13 +16,7 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", async (importOriginal) =
   };
 });
 
-import {
-  ExecApprovalButton,
-  buildExecApprovalCustomId,
-  createDiscordExecApprovalButtonContext,
-  extractDiscordChannelId,
-  parseExecApprovalData,
-} from "./exec-approvals.js";
+import { ExecApprovalButton, createDiscordExecApprovalButtonContext } from "./exec-approvals.js";
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>["execApprovals"],
@@ -91,13 +86,6 @@ describe("discord exec approval monitor helpers", () => {
     expect(parseExecApprovalData({ id: "abc", action: "deny" })).toBeNull();
     expect(parseExecApprovalData({ kind: "exec", id: "%zz", action: "deny" })).toBeNull();
     expect(parseExecApprovalData({ kind: "plugin", action: "deny" } as ComponentData)).toBeNull();
-  });
-
-  it("extracts discord channel ids from session keys", () => {
-    expect(extractDiscordChannelId("agent:main:discord:channel:123456789")).toBe("123456789");
-    expect(extractDiscordChannelId("agent:main:discord:group:222333444")).toBe("222333444");
-    expect(extractDiscordChannelId("agent:main:telegram:channel:123456789")).toBeNull();
-    expect(extractDiscordChannelId("")).toBeNull();
   });
 
   it("rejects invalid approval button payloads", async () => {

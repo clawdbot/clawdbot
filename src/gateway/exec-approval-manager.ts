@@ -56,7 +56,7 @@ type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 // Distinguishes operator decisions from trusted auto-review resolutions.
 // system.run replay validation is stricter for auto-review approvals, so this
 // runtime fact must survive on the process-local record (bindings never persist).
-export type ExecApprovalResolutionSource = "operator" | "auto-review";
+type ExecApprovalResolutionSource = "operator" | "auto-review";
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
@@ -83,12 +83,12 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   consumedBy?: string | null;
 };
 
-export type OperatorApprovalPersistenceRuntime = {
+type OperatorApprovalPersistenceRuntime = {
   runtimeEpoch: string;
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
 
-export type ExecApprovalManagerOptions<TPayload> = {
+type ExecApprovalManagerOptions<TPayload> = {
   approvalKind?: OperatorApprovalKind;
   persistence?: OperatorApprovalPersistenceRuntime;
   resolveAllowedDecisions?: (request: TPayload) => readonly ExecApprovalDecision[];
@@ -115,17 +115,17 @@ type WithLiveRecord<TResult, TPayload> = TResult extends { record: OperatorAppro
   ? TResult & { liveRecord?: ExecApprovalRecord<TPayload> }
   : TResult;
 
-export type ExecApprovalResolveResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
+type ExecApprovalResolveResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
   ResolveOperatorApprovalResult,
   TPayload
 >;
 
-export type ExecApprovalForceDenyResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
+type ExecApprovalForceDenyResult<TPayload = ExecApprovalRequestPayload> = WithLiveRecord<
   ForceDenyOperatorApprovalResult,
   TPayload
 >;
 
-export type ExecApprovalDurableLookup =
+type ExecApprovalDurableLookup =
   | { outcome: "found"; record: OperatorApprovalRecord }
   | { outcome: "missing" | "corrupt"; id: string };
 

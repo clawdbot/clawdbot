@@ -97,21 +97,26 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
 
 /** Formats a redaction-safe migration preview for terminal output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
+  const safePlan = redactMigrationPlan(plan);
   return [
-    ...formatPlanHeader(plan, "Migration preview:"),
-    ...formatPlanItems(plan, "preview"),
-    ...formatPlanWarnings(plan),
+    ...formatPlanHeader(safePlan, "Migration preview:"),
+    ...formatPlanItems(safePlan, "preview"),
+    ...formatPlanWarnings(safePlan),
   ];
 }
 
-/** Formats migration apply results for terminal output. */
+/** Formats redaction-safe migration apply results for terminal output. */
 export function formatMigrationResult(plan: MigrationPlan): string[] {
-  const lines = [...formatPlanHeader(plan, "Migration plan:"), ...formatPlanItems(plan, "result")];
-  if (plan.nextSteps && plan.nextSteps.length > 0) {
+  const safePlan = redactMigrationPlan(plan);
+  const lines = [
+    ...formatPlanHeader(safePlan, "Migration plan:"),
+    ...formatPlanItems(safePlan, "result"),
+  ];
+  if (safePlan.nextSteps && safePlan.nextSteps.length > 0) {
     lines.push("");
     lines.push(theme.heading("Next:"));
-    for (const step of plan.nextSteps) {
-      const prefix = plan.warnings?.includes(step) ? "⚠️ " : "•";
+    for (const step of safePlan.nextSteps) {
+      const prefix = safePlan.warnings?.includes(step) ? "⚠️ " : "•";
       lines.push(`${prefix} ${step}`);
     }
   }

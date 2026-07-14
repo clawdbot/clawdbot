@@ -85,7 +85,7 @@ deprecated for new code; see the per-row notes below.
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
     | `plugin-sdk/json-schema-runtime` | Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
@@ -226,7 +226,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
-    | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports for non-TTS channel/plugin secret surfaces |
+    | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and plan-target path lookup for secret-contract/config parsing |
     | `plugin-sdk/secret-provider-integration` | Type-only SecretRef provider integration manifest and preset contracts for plugins that publish external secret provider presets |
@@ -336,6 +336,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
+    | `plugin-sdk/text-utility-runtime` | Low-level text and path helpers, including five-entity HTML escaping |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |
@@ -351,7 +352,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
-    | `plugin-sdk/text-chunking` | Outbound text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
+    | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |

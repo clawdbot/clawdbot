@@ -39,15 +39,15 @@ const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 
 // Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
-const NODE_VERSION_CHECK_JS = String.raw`const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(process.versions.node);
-if (!match) process.exit(1);
-const major = Number(match[1]);
-const minor = Number(match[2]);
-const supported =
-  (major === 22 && minor >= 19) ||
-  (major === 23 && minor >= 11) ||
-  major >= 24;
-process.exit(supported ? 0 : 1);`;
+const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
+const node = parse(process.versions.node); if (!node) process.exit(1);
+const nodeSafe = (node[0] === 22 && atLeast(node, [22, 22, 3])) || (node[0] === 24 && atLeast(node, [24, 15, 0])) || (node[0] === 25 && atLeast(node, [25, 9, 0])) || node[0] >= 26;
+if (!nodeSafe) process.exit(1);
+try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
+  const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
+  db.close(); if (!sqlite) process.exit(1);
+  const sqliteSafe = atLeast(sqlite, [3, 51, 3]) || (sqlite[0] === 3 && ((sqlite[1] === 50 && sqlite[2] >= 7) || (sqlite[1] === 44 && sqlite[2] >= 6)));
+  process.exit(sqliteSafe ? 0 : 1); } catch { process.exit(1); }`;
 
 const RECEIPT_MATCH_JS = String.raw`const fs = require("node:fs");
 try {
@@ -200,6 +200,16 @@ try {
     readNpmInventory();
   } else if (install === "bundle") {
     walk("dist");
+    // Vendored workspace packages ship inside the bundle and are part of its hash;
+    // node_modules is installed after verification and never walked here.
+    const vendorPath = path.join(root, "vendor");
+    const vendorStats = fs.existsSync(vendorPath) ? fs.lstatSync(vendorPath) : undefined;
+    if (vendorStats) {
+      if (vendorStats.isSymbolicLink() || !vendorStats.isDirectory()) {
+        fail("unsafe worker vendor directory");
+      }
+      walk("vendor");
+    }
   } else {
     fail("invalid worker install channel");
   }
@@ -248,7 +258,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit ${NODE_MISSING_EXIT_CODE}
 fi
 
-if ! node -e '${NODE_VERSION_CHECK_JS}'; then
+if ! node -e '${NODE_RUNTIME_CHECK_JS}'; then
   printf '%s: ' '${NODE_UNSUPPORTED_MARKER}' >&2
   node --version >&2 || true
   exit ${NODE_UNSUPPORTED_EXIT_CODE}
@@ -465,6 +475,15 @@ if ! node -e '${VERIFY_INSTALL_JS}' "$staging" "$hash" "$install"; then
   printf '%s\n' 'worker install content does not match the expected bundle hash' >&2
   exit 2
 fi
+# Materialize production dependencies only after the pristine bundle passed its
+# integrity check; npm install writes node_modules the hash intentionally excludes.
+if [ "$install" = bundle ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    printf '%s\n' '${NPM_MISSING_MARKER}' >&2
+    exit ${NPM_MISSING_EXIT_CODE}
+  fi
+  OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
+fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
 rm -rf "$install_dir"
@@ -474,21 +493,21 @@ cat "$receipt"
 printf '\n'
 `;
 
-export type ResolvedWorkerSshIdentity = WorkerSshIdentity;
+type ResolvedWorkerSshIdentity = WorkerSshIdentity;
 
-export type WorkerBootstrapCommandRunner = (
+type WorkerBootstrapCommandRunner = (
   argv: string[],
   options: CommandOptions,
 ) => Promise<SpawnResult>;
 
-export type WorkerBootstrapRequest = {
+type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
   /** Provider endpoint host key copied by the gateway bootstrap adapter. */
   pinnedHostKey?: string;
 };
 
-export type WorkerBootstrapDependencies = {
+type WorkerBootstrapDependencies = {
   resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
@@ -651,7 +670,7 @@ function parsePreflight(
     result.stdout.includes(NODE_UNSUPPORTED_MARKER)
   ) {
     throw new Error(
-      "Worker bootstrap requires Node 22.19+, 23.11+, or 24+ on the leased host; install a supported Node runtime in the provider setup phase and retry",
+      "Worker bootstrap requires Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
   }
   if (!isSuccess(result)) {

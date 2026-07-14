@@ -7,7 +7,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
 } from "./embedded-agent-helpers/failover-matches.js";
-import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,

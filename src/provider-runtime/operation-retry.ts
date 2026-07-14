@@ -1,6 +1,7 @@
 // Provider operation retry helpers run retryable provider operations with backoff.
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
 
 export type ProviderOperationRetryStage = "read" | "poll" | "download" | "create";
 
@@ -103,13 +104,20 @@ function readErrorCause(error: unknown): unknown {
   return (error as { cause?: unknown }).cause;
 }
 
+// Provider reads get one bounded retry for negative DNS responses. Gateway
+// waits exclude ENOTFOUND because their configured gateway address needs repair.
+const PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE = /\bENOTFOUND\b/i;
+
+function hasProviderRetryableNetworkCode(value: string): boolean {
+  return hasRetryableConnectionErrorCode(value) || PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE.test(value);
+}
+
 function hasTransientNetworkSignal(error: unknown, message: string): boolean {
-  const transientCodes = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b/i;
-  if (transientCodes.test(message)) {
+  if (hasProviderRetryableNetworkCode(message)) {
     return true;
   }
   const code = readErrorCode(error);
-  if (code && transientCodes.test(code)) {
+  if (code && hasProviderRetryableNetworkCode(code)) {
     return true;
   }
   const cause = readErrorCause(error);
@@ -117,11 +125,11 @@ function hasTransientNetworkSignal(error: unknown, message: string): boolean {
     return false;
   }
   const causeCode = readErrorCode(cause);
-  if (causeCode && transientCodes.test(causeCode)) {
+  if (causeCode && hasProviderRetryableNetworkCode(causeCode)) {
     return true;
   }
   const causeMessage = formatErrorMessage(cause);
-  return transientCodes.test(causeMessage);
+  return hasProviderRetryableNetworkCode(causeMessage);
 }
 
 function hasTimeoutSignal(error: unknown, message: string): boolean {

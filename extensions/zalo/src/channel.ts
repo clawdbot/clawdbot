@@ -14,15 +14,18 @@ import {
   createChatChannelPlugin,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  defineChannelMessageAdapter,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createEmptyChannelResult,
-  createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -82,27 +85,32 @@ const zaloSetupWizard = createZaloSetupWizardProxy(
 );
 const zaloTextChunkLimit = 2000;
 
-const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
+async function sendZaloDelivery(ctx: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  mediaUrl?: string;
+}): Promise<{ messageId: string; receipt: MessageReceipt }> {
+  const result = await (
+    await loadZaloChannelRuntime()
+  ).sendZaloText({
+    to: ctx.to,
+    text: ctx.text,
+    accountId: ctx.accountId ?? undefined,
+    mediaUrl: ctx.mediaUrl,
+    cfg: ctx.cfg,
+  });
+  if (!result.ok) {
+    throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
+  }
+  return { messageId: result.messageId ?? "", receipt: result.receipt };
+}
+
+const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   channel: "zalo",
-  sendText: async ({ to, text, accountId, cfg }) =>
-    await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      cfg,
-    }),
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) =>
-    await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      mediaUrl,
-      cfg,
-    }),
+  sendText: sendZaloDelivery,
+  sendMedia: sendZaloDelivery,
 });
 
 export const zaloMessageAdapter = defineChannelMessageAdapter({
@@ -115,25 +123,8 @@ export const zaloMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ to, text, accountId, cfg }) =>
-      await (
-        await loadZaloChannelRuntime()
-      ).sendZaloText({
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        cfg,
-      }),
-    media: async ({ to, text, mediaUrl, accountId, cfg }) =>
-      await (
-        await loadZaloChannelRuntime()
-      ).sendZaloText({
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        mediaUrl,
-        cfg,
-      }),
+    text: sendZaloDelivery,
+    media: sendZaloDelivery,
   },
 });
 
@@ -303,11 +294,11 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           ctx,
           textChunkLimit: zaloTextChunkLimit,
           chunker: chunkTextForOutbound,
-          sendText: (nextCtx) => zaloRawSendResultAdapter.sendText!(nextCtx),
-          sendMedia: (nextCtx) => zaloRawSendResultAdapter.sendMedia!(nextCtx),
+          sendText: (nextCtx) => zaloSendResultAdapter.sendText!(nextCtx),
+          sendMedia: (nextCtx) => zaloSendResultAdapter.sendMedia!(nextCtx),
           emptyResult: createEmptyChannelResult("zalo"),
           onResult: ctx.onDeliveryResult,
         }),
-      ...zaloRawSendResultAdapter,
+      ...zaloSendResultAdapter,
     },
   });

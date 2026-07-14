@@ -12,7 +12,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;

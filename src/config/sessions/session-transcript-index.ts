@@ -81,7 +81,7 @@ function readMessageText(message: unknown): string | undefined {
  * assistant message text is indexed; tool results, reasoning blocks, and
  * images stay out of the index by construction.
  */
-export function extractTranscriptIndexEntry(
+function extractTranscriptIndexEntry(
   event: unknown,
   fallbackTimestamp: number,
 ): TranscriptIndexEntry | undefined {

@@ -26,7 +26,7 @@ function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
   return `openclaw-anthropic-vertex-simple:${suffix}`;
 }
 
-function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
+export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
   const normalized = baseUrl?.trim().replace(/\/+$/u, "") || "https://chatgpt.com/backend-api";
   try {
     const parsed = new URL(normalized);

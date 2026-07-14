@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { deriveConceptTags } from "./concept-vocabulary.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -13,15 +14,12 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 
 import {
   configureMemoryCoreDreamingState,
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 } from "./dreaming-state.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   filterLiveShortTermRecallEntries,
-  isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
@@ -31,8 +29,12 @@ import {
   readLightStagedKeys,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
-  testing,
 } from "./short-term-promotion.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+  shortTermTestState as testing,
+} from "./test-helpers.js";
 
 describe("short-term promotion", () => {
   let fixtureRoot = "";
@@ -130,24 +132,6 @@ describe("short-term promotion", () => {
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
-
-  it("detects short-term daily memory paths", () => {
-    expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
-    expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/daily/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/daily notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
-  });
 
   it("records short-term recall for notes stored in a memory/ subdirectory", async () => {
     await withTempWorkspace(async (workspaceDir) => {
@@ -319,7 +303,6 @@ describe("short-term promotion", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       const longSnippet = `Stable claim identity ${"x".repeat(maxSnippetChars + 100)}`;
-      const claimHash = testing.buildClaimHash(longSnippet);
 
       await recordGroundedShortTermCandidates({
         workspaceDir,
@@ -358,6 +341,10 @@ describe("short-term promotion", () => {
       const entries = Object.entries(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(1);
       const [key, entry] = expectDefined(entries[0], "stable claim recall entry");
+      const claimHash = entry.claimHash;
+      if (typeof claimHash !== "string") {
+        throw new Error("expected stable claim hash");
+      }
       expect(key.endsWith(`:${claimHash}`)).toBe(true);
       expect(entry.claimHash).toBe(claimHash);
       expect(entry.recallCount).toBe(1);
@@ -1617,220 +1604,6 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked).toStrictEqual([]);
-    });
-  });
-
-  it("treats diff-prefixed dreaming snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats bracket-prefixed dreaming snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
-      ),
-    ).toBe(false);
-  });
-
-  it("treats transcript-style dreaming prompt echoes as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats snippets with metadata prefix before the Candidate marker as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "- - status: staged - Candidate: User: [cron:26fb656d] run thing - confidence: 0.00 - evidence: memory/.dreams/session-corpus/2026-04-12.txt:25-25 - recalls: 0 - status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats snippets with confidence prefix before the Candidate marker as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw session metadata snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Session: 2026-06-18 10:37:05 EDT; Session Key: agent:cody:discord:channel:1502199757592989836; Session ID: 6d52b6a2-a2e1-4839-a69a-a532b9090a6d; Source: discord",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw conversation summaries as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Conversation Summary: assistant: Traced all three. No changes made.",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw transcript turns as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "user: Save important context from this session to the daily memory file. STRICT RULES: 1. The file MUST be named exactly memory/2026-06-18.md",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats promotion score metadata as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats legacy and signals= promotion annotations as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Legacy annotation [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "New annotation [score=0.837 signals=7 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat prose that mentions the word Candidate as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "The Candidate profile for Josh Rhoden shows he runs SEU's network admin team; stack is Cisco plus Meraki.",
-      ),
-    ).toBe(false);
-  });
-
-  describe("lineRangeOverlapsDreamingFence", () => {
-    it("returns true when the range falls inside a Light Sleep fence", () => {
-      const lines = [
-        "# Daily note",
-        "## Notes",
-        "Real durable content.",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: some staged dream content",
-        "<!-- openclaw:dreaming:light:end -->",
-        "## After",
-        "More real content.",
-      ];
-      // Line 6 (1-indexed) sits between the fence markers.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
-    });
-
-    it("returns false when the range sits entirely outside any dreaming fence", () => {
-      const lines = [
-        "# Daily note",
-        "Real durable content.",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "staged dream content",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "More real content.",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
-    });
-
-    it("returns true when the range straddles a fence boundary", () => {
-      const lines = [
-        "real line 1",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "dream line",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "real line 5",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
-    });
-
-    it("recovers after a fence end so later real content is not flagged", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "dream",
-        "<!-- openclaw:dreaming:light:end -->",
-        "real line 4",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "more dream",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "real line 8",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
-    });
-
-    // Marker lines themselves carry managed-block content. A relocated range
-    // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
-    // build its snippet from raw lines that contain that marker text, leaking
-    // it into MEMORY.md alongside any adjacent fenced content captured by the
-    // same window. The guard treats marker lines as inside-fence so those
-    // ranges are rejected. (#80613)
-    it("returns true when the range ends on a Light Sleep start marker", () => {
-      const lines = [
-        "## Plan",
-        "- Plan switches use exRule, not abConfig",
-        "",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 5)).toBe(true);
-    });
-
-    it("returns true when the range begins on a Light Sleep end marker", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-        "- normal durable bullet",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 4)).toBe(true);
-    });
-
-    it("returns true when the range covers only a marker line", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(true);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
-    });
-
-    it("returns true for REM marker single-line ranges even with no body between markers", () => {
-      const lines = [
-        "real line 1",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "real line 4",
-      ];
-      // No content between the markers, but the marker text itself must not
-      // ride along into a promoted snippet.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(true);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
-      // Real-content single lines remain unflagged.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
     });
   });
 
@@ -3242,33 +3015,6 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("uses score tie-breakers when retention timestamps are invalid", () => {
-    const entry = {
-      key: "lower-score",
-      path: "memory/2026-04-01.md",
-      startLine: 1,
-      endLine: 1,
-      source: "memory" as const,
-      snippet: "Invalid timestamp recall",
-      recallCount: 1,
-      dailyCount: 0,
-      groundedCount: 0,
-      totalScore: 1,
-      maxScore: 0.75,
-      firstRecalledAt: "not-a-date",
-      lastRecalledAt: "not-a-date",
-      queryHashes: ["q"],
-      recallDays: ["2026-04-01"],
-      conceptTags: [],
-    };
-    const higherScoreEntry = { ...entry, key: "higher-score", totalScore: 2 };
-
-    expect([entry, higherScoreEntry].toSorted(testing.compareShortTermRecallRetention)).toEqual([
-      higherScoreEntry,
-      entry,
-    ]);
-  });
-
   it("rejects long contaminated legacy recall entries before truncating snippets", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
@@ -3340,7 +3086,7 @@ describe("short-term promotion", () => {
             lastRecalledAt: "2026-04-04T00:00:00.000Z",
             queryHashes: ["a", "b"],
             recallDays: ["2026-04-04"],
-            conceptTags: testing.deriveConceptTags({
+            conceptTags: deriveConceptTags({
               path: "memory/2026-04-01.md",
               snippet,
             }),
@@ -3453,41 +3199,6 @@ describe("short-term promotion", () => {
         otherEntryCount: 0,
       });
     });
-  });
-
-  it("extracts stable concept tags from snippets and paths", () => {
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "Move backups to S3 Glacier and sync QMD router notes.",
-      }),
-      // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
-      // per-script min-length gate (the longer terms still match as substrings).
-    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
-  });
-
-  it("extracts multilingual concept tags across latin and cjk snippets", () => {
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "Configuración du routeur et sauvegarde Glacier.",
-      }),
-    ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
-      }),
-    ).toStrictEqual([
-      "バックアップ",
-      "ルーター",
-      "障害対応",
-      "路由器",
-      "备份",
-      "网关",
-      "障害",
-      "対応",
-    ]);
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {

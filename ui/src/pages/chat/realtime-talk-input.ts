@@ -87,23 +87,18 @@ export async function discoverRealtimeTalkInputs(
   }
 }
 
-export function realtimeTalkAudioConstraints(
-  inputDeviceId: string | undefined,
-  base: MediaTrackConstraints | true = true,
-): MediaTrackConstraints | true {
+function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaTrackConstraints {
   const deviceId = inputDeviceId?.trim();
-  if (!deviceId) {
-    return base;
-  }
   return {
-    ...(base === true ? {} : base),
-    deviceId: { exact: deviceId },
+    autoGainControl: true,
+    echoCancellation: true,
+    noiseSuppression: true,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
   };
 }
 
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
-  base: MediaTrackConstraints | true = true,
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
@@ -111,7 +106,7 @@ export async function openRealtimeTalkInput(
   }
   try {
     return await devices.getUserMedia({
-      audio: realtimeTalkAudioConstraints(inputDeviceId, base),
+      audio: realtimeTalkAudioConstraints(inputDeviceId),
     });
   } catch (error) {
     if (

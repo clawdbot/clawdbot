@@ -76,7 +76,7 @@ export class PluginLruCache<T> {
 export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
 /** Promise loader that coalesces concurrent loads per config object and for the default scope. */
-export type ConfigScopedPromiseLoader<T> = {
+type ConfigScopedPromiseLoader<T> = {
   load(config?: OpenClawConfig): Promise<T>;
   clear(): void;
 };

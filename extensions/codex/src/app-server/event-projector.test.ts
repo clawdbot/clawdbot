@@ -22,11 +22,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerEventProjectorOptions,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -36,6 +32,10 @@ const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+type CodexAppServerEventProjectorOptions = ConstructorParameters<
+  typeof CodexAppServerEventProjector
+>[3];
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
@@ -272,6 +272,24 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
       turn: { id: TURN_ID, status, items },
     },
   } as ProjectorNotification;
+}
+
+function pendingCommandStarted(id: string): ProjectorNotification {
+  return forCurrentTurn("item/started", {
+    item: {
+      type: "commandExecution",
+      id,
+      command: "/bin/bash -lc 'sleep 600'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    },
+  });
 }
 
 describe("CodexAppServerEventProjector", () => {
@@ -1649,6 +1667,38 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
+  });
+
+  it("keeps missing tool detail without overriding an explicit abort", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-aborted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+    });
+  });
+
+  it("fails closed when interrupted status has no abort marker", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-interrupted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastToolError).toBeUndefined();
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {

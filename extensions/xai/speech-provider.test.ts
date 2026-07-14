@@ -5,11 +5,21 @@ import { buildXaiSpeechProvider } from "./speech-provider.js";
 const {
   xaiTTSMock,
   listXaiTtsVoicesMock,
+  xaiTTSStreamMock,
   isProviderAuthProfileConfiguredMock,
   resolveApiKeyForProviderMock,
 } = vi.hoisted(() => ({
   xaiTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
   listXaiTtsVoicesMock: vi.fn(async () => [{ id: "altair", name: "Altair" }]),
+  xaiTTSStreamMock: vi.fn(async () => ({
+    audioStream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    }),
+    release: vi.fn(async () => {}),
+  })),
   isProviderAuthProfileConfiguredMock: vi.fn(() => false),
   resolveApiKeyForProviderMock: vi.fn(
     async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
@@ -26,6 +36,7 @@ vi.mock("./tts.js", () => ({
   normalizeXaiTtsBaseUrl: (baseUrl?: string) =>
     baseUrl?.trim().replace(/\/+$/, "") || "https://api.x.ai/v1",
   xaiTTS: xaiTTSMock,
+  xaiTTSStream: xaiTTSStreamMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -66,6 +77,8 @@ function requireLastTtsCall(): {
 
 describe("xai speech provider", () => {
   afterEach(() => {
+    xaiTTSMock.mockClear();
+    xaiTTSStreamMock.mockClear();
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     resolveApiKeyForProviderMock.mockReset();
@@ -75,6 +88,67 @@ describe("xai speech provider", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.XAI_BASE_URL;
   });
+
+  it("forces self-describing mp3 for voice-note streaming", async () => {
+    const provider = buildXaiSpeechProvider();
+    const result = await provider.streamSynthesize?.({
+      text: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            mediaMaxMb: 2,
+          },
+        },
+      },
+      providerConfig: {
+        apiKey: "xai-key",
+        voiceId: "eve",
+        responseFormat: "pcm",
+      },
+      target: "voice-note",
+      timeoutMs: 5_000,
+    });
+
+    expect(result?.outputFormat).toBe("mp3");
+    expect(result?.fileExtension).toBe(".mp3");
+    expect(result?.voiceCompatible).toBe(false);
+    expect(result?.audioStream).toBeInstanceOf(ReadableStream);
+    const streamParams = (
+      xaiTTSStreamMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+    ).at(-1)?.[0];
+    expect(streamParams).toMatchObject({
+      text: "hello",
+      apiKey: "xai-key",
+      voiceId: "eve",
+      responseFormat: "mp3",
+      maxBytes: 2 * 1024 * 1024,
+    });
+    await result?.release?.();
+  });
+
+  it.each(["mp3", "wav", "pcm", "mulaw", "alaw"] as const)(
+    "streams %s when requested by a compatible caller",
+    async (responseFormat) => {
+      const provider = buildXaiSpeechProvider();
+
+      const result = await provider.streamSynthesize?.({
+        text: "hello",
+        cfg: {},
+        providerConfig: {
+          apiKey: "xai-key",
+          responseFormat,
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      });
+      expect(result?.outputFormat).toBe(responseFormat);
+      const streamParams = (
+        xaiTTSStreamMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+      ).at(-1)?.[0];
+      expect(streamParams?.responseFormat).toBe(responseFormat);
+      await result?.release?.();
+    },
+  );
 
   it("synthesizes mp3 audio and does not claim native voice-note compatibility", async () => {
     const provider = buildXaiSpeechProvider();
@@ -90,6 +164,7 @@ describe("xai speech provider", () => {
       providerConfig: {
         apiKey: "xai-key",
         voiceId: "eve",
+        responseFormat: "pcm",
       },
       target: "voice-note",
       timeoutMs: 5_000,

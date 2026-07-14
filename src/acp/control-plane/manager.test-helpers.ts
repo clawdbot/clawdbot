@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
 
@@ -338,7 +337,6 @@ export function installAcpSessionManagerTestLifecycle(): void {
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
-    resetHeartbeatWakeStateForTests();
     resetAcpManagerTaskStateForTests();
   });
 }

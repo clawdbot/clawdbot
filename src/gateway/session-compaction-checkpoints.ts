@@ -37,8 +37,8 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
-export const MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES = 64 * 1024 * 1024;
-export const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
+const MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES = 64 * 1024 * 1024;
+const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
 
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
@@ -72,7 +72,7 @@ type ForkedCompactionCheckpointTranscript = {
   sessionFile: string;
 };
 
-export type CompactionCheckpointForkedTranscript = ForkedCompactionCheckpointTranscript & {
+type CompactionCheckpointForkedTranscript = ForkedCompactionCheckpointTranscript & {
   totalTokens?: number;
 };
 
@@ -81,9 +81,9 @@ type CompactionCheckpointTranscriptForkResult =
   | { status: "missing-boundary" }
   | { status: "failed" };
 
-export type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
+type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
 
-export type BranchCheckpointSessionParams = {
+type BranchCheckpointSessionParams = {
   agentId?: string;
   storePath: string;
   sourceKey: string;
@@ -92,7 +92,7 @@ export type BranchCheckpointSessionParams = {
   checkpointId: string;
 };
 
-export type RestoreCheckpointSessionParams = {
+type RestoreCheckpointSessionParams = {
   agentId?: string;
   storePath: string;
   sessionKey: string;
@@ -100,7 +100,7 @@ export type RestoreCheckpointSessionParams = {
   checkpointId: string;
 };
 
-export type PersistSessionCompactionCheckpointParams = {
+type PersistSessionCompactionCheckpointParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId: string;
@@ -120,7 +120,7 @@ export type PersistSessionCompactionCheckpointParams = {
  * Storage boundary for compaction checkpoint capture, persistence, branch,
  * restore, and cleanup operations.
  */
-export type CompactionCheckpointStore = {
+type CompactionCheckpointStore = {
   /** Captures the pre-compaction transcript identity without copying rows/files. */
   captureSnapshot: typeof captureCompactionCheckpointSnapshotAsync;
   /** Persists checkpoint metadata and prunes checkpoint artifacts owned by this store. */
@@ -456,7 +456,7 @@ function readSessionLeafStateFromRecords(
   return { entryId: latestEntryId, leafId: tree.leafId };
 }
 
-export async function forkCompactionCheckpointTranscriptAsync(params: {
+async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
   targetCwd?: string;
@@ -758,7 +758,7 @@ export function createFileBackedCompactionCheckpointStore(): CompactionCheckpoin
  * Branch/restore uses the compacted successor transcript, while legacy
  * checkpoints that already have a snapshot file keep working.
  */
-export async function captureCompactionCheckpointSnapshotAsync(params: {
+async function captureCompactionCheckpointSnapshotAsync(params: {
   sessionManager?: SessionManagerCheckpointView;
   sessionFile: string;
   maxBytes?: number;
@@ -817,7 +817,7 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   };
 }
 
-export async function cleanupCompactionCheckpointSnapshot(
+async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
   if (!snapshot?.sessionFile) {
@@ -864,7 +864,7 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
   }
 }
 
-export async function persistSessionCompactionCheckpoint(
+async function persistSessionCompactionCheckpoint(
   params: PersistSessionCompactionCheckpointParams,
 ): Promise<SessionCompactionCheckpoint | null> {
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();

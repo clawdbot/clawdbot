@@ -27,14 +27,6 @@ async function loadCronExecutionCliRuntime() {
   return await cronExecutionCliRuntimeLoader.load();
 }
 
-/** Lazily resolves CLI session ids without loading the cron CLI runner at module import time. */
-export async function getCliSessionId(
-  ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionId>
-): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionId>> {
-  const runtime = await loadCronExecutionCliRuntime();
-  return runtime.getCliSessionId(...args);
-}
-
 /** Lazily resolves complete CLI bindings so cron continuations preserve reuse metadata. */
 export async function getCliSessionBinding(
   ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionBinding>

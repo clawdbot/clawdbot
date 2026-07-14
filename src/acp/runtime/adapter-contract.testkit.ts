@@ -6,7 +6,7 @@ import { expect } from "vitest";
 import { toAcpRuntimeError } from "./errors.js";
 
 /** Inputs and optional assertions for the shared ACP runtime adapter contract. */
-export type AcpRuntimeAdapterContractParams = {
+type AcpRuntimeAdapterContractParams = {
   createRuntime: () => Promise<AcpRuntime> | AcpRuntime;
   agentId?: string;
   successPrompt?: string;

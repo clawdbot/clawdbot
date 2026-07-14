@@ -563,7 +563,7 @@ function readSortedDirNames(dir: string): string[] {
 }
 
 /** Find the best Chromium-family executable on macOS. */
-export function findChromeExecutableMac(): BrowserExecutable | null {
+function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
       kind: "chrome",
@@ -629,7 +629,7 @@ function findGoogleChromeExecutableMac(): BrowserExecutable | null {
 }
 
 /** Find the best Chromium-family executable on Linux. */
-export function findChromeExecutableLinux(): BrowserExecutable | null {
+function findChromeExecutableLinux(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
@@ -665,7 +665,7 @@ function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
 }
 
 /** Find the best Chromium-family executable on Windows. */
-export function findChromeExecutableWindows(): BrowserExecutable | null {
+function findChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   // Must use bracket notation: variable name contains parentheses.

@@ -24,14 +24,14 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 
-export const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
 const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
 
 export type OperatorApprovalKind = "exec" | "plugin";
 export type OperatorApprovalStatus = "pending" | "allowed" | "denied" | "expired" | "cancelled";
-export type OperatorApprovalDecision = "allow-once" | "allow-always" | "deny";
+type OperatorApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type OperatorApprovalTerminalReason =
   | "user"
   | "timeout"
@@ -40,9 +40,9 @@ export type OperatorApprovalTerminalReason =
   | "run-aborted"
   | "gateway-restart"
   | "storage-corrupt";
-export type OperatorApprovalResolverKind = "device" | "channel" | "runtime" | "system";
+type OperatorApprovalResolverKind = "device" | "channel" | "runtime" | "system";
 
-export type OperatorApprovalRequester = {
+type OperatorApprovalRequester = {
   deviceId: string | null;
   clientId: string | null;
   deviceTokenAuth: boolean;
@@ -84,7 +84,7 @@ export type OperatorApprovalRecord = {
   consumedBy: string | null;
 };
 
-export type NewOperatorApproval = {
+type NewOperatorApproval = {
   id: string;
   kind: OperatorApprovalKind;
   presentation: ApprovalPresentation;
@@ -97,12 +97,12 @@ export type NewOperatorApproval = {
   expiresAtMs: number;
 };
 
-export type InsertOperatorApprovalResult =
+type InsertOperatorApprovalResult =
   | { outcome: "inserted"; record: OperatorApprovalRecord }
   | { outcome: "existing"; record: OperatorApprovalRecord }
   | { outcome: "conflict" };
 
-export type GetOperatorApprovalResult =
+type GetOperatorApprovalResult =
   | { outcome: "found"; record: OperatorApprovalRecord }
   | { outcome: "not-found" }
   | { outcome: "corrupt"; id?: string };
@@ -127,7 +127,7 @@ export type ForceDenyOperatorApprovalResult =
   | { outcome: "not-found" }
   | { outcome: "corrupt" };
 
-export type ConsumeOperatorApprovalResult =
+type ConsumeOperatorApprovalResult =
   | { outcome: "consumed"; record: OperatorApprovalRecord }
   | { outcome: "already-consumed"; record: OperatorApprovalRecord }
   | { outcome: "redemption-expired"; record: OperatorApprovalRecord }
@@ -135,7 +135,7 @@ export type ConsumeOperatorApprovalResult =
   | { outcome: "not-found" }
   | { outcome: "corrupt" };
 
-export type TerminalizeOperatorApprovalsResult = {
+type TerminalizeOperatorApprovalsResult = {
   affected: number;
   records: OperatorApprovalRecord[];
 };
@@ -706,15 +706,6 @@ export function getOperatorApprovalDetailedByLocator(params: {
     denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
     return { outcome: "corrupt", id };
   }, params.databaseOptions);
-}
-
-export function getOperatorApproval(params: {
-  id: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): OperatorApprovalRecord | null {
-  const result = getOperatorApprovalDetailed(params);
-  return result.outcome === "found" ? result.record : null;
 }
 
 export function listPendingOperatorApprovals(

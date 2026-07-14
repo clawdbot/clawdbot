@@ -50,3 +50,29 @@ it("rejects stale identities after reconnecting the same client", async () => {
   await current;
   expect(capability.get("main")?.name).toBe("Current");
 });
+
+it("rejects an in-flight identity after that agent is invalidated", async () => {
+  const staleRequest = deferred<AgentIdentityResult>();
+  const currentRequest = deferred<AgentIdentityResult>();
+  const request = vi
+    .fn()
+    .mockImplementationOnce(() => staleRequest.promise)
+    .mockImplementationOnce(() => currentRequest.promise);
+  const client = { request } as unknown as GatewayBrowserClient;
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, connected: true },
+    subscribe: () => () => undefined,
+  });
+
+  const stale = capability.ensure(["main"]);
+  capability.invalidate(["main"]);
+  const current = capability.ensure(["main"]);
+
+  staleRequest.resolve({ agentId: "main", name: "Stale" } as AgentIdentityResult);
+  await stale;
+  expect(capability.entries()).toEqual([]);
+
+  currentRequest.resolve({ agentId: "main", name: "Current" } as AgentIdentityResult);
+  await current;
+  expect(capability.get("main")?.name).toBe("Current");
+});

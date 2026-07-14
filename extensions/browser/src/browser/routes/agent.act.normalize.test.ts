@@ -1,7 +1,8 @@
 // Browser tests cover agent.act.normalize plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../timer-delay.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
+
+const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
 describe("canonicalizeActTargetIds", () => {
   const canonical = "abcd1234";

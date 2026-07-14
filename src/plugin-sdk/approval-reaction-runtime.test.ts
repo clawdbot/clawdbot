@@ -14,7 +14,6 @@ import {
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
   resolveApprovalReactionDecision,
-  resolveApprovalReactionTarget,
   resolveTypedApprovalReactionTarget,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-reaction-runtime.js";
@@ -140,23 +139,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     ).toEqual({
       approvalId,
       approvalKind: "exec",
-      decision: "deny",
-      normalizedEmoji: "👎",
-    });
-  });
-
-  it("preserves deprecated id-based kind inference", () => {
-    expect(
-      resolveApprovalReactionTarget({
-        target: {
-          approvalId: "plugin:legacy-id",
-          allowedDecisions: ["deny"],
-        },
-        reactionKey: "👎",
-      }),
-    ).toEqual({
-      approvalId: "plugin:legacy-id",
-      approvalKind: "plugin",
       decision: "deny",
       normalizedEmoji: "👎",
     });

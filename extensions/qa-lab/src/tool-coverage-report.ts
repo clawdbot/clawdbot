@@ -33,11 +33,11 @@ export type QaToolCoverageSuiteSummary = {
   };
 };
 
-export type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
-export type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
-export type QaToolCoverageBucket = QaRuntimeToolBucket;
+type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
+type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
+type QaToolCoverageBucket = QaRuntimeToolBucket;
 
-export type QaToolCoverageRow = {
+type QaToolCoverageRow = {
   tool: string;
   runtimeToolName?: string;
   bucket: QaToolCoverageBucket;
@@ -59,7 +59,7 @@ export type QaToolCoverageRow = {
   details?: string;
 };
 
-export type QaToolCoverageReport = {
+type QaToolCoverageReport = {
   runtimePair: [RuntimeId, RuntimeId];
   generatedAt: string;
   evaluated: boolean;

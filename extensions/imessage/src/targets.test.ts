@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Imessage tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -214,7 +215,7 @@ describe("imessage group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);

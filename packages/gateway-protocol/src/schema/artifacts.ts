@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -17,77 +18,57 @@ const ArtifactQueryParamsProperties = {
 };
 
 /** Shared artifact filter payload used by list-style requests. */
-export const ArtifactQueryParamsSchema = Type.Object(ArtifactQueryParamsProperties, {
-  additionalProperties: false,
-});
+export const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
 
 /** Artifact lookup payload with a required artifact id plus optional scope filters. */
-export const ArtifactGetParamsSchema = Type.Object(
-  {
-    ...ArtifactQueryParamsProperties,
-    artifactId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+export const ArtifactGetParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  artifactId: NonEmptyString,
+});
 
 /** Public artifact metadata returned before or alongside download data. */
-export const ArtifactSummarySchema = Type.Object(
-  {
-    id: NonEmptyString,
-    type: NonEmptyString,
-    title: NonEmptyString,
-    mimeType: Type.Optional(NonEmptyString),
-    sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    taskId: Type.Optional(NonEmptyString),
-    messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
-    source: Type.Optional(NonEmptyString),
-    download: Type.Object(
-      {
-        mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactSummarySchema = closedObject({
+  id: NonEmptyString,
+  type: NonEmptyString,
+  title: NonEmptyString,
+  mimeType: Type.Optional(NonEmptyString),
+  sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  taskId: Type.Optional(NonEmptyString),
+  messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+  source: Type.Optional(NonEmptyString),
+  download: closedObject({
+    mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
+  }),
+});
 
 /** List request payload for artifacts visible in the selected scope. */
 export const ArtifactsListParamsSchema = ArtifactQueryParamsSchema;
 
 /** List response containing artifact summaries only. */
-export const ArtifactsListResultSchema = Type.Object(
-  {
-    artifacts: Type.Array(ArtifactSummarySchema),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsListResultSchema = closedObject({
+  artifacts: Type.Array(ArtifactSummarySchema),
+});
 
 /** Get request payload for one artifact summary. */
 export const ArtifactsGetParamsSchema = ArtifactGetParamsSchema;
 
 /** Get response containing one artifact summary. */
-export const ArtifactsGetResultSchema = Type.Object(
-  {
-    artifact: ArtifactSummarySchema,
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsGetResultSchema = closedObject({
+  artifact: ArtifactSummarySchema,
+});
 
 /** Download request payload for one artifact. */
 export const ArtifactsDownloadParamsSchema = ArtifactGetParamsSchema;
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */
-export const ArtifactsDownloadResultSchema = Type.Object(
-  {
-    artifact: ArtifactSummarySchema,
-    encoding: Type.Optional(Type.Literal("base64")),
-    data: Type.Optional(Type.String()),
-    url: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const ArtifactsDownloadResultSchema = closedObject({
+  artifact: ArtifactSummarySchema,
+  encoding: Type.Optional(Type.Literal("base64")),
+  data: Type.Optional(Type.String()),
+  url: Type.Optional(NonEmptyString),
+});
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.

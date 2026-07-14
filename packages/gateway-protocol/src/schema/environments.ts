@@ -1,5 +1,6 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type Static } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -37,70 +38,55 @@ export const WorkerTunnelStatusSchema = Type.Union([
 ]);
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
-export const WorkerEnvironmentMetadataSchema = Type.Object(
-  {
-    providerId: NonEmptyString,
-    leaseId: Type.Optional(NonEmptyString),
-    state: WorkerEnvironmentStateSchema,
-    ageMs: Type.Integer({ minimum: 0 }),
-    idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    attachedSessionIds: Type.Array(NonEmptyString),
-    tunnelStatus: WorkerTunnelStatusSchema,
-  },
-  { additionalProperties: false },
-);
+export const WorkerEnvironmentMetadataSchema = closedObject({
+  providerId: NonEmptyString,
+  leaseId: Type.Optional(NonEmptyString),
+  state: WorkerEnvironmentStateSchema,
+  ageMs: Type.Integer({ minimum: 0 }),
+  idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  attachedSessionIds: Type.Array(NonEmptyString),
+  tunnelStatus: WorkerTunnelStatusSchema,
+});
 
 function createEnvironmentSummarySchema() {
-  return Type.Object(
-    {
-      id: NonEmptyString,
-      type: NonEmptyString,
-      label: Type.Optional(NonEmptyString),
-      status: EnvironmentStatusSchema,
-      capabilities: Type.Optional(Type.Array(NonEmptyString)),
-      worker: Type.Optional(WorkerEnvironmentMetadataSchema),
-    },
-    { additionalProperties: false },
-  );
+  return closedObject({
+    id: NonEmptyString,
+    type: NonEmptyString,
+    label: Type.Optional(NonEmptyString),
+    status: EnvironmentStatusSchema,
+    capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    worker: Type.Optional(WorkerEnvironmentMetadataSchema),
+  });
 }
 
 /** Public environment summary shown in listings and status responses. */
 export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
 
 /** Empty request payload for listing known environments. */
-export const EnvironmentsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const EnvironmentsListParamsSchema = closedObject({});
 
 /** List response containing all gateway-visible environment summaries. */
-export const EnvironmentsListResultSchema = Type.Object(
-  {
-    environments: Type.Array(EnvironmentSummarySchema),
-  },
-  { additionalProperties: false },
-);
+export const EnvironmentsListResultSchema = closedObject({
+  environments: Type.Array(EnvironmentSummarySchema),
+});
 
 /** Status lookup request for one environment id. */
-export const EnvironmentsStatusParamsSchema = Type.Object(
-  { environmentId: NonEmptyString },
-  { additionalProperties: false },
-);
+export const EnvironmentsStatusParamsSchema = closedObject({ environmentId: NonEmptyString });
 
 /** Status lookup result for one environment id. */
 export const EnvironmentsStatusResultSchema = createEnvironmentSummarySchema();
 
 /** Creates a worker environment from one configured provider profile. */
-export const EnvironmentsCreateParamsSchema = Type.Object(
-  { profileId: NonEmptyString, idempotencyKey: NonEmptyString },
-  { additionalProperties: false },
-);
+export const EnvironmentsCreateParamsSchema = closedObject({
+  profileId: NonEmptyString,
+  idempotencyKey: NonEmptyString,
+});
 
 /** Create result uses the same public summary shape as list and status. */
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
 
 /** Destroys one durable worker environment by its gateway-owned id. */
-export const EnvironmentsDestroyParamsSchema = Type.Object(
-  { environmentId: NonEmptyString },
-  { additionalProperties: false },
-);
+export const EnvironmentsDestroyParamsSchema = closedObject({ environmentId: NonEmptyString });
 
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();

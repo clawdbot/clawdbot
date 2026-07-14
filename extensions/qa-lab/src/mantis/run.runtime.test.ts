@@ -71,8 +71,8 @@ describe("mantis before/after runtime", () => {
     });
 
     const result = await runMantisBeforeAfter({
-      baseline: "bug-sha",
-      candidate: "fix-sha",
+      baseline: "--lock",
+      candidate: "--force",
       commandRunner: runner,
       now: () => new Date("2026-05-03T12:00:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/test-run",
@@ -92,15 +92,27 @@ describe("mantis before/after runtime", () => {
       ]),
     ).toHaveLength(4);
     expect(commands[0]?.command).toBe("git");
-    expect(commands[0]?.args.slice(0, 3)).toEqual(["worktree", "add", "--detach"]);
-    expect(commands[0]?.args[3]).toContain("baseline");
+    expect(commands[0]?.args).toEqual([
+      "worktree",
+      "add",
+      "--detach",
+      "--",
+      path.join(result.outputDir, "worktrees", "baseline"),
+      "--lock",
+    ]);
     expect(commands[1]?.command).toBe("pnpm");
     expect(commands[1]?.args[0]).toBe("--dir");
     expect(commands[1]?.args[1]).toContain("baseline");
     expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[2]?.command).toBe("git");
-    expect(commands[2]?.args.slice(0, 3)).toEqual(["worktree", "add", "--detach"]);
-    expect(commands[2]?.args[3]).toContain("candidate");
+    expect(commands[2]?.args).toEqual([
+      "worktree",
+      "add",
+      "--detach",
+      "--",
+      path.join(result.outputDir, "worktrees", "candidate"),
+      "--force",
+    ]);
     expect(commands[3]?.command).toBe("pnpm");
     expect(commands[3]?.args[0]).toBe("--dir");
     expect(commands[3]?.args[1]).toContain("candidate");

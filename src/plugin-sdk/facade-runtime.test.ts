@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -72,7 +71,6 @@ function createBundledPluginDir(prefix: string, marker: string): string {
 
 function useBundledPluginDirOverrideForTest(dir: string): void {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
-  setBundledPluginsDirOverrideForTest(dir);
 }
 
 function createThrowingPluginDir(prefix: string): string {
@@ -102,7 +100,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   clearCurrentPluginMetadataSnapshot();
   resetFacadeRuntimeStateForTest();
-  setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

@@ -660,7 +660,7 @@ describe("renderWorkboard", () => {
         onOpenSession: () => undefined,
       });
 
-      expect(container.textContent).toContain("heartbeat 42 s");
+      expect(container.textContent).toContain("heartbeat 42s");
     } finally {
       vi.useRealTimers();
     }
@@ -916,6 +916,62 @@ describe("renderWorkboard", () => {
     expect(priorityFilter?.textContent).toContain("Normal");
     expect(priorityFilter?.textContent).toContain("High");
     expect(priorityFilter?.textContent).toContain("Urgent");
+  });
+
+  it("filters cards to the global agent scope and hides the secondary agent filter", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.viewPreset = "all";
+    state.cards = [
+      {
+        id: "writer-card",
+        title: "Writer card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "writer",
+      },
+      {
+        id: "ops-card",
+        title: "Ops card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "ops",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [{ id: "main" }, { id: "writer" }, { id: "ops" }],
+        },
+        sessions: [],
+        scopeAgentId: "writer",
+        showAgentFilter: false,
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Writer card");
+    expect(container.textContent).not.toContain("Ops card");
+    expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
   });
 
   it("closes the previous Workboard dropdown when another one opens", () => {

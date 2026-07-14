@@ -33,6 +33,7 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
+import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -141,20 +142,6 @@ function isRetryableError(status: number, errorText: string): boolean {
   return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(
     errorText,
   );
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Request was aborted"));
-      return;
-    }
-    const timeout = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timeout);
-      reject(new Error("Request was aborted"));
-    });
-  });
 }
 
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
@@ -437,7 +424,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               }
             }
 
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
 
@@ -472,7 +459,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           // Network errors are retryable
           if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
           throw lastError;

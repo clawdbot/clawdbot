@@ -26,10 +26,7 @@ import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serializati
 export {
   resolveEffectiveSharedGatewayAuth,
   resolveGatewayAuth,
-  type EffectiveSharedGatewayAuth,
   type ResolvedGatewayAuth,
-  type ResolvedGatewayAuthMode,
-  type ResolvedGatewayAuthModeSource,
 } from "./auth-resolve.js";
 
 const LEGACY_OPENCLAW_ENV_NOTE =
@@ -59,10 +56,10 @@ type ConnectAuth = {
   password?: string;
 };
 
-export type GatewayAuthSurface = "http" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
-export type AuthorizeGatewayConnectParams = {
+type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
@@ -466,7 +463,7 @@ function rejectIfRateLimited(params: {
 }
 
 /** Authorize a gateway connection, including rate-limit handling around shared-secret failures. */
-export async function authorizeGatewayConnect(
+async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;

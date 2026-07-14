@@ -1,6 +1,16 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
-import { scanPolicyChannels, scanPolicyExecApprovals, scanPolicyTools } from "./policy-state.js";
+import { collectPolicyEvidence } from "./policy-state.js";
+
+const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
+
+async function scanPolicyTools(raw: string) {
+  const evidence = await collectPolicyEvidence({}, { toolsRaw: raw });
+  return evidence.tools ?? [];
+}
+
+const scanPolicyExecApprovals = (raw: string) =>
+  collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
 
 describe("scanPolicyChannels", () => {
   it("ignores reserved channel config namespaces", () => {

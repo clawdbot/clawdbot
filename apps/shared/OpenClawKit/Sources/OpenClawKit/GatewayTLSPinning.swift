@@ -72,11 +72,11 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
     }
 }
 
-public protocol GatewayTLSFailureProviding: AnyObject {
+protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
 
-public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
+protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
     var allowsDeviceTokenRetryAuth: Bool { get }
 }
 

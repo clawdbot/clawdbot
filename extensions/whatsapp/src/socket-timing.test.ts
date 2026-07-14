@@ -58,6 +58,27 @@ describe("resolveWhatsAppSocketTiming", () => {
     });
   });
 
+  it("rejects invalid numeric timing values", () => {
+    expect(
+      resolveWhatsAppSocketTiming(
+        {
+          web: {
+            whatsapp: {
+              keepAliveIntervalMs: 0,
+              connectTimeoutMs: Number.NaN,
+              defaultQueryTimeoutMs: 1.5,
+            },
+          },
+        },
+        {
+          keepAliveIntervalMs: -1,
+          connectTimeoutMs: Number.POSITIVE_INFINITY,
+          defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
+        },
+      ),
+    ).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
+  });
+
   it("marks operation timeout errors as unknown delivery state", () => {
     const error = new WhatsAppSocketOperationTimeoutError(
       "sendMessage",

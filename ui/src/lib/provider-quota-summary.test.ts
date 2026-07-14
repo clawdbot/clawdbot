@@ -69,6 +69,34 @@ describe("collectProviderQuotaGroups", () => {
     ]);
   });
 
+  it("carries the account email and keeps distinct accounts in separate groups", () => {
+    const windows = [{ label: "5h", usedPercent: 10 }];
+    const groups = collectProviderQuotaGroups(
+      {
+        ts: 1,
+        providers: [
+          providerWithUsage("anthropic", {
+            providerId: "anthropic",
+            accountEmail: "work@example.com",
+            windows,
+          }),
+          providerWithUsage("claude-cli", {
+            providerId: "anthropic",
+            accountEmail: "personal@example.com",
+            windows,
+          }),
+        ],
+      },
+      acceptAll,
+    );
+
+    expect(groups.map((group) => group.accountEmail)).toEqual([
+      "work@example.com",
+      "personal@example.com",
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+
   it("drops providers without windows or budgets and invalid budget shapes", () => {
     const groups = collectProviderQuotaGroups(
       {

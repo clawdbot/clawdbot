@@ -1,7 +1,10 @@
 // Embedded system prompt tests cover prompt assembly for provider guidance,
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -223,6 +226,7 @@ describe("buildEmbeddedSystemPrompt", () => {
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
       modelAliasLines: [],
       userTimezone: "UTC",
+      promptMode: "minimal",
     });
 
     expect(prompt).toContain("- sessions_spawn");
@@ -231,6 +235,9 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {

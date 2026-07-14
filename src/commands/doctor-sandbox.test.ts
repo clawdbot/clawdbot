@@ -2,16 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { __testing as openClawRootTesting } from "../infra/openclaw-root.js";
 import { resolveSandboxScript } from "./doctor-sandbox.js";
 
 describe("resolveSandboxScript", () => {
   const created: string[] = [];
 
   afterEach(() => {
-    // The shared resolver memoizes package-root lookups process-wide; reset so per-test temp dirs
-    // never see a stale (including negative) cache hit.
-    openClawRootTesting.clearOpenClawPackageRootCaches();
     for (const dir of created.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }

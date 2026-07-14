@@ -293,8 +293,7 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
-import { testing as browserToolActionsTesting } from "./browser-tool.actions.js";
-import { testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
+import { createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
 function mockSingleBrowserProxyNode() {
@@ -331,44 +330,6 @@ function resetBrowserToolMocks() {
   toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
     "/tmp/openclaw-media/outbound/share.png",
   );
-  browserToolTesting.setDepsForTest({
-    browserAct: browserActionsMocks.browserAct as never,
-    browserArmDialog: browserActionsMocks.browserArmDialog as never,
-    browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
-    browserCloseTab: browserClientMocks.browserCloseTab as never,
-    browserDoctor: browserClientMocks.browserDoctor as never,
-    browserFocusTab: browserClientMocks.browserFocusTab as never,
-    browserImportProfile: browserClientMocks.browserImportProfile as never,
-    browserNavigate: browserActionsMocks.browserNavigate as never,
-    browserOpenTab: browserClientMocks.browserOpenTab as never,
-    browserPdfSave: browserActionsMocks.browserPdfSave as never,
-    browserProfiles: browserClientMocks.browserProfiles as never,
-    browserSystemProfiles: browserClientMocks.browserSystemProfiles as never,
-    browserScreenshotAction: browserActionsMocks.browserScreenshotAction as never,
-    browserStart: browserClientMocks.browserStart as never,
-    browserStatus: browserClientMocks.browserStatus as never,
-    browserStop: browserClientMocks.browserStop as never,
-    describeImageFile: toolCommonMocks.describeImageFile as never,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-    getRuntimeConfig: configMocks.loadConfig as never,
-    listNodes: nodesUtilsMocks.listNodes as never,
-    callGatewayTool: gatewayMocks.callGatewayTool as never,
-    normalizeBrowserScreenshot: toolCommonMocks.normalizeBrowserScreenshot as never,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer as never,
-    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing as never,
-    trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
-    untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
-  });
-  browserToolActionsTesting.setDepsForTest({
-    browserAct: browserActionsMocks.browserAct as never,
-    browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
-    browserDownload: browserActionsMocks.browserDownload as never,
-    browserSnapshot: browserClientMocks.browserSnapshot as never,
-    browserTabs: browserClientMocks.browserTabs as never,
-    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
-    getRuntimeConfig: configMocks.loadConfig as never,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-  });
 }
 
 function setResolvedBrowserProfiles(
@@ -390,8 +351,6 @@ function registerBrowserToolAfterEachReset() {
   });
   afterEach(() => {
     resetBrowserToolMocks();
-    browserToolActionsTesting.setDepsForTest(null);
-    browserToolTesting.setDepsForTest(null);
   });
 }
 

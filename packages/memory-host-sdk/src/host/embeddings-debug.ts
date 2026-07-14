@@ -1,5 +1,5 @@
 // Memory Host SDK module implements embeddings debug behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Lightweight stderr debug logging for memory embedding internals.
 

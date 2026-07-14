@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw backup` (create local backup archives)"
+summary: "CLI reference for `openclaw backup` (archives and SQLite snapshots)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
+  - You need a compact, verified snapshot of one OpenClaw SQLite database
   - You want to preview which paths would be included before reset or uninstall
 title: "Backup"
 ---
@@ -18,6 +19,12 @@ openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
+openclaw backup sqlite create --global --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite create --agent main --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite list --repository ~/Backups/openclaw-sqlite
+openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id>
+openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id> --scratch ~/Private/openclaw-scratch
+openclaw backup sqlite restore ~/Backups/openclaw-sqlite/<snapshot-id> --target ./restored/openclaw.sqlite
 ```
 
 ## Notes
@@ -27,6 +34,45 @@ openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+
+## SQLite snapshots
+
+Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.
+
+Snapshot creation accepts exactly one named source:
+
+| Command                                                         | Database               |
+| --------------------------------------------------------------- | ---------------------- |
+| `openclaw backup sqlite create --global --repository <dir>`     | Shared OpenClaw state  |
+| `openclaw backup sqlite create --agent <id> --repository <dir>` | One per-agent database |
+
+The repository contains one directory per committed snapshot. Each snapshot directory contains exactly:
+
+- `manifest.json`
+- `database.sqlite`
+
+Snapshot creation verifies the live database before reading it, uses SQLite `VACUUM INTO` to capture committed WAL state into a compact database, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove transient delivery queue rows and compact again so deleted queue payloads are not retained in free pages.
+
+Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
+
+SQLite snapshots can contain auth profiles, session state, plugin state, and other sensitive records. Protect repositories with the same permissions, encryption, retention policy, and destination restrictions as the live OpenClaw state directory.
+
+### Verify and restore
+
+```bash
+openclaw backup sqlite verify <snapshot-directory>
+openclaw backup sqlite restore <snapshot-directory> --target <new-database-path>
+```
+
+Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, database role and owner, and OpenClaw-owned index definitions.
+
+Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
+
+Snapshot creation applies the same owner, ACL, ancestor, and path-identity checks to the repository before staging or publishing database bytes.
+
+Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. The target parent has the same path-security requirements as verification scratch. Activating a restored database remains an explicit offline operator step.
+
+Snapshot repositories are local directories. Scheduling, upload, retention, incremental WAL bundles, failover, and restore-on-boot behavior are intentionally outside this command.
 
 ## What gets backed up
 
@@ -43,7 +89,21 @@ Auth profiles and other per-agent runtime state live in SQLite under the state d
 
 OpenClaw canonicalizes paths before building the archive: if config, the credentials directory, or a workspace already live inside the state directory, they are not duplicated as separate top-level backup sources. Missing paths are skipped.
 
-During archive creation, OpenClaw skips known live-mutation files with no restoration value: active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted. SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
+During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
+
+| State-relative scope                         | Skipped file suffixes         |
+| -------------------------------------------- | ----------------------------- |
+| `sessions/**`                                | `.jsonl`, `.log`              |
+| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`              |
+| `cron/runs/**`                               | `.jsonl`, `.log`              |
+| `logs/**`                                    | `.jsonl`, `.log`              |
+| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp` |
+| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp` |
+| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`       |
+
+These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted.
+
+SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 

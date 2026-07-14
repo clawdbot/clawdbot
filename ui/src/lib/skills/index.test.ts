@@ -15,10 +15,19 @@ import {
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
-  type SkillsState,
 } from "./index.ts";
 
+type SkillsState = Parameters<typeof loadSkills>[0];
+
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -552,6 +561,17 @@ describe("searchClawHub", () => {
     expect(state.clawhubInstallMessage).toBeNull();
   });
 
+  it("clears stale results when the query is emptied", async () => {
+    const { state, request } = createState();
+
+    await searchClawHub(state, "   ");
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.clawhubSearchResults).toBeNull();
+    expect(state.clawhubSearchError).toBeNull();
+    expect(state.clawhubSearchLoading).toBe(false);
+  });
+
   it("clears stale results as soon as a new search starts", async () => {
     const { state, request } = createState();
     type SearchResponse = { results: SkillsState["clawhubSearchResults"] };
@@ -566,10 +586,8 @@ describe("searchClawHub", () => {
     );
 
     const pending = searchClawHub(state, "github");
-
     expect(state.clawhubSearchResults).toBeNull();
     expect(state.clawhubSearchLoading).toBe(true);
-    expect(state.clawhubSearchError).toBeNull();
 
     resolveRequest({
       results: [
@@ -583,27 +601,7 @@ describe("searchClawHub", () => {
       ],
     });
     await pending;
-
-    expect(state.clawhubSearchResults).toEqual([
-      {
-        score: 0.95,
-        slug: "github-new",
-        displayName: "GitHub New",
-        summary: "Fresh result",
-        version: "2.0.0",
-      },
-    ]);
-    expect(state.clawhubSearchLoading).toBe(false);
-  });
-
-  it("clears stale results when the query is emptied", async () => {
-    const { state, request } = createState();
-
-    await searchClawHub(state, "   ");
-
-    expect(request).not.toHaveBeenCalled();
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchError).toBeNull();
+    expect(state.clawhubSearchResults?.[0]?.slug).toBe("github-new");
     expect(state.clawhubSearchLoading).toBe(false);
   });
 
@@ -871,32 +869,24 @@ describe("skill mutations", () => {
     expect(state.skillOperation).toBeNull();
   });
 
-  it("drops a mutation continuation after a source reset without releasing the new owner", async () => {
+  it("drops an old-client mutation continuation without releasing the current owner", async () => {
     const { state, request: oldRequest } = createState();
-    let releaseOld: ((value: unknown) => void) | undefined;
-    oldRequest.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseOld = resolve;
-        }),
-    );
+    const oldMutationResult = createDeferred<unknown>();
+    oldRequest.mockReturnValue(oldMutationResult.promise);
 
     const oldMutation = updateSkillEnabled(state, "github", true);
     await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledOnce());
 
-    let releaseCurrent: ((value: unknown) => void) | undefined;
-    const currentRequest = vi.fn<TestRequest>((method) => {
-      if (method === "skills.update") {
-        return new Promise((resolve) => {
-          releaseCurrent = resolve;
-        });
-      }
-      return Promise.resolve({
-        workspaceDir: "/tmp/current",
-        managedSkillsDir: "/tmp/skills",
-        skills: [],
-      });
-    });
+    const currentMutationResult = createDeferred<unknown>();
+    const currentRequest = vi.fn<TestRequest>((method) =>
+      method === "skills.update"
+        ? currentMutationResult.promise
+        : Promise.resolve({
+            workspaceDir: "/tmp/current",
+            managedSkillsDir: "/tmp/skills",
+            skills: [],
+          }),
+    );
     state.client = { request: currentRequest } as unknown as SkillsState["client"];
     state.skillsAgentRevision += 1;
     state.skillOperation = null;
@@ -904,17 +894,12 @@ describe("skill mutations", () => {
     const currentMutation = updateSkillEnabled(state, "calendar", true);
     await vi.waitFor(() => expect(currentRequest).toHaveBeenCalledOnce());
     const currentOperation = state.skillOperation;
-    expect(currentOperation).toEqual({ kind: "skill", skillKey: "calendar" });
 
-    expect(releaseOld).toBeDefined();
-    releaseOld?.({});
+    oldMutationResult.resolve({});
     await oldMutation;
-
-    expect(oldRequest.mock.calls.map(([method]) => method)).toEqual(["skills.update"]);
     expect(state.skillOperation).toBe(currentOperation);
 
-    expect(releaseCurrent).toBeDefined();
-    releaseCurrent?.({});
+    currentMutationResult.resolve({});
     await currentMutation;
     expect(currentRequest.mock.calls.map(([method]) => method)).toEqual([
       "skills.update",

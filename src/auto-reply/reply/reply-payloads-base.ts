@@ -90,7 +90,9 @@ export function applyReplyTagsToPayload(
 
 /** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice });
+  return hasReplyPayloadContent(payload, {
+    extraContent: payload.audioAsVoice || payload.location != null,
+  });
 }
 
 /** True when a payload should stay internal as reasoning-only output. */

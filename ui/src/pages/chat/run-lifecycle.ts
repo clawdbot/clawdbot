@@ -127,7 +127,7 @@ export function isChatStopCommand(text: string) {
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
-export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
   }

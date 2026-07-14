@@ -4,10 +4,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   ackSessionDelivery,
-  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
+import { enqueueSessionDelivery } from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
   function readSessionQueueStatus(tempDir: string, id: string): string | undefined {

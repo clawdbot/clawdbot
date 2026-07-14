@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
  * Model reference used by security audit findings.
  * `id` is the normalized provider/model key; `source` is the config path shown in diagnostics.
  */
-export type AuditModelRef = { id: string; source: string };
+type AuditModelRef = { id: string; source: string };
 
 function resolveAuditModelId(
   cfg: OpenClawConfig,

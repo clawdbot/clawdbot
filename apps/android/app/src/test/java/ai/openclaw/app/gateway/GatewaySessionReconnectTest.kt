@@ -156,6 +156,57 @@ private data class ReconnectServer(
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
   @Test
+  fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val reconnected = CompletableDeferred<Unit>()
+      val connectionCount = AtomicInteger()
+      val unexpectedRequest = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(connectResponseFrame(id))
+          } else {
+            unexpectedRequest.complete(Unit)
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = {
+            if (connectionCount.incrementAndGet() == 1) {
+              connected.complete(Unit)
+            } else {
+              reconnected.complete(Unit)
+            }
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val lease =
+          requireNotNull(
+            harness.session.captureRequestLease("manual|127.0.0.1|${server.port}"),
+          )
+        harness.session.reconnect()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
+        val result =
+          runCatching {
+            lease.request(
+              method = "sessions.patch",
+              paramsJson = "{}",
+            )
+          }
+
+        assertTrue(result.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertNull(withTimeoutOrNull(200) { unexpectedRequest.await() })
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connectedHelloPublishesCanonicalAndLegacyApprovalMethods() =
     runBlocking {
       val catalogs =

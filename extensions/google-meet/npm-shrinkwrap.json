@@ -8,7 +8,7 @@
       "name": "@openclaw/google-meet",
       "version": "2026.7.2",
       "dependencies": {
-        "commander": "15.0.0",
+        "pretty-ms": "9.3.0",
         "typebox": "1.3.3"
       },
       "peerDependencies": {
@@ -20,13 +20,31 @@
         }
       }
     },
-    "node_modules/commander": {
-      "version": "15.0.0",
-      "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
-      "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
+    "node_modules/parse-ms": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/parse-ms/-/parse-ms-4.0.0.tgz",
+      "integrity": "sha512-TXfryirbmq34y8QBwgqCVLi+8oA3oWx2eAnSn62ITyEhEYaWRlVZ2DvMM9eZbMs/RfxPu/PK/aBLyGj4IrqMHw==",
       "license": "MIT",
       "engines": {
-        "node": ">=22.12.0"
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/pretty-ms": {
+      "version": "9.3.0",
+      "resolved": "https://registry.npmjs.org/pretty-ms/-/pretty-ms-9.3.0.tgz",
+      "integrity": "sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==",
+      "license": "MIT",
+      "dependencies": {
+        "parse-ms": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/typebox": {

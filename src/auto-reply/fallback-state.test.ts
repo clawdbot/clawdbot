@@ -2,11 +2,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import {
-  buildFallbackNotice,
   resolveActiveFallbackState,
-  resolveFallbackTransition,
   type FallbackNoticeState,
-} from "./fallback-state.js";
+} from "../status/fallback-notice-state.js";
+import { buildFallbackNotice, resolveFallbackTransition } from "./fallback-state.js";
 
 const baseAttempt = {
   provider: "demo-primary",

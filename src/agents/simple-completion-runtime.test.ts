@@ -8,7 +8,9 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { fingerprintResolvedProviderAuth } from "./execution-auth-binding.js";
+import { bindSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
 // under test imports auth, model resolution, and transport helpers at module load.
@@ -142,6 +144,10 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       agentDir: "/tmp/openclaw-agent",
+      modelResolver: bindSimpleCompletionModelResolverWorkspace(
+        hoisted.resolveModelAsyncMock as typeof resolveModelAsync,
+        "/tmp/runtime-workspace",
+      ),
     });
 
     expectPreparedModelResult(result);
@@ -150,6 +156,9 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.auth.mode).toBe("api-key");
     expect(result.auth.source).toBe("env:TEST_API_KEY");
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("anthropic", "sk-test");
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      workspaceDir: "/tmp/runtime-workspace",
+    });
   });
 
   it("captures the exact locked auth owner used by a bound completion", async () => {

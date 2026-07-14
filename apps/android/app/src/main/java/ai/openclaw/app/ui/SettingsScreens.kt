@@ -27,6 +27,7 @@ import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
@@ -1338,7 +1339,9 @@ private fun GatewaySettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val context = LocalContext.current
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
+  val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -1347,6 +1350,10 @@ private fun GatewaySettingsScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val pairedGateways by viewModel.pairedGateways.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val discoveredGateways by viewModel.gateways.collectAsState()
+  val gatewayAgents by viewModel.gatewayAgents.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val instanceId by viewModel.instanceId.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -1432,23 +1439,160 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  SettingsDetailFrame(title = nativeString("Gateway"), subtitle = nativeString("Connection between this phone and OpenClaw."), icon = Icons.Default.Cloud, onBack = onBack) {
+  // Discovery only runs while a discovery consumer is active; the Add Gateway
+  // panel needs live results just like onboarding does.
+  LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
+
+  fun connectSetupCode() {
+    val plan =
+      resolveGatewayConnectPlan(
+        useSetupCode = true,
+        setupCode = setupCode,
+        savedManualHost = manualHost,
+        savedManualPort = manualPort.toString(),
+        savedManualTls = manualTls,
+        manualHostInput = hostInput,
+        manualPortInput = portInput,
+        manualTlsInput = transport.effectiveTls,
+        tokenInput = "",
+        bootstrapTokenInput = "",
+        passwordInput = "",
+      )
+    if (plan == null) {
+      validationText = nativeString("Enter a valid setup code or gateway address.")
+      return
+    }
+    if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
+      pendingSetupResetPlan = plan
+    } else {
+      saveAndConnect(plan)
+    }
+  }
+
+  SettingsDetailFrame(
+    title = nativeString("Gateway"),
+    subtitle = nativeString("Connection between this phone and OpenClaw."),
+    icon = Icons.Default.Cloud,
+    onBack = onBack,
+    trailingAction = {
+      ClawPlainIconButton(
+        icon = Icons.Default.QrCode2,
+        contentDescription = nativeString("Scan QR"),
+        onClick = viewModel::pairNewGateway,
+      )
+    },
+  ) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
           SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Not paired")),
+          SettingsMetric(
+            nativeString("Access"),
+            gatewayAccessLabel(
+              isConnected = gatewayConnectionDisplay.isConnected,
+              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+            ),
+          ),
           SettingsMetric(nativeString("Gateway"), serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
           SettingsMetric(nativeString("Address"), remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Not available")),
           SettingsMetric(
             nativeString("Status"),
             gatewayStatusLabel(gatewayConnectionDisplay),
           ),
+          SettingsMetric(nativeString("Discovered"), discoveredGateways.size.toString()),
+          SettingsMetric(nativeString("Default Agent"), defaultAgentName(gatewayAgents, gatewayDefaultAgentId)),
+          SettingsMetric(nativeString("Agents"), gatewayAgents.size.toString()),
+          SettingsMetric(nativeString("Instance ID"), instanceId, copyable = true),
         ),
     )
+    // First-run hero: no paired gateways yet, so pairing is the primary action.
+    if (gatewayShowsScanHero(pairedGateways.size)) {
+      ClawPrimaryButton(
+        text = nativeString("Scan QR to Pair"),
+        onClick = viewModel::pairNewGateway,
+        modifier = Modifier.fillMaxWidth(),
+        icon = Icons.Default.QrCode2,
+      )
+    }
+    if (gatewayConnectionDisplay.isConnected && !operatorAdminScopeAvailable) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(
+            text = nativeString("Limited Gateway access"),
+            style = ClawTheme.type.section,
+            color = ClawTheme.colors.text,
+          )
+          Text(
+            text = gatewayLimitedAccessUpgradeText(),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
+    }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
+    }
+    ClawSecondaryButton(
+      text = nativeString("Diagnose"),
+      onClick = {
+        copyGatewayDiagnosticsReport(
+          context = context,
+          screen = "gateway settings",
+          gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress, manualHost, manualPort, manualTls),
+          statusText = gatewayStatusLabel(gatewayConnectionDisplay),
+        )
+      },
+      modifier = Modifier.fillMaxWidth(),
+    )
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = nativeString("Add Gateway"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = nativeString("Scan or paste a setup code to add another gateway."),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        ClawSecondaryButton(text = nativeString("Scan QR"), onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"))
+        ClawSecondaryButton(text = nativeString("Connect"), onClick = ::connectSetupCode, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
+        TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
+          Text(nativeString("Where do I get a setup code?"))
+        }
+        if (showSetupCodeHelp) {
+          Text(
+            text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+        if (discoveredGateways.isEmpty()) {
+          Text(
+            text = nativeString("No gateways found yet. Use manual setup if discovery is blocked."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        } else {
+          discoveredGateways.forEachIndexed { index, endpoint ->
+            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+            ClawListItem(
+              title = endpoint.name,
+              subtitle = gatewayDiscoveredRowSubtitle(endpoint),
+              leading = { ClawIconBadge(Icons.Default.Cloud) },
+              trailing = {
+                TextButton(onClick = { viewModel.connect(endpoint) }) {
+                  Text(nativeString("Connect"))
+                }
+              },
+              onClick = null,
+            )
+          }
+        }
+      }
     }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1486,41 +1630,11 @@ private fun GatewaySettingsScreen(
             )
           }
         }
-        ClawSecondaryButton(
-          text = nativeString("Add gateway"),
-          onClick = viewModel::pairNewGateway,
-          modifier = Modifier.fillMaxWidth(),
-          icon = Icons.Default.QrCode2,
-        )
-      }
-    }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(text = nativeString("Gateway setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(
-          text = nativeString("Scan or paste a setup code to add another gateway."),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.textMuted,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = nativeString("Add gateway"), onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
-          ClawSecondaryButton(text = nativeString("Setup Code"), onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
-        }
-        if (showSetupCodeHelp) {
-          Text(
-            text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
       }
     }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = nativeString("Connection Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"))
+        Text(text = nativeString("Manual Gateway"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
           ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = nativeString("Port"), modifier = Modifier.weight(0.62f))
@@ -1558,8 +1672,8 @@ private fun GatewaySettingsScreen(
           onClick = {
             val plan =
               resolveGatewayConnectPlan(
-                useSetupCode = setupCode.isNotBlank(),
-                setupCode = setupCode,
+                useSetupCode = false,
+                setupCode = "",
                 savedManualHost = manualHost,
                 savedManualPort = manualPort.toString(),
                 savedManualTls = manualTls,
@@ -1586,6 +1700,21 @@ private fun GatewaySettingsScreen(
     }
   }
 }
+
+internal fun gatewayAccessLabel(
+  isConnected: Boolean,
+  operatorAdminScopeAvailable: Boolean,
+): String =
+  when {
+    !isConnected -> nativeString("Not available")
+    operatorAdminScopeAvailable -> nativeString("Full")
+    else -> nativeString("Limited")
+  }
+
+internal fun gatewayLimitedAccessUpgradeText(): String =
+  nativeString(
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+  )
 
 @Composable
 private fun AppearanceSettingsScreen(
@@ -1949,6 +2078,7 @@ internal fun SettingsDetailFrame(
   icon: ImageVector,
   onBack: () -> Unit,
   subtitleTextAlign: TextAlign = TextAlign.Start,
+  trailingAction: (@Composable () -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
   ClawScaffold(
@@ -1964,6 +2094,7 @@ internal fun SettingsDetailFrame(
             onClick = onBack,
           )
           Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+          trailingAction?.invoke()
           SettingsIconMark(icon = icon)
         }
       }
@@ -2370,6 +2501,12 @@ private fun AgentListRow(
     trailing = { ClawStatusPill(text = if (isDefault) nativeString("Default") else nativeString("Ready"), status = ClawStatus.Success) },
   )
 }
+
+/** First-run pairing state: the hero scan CTA shows until a gateway is paired. */
+internal fun gatewayShowsScanHero(pairedGatewayCount: Int): Boolean = pairedGatewayCount == 0
+
+/** Discovered rows show the endpoint target so users can tell twins apart before connecting. */
+internal fun gatewayDiscoveredRowSubtitle(endpoint: GatewayEndpoint): String = "${endpoint.host}:${endpoint.port}"
 
 /**
  * Chooses a display name for the configured default agent, falling back to any available agent.

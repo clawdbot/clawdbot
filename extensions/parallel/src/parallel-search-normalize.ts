@@ -25,7 +25,7 @@ export const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
-export type ParallelSearchResult = {
+type ParallelSearchResult = {
   title?: unknown;
   url?: unknown;
   publish_date?: unknown;

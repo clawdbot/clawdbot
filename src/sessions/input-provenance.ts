@@ -5,13 +5,9 @@ import { isStringOption } from "../utils/string-readers.js";
 
 // Input provenance marks whether a user-role message actually came from an
 // external user, another session, or an internal system/tool handoff.
-export const INPUT_PROVENANCE_KIND_VALUES = [
-  "external_user",
-  "inter_session",
-  "internal_system",
-] as const;
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 
-export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
+type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 
 export type InputProvenance = {
   kind: InputProvenanceKind;

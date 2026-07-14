@@ -10,7 +10,7 @@ export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
 
 // Cap optional enrichment before agent dispatch. The Teams SDK still holds the
 // webhook open for the agent turn, so this budget alone cannot prevent retries.
-export const MSTEAMS_INBOUND_PREPROCESS_TIMEOUT_MS = 10_000;
+const MSTEAMS_INBOUND_PREPROCESS_TIMEOUT_MS = 10_000;
 
 export type MSTeamsRequestDeadline = ProviderOperationDeadline;
 

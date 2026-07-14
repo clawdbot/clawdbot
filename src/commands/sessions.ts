@@ -550,4 +550,3 @@ export async function sessionsCommand(
 export const testing = {
   parseSessionsLimit,
 } as const;
-export { testing as __testing };

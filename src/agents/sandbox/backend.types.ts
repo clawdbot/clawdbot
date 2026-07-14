@@ -64,12 +64,4 @@ export type RegisteredSandboxBackend = {
 };
 
 export type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
-export type {
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-  SandboxBackendExecSpec,
-  SandboxBackendPreparedWorkdirDiscarder,
-  SandboxBackendWorkdirValidation,
-  SandboxBackendWorkdirValidator,
-  SandboxFsBridgeContext,
-} from "./backend-handle.types.js";
+export type { SandboxBackendWorkdirValidation } from "./backend-handle.types.js";

@@ -1,11 +1,12 @@
 // Covers the promotions feed cache: refresh cadence, 304 revalidation,
 // sequence monotonicity, notified markers, and claim provenance.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -16,11 +17,12 @@ import {
   markPromotionSlugsNotified,
   maybeRefreshPromotionsFeed,
   readPromotionClaims,
-  readPromotionsFeedState,
   recordPromotionClaim,
 } from "./promotions-feed.js";
 
 const NOW = Date.parse("2026-07-05T12:00:00.000Z");
+const FEED_URL = "https://clawhub.ai/api/v1/feeds/promotions";
+const mockHttp = useMockHttp();
 
 function feedPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,16 +48,6 @@ function feedPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function feedResponse(body: unknown, init: { status?: number; etag?: string } = {}) {
-  return new Response(init.status === 304 ? null : JSON.stringify(body), {
-    status: init.status ?? 200,
-    headers: {
-      "content-type": "application/json",
-      ...(init.etag ? { etag: init.etag } : {}),
-    },
-  });
-}
-
 describe("promotions feed state", () => {
   let testState: OpenClawTestState;
 
@@ -71,101 +63,110 @@ describe("promotions feed state", () => {
     await testState.cleanup();
   });
 
-  it("caches a fetched snapshot and round-trips it from storage", async () => {
-    const fetchImpl = vi.fn(async () => feedResponse(feedPayload(), { etag: '"v4"' }));
-    const state = await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(state.sequence).toBe(4);
-    expect(state.etag).toBe('"v4"');
-    expect(state.expiresAtMs).toBe(Date.parse("2026-07-06T00:00:00.000Z"));
-    expect(state.entries).toHaveLength(1);
-
-    const persisted = readPromotionsFeedState();
-    expect(persisted.sequence).toBe(4);
-    expect(persisted.expiresAtMs).toBe(Date.parse("2026-07-06T00:00:00.000Z"));
-    expect(persisted.entries[0]?.slug).toBe("example-models-launch");
-    expect(listLivePromotionEntries(persisted, NOW)).toHaveLength(1);
-    expect(listLivePromotionEntries(persisted, NOW + 3 * 86_400_000)).toHaveLength(0);
-  });
-
-  it("skips the network while the last check is fresh", async () => {
-    const fetchImpl = vi.fn(async () => feedResponse(feedPayload()));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
-    const second = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(second.entries).toHaveLength(1);
+  it("round-trips a fetched snapshot while the last check is fresh", async () => {
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload(), headers: { etag: '"v4"' } },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+    const second = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(1);
+    expect(second.sequence).toBe(4);
+    expect(second.etag).toBe('"v4"');
+    expect(second.expiresAtMs).toBe(Date.parse("2026-07-06T00:00:00.000Z"));
+    expect(second.entries[0]?.slug).toBe("example-models-launch");
+    expect(listLivePromotionEntries(second, NOW)).toHaveLength(1);
+    expect(listLivePromotionEntries(second, NOW + 3 * 86_400_000)).toHaveLength(0);
   });
 
   it("refreshes at feed expiry and keeps an expired 304 snapshot hidden without retrying", async () => {
     const expiresAt = new Date(NOW + 60_000).toISOString();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt }), { etag: '"v4"' }))
-      .mockResolvedValueOnce(feedResponse(null, { status: 304 }));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload({ expiresAt }), headers: { etag: '"v4"' } },
+    });
+    mockHttp.intercept({
+      url: FEED_URL,
+      requestHeaders: { "if-none-match": '"v4"' },
+      reply: { status: 304 },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
 
-    const expired = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const expired = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
     expect(listLivePromotionEntries(expired, NOW + 60_000)).toHaveLength(0);
 
-    const cached = await maybeRefreshPromotionsFeed({ nowMs: NOW + 61_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const cached = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 61_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
+    expect(cached.lastCheckedAtMs).toBe(NOW + 60_000);
     expect(listLivePromotionEntries(cached, NOW + 61_000)).toHaveLength(0);
   });
 
   it("keeps an expired snapshot hidden after a failed expiry refresh without retrying", async () => {
     const expiresAt = new Date(NOW + 60_000).toISOString();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt })))
-      .mockRejectedValueOnce(new Error("offline"));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+    mockHttp.intercept({ url: FEED_URL, reply: { json: feedPayload({ expiresAt }) } });
+    mockHttp.intercept({ url: FEED_URL, reply: new Error("offline") });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
 
-    const expired = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const expired = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
     expect(listLivePromotionEntries(expired, NOW + 60_000)).toHaveLength(0);
 
-    const cached = await maybeRefreshPromotionsFeed({ nowMs: NOW + 61_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const cached = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 61_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
     expect(listLivePromotionEntries(cached, NOW + 61_000)).toHaveLength(0);
   });
 
   it("replaces an expired snapshot when ClawHub publishes a newer sequence", async () => {
     const firstExpiry = new Date(NOW + 60_000).toISOString();
     const nextExpiry = new Date(NOW + 86_400_000).toISOString();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt: firstExpiry, sequence: 4 })))
-      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt: nextExpiry, sequence: 5 })));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload({ expiresAt: firstExpiry, sequence: 4 }) },
+    });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload({ expiresAt: nextExpiry, sequence: 5 }) },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
 
-    const refreshed = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const refreshed = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      fetchImpl: globalThis.fetch,
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
     expect(refreshed.sequence).toBe(5);
     expect(refreshed.expiresAtMs).toBe(Date.parse(nextExpiry));
     expect(listLivePromotionEntries(refreshed, NOW + 60_000)).toHaveLength(1);
   });
 
-  it("revalidates with If-None-Match and keeps the cache on 304", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload(), { etag: '"v4"' }))
-      .mockResolvedValueOnce(feedResponse(null, { status: 304 }));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
-    const state = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, force: true, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const secondInit = fetchImpl.mock.calls[1]?.[1] as RequestInit;
-    expect(new Headers(secondInit.headers).get("if-none-match")).toBe('"v4"');
-    expect(state.entries).toHaveLength(1);
-    expect(readPromotionsFeedState().lastCheckedAtMs).toBe(NOW + 60_000);
-  });
-
   it("drops a stale validator when the cached payload is invalid", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload(), { etag: '"v4"' }))
-      .mockResolvedValueOnce(feedResponse(feedPayload({ sequence: 5 }), { etag: '"v5"' }));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload(), headers: { etag: '"v4"' } },
+    });
+    mockHttp.intercept({
+      url: FEED_URL,
+      requestHeaders: (headers) =>
+        !Object.keys(headers).some((name) => name.toLowerCase() === "if-none-match"),
+      reply: { json: feedPayload({ sequence: 5 }), headers: { etag: '"v5"' } },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely =
         getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "clawhub_promotions_feed_state">>(db);
@@ -180,47 +181,53 @@ describe("promotions feed state", () => {
 
     const state = await maybeRefreshPromotionsFeed({
       nowMs: NOW + 60_000,
-      fetchImpl,
+      fetchImpl: globalThis.fetch,
     });
 
-    const secondInit = fetchImpl.mock.calls[1]?.[1] as RequestInit;
-    expect(new Headers(secondInit.headers).get("if-none-match")).toBeNull();
     expect(state.sequence).toBe(5);
     expect(state.etag).toBe('"v5"');
     expect(state.entries).toHaveLength(1);
   });
 
   it("never replaces the cache with an older snapshot sequence", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload({ sequence: 4 })))
-      .mockResolvedValueOnce(feedResponse(feedPayload({ sequence: 2, entries: [] })));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
-    const state = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, force: true, fetchImpl });
+    mockHttp.intercept({ url: FEED_URL, reply: { json: feedPayload({ sequence: 4 }) } });
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload({ sequence: 2, entries: [] }) },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+    const state = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      force: true,
+      fetchImpl: globalThis.fetch,
+    });
     expect(state.sequence).toBe(4);
     expect(state.entries).toHaveLength(1);
   });
 
   it("fails silent on network errors and keeps the cached snapshot", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(feedResponse(feedPayload()))
-      .mockRejectedValueOnce(new Error("offline"));
-    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
-    const state = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, force: true, fetchImpl });
+    mockHttp.intercept({ url: FEED_URL, reply: { json: feedPayload() } });
+    mockHttp.intercept({ url: FEED_URL, reply: new Error("offline") });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+    const state = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      force: true,
+      fetchImpl: globalThis.fetch,
+    });
     expect(state.entries).toHaveLength(1);
     // The failed attempt still stamps the check time so offline runs do not
     // retry on every command.
     expect(state.lastCheckedAtMs).toBe(NOW + 60_000);
   });
 
-  it("persists notified slugs across reads", () => {
+  it("persists and deduplicates notified promotion slugs", async () => {
     markPromotionSlugsNotified(["example-models-launch", "second-offer"]);
     markPromotionSlugsNotified(["example-models-launch"]);
-    expect([...readPromotionsFeedState().notifiedSlugs].toSorted()).toEqual([
-      "example-models-launch",
-      "second-offer",
-    ]);
+    mockHttp.intercept({ url: FEED_URL, reply: { json: feedPayload() } });
+
+    const state = await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+
+    expect([...state.notifiedSlugs].toSorted()).toEqual(["example-models-launch", "second-offer"]);
   });
 
   it("round-trips claim provenance and upserts by slug", () => {

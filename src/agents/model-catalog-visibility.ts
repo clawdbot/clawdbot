@@ -35,7 +35,7 @@ export type ModelCatalogAuthChecker = (
 ) => boolean | Promise<boolean>;
 type ModelCatalogEntryAuthChecker = (entry: ModelCatalogEntry) => boolean | Promise<boolean>;
 
-export type LogicalModelCatalogEntryState = {
+type LogicalModelCatalogEntryState = {
   authBacked: boolean;
   compatible: boolean;
   preferred: boolean;

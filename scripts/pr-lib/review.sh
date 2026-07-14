@@ -496,9 +496,10 @@ review_init() {
   local pr="$1"
   enter_worktree "$pr" true
 
-  local json
+  local json pr_url
   json=$(pr_meta_json "$pr")
   write_pr_meta_files "$json"
+  pr_url=$(printf '%s\n' "$json" | jq -r .url)
 
   git fetch origin "pull/$pr/head:pr-$pr" --force
   local mb
@@ -512,9 +513,9 @@ review_init() {
     > .local/review-context.env
   set_review_mode main
 
-  printf '%s\n' "$json" | jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headSha:.headRefOid,headRepo:.headRepository.nameWithOwner,additions,deletions,files:(.files|length)}'
+  printf '%s\n' "$json" | jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headSha:.headRefOid,headRepo:.headRepository.nameWithOwner,additions,deletions,files:.changedFiles}'
   echo "worktree=$PWD"
-  echo "pr_url=${PR_URL:-}"
+  echo "pr_url=$pr_url"
   echo "merge_base=$mb"
   echo "branch=$(git branch --show-current)"
   echo "wrote=.local/pr-meta.json .local/pr-meta.env .local/review-context.env .local/review-mode.env"

@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 

@@ -11,7 +11,7 @@ import type { WorkspaceStore } from "./store.js";
 
 export { WIDGETS_ROUTE_PREFIX };
 
-export type WidgetHttpRouteHandler = {
+type WidgetHttpRouteHandler = {
   handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 };
 

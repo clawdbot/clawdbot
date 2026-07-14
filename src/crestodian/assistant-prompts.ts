@@ -11,8 +11,6 @@ import type { CrestodianOverview } from "./overview.js";
  */
 /** Timeout for one assistant turn (local CLI backends cold-start slowly). */
 export const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 30_000;
-/** Maximum assistant response budget. */
-export const CRESTODIAN_ASSISTANT_MAX_TOKENS = 700;
 
 /** System prompt: persona plus the closed command vocabulary. */
 export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [

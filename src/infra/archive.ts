@@ -5,7 +5,6 @@ import "./fs-safe-defaults.js";
 export {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
-  ArchiveSecurityError,
   DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,

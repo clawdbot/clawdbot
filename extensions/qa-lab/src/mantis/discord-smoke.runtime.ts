@@ -24,7 +24,7 @@ export type MantisDiscordSmokeOptions = {
   tokenFileEnv?: string;
 };
 
-export type MantisDiscordSmokeResult = {
+type MantisDiscordSmokeResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;

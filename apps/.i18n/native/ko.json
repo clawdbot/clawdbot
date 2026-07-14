@@ -1074,6 +1074,11 @@
       "translated": "모델을 업데이트할 수 없습니다."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "사고 수준을 업데이트할 수 없습니다."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "실행이 시작되기 전에 채팅에 실패했습니다. 다시 시도하세요."
@@ -3929,11 +3934,6 @@
       "translated": "cron 작업을 로드하는 중…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "에이전트"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "이 Gateway에서 사용할 수 있는 어시스턴트를 선택하고 검사합니다."
@@ -4157,11 +4157,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "사용량 제한"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "접근 권한"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4424,44 @@
       "translated": "온라인"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "접근 권한"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "주소"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "사용할 수 없음"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "발견됨"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "기본 에이전트"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "인스턴스 ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "페어링하려면 QR 스캔"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "제한된 Gateway 접근"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4472,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "연결 해제"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "진단"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway 추가"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR 스캔"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "설정 코드"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "설정 코드는 어디에서 받을 수 있나요?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android는 기존 설정 코드를 스캔하거나 붙여넣을 수 있지만, 이 gateway는 아직 앱에 설정 코드 생성을 제공하지 않습니다. gateway 호스트에서 openclaw qr로 QR/코드를 생성한 다음 여기에서 스캔하거나 아래에 설정 코드를 붙여넣으세요."
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "아직 Gateway를 찾지 못했습니다. 검색이 차단된 경우 수동 설정을 사용하세요."
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "연결"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4534,9 @@
       "translated": "잊어버리기"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway 설정"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gateway 추가"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "설정 코드"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android는 기존 설정 코드를 스캔하거나 붙여넣을 수 있지만, 이 gateway는 아직 앱에 설정 코드 생성을 제공하지 않습니다. gateway 호스트에서 openclaw qr로 QR/코드를 생성한 다음 여기에서 스캔하거나 아래에 설정 코드를 붙여넣으세요."
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "연결 설정"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "설정 코드"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "수동 Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4587,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "유효한 설정 코드 또는 Gateway 주소를 입력하세요."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "사용할 수 없음"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용하고, Control UI 또는 openclaw qr로 전체 접근 설정 코드를 생성한 다음, 아래에서 스캔하거나 붙여넣고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4987,6 +5047,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "기본값"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -10974,6 +11039,11 @@
       "translated": "채널"
     },
     {
+      "id": "native.apple.e2eaba9832a2fad7",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.fd44d6742909f55c",
       "source": "Voice & Talk",
       "translated": "음성 및 대화"
@@ -11289,6 +11359,11 @@
       "translated": "채널"
     },
     {
+      "id": "native.apple.1f52746515df3fa5",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.1573249126ddd84f",
       "source": "Diagnostics",
       "translated": "진단"
@@ -11309,11 +11384,6 @@
       "translated": "라이선스"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
       "id": "native.apple.800b6502b5b49941",
       "source": "Address",
       "translated": "주소"
@@ -11332,6 +11402,51 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "에이전트"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "접근"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "접근 업그레이드"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "이 휴대폰은 Gateway 접근이 제한되어 있습니다."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용한 다음, Control UI 또는 openclaw qr에서 전체 접근 설정 코드를 스캔하고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "전체 접근 코드 스캔"
+    },
+    {
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.34444b9c6d74f472",
+      "source": "Scan QR to Pair",
+      "translated": "페어링하려면 QR 코드를 스캔하세요"
     },
     {
       "id": "native.apple.88835de05348122a",
@@ -11634,14 +11749,14 @@
       "translated": "새 Chat 및 Talk 세션에 사용됩니다."
     },
     {
-      "id": "native.apple.313eb24efcb8d4a0",
-      "source": "Paste setup code",
-      "translated": "설정 코드 붙여넣기"
-    },
-    {
       "id": "native.apple.19552e71de246322",
       "source": "Scan QR",
       "translated": "QR 스캔"
+    },
+    {
+      "id": "native.apple.313eb24efcb8d4a0",
+      "source": "Paste setup code",
+      "translated": "설정 코드 붙여넣기"
     },
     {
       "id": "native.apple.f4afcfbe4e4a72f8",
@@ -11649,19 +11764,14 @@
       "translated": "연결"
     },
     {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "설정 코드"
-    },
-    {
-      "id": "native.apple.adb22453596f1d78",
-      "source": "Discovered Gateways",
-      "translated": "발견된 Gateway"
-    },
-    {
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "아직 Gateway를 찾을 수 없습니다. Bonjour가 차단된 경우 수동 설정을 사용하세요."
+    },
+    {
+      "id": "native.apple.784220b48f5c4af8",
+      "source": "Add Gateway",
+      "translated": "Gateway 추가"
     },
     {
       "id": "native.apple.75c61c4ee1ecc6d8",
@@ -12102,6 +12212,336 @@
       "id": "native.apple.f439c34a9ce3a332",
       "source": "Discovered gateways and manual setup live here when the gateway has not connected yet.",
       "translated": "Gateway가 아직 연결되지 않은 경우, 발견된 Gateway와 수동 설정이 여기에 표시됩니다."
+    },
+    {
+      "id": "native.apple.acf33c8c3efde926",
+      "source": "Browse",
+      "translated": "둘러보기"
+    },
+    {
+      "id": "native.apple.57f55061e45f732b",
+      "source": "All",
+      "translated": "전체"
+    },
+    {
+      "id": "native.apple.02a59c6d5de241c6",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
+      "id": "native.apple.de33b4b220a48b7b",
+      "source": "Connect to manage Gateway skills.",
+      "translated": "Gateway Skills를 관리하려면 연결하세요."
+    },
+    {
+      "id": "native.apple.395f4d55dfb4b1bf",
+      "source": "Loading installed skills and readiness.",
+      "translated": "설치된 Skills 및 준비 상태를 불러오는 중입니다."
+    },
+    {
+      "id": "native.apple.b5a47111394ae9d2",
+      "source": "%@ ready · %@ need setup",
+      "translated": "%@개 준비됨 · %@개 설정 필요"
+    },
+    {
+      "id": "native.apple.06c8a70b3321dd77",
+      "source": "offline",
+      "translated": "오프라인"
+    },
+    {
+      "id": "native.apple.bbf921f4a20e6d64",
+      "source": "loading",
+      "translated": "불러오는 중"
+    },
+    {
+      "id": "native.apple.50af4928abeb5493",
+      "source": "Skills section",
+      "translated": "Skills 섹션"
+    },
+    {
+      "id": "native.apple.5be2a1662a9d8454",
+      "source": "Installed",
+      "translated": "설치됨"
+    },
+    {
+      "id": "native.apple.493e64eee96d3b2c",
+      "source": "Refresh Skills",
+      "translated": "Skills 새로 고침"
+    },
+    {
+      "id": "native.apple.2fc9bfee92bad603",
+      "source": "Search installed skills",
+      "translated": "설치된 Skills 검색"
+    },
+    {
+      "id": "native.apple.b7a9e8ede061b45c",
+      "source": "Installed skill filter",
+      "translated": "설치된 Skills 필터"
+    },
+    {
+      "id": "native.apple.d5075a70296450e1",
+      "source": "Connect to load and manage installed skills.",
+      "translated": "설치된 Skills를 불러오고 관리하려면 연결하세요."
+    },
+    {
+      "id": "native.apple.d23235f31ddc7d87",
+      "source": "Loading skills",
+      "translated": "Skills 불러오는 중"
+    },
+    {
+      "id": "native.apple.ad8ceb4f98255843",
+      "source": "Reading the Gateway skill catalog.",
+      "translated": "Gateway Skills 카탈로그를 읽는 중입니다."
+    },
+    {
+      "id": "native.apple.0550dad32f8ef785",
+      "source": "No matching skills",
+      "translated": "일치하는 Skills 없음"
+    },
+    {
+      "id": "native.apple.adcee8faa45b0365",
+      "source": "No skills installed",
+      "translated": "설치된 Skills 없음"
+    },
+    {
+      "id": "native.apple.e7e5b1011a14fc4b",
+      "source": "Browse ClawHub to discover and install skills.",
+      "translated": "ClawHub를 둘러보고 스킬을 찾아 설치하세요."
+    },
+    {
+      "id": "native.apple.f54b778b8ea52ece",
+      "source": "Change the search or readiness filter.",
+      "translated": "검색어나 준비 상태 필터를 변경하세요."
+    },
+    {
+      "id": "native.apple.44d2b179910face4",
+      "source": "ClawHub",
+      "translated": "ClawHub"
+    },
+    {
+      "id": "native.apple.8e161683e7efa2a4",
+      "source": "Search ClawHub",
+      "translated": "ClawHub 검색"
+    },
+    {
+      "id": "native.apple.c7050536b0ee103f",
+      "source": "Search",
+      "translated": "검색"
+    },
+    {
+      "id": "native.apple.a390ab96444bced8",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway는 다운로드 전에 검토된 정확한 릴리스를 확인합니다."
+    },
+    {
+      "id": "native.apple.85d609abe4548150",
+      "source": "Gateway offline",
+      "translated": "Gateway 오프라인"
+    },
+    {
+      "id": "native.apple.37ce41bbd2c854dd",
+      "source": "Connect to search and install ClawHub skills.",
+      "translated": "연결하여 ClawHub 스킬을 검색하고 설치하세요."
+    },
+    {
+      "id": "native.apple.a21337a8fba8d90c",
+      "source": "Gateway update required",
+      "translated": "Gateway 업데이트 필요"
+    },
+    {
+      "id": "native.apple.503fadc03e3b4090",
+      "source": "Update the Gateway to search and install ClawHub skills from iOS.",
+      "translated": "iOS에서 ClawHub 스킬을 검색하고 설치하려면 Gateway를 업데이트하세요."
+    },
+    {
+      "id": "native.apple.b542672608467c0a",
+      "source": "Searching ClawHub",
+      "translated": "ClawHub 검색 중"
+    },
+    {
+      "id": "native.apple.5acf38408914a884",
+      "source": "Loading verified skill releases.",
+      "translated": "확인된 스킬 릴리스를 불러오는 중입니다."
+    },
+    {
+      "id": "native.apple.c0261398045e7911",
+      "source": "No skills found",
+      "translated": "스킬을 찾을 수 없음"
+    },
+    {
+      "id": "native.apple.eb605facc8feeed7",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "다른 검색어를 사용하거나 카탈로그를 새로 고침해 보세요."
+    },
+    {
+      "id": "native.apple.29c8087ab70bedcd",
+      "source": "Could not load skills",
+      "translated": "스킬을 불러올 수 없음"
+    },
+    {
+      "id": "native.apple.cf8f37f9d39bf57b",
+      "source": "ClawHub unavailable",
+      "translated": "ClawHub를 사용할 수 없음"
+    },
+    {
+      "id": "native.apple.43406555e5144718",
+      "source": "Could not review skill",
+      "translated": "스킬을 검토할 수 없음"
+    },
+    {
+      "id": "native.apple.1633604644edf7b3",
+      "source": "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
+      "translated": "다시 연결하고 Skills를 새로 고친 후 다시 시도하세요. Gateway는 아직 실행 중인 일치하는 설치 작업에 안전하게 다시 연결됩니다."
+    },
+    {
+      "id": "native.apple.3cc22b37bdb9fcd1",
+      "source": "Gateway blocked install",
+      "translated": "Gateway가 설치를 차단함"
+    },
+    {
+      "id": "native.apple.95223294a767ccd7",
+      "source": "The Gateway installed the reviewed version.",
+      "translated": "Gateway가 검토된 버전을 설치했습니다."
+    },
+    {
+      "id": "native.apple.71d7b3860ab9f02c",
+      "source": "Install result unknown",
+      "translated": "설치 결과 알 수 없음"
+    },
+    {
+      "id": "native.apple.e69ba6c4d73eb72f",
+      "source": "Skill disabled",
+      "translated": "Skill 비활성화됨"
+    },
+    {
+      "id": "native.apple.8677a968b0a7729d",
+      "source": "Skill enabled",
+      "translated": "Skill 활성화됨"
+    },
+    {
+      "id": "native.apple.b4577e30f257ad79",
+      "source": "Could not enable skill",
+      "translated": "Skill을 활성화할 수 없음"
+    },
+    {
+      "id": "native.apple.b9d22e7d493eb2bb",
+      "source": "Could not disable skill",
+      "translated": "Skill을 비활성화할 수 없음"
+    },
+    {
+      "id": "native.apple.1f06ad201d9b6bed",
+      "source": "Disable",
+      "translated": "비활성화"
+    },
+    {
+      "id": "native.apple.b284f85f4efc0fa7",
+      "source": "Enable",
+      "translated": "활성화"
+    },
+    {
+      "id": "native.apple.0d4cc831b423aa98",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.apple.c63a20f1143b62ca",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.apple.892d7433a4468f5a",
+      "source": "Needs Setup",
+      "translated": "설정 필요"
+    },
+    {
+      "id": "native.apple.113dacafa42bb62e",
+      "source": "Missing: %@",
+      "translated": "누락됨: %@"
+    },
+    {
+      "id": "native.apple.1824681020aa336b",
+      "source": "Install",
+      "translated": "설치"
+    },
+    {
+      "id": "native.apple.7d9b36be7a7df9a8",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "Gateway가 다운로드 전에 ClawHub에서 이 정확한 릴리스를 확인합니다."
+    },
+    {
+      "id": "native.apple.4fb1f26e4de787dd",
+      "source": "This gateway connection needs operator.admin to install skills.",
+      "translated": "이 Gateway 연결에서 Skill을 설치하려면 operator.admin이 필요합니다."
+    },
+    {
+      "id": "native.apple.0f902fcad255ae3f",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub Skill 검토"
+    },
+    {
+      "id": "native.apple.8f61d18ceca765da",
+      "source": "Verify and install",
+      "translated": "확인 및 설치"
+    },
+    {
+      "id": "native.apple.64ac6815468e764b",
+      "source": "Gateway warning",
+      "translated": "Gateway 경고"
+    },
+    {
+      "id": "native.apple.cfb4fe56e0a7f93b",
+      "source": "The Gateway requires explicit acknowledgement for this release.",
+      "translated": "Gateway에서 이 릴리스에 대한 명시적 확인이 필요합니다."
+    },
+    {
+      "id": "native.apple.91447e88c95f0f72",
+      "source": "Review warning details",
+      "translated": "경고 세부 정보 검토"
+    },
+    {
+      "id": "native.apple.9ad3235988108fce",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "이 정확한 버전을 확인하기 전에 Gateway 경고를 펼쳐 검토하세요."
+    },
+    {
+      "id": "native.apple.b79b3886a801b83e",
+      "source": "Review Gateway warning",
+      "translated": "Gateway 경고 검토"
+    },
+    {
+      "id": "native.apple.8a3adec4b6d6eb15",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.apple.30304ca2865ea3b4",
+      "source": "Acknowledge and install",
+      "translated": "확인 및 설치"
+    },
+    {
+      "id": "native.apple.c1499a39573b3633",
+      "source": "Version",
+      "translated": "버전"
+    },
+    {
+      "id": "native.apple.4789ad34a901e14e",
+      "source": "Publisher",
+      "translated": "게시자"
+    },
+    {
+      "id": "native.apple.ba780a0a9b2fd426",
+      "source": "The connected Gateway changed. Refresh Skills and try again.",
+      "translated": "연결된 Gateway가 변경되었습니다. Skills를 새로 고친 후 다시 시도하세요."
+    },
+    {
+      "id": "native.apple.af9d5bb3dd35cfff",
+      "source": "Could not encode the Gateway request.",
+      "translated": "Gateway 요청을 인코딩할 수 없습니다."
+    },
+    {
+      "id": "native.apple.7a5a1b9342f01954",
+      "source": "ClawHub did not report an installable version for this skill.",
+      "translated": "ClawHub에서 이 Skill에 설치 가능한 버전을 제공하지 않았습니다."
     },
     {
       "id": "native.apple.798c3584ad95f8da",
@@ -12979,6 +13419,46 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
+      "id": "native.apple.9dcd64ab340a6c15",
+      "source": "Allow access",
+      "translated": "접근 허용"
+    },
+    {
+      "id": "native.apple.933a2ac28d1d2aec",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "translated": "이 iPhone에서 에이전트가 사용할 수 있는 항목을 선택하세요. 허용하기 전에는 아무것도 활성화되지 않습니다."
+    },
+    {
+      "id": "native.apple.47114a39f7a71c3b",
+      "source": "You can change any of these later in Settings.",
+      "translated": "나중에 설정에서 언제든지 변경할 수 있습니다."
+    },
+    {
+      "id": "native.apple.eabf54e2b640a4a1",
+      "source": "Continue",
+      "translated": "계속"
+    },
+    {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.c5db9e6eae115f7a",
+      "source": "Allow",
+      "translated": "허용"
+    },
+    {
+      "id": "native.apple.f591e16105268e99",
+      "source": "Open Settings",
+      "translated": "설정 열기"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "관리"
+    },
+    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "홈 네트워크"
@@ -13159,24 +13639,24 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.c9419426ba8c2a2e",
-      "source": "Securely connect this iPhone to your gateway.",
-      "translated": "이 iPhone을 Gateway에 안전하게 연결하세요."
+      "id": "native.apple.9b414850baa618da",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
+      "translated": "주머니 속의 에이전트. 시작하려면 이 iPhone을 Gateway와 페어링하세요."
     },
     {
-      "id": "native.apple.3e233ba3ed3181d4",
-      "source": "Connect to your gateway",
-      "translated": "Gateway에 연결"
+      "id": "native.apple.7248e67848beebd9",
+      "source": "Your agent runs on your own computer",
+      "translated": "에이전트는 사용자의 컴퓨터에서 실행됩니다"
     },
     {
-      "id": "native.apple.b6978424ac0a4d14",
-      "source": "Choose device permissions",
-      "translated": "기기 권한 선택"
+      "id": "native.apple.acbdc9332988fa64",
+      "source": "Pair this iPhone by scanning a setup code",
+      "translated": "설정 코드를 스캔하여 이 iPhone을 페어링하세요"
     },
     {
-      "id": "native.apple.4109460a5b8927d8",
-      "source": "Use OpenClaw from your phone",
-      "translated": "휴대폰에서 OpenClaw 사용"
+      "id": "native.apple.feb3e155748c2f05",
+      "source": "Chat, talk, and approve actions from anywhere",
+      "translated": "어디서든 채팅하고, 대화하고, 작업을 승인하세요"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -13444,6 +13924,101 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.0e07e7044608f954",
+      "source": "Allowed",
+      "translated": "허용됨"
+    },
+    {
+      "id": "native.apple.86796a6df9d0ff63",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.4c7f5404e9c42402",
+      "source": "Off in Settings",
+      "translated": "설정에서 꺼짐"
+    },
+    {
+      "id": "native.apple.96d65a5563690719",
+      "source": "Notifications",
+      "translated": "알림"
+    },
+    {
+      "id": "native.apple.d290a46515add091",
+      "source": "Camera",
+      "translated": "카메라"
+    },
+    {
+      "id": "native.apple.0eeedbc8aaafcd2c",
+      "source": "Microphone",
+      "translated": "마이크"
+    },
+    {
+      "id": "native.apple.14fadad23dd36e44",
+      "source": "Photos",
+      "translated": "사진"
+    },
+    {
+      "id": "native.apple.f0cfa9dcc57133b7",
+      "source": "Contacts",
+      "translated": "연락처"
+    },
+    {
+      "id": "native.apple.5ec2597d0b4a06fb",
+      "source": "Calendar",
+      "translated": "캘린더"
+    },
+    {
+      "id": "native.apple.9ed5c19cf1e84490",
+      "source": "Reminders",
+      "translated": "미리 알림"
+    },
+    {
+      "id": "native.apple.866b9df8afcadf07",
+      "source": "Location",
+      "translated": "위치"
+    },
+    {
+      "id": "native.apple.f205ac6778705a7d",
+      "source": "Pairing approvals and replies from your agent.",
+      "translated": "에이전트의 페어링 승인 요청과 답변을 받습니다."
+    },
+    {
+      "id": "native.apple.061a17077ee3be94",
+      "source": "Scan setup codes and take photos on request.",
+      "translated": "설정 코드를 스캔하고 요청 시 사진을 촬영합니다."
+    },
+    {
+      "id": "native.apple.c735ac6b282765f9",
+      "source": "Talk with your agent using voice.",
+      "translated": "음성으로 에이전트와 대화합니다."
+    },
+    {
+      "id": "native.apple.ebe8aadcf512ecdb",
+      "source": "Share recent photos when you ask.",
+      "translated": "요청 시 최근 사진을 공유합니다."
+    },
+    {
+      "id": "native.apple.4c4bc12c0787383c",
+      "source": "Look up and add people you mention.",
+      "translated": "언급한 사람을 검색하고 추가합니다."
+    },
+    {
+      "id": "native.apple.5a4006fbb9b23db1",
+      "source": "Check and add calendar events.",
+      "translated": "캘린더 일정을 확인하고 추가합니다."
+    },
+    {
+      "id": "native.apple.2b2a4f1aab6a12ec",
+      "source": "List, add, and complete reminders.",
+      "translated": "미리 알림을 조회하고 추가하거나 완료합니다."
+    },
+    {
+      "id": "native.apple.3854ae1f0606bafe",
+      "source": "Answer location and nearby questions.",
+      "translated": "위치 및 주변 지역에 관한 질문에 답변합니다."
+    },
+    {
       "id": "native.apple.e5f6435b9cb5a2d8",
       "source": "unknown relay error",
       "translated": "unknown relay error"
@@ -13709,94 +14284,14 @@
       "translated": "사용자 지정 헤더"
     },
     {
-      "id": "native.apple.e5a601c8fe47e9ed",
-      "source": "Add-Only",
-      "translated": "추가 전용"
-    },
-    {
-      "id": "native.apple.32aabe66f916a809",
-      "source": "Allowed",
-      "translated": "허용됨"
-    },
-    {
-      "id": "native.apple.7b551f40d1a6148c",
-      "source": "Enabled",
-      "translated": "활성화됨"
-    },
-    {
-      "id": "native.apple.94208c3068dae5b9",
-      "source": "Limited",
-      "translated": "제한됨"
-    },
-    {
-      "id": "native.apple.92223852c90e286d",
-      "source": "Not Allowed",
-      "translated": "허용되지 않음"
-    },
-    {
-      "id": "native.apple.aa6ff8becab99fdc",
-      "source": "Not Set",
-      "translated": "설정되지 않음"
-    },
-    {
-      "id": "native.apple.03e2f7265119d263",
-      "source": "Unknown",
-      "translated": "알 수 없음"
-    },
-    {
-      "id": "native.apple.4dac301c7e0c921c",
-      "source": "Contacts",
-      "translated": "연락처"
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "개인정보 및 접근"
     },
     {
       "id": "native.apple.01f362d70f6ddb4e",
       "source": "Search and add contacts from the assistant.",
       "translated": "어시스턴트에서 연락처를 검색하고 추가하세요."
-    },
-    {
-      "id": "native.apple.eda8d96e40bcc36a",
-      "source": "Photos",
-      "translated": "사진"
-    },
-    {
-      "id": "native.apple.df0159ff34744870",
-      "source": "Calendar (Add Events)",
-      "translated": "캘린더(이벤트 추가)"
-    },
-    {
-      "id": "native.apple.c6db4240083c0435",
-      "source": "Add events with least privilege.",
-      "translated": "최소 권한으로 이벤트를 추가하세요."
-    },
-    {
-      "id": "native.apple.dc62e22f0b2726c5",
-      "source": "Calendar (View Events)",
-      "translated": "캘린더(이벤트 보기)"
-    },
-    {
-      "id": "native.apple.650091bc632b3120",
-      "source": "List and read calendar events.",
-      "translated": "캘린더 이벤트를 나열하고 읽습니다."
-    },
-    {
-      "id": "native.apple.7a81d1f17d9d90c0",
-      "source": "Reminders",
-      "translated": "미리 알림"
-    },
-    {
-      "id": "native.apple.d6fd5e9f85b0e298",
-      "source": "List, add, and complete reminders.",
-      "translated": "미리 알림을 나열하고, 추가하고, 완료 처리합니다."
-    },
-    {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "건강 요약"
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "개인정보 및 접근"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -13809,24 +14304,44 @@
       "translated": "어시스턴트가 최근 사진을 읽도록 합니다."
     },
     {
-      "id": "native.apple.ac3ff8e4c6df7a2a",
-      "source": "Manage Access",
-      "translated": "접근 권한 관리"
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "제한됨"
     },
     {
-      "id": "native.apple.c557c95fa2789089",
-      "source": "Request Full Access",
-      "translated": "전체 접근 권한 요청"
+      "id": "native.apple.df0159ff34744870",
+      "source": "Calendar (Add Events)",
+      "translated": "캘린더(이벤트 추가)"
     },
     {
-      "id": "native.apple.4e50e2ab4c869464",
-      "source": "Request Access",
-      "translated": "접근 권한 요청"
+      "id": "native.apple.c6db4240083c0435",
+      "source": "Add events with least privilege.",
+      "translated": "최소 권한으로 이벤트를 추가하세요."
     },
     {
-      "id": "native.apple.a9f30d4e86060dca",
-      "source": "Upgrade to Full Access",
-      "translated": "전체 접근 권한으로 업그레이드"
+      "id": "native.apple.650091bc632b3120",
+      "source": "List and read calendar events.",
+      "translated": "캘린더 이벤트를 나열하고 읽습니다."
+    },
+    {
+      "id": "native.apple.d6fd5e9f85b0e298",
+      "source": "List, add, and complete reminders.",
+      "translated": "미리 알림을 나열하고, 추가하고, 완료 처리합니다."
+    },
+    {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "추가 전용"
+    },
+    {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "건강 요약"
+    },
+    {
+      "id": "native.apple.0b10201d7e452dc4",
+      "source": "Allow",
+      "translated": "허용"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",
@@ -15734,6 +16249,111 @@
       "translated": "구성된 Telegram 토큰이 없습니다."
     },
     {
+      "id": "native.apple.48155cd3182d0fc1",
+      "source": "Browse ClawHub",
+      "translated": "ClawHub 둘러보기"
+    },
+    {
+      "id": "native.apple.2a63044f55e90b32",
+      "source": "Discover skills",
+      "translated": "Skill 찾아보기"
+    },
+    {
+      "id": "native.apple.5fef1d6003e5df6f",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway는 다운로드 전에 검토된 정확한 릴리스를 확인합니다."
+    },
+    {
+      "id": "native.apple.f5aa33a76f62e6e9",
+      "source": "Search ClawHub",
+      "translated": "ClawHub 검색"
+    },
+    {
+      "id": "native.apple.1b08dbd63dadda23",
+      "source": "Search",
+      "translated": "검색"
+    },
+    {
+      "id": "native.apple.84bdcdb604ccadd6",
+      "source": "Results",
+      "translated": "결과"
+    },
+    {
+      "id": "native.apple.2539b847d0cc4326",
+      "source": "Searching ClawHub…",
+      "translated": "ClawHub 검색 중…"
+    },
+    {
+      "id": "native.apple.ce42e5d6c37b59e8",
+      "source": "No skills found",
+      "translated": "Skill을 찾을 수 없음"
+    },
+    {
+      "id": "native.apple.c27ee52f9350a02f",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "다른 검색어를 사용하거나 카탈로그를 새로 고치세요."
+    },
+    {
+      "id": "native.apple.fc107db526febdee",
+      "source": "Installed",
+      "translated": "설치됨"
+    },
+    {
+      "id": "native.apple.101103e2d97e04cd",
+      "source": "Review",
+      "translated": "검토"
+    },
+    {
+      "id": "native.apple.8976aca17f4dfbdc",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub Skill 검토"
+    },
+    {
+      "id": "native.apple.b5a521cd4f77fff0",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "Gateway가 다운로드 전에 ClawHub를 통해 이 정확한 릴리스를 확인합니다."
+    },
+    {
+      "id": "native.apple.86078f1c84e735d7",
+      "source": "Verify and install",
+      "translated": "확인 및 설치"
+    },
+    {
+      "id": "native.apple.fbbba0a83466864c",
+      "source": "Gateway warning",
+      "translated": "Gateway 경고"
+    },
+    {
+      "id": "native.apple.8957dc102983dbb0",
+      "source": "Review warning details",
+      "translated": "경고 세부 정보 검토"
+    },
+    {
+      "id": "native.apple.1b9020d8308c0563",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "이 정확한 버전을 승인하기 전에 Gateway 경고를 펼쳐 검토하세요."
+    },
+    {
+      "id": "native.apple.ee2577b784c64ac6",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.apple.9fa34dc1057cbcee",
+      "source": "Acknowledge and install",
+      "translated": "승인 및 설치"
+    },
+    {
+      "id": "native.apple.5e36364c63057778",
+      "source": "Version",
+      "translated": "버전"
+    },
+    {
+      "id": "native.apple.cac171668ece3a4d",
+      "source": "Publisher",
+      "translated": "게시자"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "사용 가능한 구성 섹션이 없습니다."
@@ -16994,9 +17614,9 @@
       "translated": "Peekaboo Bridge 활성화"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "서명된 도구(예: `peekaboo`)가 PeekabooBridge를 통해 UI 자동화를 실행하도록 허용합니다."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "서명된 도구(예: `peekaboo`)가 PeekabooBridge를 통해 UI 자동화를 구동하도록 허용합니다. Computer Control이 필요하며, 그렇지 않으면 Peekaboo 자체 Mac 앱을 실행하세요."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -18759,6 +19379,16 @@
       "translated": "Mac"
     },
     {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "기기"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "노드"
+    },
+    {
       "id": "native.apple.6223e5f12aa9464b",
       "source": "Permissions",
       "translated": "권한"
@@ -19334,9 +19964,14 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.0f62bd687b786431",
-      "source": "Optional capabilities that become available when their requirements are met.",
-      "translated": "요구 사항이 충족되면 사용할 수 있게 되는 선택적 기능입니다."
+      "id": "native.apple.50be0aae3f54705e",
+      "source": "Manage installed capabilities or discover verified releases on ClawHub.",
+      "translated": "설치된 기능을 관리하거나 ClawHub에서 검증된 릴리스를 찾아보세요."
+    },
+    {
+      "id": "native.apple.5a3f840bde899fbe",
+      "source": "Skills section",
+      "translated": "Skills 섹션"
     },
     {
       "id": "native.apple.d40a7bb04c5534ec",
@@ -19379,6 +20014,11 @@
       "translated": "새로 고침"
     },
     {
+      "id": "native.apple.90f5eb0762593f89",
+      "source": "Search installed skills",
+      "translated": "설치된 Skills 검색"
+    },
+    {
       "id": "native.apple.85a9941ff7a30fbe",
       "source": "Loading…",
       "translated": "로드 중…"
@@ -19402,6 +20042,16 @@
       "id": "native.apple.2beddcc70ea0d96a",
       "source": "Filter",
       "translated": "필터"
+    },
+    {
+      "id": "native.apple.ebbf5e9abc1fd8b9",
+      "source": "Installed",
+      "translated": "설치됨"
+    },
+    {
+      "id": "native.apple.a4b3ea71236c5789",
+      "source": "Browse",
+      "translated": "찾아보기"
     },
     {
       "id": "native.apple.eb868667821fbf7c",
@@ -20997,6 +21647,11 @@
       "id": "native.apple.2f45f005d2a7c3c2",
       "source": "Apple Watch",
       "translated": "Apple Watch"
+    },
+    {
+      "id": "native.apple.3fe61126fd4ca8aa",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway가 다른 ClawHub 릴리스를 평가했습니다. 설치하기 전에 해당 Skill을 다시 검토하세요."
     },
     {
       "id": "native.apple.e97067187c9a359d",

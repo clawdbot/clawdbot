@@ -23,12 +23,6 @@ type QueueState<T> = QueueSummaryState & {
   cap: number;
 };
 
-/** Clear accumulated overflow summary state after it has been emitted. */
-export function clearQueueSummaryState(state: QueueSummaryState): void {
-  state.droppedCount = 0;
-  state.summaryLines = [];
-}
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(params: {
   state: QueueSummaryState;
@@ -36,11 +30,7 @@ export function previewQueueSummaryPrompt(params: {
   title?: string;
 }): string | undefined {
   return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: params.state.dropPolicy,
-      droppedCount: params.state.droppedCount,
-      summaryLines: [...params.state.summaryLines],
-    },
+    state: params.state,
     noun: params.noun,
     title: params.title,
   });
@@ -310,7 +300,7 @@ export async function drainCollectQueueStep<T>(params: {
   });
 }
 
-/** Build and consume the queue overflow summary prompt. */
+/** Build the queue overflow summary prompt. */
 function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -330,7 +320,6 @@ function buildQueueSummaryPrompt(params: {
       lines.push(`- ${line}`);
     }
   }
-  clearQueueSummaryState(params.state);
   return lines.join("\n");
 }
 

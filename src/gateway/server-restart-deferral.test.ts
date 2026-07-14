@@ -1,10 +1,7 @@
 // Restart deferral tests protect queue-depth checks that delay gateway restart
 // until in-flight reply deliveries and command work have drained.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearAllDispatchers,
-  getTotalPendingReplies,
-} from "../auto-reply/reply/dispatcher-registry.js";
+import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTotalQueueSize, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -27,7 +24,7 @@ describe("gateway restart deferral", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await flushMicrotasks();
-    clearAllDispatchers();
+    expect(getTotalPendingReplies()).toBe(0);
     resetCommandQueueStateForTest();
   });
 

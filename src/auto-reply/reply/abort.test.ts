@@ -10,18 +10,15 @@ import {
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
+import { getAbortMemory } from "./abort-primitives.js";
 import {
   testing as abortTesting,
   formatAbortReplyText,
-  getAbortMemory,
-  getAbortMemorySizeForTest,
   isAbortRequestText,
   isAbortTrigger,
-  resetAbortMemoryForTest,
-  resolveAbortCutoffFromContext,
   setAbortMemory,
   stopSubagentsForRequester,
-  shouldSkipMessageByAbortCutoff,
   tryFastAbortFromMessage,
 } from "./abort.js";
 import { testing as acpResetTargetTesting } from "./acp-reset-target.js";
@@ -91,6 +88,13 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-abort-" });
 
 describe("abort detection", () => {
+  const trackedAbortMemoryKeys = new Set<string>();
+
+  function setTrackedAbortMemory(key: string, value: boolean): void {
+    trackedAbortMemoryKeys.add(key);
+    setAbortMemory(key, value);
+  }
+
   beforeAll(async () => {
     await suiteTempDirs.setup();
   });
@@ -129,6 +133,9 @@ describe("abort detection", () => {
         : {}),
     } as OpenClawConfig;
     if (params?.sessionIdsByKey) {
+      for (const sessionKey of Object.keys(params.sessionIdsByKey)) {
+        trackedAbortMemoryKeys.add(sessionKey);
+      }
       await writeSessionStore(storePath, params.sessionIdsByKey, params.nowMs);
     }
     return { root, storePath, cfg };
@@ -146,6 +153,17 @@ describe("abort detection", () => {
     messageSid?: string;
     timestamp?: number;
   }) {
+    for (const key of [
+      params.sessionKey,
+      params.parentSessionKey,
+      params.targetSessionKey,
+      params.from,
+      params.to,
+    ]) {
+      if (key) {
+        trackedAbortMemoryKeys.add(key);
+      }
+    }
     return tryFastAbortFromMessage({
       ctx: buildTestCtx({
         CommandBody: "/stop",
@@ -173,6 +191,7 @@ describe("abort detection", () => {
     sessionId: string;
     sessionKey: string;
   }) {
+    trackedAbortMemoryKeys.add(params.sessionKey);
     const followupRun: FollowupRun = {
       prompt: "queued",
       enqueuedAt: Date.now(),
@@ -226,7 +245,10 @@ describe("abort detection", () => {
   });
 
   afterEach(() => {
-    resetAbortMemoryForTest();
+    for (const key of trackedAbortMemoryKeys) {
+      setAbortMemory(key, false);
+    }
+    trackedAbortMemoryKeys.clear();
     abortTesting.resetDepsForTests();
     acpResetTargetTesting.setDepsForTest();
     queueCleanupTesting.resetDepsForTests();
@@ -329,21 +351,19 @@ describe("abort detection", () => {
   });
 
   it("removes abort memory entry when flag is reset", () => {
-    setAbortMemory("session-1", true);
+    setTrackedAbortMemory("session-1", true);
     expect(getAbortMemory("session-1")).toBe(true);
 
-    setAbortMemory("session-1", false);
+    setTrackedAbortMemory("session-1", false);
     expect(getAbortMemory("session-1")).toBeUndefined();
-    expect(getAbortMemorySizeForTest()).toBe(0);
   });
 
   it("caps abort memory tracking to a bounded max size", () => {
     for (let i = 0; i < 2105; i += 1) {
-      setAbortMemory(`session-${i}`, true);
+      setTrackedAbortMemory(`bounded-memory-session-${i}`, true);
     }
-    expect(getAbortMemorySizeForTest()).toBe(2000);
-    expect(getAbortMemory("session-0")).toBeUndefined();
-    expect(getAbortMemory("session-2104")).toBe(true);
+    expect(getAbortMemory("bounded-memory-session-0")).toBeUndefined();
+    expect(getAbortMemory("bounded-memory-session-2104")).toBe(true);
   });
 
   it("extracts abort cutoff metadata from context", () => {

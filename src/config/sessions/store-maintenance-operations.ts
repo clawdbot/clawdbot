@@ -52,7 +52,7 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceParams = {
+type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   activeSessionKey?: string;
@@ -64,7 +64,7 @@ export type FileBackedSessionStoreMaintenanceParams = {
   artifacts: RemovedSessionArtifactCleanup;
 };
 
-export type FileBackedSessionStoreMaintenanceResult = {
+type FileBackedSessionStoreMaintenanceResult = {
   changedStore: boolean;
 };
 

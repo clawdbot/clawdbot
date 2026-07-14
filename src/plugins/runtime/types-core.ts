@@ -1,4 +1,7 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { ConfigMutationBase } from "../../config/mutation-types.js";
+import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -10,16 +13,11 @@ import type {
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
-export type { HeartbeatRunResult };
-
-export type RuntimeRequestHeartbeatOptions = Parameters<
+type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
 >[0];
 
-export type RuntimeRequestHeartbeatNowOptions = Omit<
-  RuntimeRequestHeartbeatOptions,
-  "source" | "intent"
-> &
+type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
@@ -28,7 +26,7 @@ type RuntimeWriteConfigOptions = {
   unsetPaths?: string[][];
 };
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer U)[]
     ? ReadonlyArray<DeepReadonly<U>>
@@ -38,13 +36,12 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 
 type RuntimeConfigAfterWrite = import("../../config/config.js").ConfigWriteAfterWrite;
 type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplaceResult;
-type RuntimeConfigMutationBase = import("../../config/mutate.js").ConfigMutationBase;
 type RuntimeConfigMutationContext = {
   snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
   previousHash: string | null;
 };
 type RuntimeMutateConfigFileParams<T = void> = {
-  base?: RuntimeConfigMutationBase;
+  base?: ConfigMutationBase;
   baseHash?: string;
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
@@ -60,6 +57,9 @@ type RuntimeReplaceConfigFileParams = {
   writeOptions?: RuntimeWriteConfigOptions;
 };
 type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionPluginExtensions =
+  | Record<string, Record<string, SessionPluginJsonValue>>
+  | undefined;
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -80,7 +80,7 @@ type RuntimeCreateSessionEntryResult = {
   entry: RuntimeSessionEntry;
 };
 type RuntimeCreateSessionEntryFinalPatch = {
-  pluginExtensions: RuntimeSessionEntry["pluginExtensions"];
+  pluginExtensions: RuntimeSessionPluginExtensions;
 };
 type RuntimeCreateSessionEntryBaseParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
@@ -88,18 +88,22 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
+  /** Bind the created session's CLI execution to this paired node. */
+  execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
   initialEntry:
     | {
         agentHarnessId: string;
         modelSelectionLocked?: true;
-        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+        pluginExtensions?: RuntimeSessionPluginExtensions;
       }
     | {
         cliBackendId: string;
         model: string;
         cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
         modelSelectionLocked: true;
-        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+        pluginExtensions?: RuntimeSessionPluginExtensions;
         /** Registry-injected owner; plugin callers cannot select another owner. */
         pluginOwnerId?: string;
       };
@@ -148,16 +152,19 @@ type RuntimeSessionStoreEntryUpdateParams = {
   takeCacheOwnership?: boolean;
   requireWriteSuccess?: boolean;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
   agentRuntime?: string | null;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;
   label: string;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicy = {
   levels: PluginRuntimeThinkingPolicyLevel[];
   defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
@@ -410,10 +417,7 @@ export type PluginRuntimeCore = {
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-      options?: Omit<
-        import("../../channels/message/ingress-queue.js").CreateChannelIngressQueueOptions,
-        "channelId"
-      >,
+      options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
       TPayload,
       TMetadata,

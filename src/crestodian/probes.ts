@@ -1,6 +1,6 @@
 // Crestodian probes check local tools and Gateway health with bounded subprocess/network work.
-import { spawn } from "node:child_process";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { runCommandWithTimeout } from "../process/exec.js";
 
 /**
  * Local environment probes used by Crestodian overview loading.
@@ -17,98 +17,43 @@ export type LocalCommandProbe = {
 };
 
 const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
-const LOCAL_COMMAND_PROBE_KILL_GRACE_MS = 500;
-
-// The child close/error events own the probe result; pipe errors must not escape and crash setup.
-const ignoreOutputStreamError = () => {};
-
-function appendBounded(previous: string, chunk: string, limit: number): string {
-  const next = previous + chunk;
-  return next.length > limit ? next.slice(-limit) : next;
-}
-
 /** Probe a command by running a small version command with bounded output and timeout. */
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
-  opts: { outputLimit?: number; timeoutKillGraceMs?: number; timeoutMs?: number } = {},
+  opts: { outputLimit?: number; timeoutMs?: number } = {},
 ): Promise<LocalCommandProbe> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1_500);
   const outputLimit = opts.outputLimit ?? LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS;
-  const timeoutKillGraceMs = resolveTimerTimeoutMs(
-    opts.timeoutKillGraceMs,
-    LOCAL_COMMAND_PROBE_KILL_GRACE_MS,
-    0,
-  );
-  return await new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timedOut = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const result = await runCommandWithTimeout([command, ...args], {
+      killProcessTree: true,
+      maxOutputBytes: outputLimit,
+      timeoutMs,
     });
-    const timeoutResult = (): LocalCommandProbe => ({
+    if (result.termination === "timeout") {
+      return {
+        command,
+        found: true,
+        error: `timed out after ${timeoutMs}ms`,
+      };
+    }
+    // Version output can arrive on stdout or stderr depending on the CLI.
+    const text = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/)[0]?.trim();
+    return {
       command,
-      found: true,
-      error: `timed out after ${timeoutMs}ms`,
-    });
-    const finish = (result: LocalCommandProbe) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      resolve(result);
+      found: result.code === 0 || Boolean(text),
+      version: text || undefined,
+      error: result.code === 0 ? undefined : `exited ${String(result.code)}`,
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      // Some CLIs ignore SIGTERM; destroy pipes after a short grace window to finish promptly.
-      killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
-        child.stdout.destroy();
-        child.stderr.destroy();
-        finish(timeoutResult());
-      }, timeoutKillGraceMs);
-      killTimer.unref?.();
-    }, timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout = appendBounded(stdout, String(chunk), outputLimit);
-    });
-    child.stdout.on("error", ignoreOutputStreamError);
-    child.stderr.on("data", (chunk) => {
-      stderr = appendBounded(stderr, String(chunk), outputLimit);
-    });
-    child.stderr.on("error", ignoreOutputStreamError);
-    child.on("error", (err: NodeJS.ErrnoException) => {
-      finish({
-        command,
-        found: err.code !== "ENOENT",
-        error: err.code === "ENOENT" ? "not found" : err.message,
-      });
-    });
-    child.on("close", (code) => {
-      if (timedOut) {
-        finish(timeoutResult());
-        return;
-      }
-      // Version output can arrive on stdout or stderr depending on the CLI.
-      const text = `${stdout}\n${stderr}`.trim().split(/\r?\n/)[0]?.trim();
-      finish({
-        command,
-        found: code === 0 || Boolean(text),
-        version: text || undefined,
-        error: code === 0 ? undefined : `exited ${String(code)}`,
-      });
-    });
-  });
+  } catch (error) {
+    const spawnError = error as NodeJS.ErrnoException;
+    return {
+      command,
+      found: spawnError.code !== "ENOENT",
+      error: spawnError.code === "ENOENT" ? "not found" : spawnError.message,
+    };
+  }
 }
 
 /** Probe a Gateway URL by translating it to its HTTP /healthz endpoint. */

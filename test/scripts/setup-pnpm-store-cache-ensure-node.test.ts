@@ -260,7 +260,15 @@ exit 1
 
   it("rejects Node 22 wildcard matches below the supported minimum", () => {
     expect(runVersionMatch("22.18.0", "22.x").status).toBe(1);
-    expect(runVersionMatch("22.19.0", "22.x").status).toBe(0);
+    expect(runVersionMatch("22.22.2", "22.x").status).toBe(1);
+    expect(runVersionMatch("22.22.3", "22.x").status).toBe(0);
+  });
+
+  it("enforces patched Node 24 and 25 wildcard minimums", () => {
+    expect(runVersionMatch("24.14.1", "24.x").status).toBe(1);
+    expect(runVersionMatch("24.15.0", "24.x").status).toBe(0);
+    expect(runVersionMatch("25.8.1", "25.x").status).toBe(1);
+    expect(runVersionMatch("25.9.0", "25.x").status).toBe(0);
   });
 
   it("fails clearly when no matching node is available", () => {

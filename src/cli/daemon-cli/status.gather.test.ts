@@ -5,12 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortConnections, PortListener, PortUsageStatus } from "../../infra/ports.js";
+import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
+
+type PortConnections = Awaited<
+  ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
+>;
 
 const callGatewayStatusProbe = vi.fn<
   (opts?: unknown) => Promise<{

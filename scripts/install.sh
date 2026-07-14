@@ -18,9 +18,13 @@ NC='\033[0m' # No Color
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=19
-NODE_23_MIN_MINOR=11
-NODE_SUPPORTED_VERSION_LABEL="22.19+, 23.11+, or 24+"
+NODE_22_MIN_MINOR=22
+NODE_22_MIN_PATCH=3
+NODE_24_MIN_MINOR=15
+NODE_24_MIN_PATCH=0
+NODE_25_MIN_MINOR=9
+NODE_25_MIN_PATCH=0
+NODE_SUPPORTED_VERSION_LABEL="22.22.3+, 24.15.0+, or 25.9.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1535,13 +1539,17 @@ parse_node_version_components_for_binary() {
     if ! command -v "$node_bin" &> /dev/null && [[ ! -x "$node_bin" ]]; then
         return 1
     fi
-    local version major minor
+    local version major minor patch
     version="$("$node_bin" -v 2>/dev/null || true)"
     major="${version#v}"
     major="${major%%.*}"
     minor="${version#v}"
     minor="${minor#*.}"
     minor="${minor%%.*}"
+    patch="${version#v}"
+    patch="${patch#*.}"
+    patch="${patch#*.}"
+    patch="${patch%%.*}"
 
     if [[ ! "$major" =~ ^[0-9]+$ ]]; then
         return 1
@@ -1549,7 +1557,10 @@ parse_node_version_components_for_binary() {
     if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    echo "${major} ${minor}"
+    if [[ ! "$patch" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    echo "${major} ${minor} ${patch}"
     return 0
 }
 
@@ -1561,9 +1572,9 @@ parse_node_version_components() {
 }
 
 node_major_version() {
-    local version_components major minor
+    local version_components major minor patch
     version_components="$(parse_node_version_components || true)"
-    read -r major minor <<< "$version_components"
+    read -r major minor patch <<< "$version_components"
     if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
         echo "$major"
         return 0
@@ -1574,37 +1585,88 @@ node_major_version() {
 node_version_components_are_supported() {
     local major="$1"
     local minor="$2"
-    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -eq 23 && "$minor" -ge "$NODE_23_MIN_MINOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -gt 23 ]]; then
-        return 0
-    fi
-    return 1
+    local patch="$3"
+
+    case "$major" in
+        "$NODE_MIN_MAJOR")
+            ((minor > NODE_22_MIN_MINOR)) ||
+                ((minor == NODE_22_MIN_MINOR && patch >= NODE_22_MIN_PATCH))
+            ;;
+        24)
+            ((minor > NODE_24_MIN_MINOR)) ||
+                ((minor == NODE_24_MIN_MINOR && patch >= NODE_24_MIN_PATCH))
+            ;;
+        25)
+            ((minor > NODE_25_MIN_MINOR)) ||
+                ((minor == NODE_25_MIN_MINOR && patch >= NODE_25_MIN_PATCH))
+            ;;
+        *)
+            ((major > 25))
+            ;;
+    esac
+}
+
+node_binary_has_safe_sqlite() {
+    local node_bin="$1"
+    "$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
+            const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
+            const major = Number(match?.[1]);
+            const minor = Number(match?.[2]);
+            const patch = Number(match?.[3]);
+            const safe =
+                major > 3 ||
+                (major === 3 &&
+                    (minor > 51 ||
+                        (minor === 51 && patch >= 3) ||
+                        (minor === 50 && patch >= 7) ||
+                        (minor === 44 && patch >= 6)));
+            if (!safe) process.exitCode = 1;
+        } finally {
+            db.close();
+        }
+    ' >/dev/null 2>&1
+}
+
+node_binary_sqlite_version() {
+    local node_bin="$1"
+    local version
+    version="$("$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
+        } finally {
+            db.close();
+        }
+    ' 2>/dev/null || true)"
+    printf '%s\n' "${version:-unavailable}"
 }
 
 node_is_supported() {
-    local version_components major minor
+    local version_components major minor patch
     version_components="$(parse_node_version_components || true)"
-    read -r major minor <<< "$version_components"
-    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+    read -r major minor patch <<< "$version_components"
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    node_version_components_are_supported "$major" "$minor"
+    node_version_components_are_supported "$major" "$minor" "$patch" &&
+        node_binary_has_safe_sqlite node
 }
 
 node_binary_is_supported() {
     local node_bin="$1"
-    local version_components major minor
+    local version_components major minor patch
     version_components="$(parse_node_version_components_for_binary "$node_bin" || true)"
-    read -r major minor <<< "$version_components"
-    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+    read -r major minor patch <<< "$version_components"
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    node_version_components_are_supported "$major" "$minor"
+    node_version_components_are_supported "$major" "$minor" "$patch" &&
+        node_binary_has_safe_sqlite "$node_bin"
 }
 
 prepend_path_dir() {
@@ -1858,7 +1920,7 @@ install_node_with_apk() {
 
     local apk_node_version
     apk_node_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_warn "Alpine nodejs package installed ${apk_node_version}, outside the supported range (${NODE_SUPPORTED_VERSION_LABEL})"
+    ui_warn "Alpine nodejs package installed ${apk_node_version}, which does not meet the Node and SQLite runtime contract"
     ui_info "Trying Alpine nodejs-current package"
     if is_root; then
         run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
@@ -1872,11 +1934,12 @@ install_node_with_apk() {
         return 0
     fi
 
-    local active_path active_version
+    local active_path active_version sqlite_version
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_error "Alpine apk repositories did not provide Node.js ${NODE_SUPPORTED_VERSION_LABEL}; found ${active_version} (${active_path})"
-    echo "Use Alpine 3.21+ or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+    sqlite_version="$(node_binary_sqlite_version node)"
+    ui_error "Alpine apk repositories did not provide Node.js with WAL-reset-safe SQLite; found ${active_version} with SQLite ${sqlite_version} (${active_path})"
+    echo "Use an official node:${NODE_DEFAULT_MAJOR}-alpine container or a glibc-based host until Alpine ships patched SQLite, then rerun the installer."
     exit 1
 }
 

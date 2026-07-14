@@ -42,6 +42,8 @@ export type ChannelOutboundContext = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
+  /** @internal Stable platform-send index within one durable payload. */
+  deliveryPartIndex?: number;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before starting another fallible step. */
@@ -150,7 +152,7 @@ export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
-export type ChannelOutboundNormalizePayloadParams = {
+type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   accountId?: string | null;

@@ -47,9 +47,9 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
-let sleepSyncOverride: ((ms: number) => void) | null = null;
-let dateNowOverride: (() => number) | null = null;
-let parentPidOverride: (() => number) | null = null;
+const sleepSyncOverride: ((ms: number) => void) | null = null;
+const dateNowOverride: (() => number) | null = null;
+const parentPidOverride: (() => number) | null = null;
 
 function getTimeMs(): number {
   return dateNowOverride ? dateNowOverride() : Date.now();
@@ -656,18 +656,3 @@ export function cleanStaleGatewayProcessesSync(
     return [];
   }
 }
-
-export const testing = {
-  setSleepSyncOverride(fn: ((ms: number) => void) | null) {
-    sleepSyncOverride = fn;
-  },
-  setDateNowOverride(fn: (() => number) | null) {
-    dateNowOverride = fn;
-  },
-  setParentPidOverride(fn: (() => number) | null) {
-    parentPidOverride = fn;
-  },
-  /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
-  callSleepSyncRaw: sleepSync,
-};
-export { testing as __testing };

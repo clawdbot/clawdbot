@@ -282,6 +282,8 @@ See [SecretRef Credential Surface](/reference/secretref-credential-surface) for 
 
 ## Exec integration examples
 
+For a dedicated 1Password guide covering service accounts, the bundled agent skill, and troubleshooting, see [1Password](/gateway/1password).
+
 <AccordionGroup>
   <Accordion title="1Password CLI">
     ```json5

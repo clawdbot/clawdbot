@@ -9,7 +9,7 @@ import { validatePackageExtensionEntriesForInstall } from "../../plugins/package
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
 import { resolveUserPath } from "../../utils.js";
 
-export type PluginPayloadSmokeFailureReason =
+type PluginPayloadSmokeFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
   | "missing-package-json"
@@ -27,7 +27,7 @@ export type PluginPayloadSmokeFailure = {
   detail: string;
 };
 
-export type PluginPayloadSmokeResult = {
+type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };

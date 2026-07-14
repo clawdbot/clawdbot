@@ -1,6 +1,6 @@
 /** Tests channel action discovery from plugin message-tool descriptors. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";

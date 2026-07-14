@@ -41,6 +41,7 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import {
@@ -390,11 +391,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 }
 
 async function findBinary(name: string): Promise<string | null> {
-  const cached = binaryCache.get(name);
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(binaryCache, name, async () => {
     const direct = expandHomeDir(name.trim());
     if (direct && hasPathSeparator(direct)) {
       for (const candidate of candidateBinaryNames(direct)) {
@@ -424,9 +421,7 @@ async function findBinary(name: string): Promise<string | null> {
     }
 
     return null;
-  })();
-  binaryCache.set(name, resolved);
-  return resolved;
+  });
 }
 
 async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
@@ -455,11 +450,7 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
 }
 
 async function resolveAntigravityCliBinary(): Promise<string | null> {
-  const cached = antigravityCliCache.get("agy");
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(antigravityCliCache, "agy", async () => {
     const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
     const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
       Boolean(value),
@@ -471,9 +462,7 @@ async function resolveAntigravityCliBinary(): Promise<string | null> {
       }
     }
     return null;
-  })();
-  antigravityCliCache.set("agy", resolved);
-  return resolved;
+  });
 }
 
 async function resolveAntigravityCliEntry(

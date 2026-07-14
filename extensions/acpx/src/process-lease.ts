@@ -12,14 +12,14 @@ import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./
 /** Environment variable carrying the ACPX process lease id. */
 export const OPENCLAW_ACPX_LEASE_ID_ENV = "OPENCLAW_ACPX_LEASE_ID";
 /** Environment variable carrying the owning gateway instance id. */
-export const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
+const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
 /** CLI argument carrying the ACPX process lease id for platforms without env wrapping. */
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 /** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
 
 /** Lifecycle state for a tracked ACPX wrapper process. */
-export type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
+type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
 
 /** Persisted identity and command metadata for one ACPX wrapper process. */
 export type AcpxProcessLease = {

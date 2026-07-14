@@ -24,8 +24,6 @@ import type { CoreConfig } from "./types.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
 
-export { normalizeMatrixApproverId };
-
 function normalizeMatrixExecApproverId(value: string | number): string | undefined {
   const normalized = normalizeMatrixApproverId(value);
   return normalized === "*" ? undefined : normalized;

@@ -3,60 +3,13 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
   buildNpmInstallRecordFields,
-  logPinnedNpmSpecMessages,
-  resolvePinnedNpmInstallRecord,
   resolvePinnedNpmInstallRecordForCli,
-  resolvePinnedNpmSpec,
 } from "./npm-resolution.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw";
 const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("npm-resolution helpers", () => {
-  it("keeps the requested selector when pin is disabled", () => {
-    const result = resolvePinnedNpmSpec({
-      rawSpec: "@openclaw/plugin-alpha@latest",
-      pin: false,
-      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
-    });
-    expect(result).toEqual({
-      recordSpec: "@openclaw/plugin-alpha@latest",
-    });
-  });
-
-  it("keeps original spec when resolution is missing and pin is disabled", () => {
-    const result = resolvePinnedNpmSpec({
-      rawSpec: "@openclaw/plugin-alpha@latest",
-      pin: false,
-    });
-    expect(result).toEqual({
-      recordSpec: "@openclaw/plugin-alpha@latest",
-    });
-  });
-
-  it("warns when pin is enabled but resolved spec is missing", () => {
-    const result = resolvePinnedNpmSpec({
-      rawSpec: "@openclaw/plugin-alpha@latest",
-      pin: true,
-    });
-    expect(result).toEqual({
-      recordSpec: "@openclaw/plugin-alpha@latest",
-      pinWarning: "Could not resolve exact npm version for --pin; storing original npm spec.",
-    });
-  });
-
-  it("returns pinned spec notice when resolved spec is available", () => {
-    const result = resolvePinnedNpmSpec({
-      rawSpec: "@openclaw/plugin-alpha@latest",
-      pin: true,
-      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
-    });
-    expect(result).toEqual({
-      recordSpec: "@openclaw/plugin-alpha@1.2.3",
-      pinNotice: "Pinned npm install record to @openclaw/plugin-alpha@1.2.3.",
-    });
-  });
-
   it("builds common npm install record fields", () => {
     expect(
       buildNpmInstallRecordFields({
@@ -84,38 +37,21 @@ describe("npm-resolution helpers", () => {
     });
   });
 
-  it("logs pin warning/notice messages through provided writers", () => {
+  it("pins the install record to the resolved spec and logs a notice", () => {
     const logs: string[] = [];
-    const warns: string[] = [];
-    logPinnedNpmSpecMessages(
+    const record = resolvePinnedNpmInstallRecordForCli(
+      "@openclaw/plugin-alpha@latest",
+      true,
+      ALPHA_INSTALL_PATH,
+      "1.2.3",
       {
-        pinWarning: "warn-1",
-        pinNotice: "notice-1",
-      },
-      (message) => logs.push(message),
-      (message) => warns.push(message),
-    );
-
-    expect(logs).toEqual(["notice-1"]);
-    expect(warns).toEqual(["warn-1"]);
-  });
-
-  it("resolves pinned install record and emits pin notice", () => {
-    const logs: string[] = [];
-    const warns: string[] = [];
-    const record = resolvePinnedNpmInstallRecord({
-      rawSpec: "@openclaw/plugin-alpha@latest",
-      pin: true,
-      installPath: ALPHA_INSTALL_PATH,
-      version: "1.2.3",
-      resolution: {
         name: "@openclaw/plugin-alpha",
         version: "1.2.3",
         resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
       },
-      log: (message) => logs.push(message),
-      warn: (message) => warns.push(message),
-    });
+      (message) => logs.push(message),
+      (message) => `[warn] ${message}`,
+    );
 
     expect(record).toEqual({
       source: "npm",
@@ -130,10 +66,9 @@ describe("npm-resolution helpers", () => {
       resolvedAt: undefined,
     });
     expect(logs).toEqual(["Pinned npm install record to @openclaw/plugin-alpha@1.2.3."]);
-    expect(warns).toStrictEqual([]);
   });
 
-  it("resolves pinned install record for CLI and formats warning output", () => {
+  it("keeps the requested spec and formats a warning when pin resolution is missing", () => {
     const logs: string[] = [];
     const record = resolvePinnedNpmInstallRecordForCli(
       "@openclaw/plugin-alpha@latest",
@@ -162,7 +97,7 @@ describe("npm-resolution helpers", () => {
     ]);
   });
 
-  it("keeps install record selector for CLI unless --pin is requested", () => {
+  it("keeps the requested selector and resolution metadata when pin is disabled", () => {
     const logs: string[] = [];
     const record = resolvePinnedNpmInstallRecordForCli(
       "@openclaw/plugin-alpha",
@@ -178,7 +113,18 @@ describe("npm-resolution helpers", () => {
       (message) => `[warn] ${message}`,
     );
 
-    expect(record.spec).toBe("@openclaw/plugin-alpha");
+    expect(record).toEqual({
+      source: "npm",
+      spec: "@openclaw/plugin-alpha",
+      installPath: ALPHA_INSTALL_PATH,
+      version: "1.2.3",
+      resolvedName: "@openclaw/plugin-alpha",
+      resolvedVersion: "1.2.3",
+      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+      integrity: undefined,
+      shasum: undefined,
+      resolvedAt: undefined,
+    });
     expect(logs).toEqual([]);
   });
 });

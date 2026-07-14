@@ -9,7 +9,7 @@ import { replaceTranscriptEvents } from "../../../config/sessions/session-access
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createHookEvent } from "../../hooks.js";
+import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
   findPreviousSessionFile,

@@ -8,7 +8,6 @@
   },
   "type": "module",
   "dependencies": {
-    "gaxios": "7.1.5",
     "google-auth-library": "10.9.0",
     "zod": "4.4.3"
   },

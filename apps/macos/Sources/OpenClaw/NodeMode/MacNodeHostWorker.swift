@@ -27,6 +27,8 @@ protocol MacNodeHostWorking: Sendable {
 /// The worker never connects to Gateway; this app remains the sole node identity
 /// and keeps TCC-sensitive execution behind the native exec-host socket.
 final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
+    nonisolated static let defaultStartupTimeout: TimeInterval = 300
+
     enum WorkerError: LocalizedError {
         case unavailable(String)
 
@@ -41,6 +43,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private let queue = DispatchQueue(label: "ai.openclaw.node-host-worker")
     private let writerQueue = DispatchQueue(label: "ai.openclaw.node-host-worker.writer")
     private let session: GatewayNodeSession
+    private let startupTimeout: TimeInterval
     private let onUnexpectedExit: @Sendable () -> Void
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -65,9 +68,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
 
     init(
         session: GatewayNodeSession,
+        startupTimeout: TimeInterval = MacNodeHostWorker.defaultStartupTimeout,
         onUnexpectedExit: @escaping @Sendable () -> Void = {})
     {
         self.session = session
+        self.startupTimeout = startupTimeout
         self.onUnexpectedExit = onUnexpectedExit
     }
 
@@ -228,7 +233,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
 
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
-        timer.schedule(deadline: .now() + 20)
+        // Cold config and plugin discovery can exceed the old 20-second bound.
+        // Keep a hard deadline, but leave enough room for a cold CLI worker start.
+        timer.schedule(deadline: .now() + self.startupTimeout)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let state = self.process?.isRunning == true ? "running" : "exited"

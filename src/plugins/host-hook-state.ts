@@ -8,7 +8,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -185,7 +184,7 @@ export async function enqueuePluginNextTurnInjection(params: {
   return { ...updated.result, sessionKey: updated.canonicalKey };
 }
 
-export async function drainPluginNextTurnInjections(params: {
+async function drainPluginNextTurnInjections(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;

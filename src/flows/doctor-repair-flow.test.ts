@@ -1,9 +1,9 @@
 // Doctor repair flow tests cover repair plan output and repair execution.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 import { defineSplitHealthCheck, normalizeHealthCheck } from "./health-check-adapter.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
+import type { RunnableHealthCheck, SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
 
 function ctx(cfg: OpenClawConfig): HealthRepairContext {
@@ -107,29 +107,11 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("keeps repairable out of split repair result types", () => {
-    const check = defineSplitHealthCheck({
-      id: "test/repair-result-status-boundary",
-      kind: "core",
-      description: "repair result status boundary",
-      async detect() {
-        return [
-          {
-            checkId: "test/repair-result-status-boundary",
-            severity: "warning",
-            message: "needs repair",
-          },
-        ];
-      },
-      // @ts-expect-error repairable is a run-result preview status, not a split repair result.
-      async repair() {
-        return {
-          status: "repairable",
-          changes: [],
-        };
-      },
-    });
-
-    expect(check.id).toBe("test/repair-result-status-boundary");
+    type SplitRepair = NonNullable<SplitHealthCheckInput["repair"]>;
+    expectTypeOf(async () => ({
+      status: "repairable" as const,
+      changes: [],
+    })).not.toMatchTypeOf<SplitRepair>();
   });
 
   it("leaves non-repairable checks for legacy doctor behavior", async () => {

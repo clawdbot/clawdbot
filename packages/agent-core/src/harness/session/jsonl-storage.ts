@@ -1,4 +1,5 @@
 // Agent Core module implements jsonl storage behavior.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type {
   FileError,
   FileSystem,
@@ -6,7 +7,7 @@ import type {
   Result,
   SessionTreeEntry,
 } from "../types.js";
-import { SessionError, toError } from "../types.js";
+import { SessionError } from "../types.js";
 import {
   appendParentIdAfterEntry,
   BaseSessionStorage,
@@ -69,7 +70,11 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
   try {
     parsed = JSON.parse(line);
   } catch (error) {
-    throw invalidSession(filePath, "first line is not a valid session header", toError(error));
+    throw invalidSession(
+      filePath,
+      "first line is not a valid session header",
+      toErrorObject(error, "Non-Error thrown"),
+    );
   }
   if (!isRecord(parsed)) {
     throw invalidSession(filePath, "first line is not a valid session header");
@@ -110,7 +115,12 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   try {
     parsed = JSON.parse(line);
   } catch (error) {
-    throw invalidEntry(filePath, lineNumber, "is not valid JSON", toError(error));
+    throw invalidEntry(
+      filePath,
+      lineNumber,
+      "is not valid JSON",
+      toErrorObject(error, "Non-Error thrown"),
+    );
   }
   if (!isRecord(parsed)) {
     throw invalidEntry(filePath, lineNumber, "is not a valid session entry");

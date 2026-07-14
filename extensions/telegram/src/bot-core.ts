@@ -63,11 +63,6 @@ import { createTelegramSendChatActionHandler } from "./sendchataction-401-backof
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-export type { TelegramBotOptions } from "./bot.types.js";
-
-export { getTelegramSequentialKey };
-export { resolveTelegramScopedGroupConfig };
-
 type TelegramBotRuntime = {
   Bot: typeof Bot;
   sequentialize: typeof sequentialize;

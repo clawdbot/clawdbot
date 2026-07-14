@@ -32,7 +32,8 @@ struct HealthSummaryServiceTests {
                 end: #require(formatter.date(from: "2026-07-12T04:00:00Z"))),
         ]
 
-        #expect(HealthSummaryService.mergedDuration(intervals: intervals, clippedTo: range) == 3 * 60 * 60)
+        let duration = try #require(HealthSummaryService.mergedDuration(intervals: intervals, clippedTo: range))
+        #expect(abs(duration - 3 * 60 * 60) < 0.001)
         #expect(HealthSummaryService.mergedDuration(intervals: [], clippedTo: range) == nil)
     }
 }

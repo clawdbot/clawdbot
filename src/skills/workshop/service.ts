@@ -21,13 +21,13 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
+import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
 import {
   createSkillProposalId,
   createSkillProposalRollback,
@@ -58,7 +58,6 @@ import {
   type SkillProposalRecord,
   type SkillProposalReviseInput,
   type SkillProposalRollback,
-  type SkillProposalScan,
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
   type SkillProposalUpdateInput,
@@ -268,6 +267,13 @@ export async function proposeCreateSkill(
   const id = createSkillProposalId(name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const scan = scanProposalBundle(proposalContent, supportFiles, [
+    { file: "skill-name", content: name },
+    { file: "description", content: description },
+    { file: "goal", content: goal },
+    { file: "evidence", content: evidence },
+  ]);
+  assertProposalContainsNoLiteralSecrets(scan);
   const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -290,7 +296,7 @@ export async function proposeCreateSkill(
       skillFile: target.skillFile,
       source: "openclaw-workspace",
     },
-    scan: scanProposalBundle(proposalContent, supportFiles),
+    scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles) }
       : {}),
@@ -309,7 +315,7 @@ export async function proposeCreateSkill(
 }
 
 /** Summary of a workspace skill the workshop is allowed to write. */
-export type WritableWorkspaceSkillSummary = {
+type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
@@ -375,6 +381,12 @@ export async function proposeUpdateSkill(
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const scan = scanProposalBundle(proposalContent, supportFiles, [
+    { file: "description", content: description },
+    { file: "goal", content: goal },
+    { file: "evidence", content: evidence },
+  ]);
+  assertProposalContainsNoLiteralSecrets(scan);
   const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -398,7 +410,7 @@ export async function proposeUpdateSkill(
       source: targetSkill.source,
       currentContentHash: hashSkillProposalContent(currentContent),
     },
-    scan: scanProposalBundle(proposalContent, supportFiles),
+    scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles, targetSkill.baseDir) }
       : {}),
@@ -478,14 +490,22 @@ export async function reviseSkillProposal(
       input.evidence === undefined
         ? normalizeOptionalString(record.evidence)
         : normalizeOptionalString(input.evidence);
+    const origin = normalizeProposalOrigin(input.origin);
     const previousSupportFiles = record.supportFiles;
+    const scan = scanProposalBundle(proposalContent, supportFiles, [
+      { file: "description", content: description },
+      { file: "goal", content: goal },
+      { file: "evidence", content: evidence },
+    ]);
+    assertProposalContainsNoLiteralSecrets(scan);
     const revised: SkillProposalRecord = {
       ...record,
       description,
       updatedAt: now,
       proposedVersion: nextVersion,
       draftHash: hashSkillProposalContent(proposalContent),
-      scan: scanProposalBundle(proposalContent, supportFiles),
+      scan,
+      ...(origin ? { origin } : {}),
     };
     if (supportFiles.length > 0) {
       revised.supportFiles = supportFileMetadata;
@@ -691,32 +711,6 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
-}
-
-function scanProposalBundle(
-  content: string,
-  supportFiles: readonly PreparedSkillProposalSupportFile[] = [],
-): SkillProposalScan {
-  const scannedAt = new Date().toISOString();
-  const findings = [
-    ...scanSkillContent(content, "PROPOSAL.md"),
-    ...scanSource(content, "PROPOSAL.md"),
-    ...supportFiles.flatMap((file) => [
-      ...scanSkillContent(file.content, file.path),
-      ...scanSource(file.content, file.path),
-    ]),
-  ];
-  const critical = findings.filter((finding) => finding.severity === "critical").length;
-  const warn = findings.filter((finding) => finding.severity === "warn").length;
-  const info = findings.filter((finding) => finding.severity === "info").length;
-  return {
-    state: critical > 0 ? "failed" : "clean",
-    scannedAt,
-    critical,
-    warn,
-    info,
-    findings,
-  };
 }
 
 async function assertCanCreatePendingProposal(

@@ -3,7 +3,7 @@ import type { HookEntry } from "../hooks/types.js";
 import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
 
 /** Legacy hook registration stored by the global hook runner registry. */
-export type PluginLegacyHookRegistration = {
+type PluginLegacyHookRegistration = {
   pluginId: string;
   entry: HookEntry;
   events: string[];

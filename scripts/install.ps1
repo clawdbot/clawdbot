@@ -152,30 +152,47 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
 function Test-NodeVersionSupported {
     param([string]$Version)
 
-    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.')
+    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
     if (-not $versionMatch.Success) {
         return $false
     }
     $major = [int]$versionMatch.Groups["major"].Value
     $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
     if ($major -eq 22) {
-        return ($minor -ge 19)
+        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
     }
-    if ($major -eq 23) {
-        return ($minor -ge 11)
+    if ($major -eq 24) {
+        return ($minor -ge 15)
     }
-    return ($major -gt 23)
+    if ($major -eq 25) {
+        return ($minor -ge 9)
+    }
+    return ($major -gt 25)
+}
+
+function Test-NodeSqliteSupported {
+    try {
+        $probe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { const value = db.prepare("SELECT sqlite_version() AS version").get()?.version; const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null; const major = Number(match?.[1]); const minor = Number(match?.[2]); const patch = Number(match?.[3]); const safe = major > 3 || (major === 3 && (minor > 51 || (minor === 51 && patch >= 3) || (minor === 50 && patch >= 7) || (minor === 44 && patch >= 6))); if (!safe) process.exitCode = 1; } finally { db.close(); }'
+        $probe | & node - 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
 }
 
 function Check-Node {
     try {
         $nodeVersion = (node -v 2>$null)
         if ($nodeVersion) {
-            if (Test-NodeVersionSupported -Version $nodeVersion) {
+            if ((Test-NodeVersionSupported -Version $nodeVersion) -and (Test-NodeSqliteSupported)) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
+                Write-Host "[!] Node.js $nodeVersion uses an unsafe SQLite build; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but Node 22.19+, Node 23.11+, or Node 24+ is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -371,10 +388,10 @@ function Install-Node {
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "  Using winget..." -ForegroundColor Gray
-        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        Refresh-ProcessPath
         if (Check-Node) {
             Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
             return $true
@@ -387,20 +404,33 @@ function Install-Node {
     # Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         Write-Host "  Using Chocolatey..." -ForegroundColor Gray
-        choco install nodejs-lts -y
+        choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
-        return $true
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Chocolatey completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
         Write-Host "  Using Scoop..." -ForegroundColor Gray
-        scoop install nodejs-lts
-        Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
-        return $true
+        scoop update | Out-Host
+        scoop install nodejs-lts | Out-Host
+        scoop update nodejs-lts | Out-Host
+
+        # Refresh PATH
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Scoop completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     try {
@@ -416,7 +446,7 @@ function Install-Node {
     Write-Host ""
     Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please install Node.js 22+ manually:" -ForegroundColor Yellow
+    Write-Host "Please install Node.js 24.15+ manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Or install winget (App Installer) from the Microsoft Store." -ForegroundColor Gray
@@ -457,6 +487,27 @@ function Add-ToProcessPath {
     }
 
     $env:Path = "$PathEntry;$env:Path"
+}
+
+function Refresh-ProcessPath {
+    $entries = New-Object System.Collections.Generic.List[string]
+    $pathValues = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        $env:Path
+    )
+
+    foreach ($pathValue in $pathValues) {
+        foreach ($entry in @($pathValue -split ";")) {
+            if (
+                -not [string]::IsNullOrWhiteSpace($entry) -and
+                -not ($entries | Where-Object { $_ -ieq $entry })
+            ) {
+                $entries.Add($entry)
+            }
+        }
+    }
+    $env:Path = $entries -join ";"
 }
 
 function Add-ToUserPath {

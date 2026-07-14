@@ -1286,7 +1286,7 @@ export async function restartLaunchAgent({
       waitForPid: process.pid,
     });
     if (!handoff.ok) {
-      throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
+      throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };

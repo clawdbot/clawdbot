@@ -81,10 +81,14 @@ describe("nextcloud talk core", () => {
     expect(stripNextcloudTalkTargetPrefix("nextcloud-talk:room:AbC123")).toBe("AbC123");
     expect(stripNextcloudTalkTargetPrefix("nc-talk:room:ops")).toBe("ops");
     expect(stripNextcloudTalkTargetPrefix("nc:room:ops")).toBe("ops");
+    expect(stripNextcloudTalkTargetPrefix("NC-TALK:ROOM:Ops")).toBe("Ops");
     expect(stripNextcloudTalkTargetPrefix("room:   ")).toBeUndefined();
 
     expect(normalizeNextcloudTalkMessagingTarget("room:AbC123")).toBe("nextcloud-talk:abc123");
     expect(normalizeNextcloudTalkMessagingTarget("nc-talk:room:Ops")).toBe("nextcloud-talk:ops");
+    expect(normalizeNextcloudTalkMessagingTarget("NEXTCLOUD-TALK:ROOM:Ops")).toBe(
+      "nextcloud-talk:ops",
+    );
 
     expect(looksLikeNextcloudTalkTargetId("nextcloud-talk:room:abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("nc:opsroom1")).toBe(true);

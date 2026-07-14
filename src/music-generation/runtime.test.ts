@@ -1,10 +1,10 @@
 // Tests music generation runtime dispatch and provider fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { GenerateMusicParams } from "./runtime-types.js";
 import {
   generateMusic,
   listRuntimeMusicGenerationProviders,
-  type GenerateMusicParams,
   type MusicGenerationRuntimeDeps,
 } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";

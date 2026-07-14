@@ -1,5 +1,4 @@
 /** Resolves SecretRef values from env, file, and exec secret providers. */
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -20,10 +19,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import {
-  forceKillChildProcessTree,
-  shouldDetachChildForProcessTree,
-} from "../process/child-process-tree.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -474,139 +470,6 @@ async function resolveFileRefs(params: {
   return resolved;
 }
 
-type ExecRunResult = {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  termination: "exit" | "timeout" | "no-output-timeout";
-};
-
-function isIgnorableStdinWriteError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return false;
-  }
-  const code = String(error.code);
-  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
-}
-
-async function runExecResolver(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  input: string;
-  timeoutMs: number;
-  noOutputTimeoutMs: number;
-  maxOutputBytes: number;
-}): Promise<ExecRunResult> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(params.command, params.args, {
-      cwd: params.cwd,
-      env: params.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-      detached: shouldDetachChildForProcessTree(),
-    });
-
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let noOutputTimedOut = false;
-    let outputBytes = 0;
-    let noOutputTimer: NodeJS.Timeout | null = null;
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      forceKillChildProcessTree(child);
-    }, params.timeoutMs);
-
-    const clearTimers = () => {
-      clearTimeout(timeoutTimer);
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-        noOutputTimer = null;
-      }
-    };
-
-    const armNoOutputTimer = () => {
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-      }
-      noOutputTimer = setTimeout(() => {
-        noOutputTimedOut = true;
-        forceKillChildProcessTree(child);
-      }, params.noOutputTimeoutMs);
-    };
-
-    const append = (chunk: Buffer | string, target: "stdout" | "stderr") => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      outputBytes += Buffer.byteLength(text, "utf8");
-      if (outputBytes > params.maxOutputBytes) {
-        forceKillChildProcessTree(child);
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          reject(
-            new Error(`Exec provider output exceeded maxOutputBytes (${params.maxOutputBytes}).`),
-          );
-        }
-        return;
-      }
-      if (target === "stdout") {
-        stdout += text;
-      } else {
-        stderr += text;
-      }
-      armNoOutputTimer();
-    };
-
-    armNoOutputTimer();
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error);
-    });
-    child.stdout?.on("error", () => {});
-    child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
-    child.stderr?.on("error", () => {});
-    child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve({
-        stdout,
-        stderr,
-        code,
-        signal,
-        termination: noOutputTimedOut ? "no-output-timeout" : timedOut ? "timeout" : "exit",
-      });
-    });
-
-    const handleStdinError = (error: unknown) => {
-      if (isIgnorableStdinWriteError(error) || settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    child.stdin?.on("error", handleStdinError);
-    try {
-      child.stdin?.end(params.input);
-    } catch (error) {
-      handleStdinError(error);
-    }
-  });
-}
-
 function parseExecValues(params: {
   providerName: string;
   ids: string[];
@@ -767,18 +630,24 @@ async function resolveExecRefs(params: {
   );
   const jsonOnly = params.providerConfig.jsonOnly ?? true;
 
-  let result: ExecRunResult;
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
-    result = await runExecResolver({
-      command: secureCommandPath,
-      args: params.providerConfig.args ?? [],
-      cwd: path.dirname(secureCommandPath),
-      env: childEnv,
-      input,
-      timeoutMs,
-      noOutputTimeoutMs,
-      maxOutputBytes,
-    });
+    result = await runCommandWithTimeout(
+      [secureCommandPath, ...(params.providerConfig.args ?? [])],
+      {
+        baseEnv: {},
+        cwd: path.dirname(secureCommandPath),
+        env: childEnv,
+        input,
+        killProcessTree: true,
+        maxCombinedOutputBytes: maxOutputBytes,
+        maxOutputBytes,
+        noOutputTimeoutMs,
+        outputCapture: "head",
+        terminateOnOutputLimit: true,
+        timeoutMs,
+      },
+    );
   } catch (err) {
     throwUnknownProviderResolutionError({
       source: "exec",
@@ -798,6 +667,13 @@ async function resolveExecRefs(params: {
       source: "exec",
       provider: params.providerName,
       message: `Exec provider "${params.providerName}" produced no output for ${noOutputTimeoutMs}ms.`,
+    });
+  }
+  if (result.outputLimitExceeded) {
+    throw providerResolutionError({
+      source: "exec",
+      provider: params.providerName,
+      message: `Exec provider output exceeded maxOutputBytes (${maxOutputBytes}).`,
     });
   }
   if (result.code !== 0) {

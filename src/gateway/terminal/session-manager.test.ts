@@ -1,12 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { TerminalPtyHandle } from "./pty.js";
-import {
-  TERMINAL_EVENT_DATA,
-  TERMINAL_EVENT_EXIT,
-  TerminalSessionManager,
-  type TerminalOpenRequest,
-} from "./session-manager.js";
+import { TerminalSessionManager } from "./session-manager.js";
+
+type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
+const TERMINAL_EVENT_DATA = "terminal.data";
+const TERMINAL_EVENT_EXIT = "terminal.exit";
 
 /** A controllable fake PTY that records writes and lets tests drive data/exit. */
 function makeFakePty() {

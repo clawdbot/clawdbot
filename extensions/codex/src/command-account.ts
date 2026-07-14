@@ -31,7 +31,7 @@ type SafeCodexControlRequest = (
   options?: CodexControlRequestOptions,
 ) => Promise<SafeValue<JsonValue | undefined>>;
 
-export type CodexAccountAuthRow = {
+type CodexAccountAuthRow = {
   profileId: string;
   label: string;
   kind: string;

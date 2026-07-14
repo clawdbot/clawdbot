@@ -5,6 +5,7 @@
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
   "dependencies": {
+    "pretty-ms": "9.3.0",
     "undici": "8.5.0"
   },
   "devDependencies": {

@@ -1,15 +1,13 @@
 // Gateway live agent probe helpers.
 // Builds prompts and verification helpers for live image and cron probe tests.
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { promisify } from "node:util";
 import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { runExec } from "../process/exec.js";
 
-const execFileAsync = promisify(execFile);
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
 const OPENCLAW_CLI_GATEWAY_TIMEOUT_MS = 30_000;
 const OPENCLAW_CLI_CHILD_TIMEOUT_MS = OPENCLAW_CLI_GATEWAY_TIMEOUT_MS + 45_000;
@@ -149,11 +147,12 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const cliArgs = args.includes("--timeout")
     ? args
     : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
-  const { stdout, stderr } = await execFileAsync(process.execPath, ["openclaw.mjs", ...cliArgs], {
+  const { stdout, stderr } = await runExec(process.execPath, ["openclaw.mjs", ...cliArgs], {
+    baseEnv: childEnv,
     cwd: process.cwd(),
-    env: childEnv,
-    timeout: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
+    logOutput: false,
     maxBuffer: 1024 * 1024,
+    timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
   });
   const trimmed = stdout.trim();
   if (!trimmed) {

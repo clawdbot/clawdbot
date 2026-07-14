@@ -37,7 +37,7 @@ let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
-let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
+let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -482,7 +482,6 @@ describe("resolvePluginTools optional tools", () => {
       buildPluginToolMetadataKey,
       ensureStandalonePluginToolRegistryLoaded,
       getPluginToolMeta,
-      resetPluginToolFactoryCache,
       resolvePluginTools,
     } = await import("./tools.js"));
     ({
@@ -495,6 +494,7 @@ describe("resolvePluginTools optional tools", () => {
       await import("./runtime/gateway-request-scope.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
+    ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
   beforeEach(() => {
@@ -510,13 +510,13 @@ describe("resolvePluginTools optional tools", () => {
     }));
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
-    resetPluginToolFactoryCache?.();
+    resetPluginToolDescriptorCacheForTest?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
-    resetPluginToolFactoryCache?.();
+    resetPluginToolDescriptorCacheForTest?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();

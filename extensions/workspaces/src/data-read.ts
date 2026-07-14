@@ -7,12 +7,7 @@ import {
 } from "./binding-contract.js";
 import type { WorkspaceBinding, JsonValue } from "./schema.js";
 
-export {
-  DATA_READ_RPC_ALLOWLIST,
-  WorkspaceBindingResolutionError,
-  normalizeWorkspaceDataLogicalPath,
-  type WorkspaceBindingErrorCode,
-} from "./binding-contract.js";
+export { DATA_READ_RPC_ALLOWLIST, WorkspaceBindingResolutionError } from "./binding-contract.js";
 
 export type ResolveBindingOptions = {
   stateDir?: string;

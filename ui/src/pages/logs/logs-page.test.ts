@@ -8,12 +8,14 @@ import "./logs-page.ts";
 type TestLogsPage = HTMLElement & {
   context: ApplicationContext;
   connected: boolean;
+  logsAtBottom: boolean;
+  logsAutoFollow: boolean;
   logsEntries: unknown[];
+  scheduleScroll: (force?: boolean) => void;
   readonly updateComplete: Promise<boolean>;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadLogs: (opts?: { reset?: boolean; quiet?: boolean }) => Promise<boolean>;
   requestUpdate: () => void;
-  scheduleScroll: (force?: boolean) => void;
 };
 
 function deferred<T>() {
@@ -65,6 +67,31 @@ describe("LogsPage lifecycle", () => {
     await Promise.resolve();
 
     expect(requestFrame).not.toHaveBeenCalled();
+  });
+
+  it("forces a scroll when auto-follow is re-enabled away from the bottom", async () => {
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise(() => {
+            // Keep any incidental request pending; this test only exercises scroll state.
+          }),
+      ),
+    } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client);
+    document.body.append(page);
+    await page.updateComplete;
+
+    page.logsAutoFollow = false;
+    await page.updateComplete;
+    const scheduleScroll = vi.spyOn(page, "scheduleScroll");
+    page.logsAtBottom = false;
+    page.logsAutoFollow = true;
+    await page.updateComplete;
+
+    expect(scheduleScroll).toHaveBeenCalledOnce();
+    expect(scheduleScroll).toHaveBeenCalledWith(true);
   });
 
   it("discards a log response from a replaced gateway source that reuses its client", async () => {

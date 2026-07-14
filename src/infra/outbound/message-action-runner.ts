@@ -219,24 +219,69 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
   return resolveOutboundMessageGatewayOptions(gateway);
 }
 
+const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
+const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
+const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } =
+    await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
-  return await callGatewayLeastPrivilege<T>({
+  // A timed-out send is reattached with the same idempotency key. Cap only the
+  // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
+  const timeoutMs =
+    params.actionParams.action === "send"
+      ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
+      : gateway.timeoutMs;
+  const call = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
     params: params.actionParams,
-    timeoutMs: gateway.timeoutMs,
+    timeoutMs,
+    signal: params.abortSignal,
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
     agentRuntimeIdentityToken,
-  });
+  };
+  try {
+    return await callGatewayLeastPrivilege<T>(call);
+  } catch (error) {
+    if (
+      !isGatewayTransportError(error) ||
+      error.kind !== "timeout" ||
+      params.actionParams.action !== "send"
+    ) {
+      throw error;
+    }
+    throwIfAborted(params.abortSignal);
+  }
+
+  const reconciliationSignal = params.abortSignal
+    ? AbortSignal.any([
+        params.abortSignal,
+        AbortSignal.timeout(MESSAGE_ACTION_RECONCILIATION_MAX_MS),
+      ])
+    : undefined;
+  const reconciliationCall = {
+    ...call,
+    // `null` keeps startup bounded but removes the per-request timer after
+    // hello. The dedicated signal bounds a joined in-flight action without
+    // reconnecting every minute or inheriting the run's much longer lifetime.
+    timeoutMs: params.abortSignal
+      ? null
+      : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+    signal: reconciliationSignal,
+  };
+  // A caller-side timeout does not cancel Gateway work. Reattach once with the
+  // unchanged idempotency key so the live Gateway can join the original work.
+  return await callGatewayLeastPrivilege<T>(reconciliationCall);
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -690,6 +735,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
   );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
+    abortSignal: params.input.abortSignal,
     actionParams: {
       channel: params.channel,
       action: params.action,

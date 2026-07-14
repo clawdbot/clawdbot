@@ -98,7 +98,7 @@ export type FleetCreateOptions = {
   start?: boolean;
 };
 
-export type FleetCreateResult = {
+type FleetCreateResult = {
   tenant: string;
   containerName: string;
   port: number;
@@ -111,7 +111,7 @@ export type FleetCreateResult = {
   nextStep: string;
 };
 
-export type FleetListEntry = {
+type FleetListEntry = {
   tenant: string;
   state: string;
   port: number;
@@ -124,7 +124,7 @@ export type FleetHealthResult =
   | { status: "failed"; url: string; error: string; httpStatus?: number }
   | { status: "skipped"; url: string; reason: string };
 
-export type FleetStatusResult = {
+type FleetStatusResult = {
   tenant: string;
   containerName: string;
   runtime: FleetContainerRuntimeName;
@@ -149,7 +149,7 @@ export type FleetLogsOptions = {
   since?: string;
 };
 
-export type FleetActionResult = {
+type FleetActionResult = {
   tenant: string;
   action: FleetLifecycleAction | "upgrade" | "rm";
   image?: string;
@@ -796,5 +796,3 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
   };
 }
-
-export type FleetService = ReturnType<typeof createFleetService>;

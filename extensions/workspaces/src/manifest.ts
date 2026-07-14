@@ -52,7 +52,7 @@ function hashBytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export type ApprovedWidgetSnapshot = {
+type ApprovedWidgetSnapshot = {
   /** sha256 of every servable file, keyed by the logical path the route serves. */
   files: Record<string, string>;
   /** Parsed from the exact `widget.json` bytes that were hashed. */
@@ -200,13 +200,13 @@ export function matchesApprovedFile(
   return expected !== undefined && expected === hashBytes(bytes);
 }
 const BINDING_ID_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
-export const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
+const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
 
-export type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
+type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
 
-export type WidgetManifestBinding = { id: string; source: "static"; value: unknown };
+type WidgetManifestBinding = { id: string; source: "static"; value: unknown };
 
-export type WidgetManifest = {
+type WidgetManifest = {
   schemaVersion: 1;
   name: string;
   title: string;

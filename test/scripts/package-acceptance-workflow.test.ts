@@ -1,6 +1,6 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -339,6 +339,44 @@ describe("package acceptance workflow", () => {
     expect(partialEvidence.stderr).toContain("require full_release_validation_run_id");
 
     expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
+  });
+
+  it("accepts only main-reachable SHA-pinned release publish branches", () => {
+    const workflowSha = "a".repeat(40);
+    const binDir = tempDirs.make("release-publish-gh-");
+    const ghPath = `${binDir}/gh`;
+    writeFileSync(ghPath, `#!/bin/sh\nprintf '%s\\n' "\${MOCK_MERGE_BASE_SHA}"\n`);
+    chmodSync(ghPath, 0o755);
+    const pinnedEnv = {
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${binDir}:${process.env.PATH}`,
+      WORKFLOW_REF: `refs/heads/release-publish/${workflowSha.slice(0, 12)}-123`,
+      WORKFLOW_SHA: workflowSha,
+    };
+
+    const valid = runReleasePublishInputValidation({
+      ...pinnedEnv,
+      MOCK_MERGE_BASE_SHA: workflowSha,
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatchedName = runReleasePublishInputValidation({
+      ...pinnedEnv,
+      WORKFLOW_REF: `refs/heads/release-publish/${"b".repeat(12)}-123`,
+    });
+    expect(mismatchedName.status).toBe(1);
+    expect(mismatchedName.stderr).toContain(
+      "SHA-pinned release publish branch does not match workflow SHA",
+    );
+
+    const unreachable = runReleasePublishInputValidation({
+      ...pinnedEnv,
+      MOCK_MERGE_BASE_SHA: "c".repeat(40),
+    });
+    expect(unreachable.status).toBe(1);
+    expect(unreachable.stderr).toContain(
+      "SHA-pinned release publish workflow revision is not reachable from current main",
+    );
   });
 
   it("resolves broad release evidence and exact-binds every publish child", () => {
@@ -3481,6 +3519,9 @@ describe("package artifact reuse", () => {
     expect(trustedClawHubPlan.run).toContain(
       'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
     );
+    expect(trustedClawHubPlan.run).toContain(
+      "jq -er '.bootstrap.shouldDispatch | select(type == \"boolean\") | tostring'",
+    );
     expect(trustedClawHubPlan.run).not.toContain("cd .release-harness");
     expect(releaseWorkflow).toContain("Attest ClawHub bootstrap approval");
     expect(releaseWorkflow).toContain("Upload ClawHub bootstrap approval");
@@ -3586,8 +3627,9 @@ describe("package artifact reuse", () => {
       "OpenClaw Release Publish must use trusted main workflow tooling",
     );
     expect(releaseInputGuard).toContain(
-      '[[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" ]]',
+      '[[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]',
     );
+    expect(releaseInputGuard).toContain("refs/heads/release-publish/");
     expect(releaseInputGuard).not.toContain("refs/heads/release/");
     expect(releaseInputGuard).toContain(
       '"${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha"',
@@ -3889,7 +3931,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     }
 
     expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
     expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);

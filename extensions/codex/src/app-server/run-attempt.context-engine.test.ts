@@ -18,7 +18,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
@@ -33,6 +32,8 @@ import {
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;

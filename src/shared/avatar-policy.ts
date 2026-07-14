@@ -2,7 +2,7 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
-export { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "./avatar-limits.js";
+export { AVATAR_MAX_BYTES } from "./avatar-limits.js";
 
 /**
  * Shared avatar source policy for config validation, agent identity loading,
@@ -29,8 +29,6 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
 
 /** Detects data URLs before image-specific avatar validation. */
 const AVATAR_DATA_RE = /^data:/i;
-/** Detects inline image data URLs accepted by the persisted avatar contract. */
-const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
 /** Detects remote avatar URLs served over HTTP(S). */
 const AVATAR_HTTP_RE = /^https?:\/\//i;
 /** Detects URI schemes so non-path avatar values can be rejected or routed. */
@@ -51,11 +49,6 @@ export function isAvatarDataUrl(value: string): boolean {
   return AVATAR_DATA_RE.test(value);
 }
 
-/** Detects image data URLs without applying a projection-specific size limit. */
-export function isAvatarImageDataUrl(value: string): boolean {
-  return AVATAR_IMAGE_DATA_RE.test(value);
-}
-
 /** Detects remote HTTP(S) avatar URLs. */
 export function isAvatarHttpUrl(value: string): boolean {
   return AVATAR_HTTP_RE.test(value);
@@ -69,20 +62,6 @@ export function hasAvatarUriScheme(value: string): boolean {
 /** Detects Windows absolute paths so they are not mistaken for URI schemes. */
 export function isWindowsAbsolutePath(value: string): boolean {
   return WINDOWS_ABS_RE.test(value);
-}
-
-/** Accepts workspace-relative avatar paths while rejecting home paths and URI values. */
-export function isWorkspaceRelativeAvatarPath(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  if (hasAvatarUriScheme(value) && !isWindowsAbsolutePath(value)) {
-    return false;
-  }
-  return true;
 }
 
 /** Checks that a resolved avatar path remains inside its configured root. */

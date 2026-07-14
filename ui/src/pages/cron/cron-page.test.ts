@@ -70,8 +70,10 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function createContext(gateway: TestGateway): ApplicationContext {
+function createContext(gateway: TestGateway, scopeId: string | null = "main"): ApplicationContext {
   const subscribe = () => () => undefined;
+  let selectionState = { selectedId: scopeId, scopeId };
+  const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
     gateway,
@@ -94,6 +96,27 @@ function createContext(gateway: TestGateway): ApplicationContext {
     runtimeConfig: {
       state: { configSnapshot: null },
       subscribe,
+    },
+    agentSelection: {
+      get state() {
+        return selectionState;
+      },
+      set(agentId: string | null) {
+        selectionState = { selectedId: agentId, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      setScope(agentId: string | null) {
+        selectionState = { ...selectionState, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      subscribe(listener: (state: typeof selectionState) => void) {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
@@ -131,6 +154,23 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("scopes list, stats, and run history requests to the selected agent", async () => {
+    const request = createRequest();
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    createPage(createContext(gateway, "writer"));
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "cron.list",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+      expect(request).toHaveBeenCalledWith(
+        "cron.runs",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+    });
+  });
+
   it("create & run now issues cron.run for the job returned by cron.add", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "cron.add") {
@@ -166,6 +206,25 @@ describe("CronPage editor state sync", () => {
     });
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
     await vi.waitFor(() => expect(page.cron.cronCreateOpen).toBe(false));
+  });
+
+  it("drills from the failing stat into run history filtered to errors", async () => {
+    const request = createRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-stat-failing"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-stat-failing"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(page.querySelector(".cron-activity")).not.toBeNull());
+    expect(page.cron.cronRunsStatuses).toEqual(["error"]);
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ statuses: ["error"] }),
+    );
   });
 
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
@@ -221,9 +280,13 @@ describe("CronPage editor state sync", () => {
     expect(page.cron.cronForm.enabled).toBe(true);
 
     await vi.waitFor(() =>
-      expect(page.querySelector('[data-test-id="cron-toggle-enabled"]')).not.toBeNull(),
+      expect(page.querySelector('[data-test-id="cron-toggle-enabled"] input')).not.toBeNull(),
     );
-    (page.querySelector('[data-test-id="cron-toggle-enabled"]') as HTMLButtonElement).click();
+    const enabledToggle = page.querySelector(
+      '[data-test-id="cron-toggle-enabled"] input',
+    ) as HTMLInputElement;
+    enabledToggle.checked = false;
+    enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
     await vi.waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
     expect(serverEnabled).toBe(false);
 

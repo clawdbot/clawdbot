@@ -127,7 +127,7 @@ type SessionFileFingerprint =
       ctimeNs: bigint;
     };
 
-export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
+type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
 
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;

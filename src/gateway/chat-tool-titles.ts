@@ -52,7 +52,7 @@ const TOOL_TITLES_SYSTEM_PROMPT = [
   'Respond with JSON only: {"titles":{"<id>":"<title>"}} covering every item id.',
 ].join(" ");
 
-export type ToolTitleRequestItem = { id: string; name: string; input: string };
+type ToolTitleRequestItem = { id: string; name: string; input: string };
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 

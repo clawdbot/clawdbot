@@ -17,7 +17,7 @@ import {
 // statements; a bare transaction would open the default state DB while the
 // SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
 
-export type SessionGroupRecord = { name: string; position: number };
+type SessionGroupRecord = { name: string; position: number };
 
 type SessionGroupsDatabase = Pick<OpenClawStateKyselyDatabase, "session_groups">;
 

@@ -14,6 +14,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "import": "./dist/browser.mjs",
+      "default": "./dist/browser.mjs"
+    },
     "./readiness": {
       "types": "./dist/readiness.d.mts",
       "import": "./dist/readiness.mjs",
@@ -26,11 +31,12 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
-    "ipaddr.js": "2.4.0",
+    "@openclaw/net-policy": "workspace:*",
+    "@openclaw/retry": "workspace:*",
     "ws": "8.21.0"
   }
 }

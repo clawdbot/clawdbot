@@ -6,7 +6,7 @@ import type { ProviderUsageSnapshot } from "../../../src/infra/provider-usage.ty
 import { t } from "../i18n/index.ts";
 import { formatTokens } from "../lib/format.ts";
 
-export function formatProviderAmount(amount: number, unit: string): string {
+function formatProviderAmount(amount: number, unit: string): string {
   const normalizedUnit = unit.trim().toUpperCase();
   if (["USD", "EUR", "GBP", "CNY", "JPY"].includes(normalizedUnit)) {
     return new Intl.NumberFormat(undefined, {

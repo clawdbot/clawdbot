@@ -10,8 +10,14 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import "../../styles/sessions.css";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
@@ -21,6 +27,7 @@ import {
   normalizeThinkingOptionValue,
 } from "../../lib/chat/thinking.ts";
 import {
+  formatDurationCompact,
   formatMs,
   formatRelativeTimestamp,
   formatTokens,
@@ -254,15 +261,20 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   return { label: t("sessionsView.statusUnknown"), tone: "muted" };
 }
 
+const SESSION_STATUS_TONE_KIND = {
+  live: "ok",
+  idle: "muted",
+  done: "ok",
+  failed: "danger",
+  muted: "muted",
+} as const;
+
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const badge = resolveSessionStatusBadge(row);
   const title = `${t("sessionsView.status")}: ${badge.label}`;
   return html`
     <openclaw-tooltip .content=${title}>
-      <span class="session-status-badge session-status-badge--${badge.tone}" aria-label=${title}>
-        <span class="session-status-badge__dot" aria-hidden="true"></span>
-        <span class="session-status-badge__label">${badge.label}</span>
-      </span>
+      ${renderSettingsStatus({ kind: SESSION_STATUS_TONE_KIND[badge.tone], label: badge.label })}
     </openclaw-tooltip>
   `;
 }
@@ -420,15 +432,10 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
   const results = state.status === "results" ? state.results : [];
   const loading = state.status === "loading";
   return html`
-    <section class="sessions-transcript-search" aria-labelledby="transcript-search-title">
-      <div class="sessions-transcript-search__header">
-        <div>
-          <div id="transcript-search-title" class="sessions-transcript-search__title">
-            ${t("sessionsView.transcriptSearchTitle")}
-          </div>
-          <div class="card-sub">${t("sessionsView.transcriptSearchDescription")}</div>
-        </div>
-      </div>
+    <section
+      class="sessions-transcript-search"
+      aria-label=${t("sessionsView.transcriptSearchTitle")}
+    >
       <form
         class="sessions-transcript-search__form"
         role="search"
@@ -484,7 +491,9 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
           : nothing}
         ${state.status === "error"
           ? html`
-              <div class="callout danger sessions-transcript-search__notice">
+              <div
+                class="sessions-transcript-search__notice sessions-transcript-search__notice--danger"
+              >
                 <span>${t("sessionsView.transcriptSearchError")}: ${state.message}</span>
                 <button class="btn btn--sm" type="button" @click=${props.onTranscriptSearch}>
                   ${t("sessionsView.transcriptSearchRetry")}
@@ -494,7 +503,7 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
           : nothing}
         ${state.status === "results" && state.indexing
           ? html`
-              <div class="callout info sessions-transcript-search__notice">
+              <div class="sessions-transcript-search__notice">
                 <span>${t("sessionsView.transcriptSearchIndexing")}</span>
                 <button
                   class="btn btn--sm"
@@ -741,30 +750,31 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  const totalSeconds = Math.round(runtimeMs / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
 }
 
-function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {
+// Goal state is a dot + summary; the tooltip carries the objective detail.
+function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
   }
-  const title = formatGoalDetail(goal);
+  const kind =
+    goal.status === "active"
+      ? "accent"
+      : goal.status === "complete"
+        ? "ok"
+        : goal.status === "blocked" ||
+            goal.status === "budget_limited" ||
+            goal.status === "usage_limited"
+          ? "warn"
+          : "muted";
+  const detail = formatGoalDetail(goal);
+  // tabindex lets keyboard users trigger the tooltip; aria-label exposes the
+  // full objective detail that sighted users only get on hover.
   return html`
-    <openclaw-tooltip .content=${title}>
-      <span class="session-goal-chip session-goal-chip--${goal.status}" aria-label=${title}>
-        <span class="session-goal-chip__label">${formatGoalSummary(goal)}</span>
-        <span class="session-goal-chip__objective">${goal.objective}</span>
+    <openclaw-tooltip .content=${detail}>
+      <span tabindex="0" aria-label=${detail}>
+        ${renderSettingsStatus({ kind, label: formatGoalSummary(goal) })}
       </span>
     </openclaw-tooltip>
   `;
@@ -1029,7 +1039,7 @@ function renderOverrideSelect(params: {
     <label class="session-override-field">
       <span class="session-override-field__label">${params.label}</span>
       <select
-        class="session-override-field__control"
+        class="settings-select"
         ?disabled=${params.disabled}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
       >
@@ -1064,11 +1074,6 @@ export function renderSessions(props: SessionsProps) {
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
-  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
-  const limitTooltip = t("sessionsView.limitTooltip");
-  const globalTooltip = t("sessionsView.globalTooltip");
-  const unknownTooltip = t("sessionsView.unknownTooltip");
-  const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -1090,309 +1095,335 @@ export function renderSessions(props: SessionsProps) {
     `;
   };
 
+  const sessionsTitle = html`
+    ${t("sessionsView.title")}
+    ${props.result
+      ? html`
+          <openclaw-tooltip .content=${t("sessionsView.store", { path: props.result.path })}>
+            <span class="settings-count">${rawRows.length}</span>
+          </openclaw-tooltip>
+        `
+      : nothing}
+  `;
+  const refreshAction = html`
+    <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+      ${props.loading ? t("common.loading") : t("common.refresh")}
+    </button>
+  `;
+  const children = [
+    props.error ? html`<div class="sessions-error">${props.error}</div>` : nothing,
+    props.result ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount)) : nothing,
+    // When the gateway lacks sessions.search the section still renders: the
+    // form disables itself and shows the unavailable notice (shipped behavior).
+    renderSettingsSection(
+      {
+        title: t("sessionsView.transcriptSearchTitle"),
+        description: t("sessionsView.transcriptSearchDescription"),
+      },
+      renderTranscriptSearch(props, rawRows),
+    ),
+    renderSettingsSection(
+      {
+        title: sessionsTitle,
+        description: t("sessionsView.subtitle"),
+        actions: refreshAction,
+      },
+      renderSessionsTable(props, {
+        paginated,
+        groups,
+        groupingActive,
+        emptyBecauseFiltered,
+        totalRows,
+        totalPages,
+        page,
+        sortHeader,
+      }),
+    ),
+  ];
+  return renderSettingsPage(children, { wide: true });
+}
+
+type SessionsTableContext = {
+  paginated: GatewaySessionRow[];
+  groups: SessionRowGroup[] | null;
+  groupingActive: boolean;
+  emptyBecauseFiltered: boolean;
+  totalRows: number;
+  totalPages: number;
+  page: number;
+  sortHeader: (
+    col: "key" | "kind" | "updated" | "tokens",
+    label: string,
+    extraClass?: string,
+  ) => unknown;
+};
+
+function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
+  const { paginated, groups, groupingActive, emptyBecauseFiltered, totalRows, totalPages, page } =
+    ctx;
+  const sortHeader = ctx.sortHeader;
+  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
+  const limitTooltip = t("sessionsView.limitTooltip");
+  const globalTooltip = t("sessionsView.globalTooltip");
+  const unknownTooltip = t("sessionsView.unknownTooltip");
+  const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
   return html`
-    <section class="card">
-      <div class="sessions-header">
-        <div>
-          <div class="card-title sessions-header__title">
-            ${t("sessionsView.title")}
-            ${props.result
-              ? html`
-                  <openclaw-tooltip
-                    .content=${t("sessionsView.store", { path: props.result.path })}
-                  >
-                    <span class="sessions-header__count">${rawRows.length}</span>
-                  </openclaw-tooltip>
-                `
-              : nothing}
-          </div>
-          <div class="card-sub">${t("sessionsView.subtitle")}</div>
-        </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? t("common.loading") : t("common.refresh")}
-        </button>
+    <div
+      class="sessions-toolbar sessions-filter-bar"
+      aria-label=${t("sessionsView.filterControls")}
+    >
+      <div class="data-table-search sessions-toolbar__search">
+        ${icons.search}
+        <input
+          type="text"
+          placeholder=${t("sessionsView.searchPlaceholder")}
+          .value=${props.searchQuery}
+          @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+        />
       </div>
-
-      ${props.result ? renderSessionsOverview(rawRows, liveCount) : nothing}
-      ${props.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
-        : nothing}
-      ${renderTranscriptSearch(props, rawRows)}
-
-      <div class="data-table-wrapper">
-        <div
-          class="sessions-toolbar sessions-filter-bar"
-          aria-label=${t("sessionsView.filterControls")}
-        >
-          <div class="data-table-search sessions-toolbar__search">
-            ${icons.search}
+      <div class="session-filter-primary-row">
+        <openclaw-tooltip .content=${activeTooltip}>
+          <label class="session-filter-field">
+            <span class="session-filter-label">${t("sessionsView.active")}</span>
             <input
-              type="text"
-              placeholder=${t("sessionsView.searchPlaceholder")}
-              .value=${props.searchQuery}
-              @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+              class="session-filter-input session-filter-input--minutes"
+              placeholder=${t("sessionsView.minutesPlaceholder")}
+              .value=${props.activeMinutes}
+              ?disabled=${props.showArchived}
+              @input=${(e: Event) =>
+                props.onFiltersChange({
+                  activeMinutes: (e.target as HTMLInputElement).value,
+                  limit: props.limit,
+                  includeGlobal: props.includeGlobal,
+                  includeUnknown: props.includeUnknown,
+                  showArchived: props.showArchived,
+                })}
             />
-          </div>
-          <div class="session-filter-primary-row">
-            <openclaw-tooltip .content=${activeTooltip}>
-              <label class="session-filter-field">
-                <span class="session-filter-label">${t("sessionsView.active")}</span>
-                <input
-                  class="session-filter-input session-filter-input--minutes"
-                  placeholder=${t("sessionsView.minutesPlaceholder")}
-                  .value=${props.activeMinutes}
-                  ?disabled=${props.showArchived}
-                  @input=${(e: Event) =>
-                    props.onFiltersChange({
-                      activeMinutes: (e.target as HTMLInputElement).value,
-                      limit: props.limit,
-                      includeGlobal: props.includeGlobal,
-                      includeUnknown: props.includeUnknown,
-                      showArchived: props.showArchived,
-                    })}
-                />
-              </label>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${limitTooltip}>
-              <label class="session-filter-field">
-                <span class="session-filter-label">${t("sessionsView.limit")}</span>
-                <input
-                  class="session-filter-input session-filter-input--limit"
-                  .value=${props.limit}
-                  @input=${(e: Event) =>
-                    props.onFiltersChange({
-                      activeMinutes: props.activeMinutes,
-                      limit: (e.target as HTMLInputElement).value,
-                      includeGlobal: props.includeGlobal,
-                      includeUnknown: props.includeUnknown,
-                      showArchived: props.showArchived,
-                    })}
-                />
-              </label>
-            </openclaw-tooltip>
-          </div>
-          <div
-            class="session-filter-toggle-group"
-            role="group"
-            aria-label=${t("sessionsView.sourceFilters")}
-          >
-            ${renderFilterToggle({
-              name: "includeGlobal",
-              checked: props.includeGlobal,
-              label: t("sessionsView.global"),
-              title: globalTooltip,
-              onChange: (checked) =>
-                props.onFiltersChange({
-                  activeMinutes: props.activeMinutes,
-                  limit: props.limit,
-                  includeGlobal: checked,
-                  includeUnknown: props.includeUnknown,
-                  showArchived: props.showArchived,
-                }),
-            })}
-            ${renderFilterToggle({
-              name: "includeUnknown",
-              checked: props.includeUnknown,
-              label: t("sessionsView.unknown"),
-              title: unknownTooltip,
-              onChange: (checked) =>
-                props.onFiltersChange({
-                  activeMinutes: props.activeMinutes,
-                  limit: props.limit,
-                  includeGlobal: props.includeGlobal,
-                  includeUnknown: checked,
-                  showArchived: props.showArchived,
-                }),
-            })}
-            ${renderFilterToggle({
-              name: "showArchived",
-              checked: props.showArchived,
-              label: t("sessionsView.archivedOnly"),
-              title: showArchivedTooltip,
-              extraClass: "session-archive-toggle",
-              onChange: (checked) =>
-                props.onFiltersChange({
-                  activeMinutes: props.activeMinutes,
-                  limit: props.limit,
-                  includeGlobal: props.includeGlobal,
-                  includeUnknown: props.includeUnknown,
-                  showArchived: checked,
-                }),
-            })}
-          </div>
-          <span class="sessions-toolbar__divider" aria-hidden="true"></span>
-          <label class="session-groupby">
-            <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
-            <select
-              class="session-groupby__select"
-              @change=${(e: Event) =>
-                props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
-            >
-              ${SESSION_GROUP_MODES.map(
-                (mode) =>
-                  html`<option value=${mode} ?selected=${props.groupBy === mode}>
-                    ${groupModeLabel(mode)}
-                  </option>`,
-              )}
-            </select>
           </label>
-          ${props.groupBy === "category"
-            ? html`
-                <button class="btn btn--sm" @click=${() => props.onRequestNewCategory()}>
-                  ${icons.plus} ${t("sessionsView.newGroup")}
-                </button>
-              `
-            : nothing}
-        </div>
-
-        ${props.selectedKeys.size > 0
-          ? html`
-              <div class="data-table-bulk-bar">
-                <span
-                  >${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span
-                >
-                <button class="btn btn--sm" @click=${props.onDeselectAll}>
-                  ${t("common.unselect")}
-                </button>
-                <button
-                  class="btn btn--sm danger"
-                  ?disabled=${props.loading}
-                  @click=${props.onDeleteSelected}
-                >
-                  ${icons.trash} ${t("sessionsView.deleteSelected")}
-                </button>
-              </div>
-            `
-          : nothing}
-
-        <div class="data-table-container">
-          <table class="data-table sessions-table">
-            <thead>
-              <tr>
-                <th class="data-table-checkbox-col">
-                  ${paginated.length > 0
-                    ? html`<input
-                        type="checkbox"
-                        .checked=${paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))}
-                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
-                        !paginated.every((r) => props.selectedKeys.has(r.key))}
-                        @change=${() => {
-                          const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
-                          if (allSelected) {
-                            props.onDeselectPage(paginated.map((r) => r.key));
-                          } else {
-                            props.onSelectPage(paginated.map((r) => r.key));
-                          }
-                        }}
-                        aria-label=${t("sessionsView.selectAllOnPage")}
-                      />`
-                    : nothing}
-                </th>
-                ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
-                ${props.groupBy === "category"
-                  ? html`<th>${t("sessionsView.group")}</th>`
-                  : nothing}
-                ${sortHeader("kind", t("sessionsView.kind"))}
-                <th class="session-status-col">${t("sessionsView.status")}</th>
-                ${sortHeader("updated", t("sessionsView.updated"))}
-                ${sortHeader("tokens", t("sessionsView.tokens"))}
-                <th class="session-actions-col">
-                  <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              ${props.loading && !props.result
-                ? renderSkeletonRows(sessionsTableColumnCount(props))
-                : paginated.length === 0
-                  ? html`
-                      <tr>
-                        <td
-                          colspan=${sessionsTableColumnCount(props)}
-                          class="data-table-empty-cell"
-                        >
-                          ${emptyBecauseFiltered
-                            ? html`
-                                <div
-                                  class="data-table-empty-state"
-                                  role="status"
-                                  aria-live="polite"
-                                >
-                                  <div class="data-table-empty-state__message">
-                                    ${icons.search}
-                                    <span>${t("sessionsView.noSessionsMatchFilters")}</span>
-                                  </div>
-                                  <button class="btn btn--sm" @click=${props.onClearFilters}>
-                                    ${t("sessionsView.showAll")}
-                                  </button>
-                                </div>
-                              `
-                            : html`
-                                <div
-                                  class="data-table-empty-state"
-                                  role="status"
-                                  aria-live="polite"
-                                >
-                                  <div class="data-table-empty-state__message">
-                                    ${icons.messageSquare}
-                                    <span>${t("sessionsView.noSessions")}</span>
-                                  </div>
-                                </div>
-                              `}
-                        </td>
-                      </tr>
-                    `
-                  : groups
-                    ? groups.flatMap((group) => {
-                        const section = group.rows.flatMap((row) => renderRows(row, props));
-                        section.unshift(renderGroupHeaderRow(group, props));
-                        return section;
-                      })
-                    : paginated.flatMap((row) => renderRows(row, props))}
-            </tbody>
-          </table>
-        </div>
-
-        ${totalRows > 0 && !groupingActive
-          ? html`
-              <div class="data-table-pagination">
-                <div class="data-table-pagination__info">
-                  ${t("sessionsView.pagination", {
-                    start: String(page * props.pageSize + 1),
-                    end: String(Math.min((page + 1) * props.pageSize, totalRows)),
-                    total: String(totalRows),
-                  })}
-                </div>
-                <div class="data-table-pagination__controls">
-                  <select
-                    class="data-table-pagination__size"
-                    .value=${String(props.pageSize)}
-                    @change=${(e: Event) =>
-                      props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
-                  >
-                    ${PAGE_SIZES.map(
-                      (s) =>
-                        html`<option value=${s}>
-                          ${t("sessionsView.rowsPerPage", { count: String(s) })}
-                        </option>`,
-                    )}
-                  </select>
-                  <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                    ${t("common.previous")}
-                  </button>
-                  <button
-                    ?disabled=${page >= totalPages - 1}
-                    @click=${() => props.onPageChange(page + 1)}
-                  >
-                    ${t("common.next")}
-                  </button>
-                </div>
-              </div>
-            `
-          : nothing}
+        </openclaw-tooltip>
+        <openclaw-tooltip .content=${limitTooltip}>
+          <label class="session-filter-field">
+            <span class="session-filter-label">${t("sessionsView.limit")}</span>
+            <input
+              class="session-filter-input session-filter-input--limit"
+              .value=${props.limit}
+              @input=${(e: Event) =>
+                props.onFiltersChange({
+                  activeMinutes: props.activeMinutes,
+                  limit: (e.target as HTMLInputElement).value,
+                  includeGlobal: props.includeGlobal,
+                  includeUnknown: props.includeUnknown,
+                  showArchived: props.showArchived,
+                })}
+            />
+          </label>
+        </openclaw-tooltip>
       </div>
-    </section>
+      <div
+        class="session-filter-toggle-group"
+        role="group"
+        aria-label=${t("sessionsView.sourceFilters")}
+      >
+        ${renderFilterToggle({
+          name: "includeGlobal",
+          checked: props.includeGlobal,
+          label: t("sessionsView.global"),
+          title: globalTooltip,
+          onChange: (checked) =>
+            props.onFiltersChange({
+              activeMinutes: props.activeMinutes,
+              limit: props.limit,
+              includeGlobal: checked,
+              includeUnknown: props.includeUnknown,
+              showArchived: props.showArchived,
+            }),
+        })}
+        ${renderFilterToggle({
+          name: "includeUnknown",
+          checked: props.includeUnknown,
+          label: t("sessionsView.unknown"),
+          title: unknownTooltip,
+          onChange: (checked) =>
+            props.onFiltersChange({
+              activeMinutes: props.activeMinutes,
+              limit: props.limit,
+              includeGlobal: props.includeGlobal,
+              includeUnknown: checked,
+              showArchived: props.showArchived,
+            }),
+        })}
+        ${renderFilterToggle({
+          name: "showArchived",
+          checked: props.showArchived,
+          label: t("sessionsView.archivedOnly"),
+          title: showArchivedTooltip,
+          extraClass: "session-archive-toggle",
+          onChange: (checked) =>
+            props.onFiltersChange({
+              activeMinutes: props.activeMinutes,
+              limit: props.limit,
+              includeGlobal: props.includeGlobal,
+              includeUnknown: props.includeUnknown,
+              showArchived: checked,
+            }),
+        })}
+      </div>
+      <span class="sessions-toolbar__divider" aria-hidden="true"></span>
+      <label class="session-groupby">
+        <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
+        <select
+          class="session-groupby__select"
+          @change=${(e: Event) =>
+            props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
+        >
+          ${SESSION_GROUP_MODES.map(
+            (mode) =>
+              html`<option value=${mode} ?selected=${props.groupBy === mode}>
+                ${groupModeLabel(mode)}
+              </option>`,
+          )}
+        </select>
+      </label>
+      ${props.groupBy === "category"
+        ? html`
+            <button class="btn btn--sm" @click=${() => props.onRequestNewCategory()}>
+              ${icons.plus} ${t("sessionsView.newGroup")}
+            </button>
+          `
+        : nothing}
+    </div>
+
+    ${props.selectedKeys.size > 0
+      ? html`
+          <div class="data-table-bulk-bar">
+            <span>${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
+            <button class="btn btn--sm" @click=${props.onDeselectAll}>
+              ${t("common.unselect")}
+            </button>
+            <button
+              class="btn btn--sm danger"
+              ?disabled=${props.loading}
+              @click=${props.onDeleteSelected}
+            >
+              ${icons.trash} ${t("sessionsView.deleteSelected")}
+            </button>
+          </div>
+        `
+      : nothing}
+
+    <div class="data-table-container">
+      <table class="data-table sessions-table">
+        <thead>
+          <tr>
+            <th class="data-table-checkbox-col">
+              ${paginated.length > 0
+                ? html`<input
+                    type="checkbox"
+                    .checked=${paginated.length > 0 &&
+                    paginated.every((r) => props.selectedKeys.has(r.key))}
+                    .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                    !paginated.every((r) => props.selectedKeys.has(r.key))}
+                    @change=${() => {
+                      const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
+                      if (allSelected) {
+                        props.onDeselectPage(paginated.map((r) => r.key));
+                      } else {
+                        props.onSelectPage(paginated.map((r) => r.key));
+                      }
+                    }}
+                    aria-label=${t("sessionsView.selectAllOnPage")}
+                  />`
+                : nothing}
+            </th>
+            ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
+            ${props.groupBy === "category" ? html`<th>${t("sessionsView.group")}</th>` : nothing}
+            ${sortHeader("kind", t("sessionsView.kind"))}
+            <th class="session-status-col">${t("sessionsView.status")}</th>
+            ${sortHeader("updated", t("sessionsView.updated"))}
+            ${sortHeader("tokens", t("sessionsView.tokens"))}
+            <th class="session-actions-col">
+              <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          ${props.loading && !props.result
+            ? renderSkeletonRows(sessionsTableColumnCount(props))
+            : paginated.length === 0
+              ? html`
+                  <tr>
+                    <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
+                      ${emptyBecauseFiltered
+                        ? html`
+                            <div class="data-table-empty-state" role="status" aria-live="polite">
+                              <div class="data-table-empty-state__message">
+                                ${icons.search}
+                                <span>${t("sessionsView.noSessionsMatchFilters")}</span>
+                              </div>
+                              <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                ${t("sessionsView.showAll")}
+                              </button>
+                            </div>
+                          `
+                        : html`
+                            <div class="data-table-empty-state" role="status" aria-live="polite">
+                              <div class="data-table-empty-state__message">
+                                ${icons.messageSquare}
+                                <span>${t("sessionsView.noSessions")}</span>
+                              </div>
+                            </div>
+                          `}
+                    </td>
+                  </tr>
+                `
+              : groups
+                ? groups.flatMap((group) => {
+                    const section = group.rows.flatMap((row) => renderRows(row, props));
+                    section.unshift(renderGroupHeaderRow(group, props));
+                    return section;
+                  })
+                : paginated.flatMap((row) => renderRows(row, props))}
+        </tbody>
+      </table>
+    </div>
+
+    ${totalRows > 0 && !groupingActive
+      ? html`
+          <div class="data-table-pagination">
+            <div class="data-table-pagination__info">
+              ${t("sessionsView.pagination", {
+                start: String(page * props.pageSize + 1),
+                end: String(Math.min((page + 1) * props.pageSize, totalRows)),
+                total: String(totalRows),
+              })}
+            </div>
+            <div class="data-table-pagination__controls">
+              <select
+                class="data-table-pagination__size"
+                .value=${String(props.pageSize)}
+                @change=${(e: Event) =>
+                  props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
+              >
+                ${PAGE_SIZES.map(
+                  (s) =>
+                    html`<option value=${s}>
+                      ${t("sessionsView.rowsPerPage", { count: String(s) })}
+                    </option>`,
+                )}
+              </select>
+              <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
+                ${t("common.previous")}
+              </button>
+              <button
+                ?disabled=${page >= totalPages - 1}
+                @click=${() => props.onPageChange(page + 1)}
+              >
+                ${t("common.next")}
+              </button>
+            </div>
+          </div>
+        `
+      : nothing}
   `;
 }
 
@@ -1424,16 +1455,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const chatUrl = canLink
     ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
     : null;
-  const badgeClass =
-    row.kind === "cron"
-      ? "data-table-badge--cron"
-      : row.kind === "direct"
-        ? "data-table-badge--direct"
-        : row.kind === "group"
-          ? "data-table-badge--group"
-          : row.kind === "global"
-            ? "data-table-badge--global"
-            : "data-table-badge--unknown";
+  const kindClass = `session-kind session-kind--${row.kind}`;
   const rowClass = [
     "session-data-row",
     "session-data-row--expandable",
@@ -1548,11 +1570,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+        <span class=${kindClass}>${row.kind}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
-          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+          ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
         </div>
       </td>
       <td>${updated}</td>
@@ -1571,7 +1593,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             }}
           >
             ${visibleCheckpointCount > 0
-              ? html`<span class="session-compaction-count">${visibleCheckpointCount}</span>`
+              ? html`<span class="settings-count session-compaction-count"
+                  >${visibleCheckpointCount}</span
+                >`
               : nothing}
             ${icons.chevronDown}
           </button>
@@ -1604,7 +1628,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             keyCellTitle,
             displayName,
             showDisplayName,
-            badgeClass,
+            kindClass,
             updated,
             visibleCheckpointCount,
             hasCheckpoints,
@@ -1622,7 +1646,7 @@ function renderSessionDetailsRow(params: {
   keyCellTitle: string;
   displayName: string | null;
   showDisplayName: boolean;
-  badgeClass: string;
+  kindClass: string;
   updated: string;
   visibleCheckpointCount: number;
   hasCheckpoints: boolean;
@@ -1634,7 +1658,7 @@ function renderSessionDetailsRow(params: {
     friendlyKeyLabel,
     displayName,
     showDisplayName,
-    badgeClass,
+    kindClass,
     updated,
     visibleCheckpointCount,
     hasCheckpoints,
@@ -1679,8 +1703,8 @@ function renderSessionDetailsRow(params: {
               : nothing}
           </div>
           <div class="session-details-panel__badges">
-            ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
-            <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+            ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+            <span class=${kindClass}>${row.kind}</span>
           </div>
         </div>
 
@@ -1690,7 +1714,7 @@ function renderSessionDetailsRow(params: {
             <label class="session-override-field">
               <span class="session-override-field__label">${t("sessionsView.label")}</span>
               <input
-                class="session-override-field__control"
+                class="settings-input"
                 .value=${row.label ?? ""}
                 ?disabled=${props.loading}
                 placeholder=${t("sessionsView.optionalPlaceholder")}

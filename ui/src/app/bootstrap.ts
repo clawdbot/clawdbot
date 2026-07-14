@@ -36,11 +36,11 @@ import {
   loadSettings,
   patchSettings,
   persistSessionToken,
-  resolveApplicationStartupSettings,
   resolvePageGatewaySettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -164,7 +164,7 @@ function createApplicationNavigationPreferences(
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
     sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
-    sidebarMoreExpanded: settings.sidebarMoreExpanded,
+    pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -178,7 +178,7 @@ function createApplicationNavigationPreferences(
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
-        nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
+        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
       }
@@ -186,7 +186,7 @@ function createApplicationNavigationPreferences(
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
         sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
-        sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
+        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
       for (const listener of listeners) {
@@ -382,6 +382,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           console.error("[openclaw] route replacement failed", error);
         });
     },
+    revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   return {

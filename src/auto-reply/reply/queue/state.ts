@@ -16,7 +16,7 @@ import {
   type QueueSettings,
 } from "./types.js";
 
-export type FollowupQueueState = {
+type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;

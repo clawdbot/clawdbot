@@ -51,7 +51,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   fixDmScope?: boolean;
 };
 
-export type SessionCleanupAction =
+type SessionCleanupAction =
   | "keep"
   | "prune-missing"
   | "prune-model-run"
@@ -88,7 +88,7 @@ export type SessionsCleanupResult =
       stores: SessionCleanupSummary[];
     };
 
-export type SessionsCleanupRunResult = {
+type SessionsCleanupRunResult = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   previewResults: Array<{
     summary: SessionCleanupSummary;

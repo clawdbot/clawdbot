@@ -135,10 +135,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
 });
 
-import {
-  dispatchPreparedSlackMessage,
-  resetSlackStreamRecipientTeamCacheForTests,
-} from "./monitor/message-handler/dispatch.js";
+import { dispatchPreparedSlackMessage } from "./monitor/message-handler/dispatch.js";
 
 afterAll(() => {
   vi.doUnmock("./monitor/reply.runtime.js");
@@ -158,9 +155,6 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
-  // The recipient-team cache is module-global; without a reset the users.info
-  // lookup would only appear in the first recorded scenario.
-  resetSlackStreamRecipientTeamCacheForTests();
 });
 
 const CHANNEL_ID = "C0TRACE";

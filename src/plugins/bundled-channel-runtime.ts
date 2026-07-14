@@ -120,19 +120,3 @@ export function resolveBundledChannelGeneratedPath(
 ): string | null {
   return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
 }
-
-/** Resolves the source workspace path for a bundled channel plugin id. */
-export function resolveBundledChannelWorkspacePath(params: {
-  rootDir: string;
-  scanDir?: string;
-  pluginId: string;
-}): string | null {
-  return (
-    listBundledChannelPluginMetadata({
-      rootDir: params.rootDir,
-      ...(params.scanDir ? { scanDir: params.scanDir } : {}),
-      includeChannelConfigs: false,
-      includeSyntheticChannelConfigs: false,
-    }).find((metadata) => metadata.manifest.id === params.pluginId)?.rootDir ?? null
-  );
-}

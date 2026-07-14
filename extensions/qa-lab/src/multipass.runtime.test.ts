@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
 
 function readRootPackageManager() {
   const packageJson = JSON.parse(
@@ -16,11 +16,11 @@ function readRootPackageManager() {
   return packageJson.packageManager;
 }
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    execFile: execFileMock,
+    runExec: runExecMock,
   };
 });
 
@@ -265,12 +265,9 @@ describe("qa multipass runtime", () => {
     const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-missing-test");
     vi.spyOn(Date, "now").mockReturnValue(1_717_171_717_171);
     vi.spyOn(Math, "random").mockReturnValue(0.123456789);
-    (execFileMock as unknown as Mock).mockImplementation((...args: unknown[]) => {
-      const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
-      const error = new Error("spawn multipass ENOENT") as NodeJS.ErrnoException;
-      error.code = "ENOENT";
-      callback(error, "", "");
-    });
+    runExecMock.mockRejectedValueOnce(
+      Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" }),
+    );
 
     const expectedVmName = createQaMultipassPlan({
       repoRoot: process.cwd(),
@@ -304,12 +301,13 @@ describe("qa multipass runtime", () => {
       "qa-e2e",
       "multipass-probe-error-test",
     );
-    (execFileMock as unknown as Mock).mockImplementation((...args: unknown[]) => {
-      const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
-      const error = new Error("multipassd is not running") as NodeJS.ErrnoException;
-      error.code = "EACCES";
-      callback(error, "", "multipassd is not running");
-    });
+    runExecMock.mockRejectedValueOnce(
+      Object.assign(new Error("multipassd is not running"), {
+        code: "EACCES",
+        stdout: "",
+        stderr: "multipassd is not running",
+      }),
+    );
 
     await expect(
       runQaMultipass({

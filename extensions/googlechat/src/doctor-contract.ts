@@ -4,9 +4,21 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 
 type GoogleChatChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
+
+// Google Chat's nested streaming schema is delivery-only ({chunkMode, block});
+// it has no preview mode (legacy streamMode is removed outright above), so
+// only the delivery flat aliases migrate. Account merge replaces the root
+// streaming object wholesale (resolveMergedAccountConfig without a streaming
+// deep-merge), so migration seeds materialized account objects with the
+// inherited root settings.
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "googlechat",
+  streaming: { defaultMode: "partial", deliveryOnly: true },
+  accountStreamingReplacesRoot: true,
+});
 
 function hasLegacyGoogleChatStreamMode(value: unknown): boolean {
   return asObjectRecord(value)?.streamMode !== undefined;
@@ -113,13 +125,10 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAccountAliases(value, hasLegacyGoogleChatGroupAllowAlias),
   },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
-export function normalizeCompatibilityConfig({
-  cfg,
-}: {
-  cfg: OpenClawConfig;
-}): ChannelDoctorConfigMutation {
+function normalizeRetiredGoogleChatKeys(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
   const rawEntry = asObjectRecord(
     (cfg.channels as Record<string, unknown> | undefined)?.googlechat,
   );
@@ -178,4 +187,16 @@ export function normalizeCompatibilityConfig({
     },
     changes,
   };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const retired = normalizeRetiredGoogleChatKeys(cfg);
+  return streamingAliasMigration.normalizeChannelConfig({
+    cfg: retired.config,
+    changes: retired.changes,
+  });
 }

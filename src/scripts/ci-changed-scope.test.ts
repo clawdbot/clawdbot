@@ -13,6 +13,7 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
+  shouldRunTsLoc,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
@@ -117,6 +118,13 @@ describe("detectChangedScope", () => {
 
     expect(shouldRunNativeI18n(["src/config/defaults.ts"])).toBe(false);
     expect(shouldRunNativeI18n(["scripts/install.sh"])).toBe(false);
+  });
+
+  it("routes production TypeScript to the LOC ratchet independent of native lanes", () => {
+    expect(shouldRunTsLoc(["apps/android/scripts/build-release-artifacts.ts"])).toBe(true);
+    expect(shouldRunTsLoc(["apps/macos/Sources/Foo.swift"])).toBe(false);
+    expect(shouldRunTsLoc(["src/state/openclaw-state-schema.generated.ts"])).toBe(false);
+    expect(shouldRunTsLoc(["src/runtime.test.ts"])).toBe(false);
   });
 
   it("fails safe when no paths are provided", () => {
@@ -545,6 +553,7 @@ describe("detectChangedScope", () => {
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "scripts/github/run-openclaw-cross-os-release-checks.sh",
       "scripts/openclaw-cross-os-release-checks.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
       "test/scripts/openclaw-cross-os-release-workflow.test.ts",
     ]) {
       expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({
@@ -1003,6 +1012,7 @@ describe("detectChangedScope", () => {
       run_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      run_ts_loc: "false",
     });
   });
 });

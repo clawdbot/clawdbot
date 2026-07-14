@@ -1,6 +1,6 @@
 // Defines common channel messaging configuration types.
 import type {
-  BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -48,11 +48,8 @@ export type CommonChannelMessagingConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Delivery streaming config: chunk mode plus block streaming controls. */
+  streaming?: ChannelDeliveryStreamingConfig;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */

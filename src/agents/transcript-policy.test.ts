@@ -4,7 +4,6 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
@@ -208,8 +207,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
-const mockResolveProviderRuntimePlugin = vi.mocked(resolveProviderRuntimePlugin);
-
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
     ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } =
@@ -265,20 +262,20 @@ describe("resolveTranscriptPolicy", () => {
   it("memoizes replay policy resolution for the same config and process env", () => {
     const config = {} as OpenClawConfig;
 
-    resolveTranscriptPolicy({
+    const firstPolicy = resolveTranscriptPolicy({
       provider: "mistral",
       modelId: "mistral-large-latest",
       config,
       env: process.env,
     });
-    resolveTranscriptPolicy({
+    const secondPolicy = resolveTranscriptPolicy({
       provider: "mistral",
       modelId: "mistral-large-latest",
       config,
       env: process.env,
     });
 
-    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(1);
+    expect(secondPolicy).toBe(firstPolicy);
   });
 
   it("does not reuse cached replay policies across custom env objects", () => {
@@ -309,7 +306,6 @@ describe("resolveTranscriptPolicy", () => {
     expect(strictPolicy.toolCallIdMode).toBe("strict");
     expect(loosePolicy.sanitizeToolCallIds).toBe(false);
     expect(loosePolicy.toolCallIdMode).toBeUndefined();
-    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(2);
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {

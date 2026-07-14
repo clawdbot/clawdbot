@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot, sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeHtml, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CANVAS_HOST_PATH } from "./host/a2ui.js";
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
@@ -70,15 +70,6 @@ function isPdfPathLike(value: string): boolean {
 function buildPdfWrapper(url: string): string {
   const escaped = escapeHtml(url);
   return `<!doctype html><html><body style="margin:0;background:#e5e7eb;"><object data="${escaped}" type="application/pdf" style="width:100%;height:100vh;border:0;"><iframe src="${escaped}" style="width:100%;height:100vh;border:0;"></iframe><p style="padding:16px;font:14px system-ui,sans-serif;">Unable to render PDF preview. <a href="${escaped}" target="_blank" rel="noopener noreferrer">Open PDF</a>.</p></object></body></html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function normalizeLogicalPath(value: string): string {

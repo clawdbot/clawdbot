@@ -35,13 +35,6 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-export type { CreatePluginRuntimeOptions } from "./types.js";
-export {
-  clearGatewaySubagentRuntime,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-} from "./gateway-bindings.js";
-
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
@@ -264,6 +257,7 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
   };
 }
 
+// Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();

@@ -43,9 +43,13 @@ type ClawBannerOptions = {
   env?: NodeJS.ProcessEnv;
   /** Injectable randomness for the animation garnish (tests pin it). */
   rng?: () => number;
+  /** Ends the animation on its static frame when parallel startup work settles. */
+  settleWhen?: PromiseLike<unknown>;
   sleep?: (ms: number) => Promise<void>;
   write?: (chunk: string) => void;
 };
+
+export type ClawBannerResult = "static" | "completed" | "settled";
 
 type CellTint = (col: number) => (text: string) => string;
 
@@ -101,10 +105,30 @@ const defaultSleep = (ms: number) =>
 // canned; every sequence ends on the exact static banner.
 async function animateBanner(opts: {
   rng: () => number;
+  settleWhen?: PromiseLike<unknown>;
   sleep: (ms: number) => Promise<void>;
   write: (chunk: string) => void;
-}): Promise<void> {
-  const { rng, sleep, write } = opts;
+}): Promise<Exclude<ClawBannerResult, "static">> {
+  const { rng, settleWhen, sleep, write } = opts;
+  let settleRequested = false;
+  const settleSignal = settleWhen
+    ? Promise.resolve(settleWhen).then(
+        () => {
+          settleRequested = true;
+        },
+        () => {
+          settleRequested = true;
+        },
+      )
+    : null;
+  const pause = async (ms: number): Promise<boolean> => {
+    if (!settleSignal) {
+      await sleep(ms);
+      return true;
+    }
+    await Promise.race([sleep(ms), settleSignal]);
+    return !settleRequested;
+  };
   let drewFrame = false;
   const draw = (lines: string[]) => {
     const prefix = drewFrame ? `\x1b[${ROWS}F` : "";
@@ -139,7 +163,9 @@ async function animateBanner(opts: {
           wordmarkTint: tintAt(identityTint),
         }),
       );
-      await sleep(45);
+      if (!(await pause(45))) {
+        return "settled";
+      }
     }
     // Shimmer: a bright band sweeps the wordmark; rarely it runs twice.
     const shimmerPasses = rng() < 0.2 ? 2 : 1;
@@ -148,22 +174,37 @@ async function animateBanner(opts: {
         const band: CellTint = (col) =>
           col >= x && col < x + 6 ? theme.accentBright : identityTint;
         draw(composeFrame({ wordmarkTint: band }));
-        await sleep(40);
+        if (!(await pause(40))) {
+          return "settled";
+        }
       }
     }
     // Snip: claws open and close once, sometimes twice.
     const snips = rng() < 0.4 ? 2 : 1;
     for (let snip = 0; snip < snips; snip++) {
       draw(composeFrame({ mascotRows: [...MASCOT_OPEN_ROWS, ...MASCOT_ART.slice(2)] }));
-      await sleep(95);
+      if (!(await pause(95))) {
+        return "settled";
+      }
       draw(staticBannerLines());
-      await sleep(115);
+      if (!(await pause(115))) {
+        return "settled";
+      }
     }
     draw(staticBannerLines());
+    return "completed";
   } finally {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    write("\x1b[?25h");
+    try {
+      // Parallel work owns startup latency; leave a complete banner instead of
+      // an interrupted frame before its logs or errors take over the terminal.
+      if (settleRequested && drewFrame) {
+        draw(staticBannerLines());
+      }
+    } finally {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      write("\x1b[?25h");
+    }
   }
 }
 
@@ -174,11 +215,11 @@ async function animateBanner(opts: {
 export async function printClawBanner(
   runtime: RuntimeEnv,
   options: ClawBannerOptions = {},
-): Promise<void> {
+): Promise<ClawBannerResult> {
   const columns = options.columns ?? process.stdout.columns ?? 80;
   if (columns < BANNER_WIDTH) {
     runtime.log(`${plainTitleLine()}\n`);
-    return;
+    return "static";
   }
   const env = options.env ?? process.env;
   const animate =
@@ -188,12 +229,14 @@ export async function printClawBanner(
     !env.VITEST;
   if (!animate) {
     runtime.log(`${staticBannerLines().join("\n")}\n`);
-    return;
+    return "static";
   }
-  await animateBanner({
+  const result = await animateBanner({
     rng: options.rng ?? Math.random,
+    settleWhen: options.settleWhen,
     sleep: options.sleep ?? defaultSleep,
     write: options.write ?? ((chunk) => process.stdout.write(chunk)),
   });
   (options.write ?? ((chunk: string) => process.stdout.write(chunk)))("\n");
+  return result;
 }

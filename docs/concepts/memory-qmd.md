@@ -269,8 +269,10 @@ keeps the older per-collection fallback for correctness.
 lexical-only, skips QMD vector status probes and embedding maintenance, and
 leaves semantic readiness checks to `vsearch` or `query` setups.
 
-**Search times out?** Increase `memory.qmd.limits.timeoutMs` (default:
-4000ms). Set it higher, for example `120000`, for slower hardware.
+**Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
+Set it higher, for example `120000`, for slower hardware. This limit applies to
+QMD's own search commands during agent `memory_search` calls; setup, sync,
+builtin fallback, and supplemental corpus work keep their own shorter deadlines.
 
 **Empty results in group or channel chats?** This is expected with the
 default `memory.qmd.scope`, which allows only direct sessions. Add an

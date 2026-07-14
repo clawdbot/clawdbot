@@ -26,6 +26,12 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
       this.writeMessage({ type: "invoke-result", result: params ?? {} });
       return {} as T;
     }
+    if (method === "node.invoke.progress") {
+      // Unreachable while the embedded app worker never enables agent runs
+      // (the only progress emitter); the Mac host bridge has no case for it.
+      this.writeMessage({ type: "invoke-progress", progress: params ?? {} });
+      return {} as T;
+    }
     if (method === "node.event") {
       this.writeMessage({ type: "node-event", event: params ?? {} });
       return {} as T;

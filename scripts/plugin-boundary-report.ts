@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Plugin Boundary Report script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -10,7 +9,7 @@ import {
   reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../src/plugin-sdk/entrypoints.ts";
-import { PLUGIN_COMPAT_RECORDS } from "../src/plugins/compat/registry.ts";
+import { listPluginCompatRecords } from "../src/plugins/compat/registry.ts";
 import type { PluginCompatRecord } from "../src/plugins/compat/types.ts";
 
 const REPO_ROOT = process.cwd();
@@ -374,7 +373,8 @@ function collectCompatDebt(
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
 ): CompatDebtRecord[] {
-  return PLUGIN_COMPAT_RECORDS.filter((record) => record.status === "deprecated")
+  return listPluginCompatRecords()
+    .filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
       const references =
@@ -389,7 +389,7 @@ function collectCompatDebt(
         owner: record.owner,
         status: record.status,
         removeAfter: record.removeAfter,
-        replacement: record.replacement,
+        replacement: record.replacement as string,
         docsPath: record.docsPath,
         surfaces: record.surfaces,
         tokens,

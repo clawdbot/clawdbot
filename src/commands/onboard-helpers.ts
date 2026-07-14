@@ -42,7 +42,7 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
@@ -245,18 +245,6 @@ export async function ensureWorkspaceAndSessions(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
-}
-
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */

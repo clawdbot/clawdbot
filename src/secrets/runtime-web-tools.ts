@@ -32,19 +32,10 @@ import {
 } from "./runtime-web-tools.shared.js";
 import type {
   RuntimeWebDiagnostic,
-  RuntimeWebDiagnosticCode,
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
 } from "./runtime-web-tools.types.js";
-
-export type {
-  RuntimeWebDiagnostic,
-  RuntimeWebDiagnosticCode,
-  RuntimeWebFetchMetadata,
-  RuntimeWebSearchMetadata,
-  RuntimeWebToolsMetadata,
-};
 
 const loadRuntimeWebToolsFallbackProviders = createLazyRuntimeSurface(
   () => import("./runtime-web-tools-fallback.runtime.js"),

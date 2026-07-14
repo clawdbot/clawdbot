@@ -3,10 +3,6 @@
  */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import {
-  addTimerTimeoutGraceMs,
-  MAX_TIMER_TIMEOUT_MS,
-} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
@@ -16,11 +12,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  resolveSessionTranscriptRuntimeReadTarget,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptRuntimeReadTarget } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -34,12 +26,8 @@ import {
   resolveCompactionSuccessorTranscript,
 } from "../../context-engine/types.js";
 import {
-  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
-  claimAgentRunContext,
-  emitAgentItemEvent,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
@@ -52,9 +40,6 @@ import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
-import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
@@ -80,10 +65,6 @@ import {
 } from "../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
-import {
-  resolveSessionKeyForRequest,
-  resolveStoredSessionKeyForSessionId,
-} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   classifyAssistantFailoverReason,
@@ -117,12 +98,6 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import {
-  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
-  type FastModeAutoProgressState,
-  formatFastModeAutoProgressText,
-  resolveFastModeForElapsed,
-} from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   agentHarnessBuildsOpenClawTools,
@@ -142,12 +117,6 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../model-selection.js";
-import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   OPENAI_PROVIDER_ID,
@@ -168,7 +137,6 @@ import {
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import {
@@ -178,7 +146,6 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
-import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -222,6 +189,7 @@ import {
   resolveEmbeddedAuthCooldownProbePolicy,
 } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
+import { createScopedAuthProfileStore, resolveAttemptDispatchApiKey } from "./run/auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import {
   hasCodexAppServerRecoveryRetryBudget,
@@ -230,6 +198,7 @@ import {
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
+import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -270,14 +239,39 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import {
+  EMBEDDED_RUN_LANE_HEARTBEAT_MS,
+  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+  resolveEmbeddedRunLaneTimeoutMs,
+} from "./run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
+import {
+  buildTraceToolSummary,
+  hasCompletedModelProgressForIdleBreaker,
+  normalizeEmbeddedRunAttemptResult,
+} from "./run/run-attempt-result.js";
+import {
+  CODEX_HARNESS_ID,
+  resolveAttemptTrajectoryAttribution,
+  resolveInitialEmbeddedRunModel,
+  resolveInitialThinkLevel,
+  resolveRequestStreamTransportOverrides,
+} from "./run/runtime-resolution.js";
+import {
+  assertAgentHarnessRunAdmission,
+  backfillSessionKey,
+  buildContextEngineCompactionSessionTarget,
+  isNoRealConversationCompactionNoop,
+  resetNoRealConversationTokenSnapshot,
+} from "./run/session-bootstrap.js";
 import {
   buildBeforeModelResolveAttachments,
   createNativeModelOwnedRuntimeModel,
   resolveEmbeddedRuntimeModelPolicy,
-  resolveAgentHarnessRunAdmissionError,
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
@@ -288,38 +282,25 @@ import {
   resolveEmbeddedRunAttemptTerminalOutcome,
 } from "./run/terminal-outcome.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
-import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInActiveTarget,
 } from "./tool-result-truncation.js";
-import type {
-  EmbeddedAgentMeta,
-  EmbeddedAgentRunResult,
-  TraceAttempt,
-  ToolSummaryTrace,
-} from "./types.js";
+import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
-const CODEX_HARNESS_ID = "codex";
-const OPENAI_RESPONSES_API = "openai-responses";
-const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
-const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
-const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
-const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
-type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   onSuccessfulAuthBinding?: (
     binding: import("../execution-auth-binding.js").AgentExecutionAuthBinding,
@@ -332,451 +313,8 @@ type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
 };
 
-function normalizeRuntimeId(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
-}
-
-function resolveAttemptTrajectoryAttribution(params: {
-  model: { api?: string; provider?: string };
-  modelId: string;
-  provider: string;
-  runtimePlan: {
-    auth?: Pick<AgentRuntimePlan["auth"], "authProfileProviderForAuth">;
-    observability?: Pick<AgentRuntimePlan["observability"], "harnessId">;
-  };
-}): { modelApi?: string; modelId: string; provider: string } {
-  const authProfileProvider = normalizeRuntimeId(
-    params.runtimePlan.auth?.authProfileProviderForAuth,
-  );
-  const harnessId = normalizeRuntimeId(params.runtimePlan.observability?.harnessId);
-  if (
-    harnessId === CODEX_HARNESS_ID &&
-    authProfileProvider !== OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
-  ) {
-    return {
-      modelApi: OPENAI_CODEX_RESPONSES_API,
-      modelId: params.modelId,
-      provider: OPENAI_PROVIDER_ID,
-    };
-  }
-  return {
-    ...(params.model.api ? { modelApi: params.model.api } : {}),
-    modelId: params.modelId,
-    provider: params.provider,
-  };
-}
-
-function buildContextEngineCompactionSessionTarget(params: {
-  agentId: string;
-  config?: RunEmbeddedAgentParams["config"];
-  sessionFile: string;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
-}): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
-  const storePath =
-    params.sessionTarget?.storePath ??
-    sqliteMarker?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId });
-  return {
-    agentId,
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(storePath ? { storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
-      : {}),
-  };
-}
-
-function isNoRealConversationCompactionNoop(params: {
-  ok?: boolean;
-  compacted?: boolean;
-  reason?: string;
-}): boolean {
-  return (
-    params.ok === true &&
-    params.compacted === false &&
-    params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
-  );
-}
-
-function resolveInitialThinkLevel(params: {
-  requested?: ThinkLevel;
-  config?: RunEmbeddedAgentParams["config"];
-  provider: string;
-  modelId: string;
-  model: { reasoning?: boolean };
-}): ThinkLevel {
-  if (params.requested) {
-    return params.requested;
-  }
-  return resolveThinkingDefault({
-    cfg: params.config ?? {},
-    provider: params.provider,
-    model: params.modelId,
-    catalog: [
-      {
-        provider: params.provider,
-        id: params.modelId,
-        name: params.modelId,
-        reasoning: params.model.reasoning,
-      },
-    ],
-  });
-}
-
-async function resetNoRealConversationTokenSnapshot(params: {
-  config?: RunEmbeddedAgentParams["config"];
-  sessionKey?: string;
-  agentId?: string;
-}): Promise<void> {
-  if (!params.sessionKey) {
-    return;
-  }
-  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
-  try {
-    await updateSessionEntry(
-      {
-        storePath,
-        sessionKey: params.sessionKey,
-      },
-      async () => ({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        contextBudgetStatus: undefined,
-        updatedAt: Date.now(),
-      }),
-      {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      },
-    );
-  } catch (err) {
-    log.warn(
-      `[context-overflow-precheck] failed to reset stale context snapshot for ` +
-        `${params.sessionKey}: ${String(err)}`,
-    );
-  }
-}
-
-function resolveAttemptDispatchApiKey(params: {
-  apiKeyInfo: ApiKeyInfo | null;
-  runtimeAuthState: RuntimeAuthState | null;
-}): string | undefined {
-  if (params.runtimeAuthState) {
-    return undefined;
-  }
-  return params.apiKeyInfo?.apiKey;
-}
-
 function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
   return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
-}
-
-function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
-  const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
-  // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.
-  // Lane ownership still caps at the default agent deadline in that case.
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
-    return defaultLaneTimeoutMs;
-  }
-  return (
-    addTimerTimeoutGraceMs(Math.floor(timeoutMs), EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS) ??
-    defaultLaneTimeoutMs
-  );
-}
-
-function withEmbeddedRunLaneTimeout(
-  opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number,
-): CommandQueueEnqueueOptions | undefined {
-  if (opts?.taskTimeoutMs !== undefined) {
-    return opts;
-  }
-  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
-}
-
-function resolveEmbeddedRunSessionQueuePriority(
-  trigger: RunEmbeddedAgentParams["trigger"],
-): CommandQueueEnqueueOptions["priority"] {
-  switch (trigger) {
-    case "user":
-    case "manual":
-      return "foreground";
-    case "cron":
-    case "heartbeat":
-    case "memory":
-    case "overflow":
-      return "background";
-    default:
-      return "normal";
-  }
-}
-
-function normalizeEmbeddedRunAttemptResult(
-  attempt: EmbeddedRunAttemptForRunner,
-): EmbeddedRunAttemptForRunner {
-  const raw = attempt as EmbeddedRunAttemptForRunner & {
-    assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
-    toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
-    acceptedSessionSpawns?: EmbeddedRunAttemptForRunner["acceptedSessionSpawns"] | null;
-    messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
-    messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
-    messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
-    messagingToolSentTargets?: EmbeddedRunAttemptForRunner["messagingToolSentTargets"] | null;
-    messagingToolSourceReplyPayloads?:
-      | EmbeddedRunAttemptForRunner["messagingToolSourceReplyPayloads"]
-      | null;
-    didDeliverSourceReplyViaMessageTool?: boolean | null;
-    itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
-    currentAttemptReplayMetadata?:
-      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
-      | null;
-  };
-  return {
-    ...attempt,
-    assistantTexts: raw.assistantTexts ?? [],
-    toolMetas: raw.toolMetas ?? [],
-    acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
-    messagesSnapshot: raw.messagesSnapshot ?? [],
-    messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
-    messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
-    messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
-    messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
-    didDeliverSourceReplyViaMessageTool: raw.didDeliverSourceReplyViaMessageTool === true,
-    itemLifecycle: raw.itemLifecycle ?? {
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    },
-    replayMetadata: resolveAttemptReplayMetadata(raw),
-    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
-  };
-}
-
-function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
-  return (
-    attempt.assistantTexts.some((text) => text.trim().length > 0) ||
-    attempt.toolMetas.length > 0 ||
-    (attempt.clientToolCalls?.length ?? 0) > 0 ||
-    hasOutboundDeliveryEvidence(attempt) ||
-    attempt.itemLifecycle.completedCount > 0
-  );
-}
-
-function createEmptyAuthProfileStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {},
-  };
-}
-
-function createScopedAuthProfileStore(
-  store: AuthProfileStore,
-  profileIds: string | undefined | string[],
-): AuthProfileStore {
-  const profiles = store.profiles ?? {};
-  const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
-    .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => Boolean(profileId));
-  const scopedProfiles = Object.fromEntries(
-    normalizedProfileIds.flatMap((profileId) => {
-      const credential = profiles[profileId];
-      return credential ? [[profileId, credential] as const] : [];
-    }),
-  );
-  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
-  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
-  return Object.keys(scopedProfiles).length > 0
-    ? {
-        version: store.version,
-        profiles: scopedProfiles,
-        ...(scopedRuntimePersistedProfileIds.length > 0
-          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
-          : {}),
-        ...(scopedRuntimeExternalProfileIds.length > 0 ||
-        store.runtimeExternalProfileIdsAuthoritative === true
-          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
-          : {}),
-        ...(store.runtimeExternalProfileIdsAuthoritative === true
-          ? { runtimeExternalProfileIdsAuthoritative: true }
-          : {}),
-      }
-    : createEmptyAuthProfileStore();
-}
-
-function buildTraceToolSummary(params: {
-  toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
-  fallbackHadFailure: boolean;
-}): ToolSummaryTrace | undefined {
-  if (!params.toolMetas?.length) {
-    return undefined;
-  }
-  const tools: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of params.toolMetas) {
-    const toolName = normalizeOptionalString(entry.toolName);
-    if (!toolName || seen.has(toolName)) {
-      continue;
-    }
-    seen.add(toolName);
-    tools.push(toolName);
-  }
-  const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
-  return {
-    calls: params.toolMetas?.length ?? 0,
-    tools,
-    // Per-call error metadata is additive to the shipped harness result contract.
-    // Keep the prior any-failure signal for external harnesses that do not emit it yet.
-    failures: failedToolCalls || Number(params.fallbackHadFailure),
-  };
-}
-
-/**
- * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
- * The return value is normalized: whitespace-only inputs collapse to undefined, and
- * successful resolution returns a trimmed session key. This is a read-only lookup
- * with no side effects.
- * See: https://github.com/openclaw/openclaw/issues/60552
- */
-function backfillSessionKey(params: {
-  config: RunEmbeddedAgentParams["config"];
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.sessionKey);
-  if (trimmed) {
-    return trimmed;
-  }
-  if (!params.config || !params.sessionId) {
-    return undefined;
-  }
-  try {
-    const resolved = normalizeOptionalString(params.agentId)
-      ? resolveStoredSessionKeyForSessionId({
-          cfg: params.config,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-        })
-      : resolveSessionKeyForRequest({
-          cfg: params.config,
-          sessionId: params.sessionId,
-          clone: false,
-        });
-    return normalizeOptionalString(resolved.sessionKey);
-  } catch (err) {
-    log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
-    );
-    return undefined;
-  }
-}
-
-function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return;
-  }
-  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
-  const storePath =
-    normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
-  const durableEntry = loadSessionEntry({
-    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
-    readConsistency: "latest",
-    sessionKey,
-    storePath,
-  });
-  const admissionError = resolveAgentHarnessRunAdmissionError({
-    agentHarnessId: params.agentHarnessId,
-    entry: durableEntry,
-    modelSelectionLocked: params.modelSelectionLocked,
-    sessionId: params.sessionId,
-    sessionKey,
-  });
-  if (admissionError) {
-    throw new Error(admissionError);
-  }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
-}
-
-/** Marks only request parameters that OpenClaw applies to provider egress. */
-function resolveRequestStreamTransportOverrides(
-  streamParams: RunEmbeddedAgentParams["streamParams"],
-): "present" | undefined {
-  return streamParams && Object.keys(streamParams).length > 0 ? "present" : undefined;
-}
-
-function resolveInitialEmbeddedRunModel(params: {
-  config: RunEmbeddedAgentParams["config"];
-  agentId?: string;
-  provider?: string;
-  model?: string;
-}): { provider: string; modelId: string } {
-  const cfg = params.config ?? {};
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId: params.agentId,
-  });
-  const explicitProvider = normalizeOptionalString(params.provider);
-  const explicitModel = normalizeOptionalString(params.model);
-  const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
-
-  if (explicitProvider && explicitModel) {
-    return { provider: explicitProvider, modelId: explicitModel };
-  }
-
-  if (explicitModel) {
-    const provider = explicitProvider ?? defaultProvider;
-    const aliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider: provider,
-    });
-    const resolved = resolveModelRefFromString({
-      cfg,
-      raw: explicitModel,
-      defaultProvider: provider,
-      aliasIndex,
-    });
-    return {
-      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
-      modelId: resolved?.ref.model ?? explicitModel,
-    };
-  }
-
-  return {
-    provider: explicitProvider ?? defaultProvider,
-    modelId: configuredDefault.model || DEFAULT_MODEL,
-  };
 }
 
 const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
@@ -808,6 +346,9 @@ async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
+    ? { remaining: 1 }
+    : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
@@ -829,6 +370,7 @@ async function runEmbeddedAgentInternal(
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
+    skillWorkshopProposalMutationBudget,
   };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -843,130 +385,26 @@ async function runEmbeddedAgentInternal(
     }
     void suspendSession(suspension);
   };
-  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
-  const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
-  const laneTaskAbortController = new AbortController();
-  const laneTaskReleaseController = new AbortController();
-  let laneTaskProgressAtMs = Date.now();
-  const noteLaneTaskProgress = () => {
-    laneTaskProgressAtMs = Date.now();
-  };
-  const throwIfAborted = () => {
-    if (!params.abortSignal?.aborted) {
-      return;
-    }
-    const reason = params.abortSignal.reason;
-    if (reason instanceof Error) {
-      throw reason;
-    }
-    const abortErr =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortErr.name = "AbortError";
-    throw abortErr;
-  };
-  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(
-      {
-        ...opts,
-        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
-        taskTimeoutAbortSignal: laneTaskAbortController.signal,
-        taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-        taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
-      },
-      laneTaskTimeoutMs,
-    );
-  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
-    if (!opts?.onWait && !params.onLaneWait) {
-      return opts;
-    }
-    return {
-      ...opts,
-      onWait: (waitMs, queuedAhead) => {
-        opts?.onWait?.(waitMs, queuedAhead);
-        params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
-      },
-    } satisfies CommandQueueEnqueueOptions;
-  };
-  const noteLaneWaitIfBusy = (lane: string) => {
-    if (!params.onLaneWait) {
-      return;
-    }
-    const snapshot = getCommandLaneSnapshot(lane);
-    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
-      params.onLaneWait({
-        waitMs: 0,
-        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
-        waiting: true,
-      });
-    }
-  };
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const globalOpts: CommandQueueEnqueueOptions = {
-      ...opts,
-      priority: sessionQueuePriority,
-    };
-    const taskWithCurrentLifecycle = () => {
-      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
-      throwIfAborted();
-      const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
-      const existingContext = getAgentRunContext(params.runId);
-      if (lifecycleGeneration !== currentLifecycleGeneration) {
-        const wasQueuedBeforeRotation = queuedLifecycleGeneration === lifecycleGeneration;
-        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
-        const newerSameIdExecutionOwnsContext =
-          existingContext?.lifecycleGeneration === currentLifecycleGeneration;
-        if (
-          !wasQueuedBeforeRotation ||
-          !canResumeAcrossRotation ||
-          newerSameIdExecutionOwnsContext
-        ) {
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        }
-        lifecycleGeneration = currentLifecycleGeneration;
-        params = { ...params, lifecycleGeneration };
-      }
-      // Queue waits can outlive the durable harness binding that admitted a run.
-      // Recheck only after lifecycle admission, before any run context or hook can execute.
-      assertAgentHarnessRunAdmission(params);
-      claimAgentRunContext(params.runId, {
-        ...existingContext,
-        sessionKey: params.sessionKey ?? existingContext?.sessionKey,
-        sessionId: params.sessionId ?? existingContext?.sessionId,
-        lifecycleGeneration,
-      });
-      return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
-    };
-    if (params.enqueue) {
-      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
-    }
-    // #1057: a subagent continuation is routed onto its own session lane, so the
-    // global lane resolves to that same session lane. Re-enqueuing it through the
-    // global path here (already inside the enqueueSession wrapper for that lane)
-    // would self-deadlock; run it directly instead.
-    if (globalLane === sessionLane) {
-      return taskWithCurrentLifecycle();
-    }
-    noteLaneWaitIfBusy(globalLane);
-    return enqueueCommandInLane(
-      globalLane,
-      taskWithCurrentLifecycle,
-      withLaneTimeout(withRunLaneWait(globalOpts)),
-    );
-  };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    const taskWithLaneAdmission = () => {
-      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
-      return task();
-    };
-    if (params.enqueue) {
-      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
-    }
-    noteLaneWaitIfBusy(sessionLane);
-    return enqueueCommandInLane(sessionLane, taskWithLaneAdmission, withRunLaneWait(sessionOpts));
-  };
+  const {
+    enqueueGlobal,
+    enqueueSession,
+    laneTaskAbortController,
+    laneTaskReleaseController,
+    noteLaneTaskProgress,
+    throwIfAborted,
+  } = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => params,
+    globalLane,
+    initialQueuedLifecycleGeneration: queuedLifecycleGeneration,
+    sessionLane,
+    setLifecycleGeneration: (generation) => {
+      lifecycleGeneration = generation;
+    },
+    setParams: (nextParams) => {
+      params = nextParams;
+    },
+  });
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -997,140 +435,24 @@ async function runEmbeddedAgentInternal(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
-      const fastModeStarted = params.fastModeStartedAtMs ?? started;
-      const fastModeAutoOnSeconds =
-        params.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
-      const fastModeAutoProgressState: FastModeAutoProgressState =
-        params.fastModeAutoProgressState ?? {
-          offAnnounced: false,
-          resetAnnounced: false,
-        };
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
-      const notifyExecutionPhase = (
-        phase: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0]["phase"],
-        extra?: Omit<
-          Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
-          "phase"
-        >,
-      ) => {
-        noteLaneTaskProgress();
-        params.onExecutionPhase?.({ phase, ...extra });
-      };
-      const notifyRunProgress = (
-        info: Parameters<NonNullable<RunEmbeddedAgentParams["onRunProgress"]>>[0],
-      ) => {
-        noteLaneTaskProgress();
-        params.onRunProgress?.(info);
-      };
-      const emitFastModeAutoProgress = async (payload: {
-        enabled: boolean;
-        elapsedSeconds: number;
-        fastAutoOnSeconds?: number;
-      }) => {
-        const summary = formatFastModeAutoProgressText(payload);
-        try {
-          emitAgentItemEvent({
-            runId: params.runId,
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            data: {
-              itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
-              kind: "status",
-              title: "Fast",
-              phase: "update",
-              status: "running",
-              summary,
-            },
-          });
-        } catch (error) {
-          log.debug(
-            `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
-          );
-        }
-        try {
-          await params.onAgentEvent?.({
-            stream: "item",
-            data: {
-              kind: "status",
-              title: "Fast",
-              phase: "update",
-              summary,
-            },
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          });
-        } catch (error) {
-          log.debug(`embedded run fast mode auto event failed: ${formatErrorMessage(error)}`);
-        }
-        try {
-          await params.onToolResult?.({
-            text: summary,
-            channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
-          });
-        } catch (error) {
-          log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
-        }
-      };
-      const maybeAnnounceFastModeAutoOff = async () => {
-        if (params.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
-          return;
-        }
-        const next = resolveFastModeForElapsed({
-          mode: "auto",
-          startedAtMs: fastModeStarted,
-          fastAutoOnSeconds: fastModeAutoOnSeconds,
-        });
-        if (next.enabled) {
-          return;
-        }
-        fastModeAutoProgressState.offAnnounced = true;
-        await emitFastModeAutoProgress(next);
-      };
-      const notifyToolResult = async (payload: ReplyPayload) => {
-        await params.onToolResult?.(payload);
-      };
-      const notifyAgentEvent = async (
-        event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
-      ) => {
-        await params.onAgentEvent?.(event);
-      };
-      const resolveAttemptFastMode = (): boolean | undefined => {
-        const resolved = resolveFastModeForElapsed({
-          mode: params.fastMode,
-          startedAtMs: fastModeStarted,
-          fastAutoOnSeconds: fastModeAutoOnSeconds,
-        });
-        return resolved.mode === undefined ? undefined : resolved.enabled;
-      };
-      const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
-        if (params.fastMode === "auto") {
-          return resolveAttemptFastMode;
-        }
-        return resolveAttemptFastMode();
-      };
-      const maybeEmitFastModeAutoReset = async () => {
-        if (
-          params.fastMode !== "auto" ||
-          !fastModeAutoProgressState.offAnnounced ||
-          fastModeAutoProgressState.resetAnnounced
-        ) {
-          return;
-        }
-        fastModeAutoProgressState.resetAnnounced = true;
-        await emitFastModeAutoProgress({
-          enabled: true,
-          elapsedSeconds: 0,
-          fastAutoOnSeconds: fastModeAutoOnSeconds,
-        });
-      };
-      const maybeEmitFastModeAutoResetBestEffort = async () => {
-        try {
-          await maybeEmitFastModeAutoReset();
-        } catch (error) {
-          log.warn(
-            `embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
-          );
-        }
-      };
+      const {
+        fastModeAutoOnSeconds,
+        fastModeAutoProgressState,
+        fastModeStartedAtMs: fastModeStarted,
+        maybeAnnounceFastModeAutoOff,
+        maybeEmitFastModeAutoResetBestEffort,
+        notifyAgentEvent,
+        notifyExecutionPhase,
+        notifyRunProgress,
+        notifyToolResult,
+        resolveAttemptFastModeParam,
+      } = createEmbeddedRunProgressController({
+        attempt: params,
+        noteLaneTaskProgress,
+        startedAtMs: started,
+      });
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
         const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
@@ -1237,6 +559,7 @@ async function runEmbeddedAgentInternal(
         attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
+        modelSelectionLocked: params.modelSelectionLocked,
         hookRunner,
         hookContext: hookCtx,
       });
@@ -2874,6 +2197,9 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
+            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+            skillWorkshopOrigin: params.skillWorkshopOrigin,
+            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
@@ -3996,6 +3322,7 @@ async function runEmbeddedAgentInternal(
               aborted,
               externalAbort,
               fallbackConfigured,
+              failoverCode: promptErrorDetails.code,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -4037,6 +3364,7 @@ async function runEmbeddedAgentInternal(
                 aborted,
                 externalAbort,
                 fallbackConfigured,
+                failoverCode: promptErrorDetails.code,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -4380,7 +3708,6 @@ async function runEmbeddedAgentInternal(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
-
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
@@ -4407,6 +3734,7 @@ async function runEmbeddedAgentInternal(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didDeliverSourceReplyViaMessageTool:
               attempt.didDeliverSourceReplyViaMessageTool === true,
+            messagingToolSentTargets: attempt.messagingToolSentTargets,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
@@ -5138,7 +4466,6 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
-
 export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,

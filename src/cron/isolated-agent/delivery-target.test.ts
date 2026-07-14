@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type {
   ChannelDirectoryEntry,
   ChannelOutboundAdapter,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {

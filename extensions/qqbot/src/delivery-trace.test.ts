@@ -178,7 +178,7 @@ const ACCOUNT: GatewayAccount = {
   // reaches a recorded wire payload.
   clientSecret: "trace-cred",
   markdownSupport: false,
-  config: { streaming: true },
+  config: { streaming: { mode: "partial", nativeTransport: true } },
 };
 
 const silentLog = {

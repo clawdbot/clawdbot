@@ -4,36 +4,26 @@ import Photos
 import SwiftUI
 import UIKit
 
-private enum PrivacyPermissionStatus {
-    case addOnly
-    case allowed
-    case enabled
-    case limited
-    case notAllowed
-    case notSet
-    case unknown
+struct PrivacyGatewayPermissionSnapshot: Equatable {
+    let contacts: Bool
+    let photos: Bool
+    let calendar: Bool
+    let reminders: Bool
 
-    var resource: LocalizedStringResource {
-        switch self {
-        case .addOnly: LocalizedStringResource("Add-Only")
-        case .allowed: LocalizedStringResource("Allowed")
-        case .enabled: LocalizedStringResource("Enabled")
-        case .limited: LocalizedStringResource("Limited")
-        case .notAllowed: LocalizedStringResource("Not Allowed")
-        case .notSet: LocalizedStringResource("Not Set")
-        case .unknown: LocalizedStringResource("Unknown")
-        }
+    init(
+        contactsStatus: CNAuthorizationStatus,
+        photosStatus: PHAuthorizationStatus,
+        calendarStatus: EKAuthorizationStatus,
+        remindersStatus: EKAuthorizationStatus)
+    {
+        self.contacts = contactsStatus == .authorized || contactsStatus == .limited
+        self.photos = PhotoLibraryAccess.canRead(photosStatus)
+        self.calendar = Self.hasReadableEventKitAccess(calendarStatus)
+        self.reminders = Self.hasReadableEventKitAccess(remindersStatus)
     }
 
-    var tone: OpenClawStatusTone {
-        switch self {
-        case .allowed, .enabled, .limited:
-            .ok
-        case .addOnly, .notSet:
-            .warn
-        case .notAllowed, .unknown:
-            .danger
-        }
+    private static func hasReadableEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
     }
 }
 
@@ -45,64 +35,18 @@ struct PrivacyAccessSectionView: View {
     @State private var photosStatus = PhotoLibraryAccess.authorizationStatus()
     @State private var healthEnabled = HealthAuthorization.isEnabled
     @State private var healthError: String?
+    @State private var requestingIdentifiers: Set<String> = []
 
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         DisclosureGroup {
-            self.permissionRow(
-                identifier: "contacts",
-                title: "Contacts",
-                icon: "person.crop.circle",
-                status: self.permissionStatus(for: self.contactsStatus),
-                detail: "Search and add contacts from the assistant.",
-                actionTitle: self.actionTitle(for: self.contactsStatus),
-                action: self.handleContactsAction)
-
-            self.permissionRow(
-                identifier: "photos",
-                title: "Photos",
-                icon: "photo.on.rectangle",
-                status: self.photosPermissionStatus,
-                detail: self.photosDetail,
-                actionTitle: self.photosActionTitle,
-                action: self.handlePhotosAction)
-
-            self.permissionRow(
-                identifier: "calendar-add",
-                title: "Calendar (Add Events)",
-                icon: "calendar.badge.plus",
-                status: self.calendarWritePermissionStatus,
-                detail: "Add events with least privilege.",
-                actionTitle: self.calendarWriteActionTitle,
-                action: self.handleCalendarWriteAction)
-
-            self.permissionRow(
-                identifier: "calendar-view",
-                title: "Calendar (View Events)",
-                icon: "calendar",
-                status: self.calendarReadPermissionStatus,
-                detail: "List and read calendar events.",
-                actionTitle: self.calendarReadActionTitle,
-                action: self.handleCalendarReadAction)
-
-            self.permissionRow(
-                identifier: "reminders",
-                title: "Reminders",
-                icon: "checklist",
-                status: self.remindersPermissionStatus,
-                detail: "List, add, and complete reminders.",
-                actionTitle: self.remindersActionTitle,
-                action: self.handleRemindersAction)
-
-            self.permissionRow(
-                identifier: "health",
-                title: "Health Summaries",
-                icon: "heart.text.clipboard",
-                status: self.healthPermissionStatus,
-                detail: self.healthDetail,
-                actionTitle: self.healthActionTitle,
-                action: self.handleHealthAction)
+            self.contactsRow
+            self.photosRow
+            self.calendarAddRow
+            self.calendarViewRow
+            self.remindersRow
+            self.healthRow
 
             if let healthError {
                 Text(healthError)
@@ -122,281 +66,188 @@ struct PrivacyAccessSectionView: View {
         }
     }
 
+    private var contactsRow: some View {
+        let grant = DevicePermissionStatusMap.contacts(self.contactsStatus)
+        return self.permissionRow(
+            identifier: "contacts",
+            kind: .contacts,
+            detail: LocalizedStringResource("Search and add contacts from the assistant."),
+            grant: grant,
+            statusLabel: grant == .limited ? LocalizedStringResource("Limited") : nil,
+            actionTitle: self.standardActionTitle(for: grant, limitedTitle: "Manage Access"),
+            action: self.standardAction(identifier: "contacts", for: grant) {
+                await self.requestContacts()
+            })
+    }
+
+    private var photosRow: some View {
+        let grant = DevicePermissionStatusMap.photos(self.photosStatus)
+        return self.permissionRow(
+            identifier: "photos",
+            kind: .photos,
+            detail: grant == .limited
+                ? LocalizedStringResource("Read photos you select for the assistant.")
+                : LocalizedStringResource("Read recent photos for the assistant."),
+            grant: grant,
+            statusLabel: grant == .limited ? LocalizedStringResource("Limited") : nil,
+            actionTitle: self.standardActionTitle(for: grant, limitedTitle: "Manage Access"),
+            action: self.standardAction(identifier: "photos", for: grant) {
+                await self.updatePhotosStatus(PhotoLibraryAccess.requestReadWrite())
+            })
+    }
+
+    private var calendarAddRow: some View {
+        let grant = DevicePermissionStatusMap.eventKitWrite(self.calendarStatus)
+        return self.permissionRow(
+            identifier: "calendar-add",
+            kind: .calendar,
+            symbol: "calendar.badge.plus",
+            title: LocalizedStringResource("Calendar (Add Events)"),
+            detail: LocalizedStringResource("Add events with least privilege."),
+            grant: grant,
+            actionTitle: self.standardActionTitle(for: grant),
+            action: self.standardAction(identifier: "calendar-add", for: grant) {
+                _ = await self.requestCalendarWriteOnly()
+                self.applyCalendarStatus()
+            })
+    }
+
+    private var calendarViewRow: some View {
+        let grant = DevicePermissionStatusMap.eventKitRead(self.calendarStatus)
+        return self.permissionRow(
+            identifier: "calendar-view",
+            kind: .calendar,
+            detail: LocalizedStringResource("List and read calendar events."),
+            grant: grant,
+            statusLabel: grant == .limited ? LocalizedStringResource("Add-Only") : nil,
+            actionTitle: self.standardActionTitle(for: grant, limitedTitle: "Upgrade"),
+            action: self.standardAction(identifier: "calendar-view", for: grant, limitedRequests: true) {
+                _ = await self.requestCalendarFull()
+                self.applyCalendarStatus()
+            })
+    }
+
+    private var remindersRow: some View {
+        let grant = DevicePermissionStatusMap.eventKitRead(self.remindersStatus)
+        return self.permissionRow(
+            identifier: "reminders",
+            kind: .reminders,
+            detail: LocalizedStringResource("List, add, and complete reminders."),
+            grant: grant,
+            statusLabel: grant == .limited ? LocalizedStringResource("Add-Only") : nil,
+            actionTitle: self.standardActionTitle(for: grant, limitedTitle: "Upgrade"),
+            action: self.standardAction(identifier: "reminders", for: grant, limitedRequests: true) {
+                _ = await self.requestRemindersFull()
+                self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+                self.refreshAll()
+            })
+    }
+
+    private var healthRow: some View {
+        DevicePermissionRow(
+            identifierPrefix: "privacy-access",
+            identifier: "health",
+            symbol: "heart.text.clipboard",
+            tint: .red,
+            title: LocalizedStringResource("Health Summaries"),
+            detail: self.healthDetail,
+            grant: self.healthGrant,
+            isRequesting: self.requestingIdentifiers.contains("health"),
+            actionTitle: self.healthActionTitle,
+            action: HealthAuthorization.isAvailable ? { self.handleHealthAction() } : nil)
+    }
+
     private func permissionRow(
         identifier: String,
-        title: LocalizedStringResource,
-        icon: String,
-        status: PrivacyPermissionStatus,
+        kind: DevicePermissionKind,
+        symbol: String? = nil,
+        title: LocalizedStringResource? = nil,
         detail: LocalizedStringResource,
+        grant: DevicePermissionGrant,
+        statusLabel: LocalizedStringResource? = nil,
         actionTitle: LocalizedStringResource?,
         action: (() -> Void)?) -> some View
     {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label {
-                    Text(title)
-                } icon: {
-                    Image(systemName: icon)
-                }
-                .font(OpenClawType.subheadSemiBold)
-                Spacer()
-                OpenClawStatusBadge(
-                    label: .verbatim(String(localized: status.resource)),
-                    tone: status.tone)
-                    .accessibilityIdentifier("privacy-access-\(identifier)-status")
-            }
-            Text(detail)
-                .font(OpenClawType.footnote)
-                .foregroundStyle(.secondary)
-            if let actionTitle, let action {
-                Button(action: action) {
-                    Text(actionTitle)
-                        .font(OpenClawType.footnoteSemiBold)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("privacy-access-\(identifier)-action")
-            }
-        }
-        .padding(.vertical, 2)
+        DevicePermissionRow(
+            identifierPrefix: "privacy-access",
+            identifier: identifier,
+            symbol: symbol ?? kind.symbol,
+            tint: kind.tint,
+            title: title ?? kind.title,
+            detail: detail,
+            grant: grant,
+            isRequesting: self.requestingIdentifiers.contains(identifier),
+            statusLabel: statusLabel,
+            actionTitle: actionTitle,
+            action: action)
     }
 
-    private func permissionStatus(for cnStatus: CNAuthorizationStatus) -> PrivacyPermissionStatus {
-        switch cnStatus {
-        case .authorized, .limited:
-            .allowed
-        case .notDetermined:
-            .notSet
-        case .denied, .restricted:
-            .notAllowed
-        @unknown default:
-            .unknown
-        }
-    }
-
-    private func actionTitle(for cnStatus: CNAuthorizationStatus) -> LocalizedStringResource? {
-        switch cnStatus {
-        case .notDetermined:
-            LocalizedStringResource("Request Access")
-        case .denied, .restricted:
+    private func standardActionTitle(
+        for grant: DevicePermissionGrant,
+        limitedTitle: LocalizedStringResource? = nil) -> LocalizedStringResource?
+    {
+        switch grant {
+        case .notRequested:
+            LocalizedStringResource("Allow")
+        case .denied:
             LocalizedStringResource("Open Settings")
-        default:
-            nil
-        }
-    }
-
-    private var photosPermissionStatus: PrivacyPermissionStatus {
-        switch self.photosStatus {
-        case .authorized:
-            .allowed
         case .limited:
-            .limited
-        case .notDetermined:
-            .notSet
-        case .denied, .restricted:
-            .notAllowed
-        @unknown default:
-            .unknown
+            limitedTitle
+        case .granted:
+            nil
         }
     }
 
-    private var photosDetail: LocalizedStringResource {
-        self.photosStatus == .limited
-            ? LocalizedStringResource("Read photos you select for the assistant.")
-            : LocalizedStringResource("Read recent photos for the assistant.")
-    }
-
-    private var photosActionTitle: LocalizedStringResource? {
-        switch self.photosStatus {
-        case .notDetermined:
-            LocalizedStringResource("Request Access")
+    /// `limitedRequests`: a limited grant re-requests (EventKit write-only → full)
+    /// instead of routing to Settings like Photos/Contacts limited access does.
+    private func standardAction(
+        identifier: String,
+        for grant: DevicePermissionGrant,
+        limitedRequests: Bool = false,
+        request: @escaping () async -> Void) -> (() -> Void)?
+    {
+        let run: () -> Void = {
+            guard !self.requestingIdentifiers.contains(identifier) else { return }
+            Task {
+                self.requestingIdentifiers.insert(identifier)
+                defer { self.requestingIdentifiers.remove(identifier) }
+                await request()
+            }
+        }
+        switch grant {
+        case .notRequested:
+            return run
         case .limited:
-            LocalizedStringResource("Manage Access")
-        case .denied, .restricted:
-            LocalizedStringResource("Open Settings")
-        default:
-            nil
+            return limitedRequests ? run : { self.openSettings() }
+        case .denied:
+            return { self.openSettings() }
+        case .granted:
+            return nil
         }
     }
 
-    private func handlePhotosAction() {
-        switch self.photosStatus {
-        case .notDetermined:
-            Task {
-                let status = await PhotoLibraryAccess.requestReadWrite()
-                await MainActor.run { self.updatePhotosStatus(status) }
+    private func requestContacts() async {
+        let granted = await PermissionRequestBridge.awaitRequest { completion in
+            let store = CNContactStore()
+            store.requestAccess(for: .contacts) { granted, _ in
+                completion(granted)
             }
-        case .limited, .denied, .restricted:
-            self.openSettings()
-        default:
-            break
+        }
+        self.refreshAll()
+        if granted {
+            self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         }
     }
 
-    private func handleContactsAction() {
-        switch self.contactsStatus {
-        case .notDetermined:
-            Task {
-                let granted = await PermissionRequestBridge.awaitRequest { completion in
-                    let store = CNContactStore()
-                    store.requestAccess(for: .contacts) { granted, _ in
-                        completion(granted)
-                    }
-                }
-                await MainActor.run {
-                    self.refreshAll()
-                    if granted {
-                        self.contactsStatus = .authorized
-                    }
-                }
-            }
-        case .denied, .restricted:
-            self.openSettings()
-        default:
-            break
-        }
+    private func applyCalendarStatus() {
+        self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        self.refreshAll()
     }
 
-    private var calendarWritePermissionStatus: PrivacyPermissionStatus {
-        switch self.calendarStatus {
-        case .authorized, .fullAccess, .writeOnly:
-            .allowed
-        case .notDetermined:
-            .notSet
-        case .denied, .restricted:
-            .notAllowed
-        @unknown default:
-            .unknown
-        }
-    }
-
-    private var calendarWriteActionTitle: LocalizedStringResource? {
-        switch self.calendarStatus {
-        case .notDetermined:
-            LocalizedStringResource("Request Access")
-        case .denied, .restricted:
-            LocalizedStringResource("Open Settings")
-        default:
-            nil
-        }
-    }
-
-    private func handleCalendarWriteAction() {
-        switch self.calendarStatus {
-        case .notDetermined:
-            Task {
-                let granted = await self.requestCalendarWriteOnly()
-                await MainActor.run {
-                    self.refreshAll()
-                    if granted {
-                        self.calendarStatus = .writeOnly
-                    }
-                }
-            }
-        case .denied, .restricted:
-            self.openSettings()
-        default:
-            break
-        }
-    }
-
-    private var calendarReadPermissionStatus: PrivacyPermissionStatus {
-        switch self.calendarStatus {
-        case .authorized, .fullAccess:
-            .allowed
-        case .writeOnly:
-            .addOnly
-        case .notDetermined:
-            .notSet
-        case .denied, .restricted:
-            .notAllowed
-        @unknown default:
-            .unknown
-        }
-    }
-
-    private var calendarReadActionTitle: LocalizedStringResource? {
-        switch self.calendarStatus {
-        case .notDetermined:
-            LocalizedStringResource("Request Full Access")
-        case .writeOnly:
-            LocalizedStringResource("Upgrade to Full Access")
-        case .denied, .restricted:
-            LocalizedStringResource("Open Settings")
-        default:
-            nil
-        }
-    }
-
-    private func handleCalendarReadAction() {
-        switch self.calendarStatus {
-        case .notDetermined, .writeOnly:
-            Task {
-                let granted = await self.requestCalendarFull()
-                await MainActor.run {
-                    self.refreshAll()
-                    if granted {
-                        self.calendarStatus = .fullAccess
-                    }
-                }
-            }
-        case .denied, .restricted:
-            self.openSettings()
-        default:
-            break
-        }
-    }
-
-    private var remindersPermissionStatus: PrivacyPermissionStatus {
-        switch self.remindersStatus {
-        case .authorized, .fullAccess:
-            .allowed
-        case .writeOnly:
-            .addOnly
-        case .notDetermined:
-            .notSet
-        case .denied, .restricted:
-            .notAllowed
-        @unknown default:
-            .unknown
-        }
-    }
-
-    private var remindersActionTitle: LocalizedStringResource? {
-        switch self.remindersStatus {
-        case .notDetermined:
-            LocalizedStringResource("Request Access")
-        case .writeOnly:
-            LocalizedStringResource("Upgrade to Full Access")
-        case .denied, .restricted:
-            LocalizedStringResource("Open Settings")
-        default:
-            nil
-        }
-    }
-
-    private func handleRemindersAction() {
-        switch self.remindersStatus {
-        case .notDetermined, .writeOnly:
-            Task {
-                let granted = await self.requestRemindersFull()
-                await MainActor.run {
-                    self.refreshAll()
-                    if granted {
-                        self.remindersStatus = .fullAccess
-                    }
-                }
-            }
-        case .denied, .restricted:
-            self.openSettings()
-        default:
-            break
-        }
-    }
-
-    private var healthPermissionStatus: PrivacyPermissionStatus {
-        guard HealthAuthorization.isAvailable else { return .notAllowed }
+    private var healthGrant: DevicePermissionGrant {
+        guard HealthAuthorization.isAvailable else { return .denied }
         // HealthKit hides read authorization; this is only OpenClaw's sharing switch.
-        return self.healthEnabled ? .enabled : .notSet
+        return self.healthEnabled ? .granted : .notRequested
     }
 
     private var healthDetail: LocalizedStringResource {
@@ -433,7 +284,10 @@ struct PrivacyAccessSectionView: View {
             return
         }
 
+        guard !self.requestingIdentifiers.contains("health") else { return }
         Task { @MainActor in
+            self.requestingIdentifiers.insert("health")
+            defer { self.requestingIdentifiers.remove("health") }
             do {
                 try await HealthAuthorization.enable()
                 self.healthEnabled = true
@@ -446,11 +300,29 @@ struct PrivacyAccessSectionView: View {
     }
 
     private func refreshAll() {
-        self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
-        self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        self.updatePhotosStatus(PhotoLibraryAccess.authorizationStatus())
+        let previousPermissions = PrivacyGatewayPermissionSnapshot(
+            contactsStatus: self.contactsStatus,
+            photosStatus: self.photosStatus,
+            calendarStatus: self.calendarStatus,
+            remindersStatus: self.remindersStatus)
+        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
+        let photosStatus = PhotoLibraryAccess.authorizationStatus()
+        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        let currentPermissions = PrivacyGatewayPermissionSnapshot(
+            contactsStatus: contactsStatus,
+            photosStatus: photosStatus,
+            calendarStatus: calendarStatus,
+            remindersStatus: remindersStatus)
+
+        self.contactsStatus = contactsStatus
+        self.photosStatus = photosStatus
+        self.calendarStatus = calendarStatus
+        self.remindersStatus = remindersStatus
         self.healthEnabled = HealthAuthorization.isEnabled
+        if previousPermissions != currentPermissions {
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+        }
     }
 
     private func updatePhotosStatus(_ status: PHAuthorizationStatus) {

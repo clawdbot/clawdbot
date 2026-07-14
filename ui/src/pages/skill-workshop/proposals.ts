@@ -440,7 +440,7 @@ export async function loadSkillWorkshopProposals(
   }
 }
 
-export async function loadSkillWorkshopProposalDetail(
+async function loadSkillWorkshopProposalDetail(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,

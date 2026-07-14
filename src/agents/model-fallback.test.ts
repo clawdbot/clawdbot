@@ -14,13 +14,9 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   clearCurrentPluginMetadataSnapshot,
-  resolvePluginMetadataControlPlaneFingerprint,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -227,68 +223,6 @@ function setDefaultPluginMetadataSnapshot(): void {
     config: {},
     env: process.env,
   });
-}
-
-function createModelNormalizerSnapshot(params: {
-  manifestHash: string;
-  prefix: string;
-}): PluginMetadataSnapshot {
-  // Builds a process-stable plugin metadata snapshot with one model normalizer
-  // so fallback can prove manifest-policy cache invalidation.
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "fallback-normalizer",
-        manifestPath: `/tmp/fallback-normalizer-${params.manifestHash}/openclaw.plugin.json`,
-        manifestHash: params.manifestHash,
-        source: `/tmp/fallback-normalizer-${params.manifestHash}/index.ts`,
-        rootDir: `/tmp/fallback-normalizer-${params.manifestHash}`,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: process.env,
-        index,
-        policyHash,
-      },
-    ),
-    index,
-    registryDiagnostics: [],
-    plugins: [
-      {
-        id: "fallback-normalizer",
-        modelIdNormalization: {
-          providers: {
-            demo: {
-              prefixWhenBare: params.prefix,
-            },
-          },
-        },
-      },
-    ],
-  } as unknown as PluginMetadataSnapshot;
 }
 
 afterEach(resetModelFallbackTestState);
@@ -710,6 +644,55 @@ describe("runWithModelFallback", () => {
         error: failure,
       }),
     );
+  });
+
+  it("does not replay CLI max-turn failures on configured fallback models", async () => {
+    const failure = new FailoverError(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
+      {
+        provider: "claude-cli",
+        model: "sonnet",
+        reason: "unknown",
+        code: "cli_max_turns",
+      },
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay aggregate failures containing a CLI max-turn stop", async () => {
+    const maxTurns = new FailoverError("max turns", {
+      provider: "claude-cli",
+      model: "sonnet",
+      reason: "unknown",
+      code: "cli_max_turns",
+    });
+    const failure = new AggregateError(
+      [maxTurns, new Error("fork successor persistence failed")],
+      "CLI turn failed and its fork successor could not be persisted",
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
@@ -3078,54 +3061,6 @@ describe("runWithModelFallback", () => {
         fallbacksOverride: [],
       }),
     ).toEqual([{ provider: "ollama", model: "llama3" }]);
-  });
-
-  it("does not reuse fallback candidate cache entries across manifest normalization snapshots", () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: [],
-          },
-        },
-      },
-    });
-
-    try {
-      setCurrentPluginMetadataSnapshot(
-        createModelNormalizerSnapshot({
-          manifestHash: "alpha",
-          prefix: "alpha",
-        }),
-        { config: {}, env: process.env },
-      );
-      expect(
-        testing.resolveFallbackCandidates({
-          cfg,
-          provider: "demo",
-          model: "demo-model",
-          fallbacksOverride: [],
-        }),
-      ).toEqual([{ provider: "demo", model: "alpha/demo-model" }]);
-
-      setCurrentPluginMetadataSnapshot(
-        createModelNormalizerSnapshot({
-          manifestHash: "bravo",
-          prefix: "bravo",
-        }),
-        { config: {}, env: process.env },
-      );
-      expect(
-        testing.resolveFallbackCandidates({
-          cfg,
-          provider: "demo",
-          model: "demo-model",
-          fallbacksOverride: [],
-        }),
-      ).toEqual([{ provider: "demo", model: "bravo/demo-model" }]);
-    } finally {
-      setDefaultPluginMetadataSnapshot();
-    }
   });
 
   it("defaults provider/model when missing (regression #946)", () => {

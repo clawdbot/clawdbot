@@ -71,7 +71,12 @@ function contextWithClient(
       subscribe,
     },
     agentIdentity: { get: () => undefined, ensure: vi.fn(async () => undefined), subscribe },
-    agentSelection: { subscribe },
+    agentSelection: {
+      state: { selectedId: null, scopeId: null },
+      set: vi.fn(),
+      setScope: vi.fn(),
+      subscribe,
+    },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
     sessions: {

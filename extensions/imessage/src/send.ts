@@ -1,5 +1,4 @@
 // Imessage plugin module implements send behavior.
-import { spawn } from "node:child_process";
 import { constants, accessSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -25,11 +24,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import {
-  appendIMessageCliStderrTail,
-  appendIMessageCliStdout,
-  listenForIMessageCliStreamErrors,
-} from "./cli-output.js";
+import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -558,11 +553,6 @@ function resolveOutboundEchoScope(params: {
   return `${params.accountId}:imessage:${params.target.to}`;
 }
 
-function buildIMessageCliJsonArgs(args: readonly string[], dbPath?: string): string[] {
-  const trimmedDbPath = dbPath?.trim();
-  return [...args, ...(trimmedDbPath ? ["--db", trimmedDbPath] : []), "--json"];
-}
-
 function resolveIMessageCliFailure(result: Record<string, unknown>): string | null {
   if (result.success !== false) {
     return null;
@@ -583,124 +573,11 @@ async function runIMessageCliJson(
   args: readonly string[],
   timeoutMs?: number,
 ): Promise<Record<string, unknown>> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(cliPath, buildIMessageCliJsonArgs(args, dbPath), {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let killEscalation: ReturnType<typeof setTimeout> | null = null;
-    let settled = false;
-    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation && !options.keepKillEscalation) {
-        clearTimeout(killEscalation);
-      }
-    };
-    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers(options);
-      reject(error);
-    };
-    const succeed = (value: Record<string, unknown>): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve(value);
-    };
-    const timer =
-      timeoutMs && timeoutMs > 0
-        ? setTimeout(() => {
-            child.kill("SIGTERM");
-            killEscalation = setTimeout(() => {
-              try {
-                child.kill("SIGKILL");
-              } catch {
-                // best-effort
-              }
-            }, 2000);
-            fail(new Error(`iMessage action timed out after ${timeoutMs}ms`), {
-              keepKillEscalation: true,
-            });
-          }, timeoutMs)
-        : null;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      const appended = appendIMessageCliStdout(stdout, chunk);
-      if (!appended.ok) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // best-effort
-        }
-        fail(new Error(appended.message));
-        return;
-      }
-      stdout = appended.value;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendIMessageCliStderrTail(stderr, chunk);
-    });
-    listenForIMessageCliStreamErrors({
-      child,
-      isSettled: () => settled,
-      fail,
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      fail(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      const lines = stdout
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const last = lines.at(-1);
-      let parsed: Record<string, unknown> | null = null;
-      if (last) {
-        try {
-          const json = JSON.parse(last) as unknown;
-          if (json && typeof json === "object" && !Array.isArray(json)) {
-            parsed = json as Record<string, unknown>;
-          }
-        } catch {
-          // handled below
-        }
-      }
-      if (code === 0 && parsed) {
-        const failure = resolveIMessageCliFailure(parsed);
-        if (failure) {
-          fail(new Error(failure));
-          return;
-        }
-        succeed(parsed);
-        return;
-      }
-      if (parsed && typeof parsed.error === "string" && parsed.error.trim()) {
-        fail(new Error(parsed.error.trim()));
-        return;
-      }
-      const detail = stderr.trim() || stdout.trim() || `imsg exited with code ${code}`;
-      fail(new Error(detail));
-    });
+  return await runIMessageCliJsonCommand({
+    args,
+    cliPath,
+    dbPath,
+    timeoutMs,
   });
 }
 

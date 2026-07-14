@@ -58,7 +58,7 @@ function parseOptionalBoolean(value: string): boolean {
   throw new Error(`invalid boolean: ${value}`);
 }
 
-export function parseWorkspaceGrid(value: string): WorkspaceGrid {
+function parseWorkspaceGrid(value: string): WorkspaceGrid {
   const parts = value.split(",").map((entry) => Number(entry.trim()));
   if (parts.length !== 4 || parts.some((entry) => !Number.isInteger(entry))) {
     throw new Error("grid must be x,y,w,h");

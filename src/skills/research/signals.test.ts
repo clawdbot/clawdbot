@@ -2,10 +2,22 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { extractDurableInstructionProposals } from "./signals.js";
+import { extractDurableInstructions, groupDurableInstructionProposals } from "./signals.js";
 
 function userMessage(content: string): { role: string; content: string } {
   return { role: "user", content };
+}
+
+function extractDurableInstructionProposals(params: {
+  messages: unknown[];
+  existingSkills?: Array<{ name: string; description?: string }>;
+  maxProposals?: number;
+}) {
+  return groupDurableInstructionProposals({
+    instructions: extractDurableInstructions(params.messages),
+    existingSkills: params.existingSkills,
+    maxProposals: params.maxProposals,
+  });
 }
 
 describe("extractDurableInstructionProposals", () => {

@@ -1,9 +1,15 @@
 // Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsRow,
+  renderSettingsStatus,
+  renderSettingsToggle,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
+import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
@@ -42,19 +48,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  if (value < 1_000) {
-    return t("activity.duration.ms", { count: String(Math.round(value)) });
-  }
-  if (value < 60_000) {
-    return t("activity.duration.seconds", { count: (value / 1_000).toFixed(1) });
-  }
-  const roundedSeconds = Math.round(value / 1_000);
-  const minutes = Math.floor(roundedSeconds / 60);
-  const seconds = roundedSeconds % 60;
-  return t("activity.duration.minutes", {
-    minutes: String(minutes),
-    seconds: String(seconds),
-  });
+  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {
@@ -114,9 +108,9 @@ function filterEntries(props: ActivityProps): ActivityEntry[] {
   });
 }
 
-function renderStatusChip(props: ActivityProps, status: ActivityStatus) {
+function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   return html`
-    <label class="activity-status-filter activity-status-filter--${status}">
+    <label class="activity-status-filter">
       <input
         type="checkbox"
         .checked=${props.statusFilters[status]}
@@ -126,6 +120,16 @@ function renderStatusChip(props: ActivityProps, status: ActivityStatus) {
       <span>${statusLabel(status)}</span>
     </label>
   `;
+}
+
+const STATUS_KINDS = {
+  running: "warn",
+  done: "ok",
+  error: "danger",
+} as const satisfies Record<ActivityStatus, "warn" | "ok" | "danger">;
+
+function statusKind(status: ActivityStatus): "warn" | "ok" | "danger" {
+  return STATUS_KINDS[status];
 }
 
 function renderEntry(props: ActivityProps, entry: ActivityEntry) {
@@ -142,9 +146,10 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
         <span class="activity-entry__chevron" aria-hidden="true">${icons.chevronRight}</span>
         <span class="activity-entry__main">
           <span class="activity-entry__title">
-            <span class="activity-status activity-status--${entry.status}">
-              ${statusLabel(entry.status)}
-            </span>
+            ${renderSettingsStatus({
+              kind: statusKind(entry.status),
+              label: statusLabel(entry.status),
+            })}
             <span class="activity-entry__tool mono">${entry.toolName}</span>
           </span>
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
@@ -184,43 +189,21 @@ export function renderActivity(props: ActivityProps) {
     props.toolFilter ||
     STATUS_ORDER.some((status) => !props.statusFilters[status]);
 
+  // The stream fills the remaining viewport height; the settings-page column
+  // wrapper is intentionally skipped so the fill-height flex chain
+  // (.settings-workspace--fill-height … .activity-page … .activity-group …
+  // .activity-stream) works. The named <section> keeps the region landmark.
   return html`
     <section class="activity-page" aria-label=${t("activity.title")}>
-      <div class="activity-toolbar" aria-label=${t("activity.filtersLabel")}>
-        <label class="activity-field activity-field--search">
-          <span>${t("activity.search")}</span>
-          <input
-            type="search"
-            .value=${props.filterText}
-            placeholder=${t("activity.searchPlaceholder")}
-            @input=${(event: Event) =>
-              props.onFilterTextChange((event.target as HTMLInputElement).value)}
-          />
-        </label>
-        <label class="activity-field">
-          <span>${t("activity.toolFilter")}</span>
-          <select
-            .value=${props.toolFilter}
-            @change=${(event: Event) =>
-              props.onToolFilterChange((event.target as HTMLSelectElement).value)}
-          >
-            <option value="">${t("activity.allTools")}</option>
-            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
-          </select>
-        </label>
-        <div class="activity-status-filters" role="group" aria-label=${t("activity.statusFilters")}>
-          ${STATUS_ORDER.map((status) => renderStatusChip(props, status))}
-        </div>
-        <label class="activity-autofollow">
-          <input
-            type="checkbox"
-            .checked=${props.autoFollow}
-            @change=${(event: Event) =>
-              props.onToggleAutoFollow((event.target as HTMLInputElement).checked)}
-          />
-          <span>${t("activity.autoFollow")}</span>
-        </label>
-        <div class="activity-actions">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("activity.title")}</h2>
+        <div class="settings-section__actions">
+          <span class="activity-count" aria-live="polite">
+            ${t("activity.visibleCount", {
+              visible: String(filtered.length),
+              total: String(props.entries.length),
+            })}
+          </span>
           <button
             type="button"
             class="btn btn--sm"
@@ -246,29 +229,73 @@ export function renderActivity(props: ActivityProps) {
             ${t("activity.clear")}
           </button>
         </div>
-        <div class="activity-toolbar__count" aria-live="polite">
-          ${t("activity.visibleCount", {
-            visible: String(filtered.length),
-            total: String(props.entries.length),
-          })}
-        </div>
       </div>
-
-      <div
-        class="activity-stream"
-        role="list"
-        aria-label=${t("activity.streamLabel")}
-        @scroll=${props.onScroll}
-      >
-        ${filtered.length === 0
-          ? html`
-              <div class="activity-empty">
-                ${props.entries.length === 0 || !hasAnyFilters
-                  ? t("activity.empty")
-                  : t("activity.emptyFiltered")}
-              </div>
-            `
-          : filtered.map((entry) => renderEntry(props, entry))}
+      <div class="settings-group activity-group">
+        ${renderSettingsRow({
+          title: t("activity.search"),
+          control: html`
+            <input
+              class="settings-input"
+              type="search"
+              aria-label=${t("activity.search")}
+              .value=${props.filterText}
+              placeholder=${t("activity.searchPlaceholder")}
+              @input=${(event: Event) =>
+                props.onFilterTextChange((event.target as HTMLInputElement).value)}
+            />
+          `,
+        })}
+        ${renderSettingsRow({
+          title: t("activity.toolFilter"),
+          control: html`
+            <select
+              class="settings-select"
+              aria-label=${t("activity.toolFilter")}
+              .value=${props.toolFilter}
+              @change=${(event: Event) =>
+                props.onToolFilterChange((event.target as HTMLSelectElement).value)}
+            >
+              <option value="">${t("activity.allTools")}</option>
+              ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+            </select>
+          `,
+        })}
+        ${renderSettingsRow({
+          title: t("activity.statusFilters"),
+          control: html`
+            <span
+              role="group"
+              aria-label=${t("activity.statusFilters")}
+              class="activity-status-filters"
+            >
+              ${STATUS_ORDER.map((status) => renderStatusFilter(props, status))}
+            </span>
+          `,
+        })}
+        ${renderSettingsRow({
+          title: t("activity.autoFollow"),
+          control: renderSettingsToggle({
+            checked: props.autoFollow,
+            ariaLabel: t("activity.autoFollow"),
+            onChange: (checked) => props.onToggleAutoFollow(checked),
+          }),
+        })}
+        <div
+          class="activity-stream"
+          role="list"
+          aria-label=${t("activity.streamLabel")}
+          @scroll=${props.onScroll}
+        >
+          ${filtered.length === 0
+            ? html`
+                <div class="activity-empty">
+                  ${props.entries.length === 0 || !hasAnyFilters
+                    ? t("activity.empty")
+                    : t("activity.emptyFiltered")}
+                </div>
+              `
+            : filtered.map((entry) => renderEntry(props, entry))}
+        </div>
       </div>
     </section>
   `;

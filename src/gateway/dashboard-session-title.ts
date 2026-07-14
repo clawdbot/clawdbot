@@ -38,7 +38,7 @@ export function isDashboardSessionTitleCandidate(params: {
   );
 }
 
-export function normalizeDashboardSessionTitle(raw: string): string | null {
+function normalizeDashboardSessionTitle(raw: string): string | null {
   const firstLine = raw
     .replace(/\r/g, "")
     .split("\n")

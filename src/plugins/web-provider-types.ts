@@ -46,12 +46,12 @@ export type WebFetchProviderContext = {
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
-export type WebSearchProviderConfiguredCredentialFallback = {
+type WebSearchProviderConfiguredCredentialFallback = {
   path: string;
   value: unknown;
 };
 
-export type WebFetchProviderConfiguredCredentialFallback = {
+type WebFetchProviderConfiguredCredentialFallback = {
   path: string;
   value: unknown;
 };

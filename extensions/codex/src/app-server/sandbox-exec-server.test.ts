@@ -1,11 +1,12 @@
 // Codex tests cover sandbox exec server plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
-  CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
-  closeCodexSandboxExecServersForTests,
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
+
+const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 import {
   collectNotifications,
   createClient,
@@ -19,7 +20,7 @@ import {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await closeCodexSandboxExecServersForTests();
+  await sandboxExecServerRegistry.closeAll();
 });
 
 function testExecEnv(): NodeJS.ProcessEnv {

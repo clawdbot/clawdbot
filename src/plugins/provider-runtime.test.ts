@@ -7,7 +7,6 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
   expectCodexMissingAuthHint,
-  expectedAugmentedOpenaiCodexCatalogEntries,
 } from "./provider-runtime.test-support.js";
 import type {
   AnyAgentTool,
@@ -2610,40 +2609,6 @@ describe("provider-runtime", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-  });
-
-  it("resolves bundled catalog hooks through provider plugins", async () => {
-    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
-    resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
-      const onlyPluginIds = params?.onlyPluginIds;
-      if (!onlyPluginIds || !onlyPluginIds.includes("openai")) {
-        return [];
-      }
-      return [createOpenAiCatalogProviderPlugin()];
-    });
-
-    await expect(
-      augmentModelCatalogWithProviderPlugins({
-        env: process.env,
-        context: {
-          env: process.env,
-          entries: [
-            { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
-            { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
-            { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
-          ],
-        },
-      }),
-    ).resolves.toEqual(expectedAugmentedOpenaiCodexCatalogEntries);
-
-    expectRecordFields(getLastResolvePluginProvidersParams(), {
-      onlyPluginIds: ["openai"],
-      activate: false,
-    });
-    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {

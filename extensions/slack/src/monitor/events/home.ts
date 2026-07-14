@@ -6,7 +6,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
-export function buildSlackHomeView(slashCommandName?: string): HomeView {
+function buildSlackHomeView(slashCommandName?: string): HomeView {
   const startSessionText = slashCommandName
     ? `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`
     : "Send a DM or mention OpenClaw in a channel to start a session.";

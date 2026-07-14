@@ -10,15 +10,12 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "./dreaming-state.js";
-import {
-  readShortTermRecallEntries,
-  recordShortTermRecalls,
-  testing as shortTermTesting,
-} from "./short-term-promotion.js";
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));

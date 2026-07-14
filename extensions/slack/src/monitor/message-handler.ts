@@ -71,17 +71,7 @@ const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
-export class SlackRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "SlackRetryableInboundError";
-  }
-}
-
 function isRetryableSlackInboundError(error: unknown): boolean {
-  if (error instanceof SlackRetryableInboundError) {
-    return true;
-  }
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
   );

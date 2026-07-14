@@ -1,6 +1,9 @@
 // Verifies plugin registry behavior with runtime config inputs.
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -21,6 +24,27 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("resolves plugin API paths against the plugin root", () => {
+    const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "path-plugin",
+      name: "Path Plugin",
+      source: path.join(pluginRoot, "index.js"),
+      rootDir: pluginRoot,
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
+
+    expect(api.resolvePath("data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
+    expect(api.resolvePath("./data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
+    expect(api.resolvePath(absolute)).toBe(absolute);
+    expect(api.resolvePath("~/openclaw/plugin.txt")).toBe(resolveUserPath("~/openclaw/plugin.txt"));
+  });
+
   it("adds plugin context to lazy runtime resolution failures", () => {
     const runtime = new Proxy({} as PluginRuntime, {
       get() {

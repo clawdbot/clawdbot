@@ -248,7 +248,7 @@ describe("CronService declarative jobs", () => {
     );
     for (const id of ["nested/job", "..\\job", "nul\0job"]) {
       await expect(writer.add(declaration({ declarationKey: undefined, id }))).rejects.toThrow(
-        "invalid cron run log job id",
+        "invalid cron task run job id",
       );
     }
     writer.stop();

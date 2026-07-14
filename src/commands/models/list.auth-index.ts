@@ -17,7 +17,7 @@ export type ModelListAuthIndex = {
   evaluateModelAuth(provider: string, ref?: ModelListAuthRef): ModelListAuthEvaluation;
 };
 
-export type CreateModelListAuthIndexParams = {
+type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
   agentDir?: string;

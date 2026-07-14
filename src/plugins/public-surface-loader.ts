@@ -223,9 +223,3 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   }
   return null;
 }
-
-export function resetBundledPluginPublicArtifactLoaderForTest(): void {
-  publicSurfaceModuleCache.clear();
-  publicSurfaceLocationCache.clear();
-  moduleLoaders.clear();
-}

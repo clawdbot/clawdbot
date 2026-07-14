@@ -25,7 +25,7 @@ import type { PluginKind } from "./plugin-kind.types.js";
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
-export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
+const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
 const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
@@ -45,12 +45,6 @@ type PluginManifestLoadCacheEntry = {
 const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
-
-/** Clears process-local manifest parse cache for tests and explicit refresh flows. */
-export function clearPluginManifestLoadCache(): void {
-  pluginManifestLoadCache.clear();
-}
-
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
@@ -99,7 +93,7 @@ export type PluginManifestModelPricing = {
   providers?: Record<string, PluginManifestModelPricingProvider>;
 };
 
-export type PluginManifestModelIdPrefixRule = {
+type PluginManifestModelIdPrefixRule = {
   modelPrefix: string;
   prefix: string;
 };
@@ -133,7 +127,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-export type PluginManifestProviderRequestProvider = {
+type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
@@ -189,9 +183,9 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
-export type PluginManifestDefaultPlatform = NodeJS.Platform;
+type PluginManifestDefaultPlatform = NodeJS.Platform;
 
-export type PluginManifestSetupProvider = {
+type PluginManifestSetupProvider = {
   /** Provider id surfaced during setup/onboarding. */
   id: string;
   /** Setup/auth methods that this provider supports. */
@@ -206,7 +200,7 @@ export type PluginManifestSetupProvider = {
   authEvidence?: PluginManifestSetupProviderAuthEvidence[];
 };
 
-export type PluginManifestSetupProviderAuthEvidence = {
+type PluginManifestSetupProviderAuthEvidence = {
   /** Generic local file evidence gated by required environment metadata. */
   type: "local-file-with-env";
   /** Optional env var containing an explicit credential file path. */
@@ -244,9 +238,9 @@ export type PluginManifestQaRunner = {
   description?: string;
 };
 
-export type PluginManifestConfigLiteral = string | number | boolean | null;
+type PluginManifestConfigLiteral = string | number | boolean | null;
 
-export type PluginManifestDangerousConfigFlag = {
+type PluginManifestDangerousConfigFlag = {
   /**
    * Dot-separated config path relative to `plugins.entries.<id>.config`.
    * Supports `*` wildcards for map/array segments.
@@ -256,7 +250,7 @@ export type PluginManifestDangerousConfigFlag = {
   equals: PluginManifestConfigLiteral;
 };
 
-export type PluginManifestSecretInputPath = {
+type PluginManifestSecretInputPath = {
   /**
    * Dot-separated config path relative to `plugins.entries.<id>.config`.
    * Supports `*` wildcards for map/array segments.
@@ -266,7 +260,7 @@ export type PluginManifestSecretInputPath = {
   expected?: "string";
 };
 
-export type PluginManifestSecretInputContracts = {
+type PluginManifestSecretInputContracts = {
   /**
    * Override bundled-plugin default enablement when deciding whether this
    * SecretRef surface is active. Use this when the plugin is bundled but the
@@ -445,7 +439,7 @@ export type PluginManifestContracts = {
   tools?: string[];
 };
 
-export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
+type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 
 export type PluginManifestMediaUnderstandingProviderMetadata = {
   capabilities?: PluginManifestMediaUnderstandingCapability[];
@@ -463,7 +457,7 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   >;
 };
 
-export type PluginManifestProviderBaseUrlGuard = {
+type PluginManifestProviderBaseUrlGuard = {
   provider: string;
   defaultBaseUrl?: string;
   allowedBaseUrls: string[];
@@ -474,7 +468,7 @@ export type PluginManifestCapabilityProviderAuthSignal = {
   providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
 };
 
-export type PluginManifestCapabilityProviderModeConfigSignal = {
+type PluginManifestCapabilityProviderModeConfigSignal = {
   path?: string;
   default?: string;
   allowed?: string[];
@@ -504,7 +498,7 @@ export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadat
   replaySafe?: boolean;
 };
 
-export type PluginManifestProviderAuthChoice = {
+type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
   provider: string;
   /** Provider auth method id that this choice should dispatch to. */
@@ -545,12 +539,9 @@ export type PluginManifestProviderAuthChoice = {
   onboardingScopes?: PluginManifestOnboardingScope[];
 };
 
-export type PluginManifestOnboardingScope =
-  | "text-inference"
-  | "image-generation"
-  | "music-generation";
+type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
 
-export type PluginManifestLoadResult =
+type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
@@ -1981,7 +1972,7 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-export type PluginPackageChannelCliOption = {
+type PluginPackageChannelCliOption = {
   flags: string;
   description: string;
   defaultValue?: boolean | string;
@@ -1998,7 +1989,7 @@ export type PluginPackageInstall = {
   requiredPlatformPackages?: string[];
 };
 
-export type OpenClawPackageStartup = {
+type OpenClawPackageStartup = {
   /**
    * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
    * startup surface needed before the server starts listening.
@@ -2006,13 +1997,13 @@ export type OpenClawPackageStartup = {
   deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
-export type OpenClawPackageSetupFeatures = {
+type OpenClawPackageSetupFeatures = {
   configPromotion?: boolean;
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
 
-export type OpenClawPackageCompat = {
+type OpenClawPackageCompat = {
   pluginApi?: string;
 };
 
@@ -2050,7 +2041,7 @@ export type PackageExtensionResolution =
   | { status: "empty"; entries: [] }
   | { status: "invalid"; entries: []; error: string };
 
-export type ManifestKey = typeof MANIFEST_KEY;
+type ManifestKey = typeof MANIFEST_KEY;
 
 export type PackageManifest = {
   name?: string;

@@ -97,12 +97,24 @@ function readPackageStaticAssetEntries(packageJson) {
   return Array.isArray(entries) ? entries : [];
 }
 
+// External plugins (`bundledDist: false`) own their own dist and are excluded
+// from core dist, so their static assets must not be discovered for core
+// runtime postbuild copies.
+function isExternalDistPackage(packageJson) {
+  return packageJson.openclaw?.build?.bundledDist === false;
+}
+
 /**
  * Discovers static asset copy specs from extension package metadata.
+ *
+ * External plugins (`bundledDist: false`) are skipped by default so their
+ * launchers are not copied into core dist. Per-package plugin builds pass
+ * `includeExternalPlugins` to still emit their own static assets.
  */
 export function discoverStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
+  const includeExternalPlugins = params.includeExternalPlugins ?? false;
   const assets = [];
   for (const { dirName, hasPackageJson, packageJsonPath } of listExtensionPackageDirs(
     rootDir,
@@ -112,6 +124,9 @@ export function discoverStaticExtensionAssets(params = {}) {
       continue;
     }
     const packageJson = readJsonFile(packageJsonPath, fsImpl);
+    if (!includeExternalPlugins && isExternalDistPackage(packageJson)) {
+      continue;
+    }
     for (const entry of readPackageStaticAssetEntries(packageJson)) {
       const source = normalizePackageRelativePath(entry?.source);
       const output = normalizePackageRelativePath(entry?.output);
@@ -231,7 +246,9 @@ export function copyStaticExtensionAssetsToRuntimeOverlay(params = {}) {
 export function copyStaticExtensionAssetsForPackage(params) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const assets = params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl });
+  const assets =
+    params.assets ??
+    discoverStaticExtensionAssets({ rootDir, fs: fsImpl, includeExternalPlugins: true });
   const packagePrefix = `extensions/${params.pluginDir}/`;
   const rootDistPrefix = `dist/extensions/${params.pluginDir}/`;
   const copied = [];

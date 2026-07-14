@@ -5,7 +5,6 @@ import {
   buildCommandPayloadCandidates,
   detectCarriedShellBuiltinArgv,
   detectCommandCarrierArgv,
-  detectEnvSplitStringFlag,
   detectInlineEvalArgv,
   detectInlineEvalInSegments,
   detectShellWrapperThroughCarrierArgv,
@@ -130,15 +129,15 @@ describe("command-analysis risks", () => {
     ]);
   });
 
-  it("detects env split-string flag forms", () => {
-    expect(detectEnvSplitStringFlag(["env", "-S", "sh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-Ssh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-iS", "sh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-iSsh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-is", "sh -c id"])).toBe("-s");
-    expect(detectEnvSplitStringFlag(["env", "--split-string=sh -c id"])).toBe("--split-string");
-    expect(detectEnvSplitStringFlag(["env", "sh", "-c", "id"])).toBeNull();
-    expect(detectEnvSplitStringFlag(["env", "-XSsh -c id"])).toBeNull();
+  it.each([
+    { args: ["-S", "sh -c id"], flag: "-S" },
+    { args: ["-Ssh -c id"], flag: "-S" },
+    { args: ["-iS", "sh -c id"], flag: "-S" },
+    { args: ["-iSsh -c id"], flag: "-S" },
+    { args: ["-is", "sh -c id"], flag: "-s" },
+    { args: ["--split-string=sh -c id"], flag: "--split-string" },
+  ])("detects env split-string carrier form $args", ({ args, flag }) => {
+    expect(detectCommandCarrierArgv(["env", ...args])).toEqual([{ command: "env", flag }]);
   });
 
   it("detects shell wrappers carried through prefix commands", () => {

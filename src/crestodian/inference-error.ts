@@ -1,4 +1,4 @@
-export type CrestodianInferenceStage = "agent-turn" | "planner" | "conversation";
+type CrestodianInferenceStage = "agent-turn" | "planner" | "conversation";
 
 /** Safe public error for a Crestodian turn that could not complete with intelligence. */
 export class CrestodianInferenceUnavailableError extends Error {

@@ -19,6 +19,7 @@ import {
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import { DEFAULT_MEDIA_SEND_ERROR, type OutboundMediaAccessContext } from "./outbound-types.js";
+import { raceWithTimeout } from "./race-with-timeout.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -365,26 +366,25 @@ async function sendVoiceWithTimeout(
     account.config?.voiceDirectUploadFormats;
   const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
   const voiceTimeout = 45_000;
-  const ac = new AbortController();
   try {
-    const result = await Promise.race([
-      mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
-        if (ac.signal.aborted) {
-          log?.debug?.(`sendVoice completed after timeout, suppressing late delivery`);
-          return {
-            channel: "qqbot",
-            error: "Voice send completed after timeout (suppressed)",
-          } as typeof r;
-        }
-        return r;
+    const result = await raceWithTimeout(
+      (timeoutState) =>
+        mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
+          if (timeoutState.timedOut) {
+            log?.debug?.(`sendVoice completed after timeout, suppressing late delivery`);
+            return {
+              channel: "qqbot",
+              error: "Voice send completed after timeout (suppressed)",
+            };
+          }
+          return r;
+        }),
+      voiceTimeout,
+      () => ({
+        channel: "qqbot",
+        error: "Voice send timed out and was skipped",
       }),
-      new Promise<{ channel: string; error: string }>((resolve) => {
-        setTimeout(() => {
-          ac.abort();
-          resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" });
-        }, voiceTimeout);
-      }),
-    ]);
+    );
     if (result.error) {
       log?.error(`sendVoice error: ${result.error}`);
       return false;

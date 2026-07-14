@@ -595,6 +595,10 @@ export async function runPreparedCliAgent(
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
+  const preparedContextAgentMeta =
+    isClaudeCliProvider(params.provider) && context.contextWindowInfo
+      ? { contextTokens: context.contextWindowInfo.tokens }
+      : {};
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -716,6 +720,7 @@ export async function runPreparedCliAgent(
         sessionId: params.sessionId ?? "",
         provider: params.provider,
         model: context.modelId,
+        ...preparedContextAgentMeta,
         ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
       },
     },
@@ -809,6 +814,7 @@ export async function runPreparedCliAgent(
           sessionId: "",
           provider: params.provider,
           model: context.modelId,
+          ...preparedContextAgentMeta,
           ...(sessionBindingDisabled || resolveReusableCliSessionId(context.reusableCliSession)
             ? { clearCliSessionBinding: true }
             : {}),
@@ -1117,6 +1123,7 @@ export async function runPreparedCliAgent(
           sessionId: agentSessionId,
           provider: params.provider,
           model: context.modelId,
+          ...preparedContextAgentMeta,
           usage: resultParams.output.usage,
           ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
           ...(persistedCliSessionId

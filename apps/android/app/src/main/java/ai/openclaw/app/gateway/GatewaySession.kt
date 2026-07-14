@@ -221,7 +221,24 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
-  private val json = Json { ignoreUnknownKeys = true }
+  /** One ready physical WebSocket captured before queued work starts waiting. */
+  internal class RequestLease internal constructor(
+    val endpointStableId: String,
+    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
+  ) {
+    suspend fun request(
+      method: String,
+      paramsJson: String?,
+      timeoutMs: Long = 15_000,
+    ): String = requestImpl(method, paramsJson, timeoutMs)
+  }
+
+  private val json =
+    Json {
+      ignoreUnknownKeys = true
+      encodeDefaults = true
+      explicitNulls = false
+    }
   private val writeLock = Mutex()
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
@@ -387,7 +404,7 @@ class GatewaySession(
     val conn = readyConnection(expectedEndpointStableId) ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
       conn.request(
-        "node.event",
+        GatewayMethod.NodeEvent.rawValue,
         buildNodeEventParams(event = event, payloadJson = payloadJson),
         timeoutMs = 8_000,
       )
@@ -422,7 +439,7 @@ class GatewaySession(
         )
     val params = buildNodeEventParams(event = event, payloadJson = payloadJson)
     try {
-      val res = conn.request("node.event", params, timeoutMs = timeoutMs)
+      val res = conn.request(GatewayMethod.NodeEvent.rawValue, params, timeoutMs = timeoutMs)
       return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
@@ -438,11 +455,11 @@ class GatewaySession(
     event: String,
     payloadJson: String?,
   ): JsonObject =
-    buildJsonObject {
-      put("event", JsonPrimitive(event))
-      // Gateway node events carry payloadJSON as a string for compatibility with non-JSON payload producers.
-      put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
-    }
+    json
+      .encodeToJsonElement(
+        GatewayNodeEventParams.serializer(),
+        GatewayNodeEventParams(event = event, payloadJson = payloadJson ?: "{}"),
+      ).asObjectOrNull() ?: error("GatewayNodeEventParams must encode as an object")
 
   /** Sends an RPC request and throws a code-prefixed exception when the gateway returns an error. */
   suspend fun request(
@@ -466,12 +483,30 @@ class GatewaySession(
     throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
+  /** Captures the current physical connection; requests never resolve a replacement socket. */
+  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    return RequestLease(endpointStableId = conn.endpoint.stableId) { method, paramsJson, timeoutMs ->
+      val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+      if (!res.ok) {
+        throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+      }
+      res.payloadJson ?: ""
+    }
+  }
+
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): RpcResult = requestDetailed(expectedEndpointStableId = null, method, paramsJson, timeoutMs)
+  ): RpcResult =
+    requestDetailed(
+      expectedEndpointStableId = null,
+      method,
+      paramsJson,
+      timeoutMs,
+    )
 
   private suspend fun requestDetailed(
     expectedEndpointStableId: String?,
@@ -480,12 +515,26 @@ class GatewaySession(
     timeoutMs: Long,
   ): RpcResult {
     val conn = readyConnection(expectedEndpointStableId) ?: throw GatewayRequestNotEnqueued("not connected")
+    return requestDetailed(conn, method, paramsJson, timeoutMs)
+  }
+
+  private suspend fun requestDetailed(
+    conn: Connection,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
+  ): RpcResult {
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
       } else {
         json.parseToJsonElement(paramsJson)
       }
+    // Readiness and identity are checked after parsing, immediately before enqueue.
+    // A later reconnect can only close this exact socket, never retarget the lease.
+    if (currentConnection !== conn || !conn.isReady()) {
+      throw GatewayRequestNotEnqueued("gateway request lease changed")
+    }
     val res = conn.request(method, params, timeoutMs)
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
@@ -689,12 +738,11 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
     ): JsonObject =
-      buildJsonObject {
-        put("type", JsonPrimitive("req"))
-        put("id", JsonPrimitive(id))
-        put("method", JsonPrimitive(method))
-        if (params != null) put("params", params)
-      }
+      json
+        .encodeToJsonElement(
+          GatewayRequestFrame.serializer(),
+          GatewayRequestFrame(id = id, method = method, params = params),
+        ).asObjectOrNull() ?: error("GatewayRequestFrame must encode as an object")
 
     suspend fun awaitClose() = closedDeferred.await()
 
@@ -857,7 +905,7 @@ class GatewaySession(
           connectNonce = connectNonce,
           selectedAuth = selectedAuth,
         )
-      val res = request("connect", payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
+      val res = request(GatewayMethod.Connect.rawValue, payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val error = res.error ?: ErrorShape("UNAVAILABLE", "connect failed")
         val shouldRetryWithDeviceToken =
@@ -896,13 +944,12 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
-        // Setup-code bootstrap handoff is deliberately least-privilege. It never
-        // persists operator.admin, so Skill Workshop lifecycle actions remain
-        // disabled until shared token/password auth or an owner-approved scope
-        // upgrade issues an admin-scoped operator device token.
+        // The Gateway bounds setup-code handoff to a closed mobile profile. Persist
+        // only the supported full or limited scope set and drop unexpected extras.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
+              "operator.admin",
               "operator.approvals",
               "operator.read",
               "operator.talk.secrets",
@@ -1154,15 +1201,17 @@ class GatewaySession(
     }
 
     private fun handleResponse(frame: JsonObject) {
-      val id = frame["id"].asStringOrNull() ?: return
+      val response =
+        runCatching {
+          json.decodeFromJsonElement(GatewayResponseFrame.serializer(), frame)
+        }.getOrNull() ?: return
+      val id = response.id
       if (id == connectRequestId) connectResponseAccepted.set(true)
-      val ok = frame["ok"].asBooleanOrNull() ?: false
-      val payloadJson = frame["payload"]?.let { payload -> payload.toString() }
+      // Read the raw element so an explicit JSON null remains distinguishable from an omitted payload.
+      val payloadJson = frame["payload"]?.toString()
       val error =
-        frame["error"]?.asObjectOrNull()?.let { obj ->
-          val code = obj["code"].asStringOrNull() ?: "UNAVAILABLE"
-          val msg = obj["message"].asStringOrNull() ?: "request failed"
-          val detailObj = obj["details"].asObjectOrNull()
+        response.error?.let { wireError ->
+          val detailObj = wireError.details.asObjectOrNull()
           val details =
             detailObj?.let {
               GatewayConnectErrorDetails(
@@ -1172,7 +1221,7 @@ class GatewaySession(
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
-                retryable = it["retryable"].asBooleanOrNull() == true,
+                retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
@@ -1182,23 +1231,27 @@ class GatewaySession(
                 clawhubVersion = it["version"].asStringOrNull(),
               )
             }
-          ErrorShape(code, msg, details)
+          ErrorShape(wireError.code, wireError.message, details)
         }
-      pending.remove(id)?.complete(RpcResponse(id, ok, payloadJson, error))
+      pending.remove(id)?.complete(RpcResponse(id, response.ok, payloadJson, error))
     }
 
     private fun handleEvent(frame: JsonObject) {
-      val event = frame["event"].asStringOrNull() ?: return
+      val gatewayEvent =
+        runCatching {
+          json.decodeFromJsonElement(GatewayEventFrame.serializer(), frame)
+        }.getOrNull() ?: return
+      val event = gatewayEvent.event
       val payloadJson =
-        frame["payload"]?.let { it.toString() } ?: frame["payloadJSON"].asStringOrNull()
-      if (event == "connect.challenge") {
+        frame["payload"]?.toString() ?: frame["payloadJSON"].asStringOrNull()
+      if (event == GatewayEvent.ConnectChallenge.rawValue) {
         val nonce = extractConnectNonce(payloadJson)
         if (!connectNonceDeferred.isCompleted && !nonce.isNullOrBlank()) {
           connectNonceDeferred.complete(nonce.trim())
         }
         return
       }
-      if (event == "node.invoke.request" && payloadJson != null && onInvoke != null) {
+      if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return
       }
@@ -1220,22 +1273,27 @@ class GatewaySession(
 
     private fun handleInvokeEvent(payloadJson: String) {
       val payload =
-        try {
-          json.parseToJsonElement(payloadJson).asObjectOrNull()
-        } catch (_: Throwable) {
-          null
-        } ?: return
-      val id = payload["id"].asStringOrNull() ?: return
-      val nodeId = payload["nodeId"].asStringOrNull() ?: return
-      val command = payload["command"].asStringOrNull() ?: return
-      val params =
-        payload["paramsJSON"].asStringOrNull()
-          ?: payload["params"]?.let { value -> if (value is JsonNull) null else value.toString() }
-      val timeoutMs = payload["timeoutMs"].asLongOrNull()
+        runCatching {
+          json.decodeFromString(GatewayNodeInvokeRequest.serializer(), payloadJson)
+        }.getOrNull() ?: return
+      // Older gateways sent structured `params`; keep accepting that shipped wire shape while
+      // generated models follow the canonical `paramsJSON` schema.
+      val paramsJson =
+        payload.paramsJson
+          ?: runCatching {
+            json.parseToJsonElement(payloadJson).asObjectOrNull()?.get("params")
+          }.getOrNull()?.let { value -> if (value is JsonNull) null else value.toString() }
       connectionScope.launch {
-        val request = InvokeRequest(id, nodeId, command, params, timeoutMs)
+        val request =
+          InvokeRequest(
+            id = payload.id,
+            nodeId = payload.nodeId,
+            command = payload.command,
+            paramsJson = paramsJson,
+            timeoutMs = payload.timeoutMs,
+          )
         val result = executeInvokeRequest(request)
-        sendInvokeResult(id, nodeId, result, timeoutMs)
+        sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)
       }
     }
 
@@ -1277,29 +1335,24 @@ class GatewaySession(
     ) {
       val parsedPayload = result.payloadJson?.let { parseJsonOrNull(it) }
       val params =
-        buildJsonObject {
-          put("id", JsonPrimitive(id))
-          put("nodeId", JsonPrimitive(nodeId))
-          put("ok", JsonPrimitive(result.ok))
-          if (parsedPayload != null) {
-            put("payload", parsedPayload)
-          } else if (result.payloadJson != null) {
-            // Preserve malformed/non-object payloads as payloadJSON so the gateway can report handler output.
-            put("payloadJSON", JsonPrimitive(result.payloadJson))
-          }
-          result.error?.let { err ->
-            put(
-              "error",
-              buildJsonObject {
-                put("code", JsonPrimitive(err.code))
-                put("message", JsonPrimitive(err.message))
-              },
-            )
-          }
-        }
+        json
+          .encodeToJsonElement(
+            GatewayNodeInvokeResultParams.serializer(),
+            GatewayNodeInvokeResultParams(
+              id = id,
+              nodeId = nodeId,
+              ok = result.ok,
+              payload = parsedPayload,
+              payloadJson = if (parsedPayload == null) result.payloadJson else null,
+              error =
+                result.error?.let { err ->
+                  GatewayNodeInvokeResultParamsError(code = err.code, message = err.message)
+                },
+            ),
+          ).asObjectOrNull() ?: error("GatewayNodeInvokeResultParams must encode as an object")
       val ackTimeoutMs = resolveInvokeResultAckTimeoutMs(invokeTimeoutMs)
       try {
-        request("node.invoke.result", params, timeoutMs = ackTimeoutMs)
+        request(GatewayMethod.NodeInvokeResult.rawValue, params, timeoutMs = ackTimeoutMs)
       } catch (err: Throwable) {
         Log.w(
           loggerTag,

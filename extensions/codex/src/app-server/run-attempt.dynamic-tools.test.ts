@@ -10,10 +10,13 @@ import {
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
+import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -28,7 +31,15 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
+const testing = {
+  hasPendingDynamicToolTerminalDiagnostic,
+  resolveCodexAppServerHookChannelId,
+  setOpenClawCodingToolsFactoryForTests(
+    factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
+  ): void {
+    dynamicToolBuildState.openClawCodingToolsFactory = factory;
+  },
+};
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -208,27 +219,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       );
     },
   );
-
-  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.sessionKey = "agent:main:main";
-
-    expect(
-      testing.resolveOpenClawCodingToolsSessionKeys(
-        params,
-        "agent:main:telegram:default:direct:1234",
-      ),
-    ).toEqual({
-      sessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-    });
-
-    expect(testing.resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
-      sessionKey: "agent:main:main",
-      runSessionKey: undefined,
-    });
-  });
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
     const harness = createStartedThreadHarness();

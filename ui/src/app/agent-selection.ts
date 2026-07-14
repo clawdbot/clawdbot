@@ -11,30 +11,32 @@ type AgentSelectionGateway = {
 
 type AgentSelectionState = {
   selectedId: string | null;
+  /** Agent filter shared by agent-owned pages; null exposes all agents. */
+  scopeId: string | null;
 };
 
 export type AgentSelectionCapability = {
   readonly state: AgentSelectionState;
   set: (agentId: string | null) => void;
+  setScope: (agentId: string | null) => void;
   subscribe: (listener: (state: AgentSelectionState) => void) => () => void;
 };
 
 export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
 ): AgentSelectionCapability {
-  let state: AgentSelectionState = {
-    selectedId: gateway.snapshot.assistantAgentId
-      ? normalizeAgentId(gateway.snapshot.assistantAgentId)
-      : null,
-  };
+  const initialId = gateway.snapshot.assistantAgentId
+    ? normalizeAgentId(gateway.snapshot.assistantAgentId)
+    : null;
+  let state: AgentSelectionState = { selectedId: initialId, scopeId: initialId };
   let client = gateway.snapshot.client;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
-  const publish = (selectedId: string | null) => {
-    if (state.selectedId === selectedId) {
+  const publish = (next: AgentSelectionState) => {
+    if (state.selectedId === next.selectedId && state.scopeId === next.scopeId) {
       return;
     }
-    state = { selectedId };
+    state = next;
     for (const listener of listeners) {
       listener(state);
     }
@@ -43,7 +45,8 @@ export function createAgentSelectionCapability(
   gateway.subscribe((next) => {
     if (next.client !== client) {
       client = next.client;
-      publish(next.assistantAgentId ? normalizeAgentId(next.assistantAgentId) : null);
+      const selectedId = next.assistantAgentId ? normalizeAgentId(next.assistantAgentId) : null;
+      publish({ selectedId, scopeId: selectedId });
     }
   });
 
@@ -52,7 +55,15 @@ export function createAgentSelectionCapability(
       return state;
     },
     set(agentId) {
-      publish(agentId?.trim() ? normalizeAgentId(agentId) : null);
+      const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;
+      // A chip/chat switch establishes a new global page scope. The separate
+      // scope field lets page controls expose all agents without losing the
+      // concrete agent required by chat and new-session flows.
+      publish({ selectedId, scopeId: selectedId });
+    },
+    setScope(agentId) {
+      const scopeId = agentId?.trim() ? normalizeAgentId(agentId) : null;
+      publish({ ...state, scopeId });
     },
     subscribe(listener) {
       listeners.add(listener);

@@ -61,27 +61,6 @@ public enum GatewayDeviceAuthPayload {
         ].joined(separator: "|")
     }
 
-    /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
-    public static func buildConnectCompatibilityPayload(
-        deviceId: String,
-        clientId: String,
-        clientMode: String,
-        role: String,
-        scopes: [String],
-        signedAtMs: Int64,
-        token: String? = nil,
-        nonce: String) -> String
-    {
-        self.buildConnectCompatibilityPayload(fields: Fields(
-            deviceId: deviceId,
-            client: Client(id: clientId, mode: clientMode),
-            role: role,
-            scopes: scopes,
-            signedAtMs: signedAtMs,
-            token: token,
-            nonce: nonce))
-    }
-
     public static func buildV3(
         fields: Fields,
         platform: String?,
@@ -104,32 +83,6 @@ public enum GatewayDeviceAuthPayload {
             normalizedPlatform,
             normalizedDeviceFamily,
         ].joined(separator: "|")
-    }
-
-    /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
-    public static func buildV3(
-        deviceId: String,
-        clientId: String,
-        clientMode: String,
-        role: String,
-        scopes: [String],
-        signedAtMs: Int64,
-        token: String? = nil,
-        nonce: String,
-        platform: String? = nil,
-        deviceFamily: String? = nil) -> String
-    {
-        self.buildV3(
-            fields: Fields(
-                deviceId: deviceId,
-                client: Client(id: clientId, mode: clientMode),
-                role: role,
-                scopes: scopes,
-                signedAtMs: signedAtMs,
-                token: token,
-                nonce: nonce),
-            platform: platform,
-            deviceFamily: deviceFamily)
     }
 
     static func normalizeMetadataField(_ value: String?) -> String {

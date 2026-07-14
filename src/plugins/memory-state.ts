@@ -70,7 +70,7 @@ export type MemoryCorpusSupplementRegistration = {
   supplement: MemoryCorpusSupplement;
 };
 
-export type MemoryPromptSupplementRegistration = {
+type MemoryPromptSupplementRegistration = {
   pluginId: string;
   builder: MemoryPromptSectionBuilder;
 };
@@ -92,11 +92,11 @@ export type MemoryFlushPlanResolver = (params: {
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
 
-export type MemoryRuntimeQmdConfig = {
+type MemoryRuntimeQmdConfig = {
   command?: string;
 };
 
-export type MemoryRuntimeBackendConfig =
+type MemoryRuntimeBackendConfig =
   | {
       backend: "builtin";
     }
@@ -137,7 +137,7 @@ export type MemoryPluginRuntime = {
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 
-export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
+type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
 
 export type MemoryPluginPublicArtifact = {
   kind: string;
@@ -159,12 +159,10 @@ export type MemoryPluginCapability = {
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
 };
 
-export type MemoryPluginCapabilityRegistration = {
+type MemoryPluginCapabilityRegistration = {
   pluginId: string;
   capability: MemoryPluginCapability;
 };
-
-const LEGACY_MEMORY_COMPAT_PLUGIN_ID = "legacy-memory-v1";
 
 type MemoryPluginState = {
   capability?: MemoryPluginCapabilityRegistration;
@@ -229,12 +227,6 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
   return [...memoryPluginState.corpusSupplements];
 }
-
-/** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
-export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
-  registerMemoryPromptSectionForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, builder);
-}
-
 export function registerMemoryPromptSectionForPlugin(
   pluginId: string,
   builder: MemoryPromptSectionBuilder,
@@ -280,12 +272,6 @@ function normalizeMemoryPromptLines(value: unknown): string[] {
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
-
-/** @deprecated Use registerMemoryCapability(pluginId, { flushPlanResolver }) instead. */
-export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
-  registerMemoryFlushPlanResolverForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, resolver);
-}
-
 export function registerMemoryFlushPlanResolverForPlugin(
   pluginId: string,
   resolver: MemoryFlushPlanResolver,
@@ -299,12 +285,6 @@ export function resolveMemoryFlushPlan(params: {
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
 }
-
-/** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
-export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
-  registerMemoryRuntimeForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, runtime);
-}
-
 export function registerMemoryRuntimeForPlugin(
   pluginId: string,
   runtime: MemoryPluginRuntime,

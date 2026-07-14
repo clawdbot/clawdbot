@@ -5,7 +5,7 @@ import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
@@ -14,6 +14,7 @@ const requiredPreparedPathGroups = [
   ["dist/control-ui/index.html"],
 ];
 const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
+const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 
@@ -42,6 +43,13 @@ export function collectPreparedPrepackErrors(
   }
 
   if (!normalizedAssets.values().next().done) {
+    for (const suffix of requiredControlUiCompressionSuffixes) {
+      if (!Array.from(normalizedAssets).some((assetPath) => assetPath.endsWith(suffix))) {
+        errors.push(
+          `missing prepared Control UI ${suffix} asset under ${requiredControlUiAssetPrefix}`,
+        );
+      }
+    }
     return errors;
   }
 

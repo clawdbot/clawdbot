@@ -376,6 +376,7 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
     public let runId: String
     public let text: String
 
+    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(runId: String, text: String) {
         self.runId = runId
         self.text = text
@@ -385,6 +386,7 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
 public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let hasActiveRun: Bool?
 
+    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(hasActiveRun: Bool?) {
         self.hasActiveRun = hasActiveRun
     }
@@ -455,6 +457,7 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let message: AnyCodable?
     public let errorMessage: String?
 
+    // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
         runId: String?,
         sessionKey: String?,
@@ -479,6 +482,7 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
     public let messageId: String?
     public let messageSeq: Int?
 
+    // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
         sessionKey: String?,
         agentId: String? = nil,

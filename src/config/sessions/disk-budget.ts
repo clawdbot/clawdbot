@@ -23,7 +23,7 @@ import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionDiskBudgetConfig = {
+type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
@@ -46,7 +46,7 @@ export type SessionUnreferencedArtifactSweepResult = {
   olderThanMs: number;
 };
 
-export type SessionDiskBudgetLogger = {
+type SessionDiskBudgetLogger = {
   warn: (message: string, context?: Record<string, unknown>) => void;
   info: (message: string, context?: Record<string, unknown>) => void;
 };

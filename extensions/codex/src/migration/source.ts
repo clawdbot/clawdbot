@@ -48,7 +48,7 @@ export type CodexPluginSource = {
   message?: string;
 };
 
-export type CodexPluginMigrationBlockCode =
+type CodexPluginMigrationBlockCode =
   | "plugin_disabled"
   | "codex_subscription_required"
   | "codex_account_unavailable"
@@ -58,7 +58,7 @@ export type CodexPluginMigrationBlockCode =
   | "app_disabled"
   | "app_missing";
 
-export type CodexPluginMigrationAppFact = {
+type CodexPluginMigrationAppFact = {
   id: string;
   name: string;
   needsAuth?: boolean;
@@ -66,7 +66,7 @@ export type CodexPluginMigrationAppFact = {
   isEnabled?: boolean;
 };
 
-export type CodexPluginMigrationBlock = {
+type CodexPluginMigrationBlock = {
   code: CodexPluginMigrationBlockCode;
   apps?: CodexPluginMigrationAppFact[];
   error?: string;

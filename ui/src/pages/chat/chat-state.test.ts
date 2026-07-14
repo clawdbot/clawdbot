@@ -1,11 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  applyRemoteSlashCommandsResult,
-  resetChatSlashCommandMetadataForTest,
-} from "./chat-commands.ts";
+  buildFallbackSlashCommands,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import {
   admitQueuedMessageForSession,
   removeQueuedMessage,
@@ -14,7 +15,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
-  handleChatManualRefresh,
+  handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -33,7 +34,6 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
-import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/assistant-identity.ts")>()),
@@ -41,12 +41,105 @@ vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  resetChatSlashCommandMetadataForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("coalesces stream invalidations into one animation frame", () => {
+    let nextFrame = 1;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    const requestUpdate = vi.fn();
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+
+    for (const deltaText of ["A", "B", "C"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
+    }
+
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).not.toHaveBeenCalled();
+    const firstFrame = frames.get(1);
+    frames.delete(1);
+    firstFrame?.(0);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(state.chatStreamRenderFrame).toBeNull();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText: "D" },
+    });
+    const staleFrame = frames.get(2);
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.operation",
+      payload: {},
+    });
+    staleFrame?.(0);
+
+    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    expect(state.chatStreamRenderFrame).toBeNull();
+  });
+
+  it("keeps every chat delta while batching their render", () => {
+    let scheduledFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    const requestUpdate = vi.fn();
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+
+    for (const deltaText of ["A", "B", "C"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
+    }
+
+    expect(state.chatStream).toBe("ABC");
+    expect(requestUpdate).not.toHaveBeenCalled();
+    scheduledFrame?.(0);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
@@ -184,93 +277,6 @@ describe("ChatStateController render lifecycle", () => {
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
-  });
-
-  it("resolves a canceled commit wait without starting manual refresh RPCs", async () => {
-    const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-    let cancelCommit = () => {};
-    const invalidate = vi.fn();
-    const renderLifecycle: RenderLifecycle = {
-      invalidate,
-      afterCommit: (_effect, onCancel) => {
-        cancelCommit = () => onCancel?.();
-        return cancelCommit;
-      },
-    };
-    const resetToolStream = vi.fn();
-    const scrollToBottom = vi.fn();
-    const state = {
-      chatManualRefreshFrame: 40,
-      chatManualRefreshGeneration: 0,
-      chatManualRefreshInFlight: false,
-      chatNewMessagesBelow: true,
-      renderLifecycle,
-      resetToolStream,
-      scrollToBottom,
-    } as unknown as ChatPageHost;
-
-    const refresh = handleChatManualRefresh(state);
-    cancelCommit();
-    await refresh;
-
-    expect(state.chatManualRefreshInFlight).toBe(false);
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(40);
-    expect(resetToolStream).not.toHaveBeenCalled();
-    expect(scrollToBottom).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
-  });
-
-  it("cancels pending manual refresh frames when state is replaced or disconnected", () => {
-    const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-    const host = {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    } satisfies ReactiveControllerHost;
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
-    const createState = (frame: number, renderLifecycle: RenderLifecycle) =>
-      ({
-        chatLoading: false,
-        chatMessages: [],
-        chatToolMessages: [],
-        chatStream: null,
-        realtimeTalkConversation: [],
-        handleSendChat: async () => undefined,
-        handleChatDraftChange: () => undefined,
-        handleChatInputHistoryKey: () => ({ handled: false }),
-        chatManualRefreshFrame: frame,
-        chatManualRefreshGeneration: 1,
-        chatManualRefreshInFlight: true,
-        renderLifecycle,
-        chatScrollCommitCleanup: null,
-        chatScrollFrame: null,
-        chatScrollGuardFrame: null,
-        chatScrollTimeout: null,
-        chatScrollGeneration: 0,
-        chatIsProgrammaticScroll: false,
-        sessionWorkspaceState: undefined,
-        realtimeTalkSession: null,
-        resetToolStream: vi.fn(),
-      }) as unknown as ChatPageHost;
-    const first = createState(41, controller.createRenderLifecycle());
-
-    controller.attach(first);
-    const second = createState(42, controller.createRenderLifecycle());
-    controller.attach(second);
-
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
-    expect(first.chatManualRefreshFrame).toBeNull();
-    expect(first.chatManualRefreshInFlight).toBe(false);
-
-    controller.hostDisconnected();
-
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
-    expect(second.chatManualRefreshFrame).toBeNull();
-    expect(second.chatManualRefreshInFlight).toBe(false);
   });
 });
 

@@ -34,7 +34,7 @@ type FleetRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "fleet_cells" | "
 const FLEET_OPERATION_LEASE_SCOPE = "fleet-cell-operation";
 const FLEET_OPERATION_LEASE_TTL_MS = 5 * 60_000;
 
-export type FleetCellOperationLease = {
+type FleetCellOperationLease = {
   heartbeat: (nowMs?: number) => void;
   release: () => void;
   owner: string;

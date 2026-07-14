@@ -24,6 +24,7 @@
     <string name="native_002a6fcb30b2def4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ek, gönderilmek üzere hazırlanamadı."</string>
     <string name="native_003aaf9e0a0e6b9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mikrofon kapalı"</string>
     <string name="native_0060cbfdd3cf13ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw uyarılarını göster"</string>
+    <string name="native_008dacb6d1e85bd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tam"</string>
     <string name="native_009506aeb0484b2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Onay verildi ve kaydedildi."</string>
     <string name="native_00d108e2e6466940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son arama geçmişini göster"</string>
     <string name="native_00e8aeba41d79ce3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 beklemede"</string>
@@ -38,6 +39,7 @@
     <string name="native_0303e18246708180" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlı değil"</string>
     <string name="native_030cab223a806ad6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yüklü skill durumunu inceleyin ve yönetin."</string>
     <string name="native_031a8f0f659df890" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Başarısız"</string>
+    <string name="native_0349070711a2323d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Varsayılan Agent"</string>
     <string name="native_03494b0d1f803522" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kamera"</string>
     <string name="native_035edd9bd720fa18" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gruptan kaldır"</string>
     <string name="native_03bd6fca9cf5c1fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aranıyor"</string>
@@ -90,6 +92,7 @@
     <string name="native_0d42a8a0056d0f0f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron görevlerini incelemek için Gateway\'e bağlanın."</string>
     <string name="native_0d5efd432e4fedf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gerçek zamanlı ses sağlayıcısı yapılandırılmamış."</string>
     <string name="native_0db10f2c2f332cd2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"kick"</string>
+    <string name="native_0dc49fb52ef24934" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Örnek Kimliği"</string>
     <string name="native_0e21c3fd2dee2f6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway belirteci gerekli. Tekrar girin veya bu bağlantıyı düzenleyin."</string>
     <string name="native_0e570ca6fabe24f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kaynak"</string>
     <string name="native_0e91610117029a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yenile"</string>
@@ -101,7 +104,6 @@
     <string name="native_100ac08064a6d586" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yakın zamanda oturum yok"</string>
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway durumu, telefon düğümü hazır olma durumu ve son günlük akışı."</string>
     <string name="native_1093115897879aa3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çalışma Zamanı"</string>
-    <string name="native_10eb093812a2db14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway kurulumu"</string>
     <string name="native_1102bd820f68901b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aracı %1$s"</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
     <string name="native_114c9789813fd2b0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s (%2$s)"</string>
@@ -130,7 +132,7 @@
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konum"</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"örn. America/New_York"</string>
     <string name="native_16524d7409d37507" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oturum hedefi"</string>
-    <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub becerisini incele"</string>
+    <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub Skill\'ini incele"</string>
     <string name="native_16a0eeb0791b6c92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"snapshot"</string>
     <string name="native_170421cc4a4c2f30" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düğüm ana makinesi"</string>
     <string name="native_1709305c9fa966d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düzey"</string>
@@ -154,7 +156,9 @@
     <string name="native_194a05367fb28913" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s hazır"</string>
     <string name="native_199e261f8ee0e97f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlandı (operatör çevrimdışı)"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yetenek onaylanmadı"</string>
+    <string name="native_1a2303ede07493ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlan"</string>
     <string name="native_1a3421ff23362bbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düğüm erişimini onayla"</string>
+    <string name="native_1a6b66544dcfe305" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway Ekle"</string>
     <string name="native_1a78d280d076b8ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zamanlanmış iş yok."</string>
     <string name="native_1a9e3989a89e862b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Transkripsiyon kullanılamıyor: %1$s"</string>
     <string name="native_1aa4cb0bcca76e92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Görsel"</string>
@@ -325,7 +329,7 @@
     <string name="native_387b2569e440838c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönderilemedi: %1$s"</string>
     <string name="native_3892e10346fd2012" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Köprü"</string>
     <string name="native_38d198cd5303680f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Teslim Hatası"</string>
-    <string name="native_38dcea3e5a6a342e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'u telefonunuzdan kullanın"</string>
+    <string name="native_38dcea3e5a6a342e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'ı telefonunuzdan kullanın"</string>
     <string name="native_3907fa7f80722a6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Görünüm"</string>
     <string name="native_3912c65bdd0a4356" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Atölyesi"</string>
     <string name="native_3942b87daebe82bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Belirteç Gerekiyor"</string>
@@ -483,6 +487,7 @@
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En son günlük parçası gösteriliyor."</string>
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kurulum kodunu kullan"</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
+    <string name="native_57efc4ebe625cab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Güvenli bir wss:// veya Tailscale Serve Gateway kullanın, Control UI\'da veya openclaw qr ile tam erişimli bir kurulum kodu oluşturun, ardından aşağıya tarayın veya yapıştırın ve ayarları ve yükseltmeleri etkinleştirmek için yeniden bağlanın."</string>
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
     <string name="native_57fd7a0cf33f2666" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seçildi"</string>
     <string name="native_58268edca12a81a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android mevcut bir kurulum kodunu tarayabilir veya yapıştırabilir, ancak bu gateway henüz uygulamaya kurulum kodu oluşturma özelliği sunmuyor. Gateway ana makinesinde openclaw qr ile QR/kod oluşturun, ardından burada tarayın veya kurulum kodunu aşağıya yapıştırın."</string>
@@ -500,6 +505,7 @@
     <string name="native_5a73512707500938" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleşen öneriler, aracılar yeniden kullanılabilir skill taslakları oluşturduktan sonra burada görünecektir."</string>
     <string name="native_5a7a1c2ec168fbbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Search"</string>
     <string name="native_5a7d4412c13abceb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw konuşuyor"</string>
+    <string name="native_5a99f6fa7e98657a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"QR Kodunu Tara"</string>
     <string name="native_5ab9d81fd481e71f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seçili Uygulamalar"</string>
     <string name="native_5aed37ac02104e71" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yapılandırmasını ve çalıştırma geçmişini incelemek için bir işi açın. Admin kapsamlı bağlantılar ayrıca onu çalıştırabilir, düzenleyebilir, etkinleştirebilir, devre dışı bırakabilir veya silebilir."</string>
     <string name="native_5b3522ef7c1c149e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oturum aramasına odaklan"</string>
@@ -550,8 +556,8 @@
     <string name="native_63734ae10b7e46e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Alt sistem"</string>
     <string name="native_6386ffec7ad722df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Komut çıkışında"</string>
     <string name="native_639a40e82b9a96f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlantı"</string>
-    <string name="native_642ef160a6d414e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ekle"</string>
     <string name="native_649474af418cac5d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"2. Adım"</string>
+    <string name="native_64dd65edfeaabd10" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tanıla"</string>
     <string name="native_64f24041b18e3654" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bazı kanal durumu denetimleri tamamlanmadı."</string>
     <string name="native_64f46a7526a186d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pin"</string>
     <string name="native_6516c565123b19ad" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s Öğesini Kopyala"</string>
@@ -672,7 +678,7 @@
     <string name="native_7728331d12fcfc1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Güvenlik bildirimi"</string>
     <string name="native_7765ad1890a192a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Paylaşılan görüntü uyarısını kapat"</string>
     <string name="native_77706d90347b2e64" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zamanlayıcının bu işi çalıştırmasına izin ver."</string>
-    <string name="native_779aa3df405560c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway farklı bir ClawHub sürümünü değerlendirdi. Yüklemeden önce skill\'i tekrar inceleyin."</string>
+    <string name="native_779aa3df405560c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway farklı bir ClawHub sürümünü değerlendirdi. Yüklemeden önce Skill\'i tekrar inceleyin."</string>
     <string name="native_77ab6bb71f77154d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistem Erişimini Aç"</string>
     <string name="native_7817cd06563196ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Görsel kullanılamıyor"</string>
     <string name="native_788011833a5a0f22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bildirimler"</string>
@@ -695,6 +701,7 @@
     <string name="native_7bda957a27b2f876" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sıraya alındı — yeniden bağlanıldığında gönderilecek"</string>
     <string name="native_7c55b5030e55a687" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s dk önce"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirme erişimi kontrol ediliyor"</string>
+    <string name="native_7c79875c4f9d1990" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sınırlı Gateway erişimi"</string>
     <string name="native_7cc20d4753b8fd45" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Araçlar çalıştırılıyor..."</string>
     <string name="native_7d2227b96bc40069" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Onay kontrol ediliyor…"</string>
     <string name="native_7d3951124ae2ca1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu telefondan fotoğraf ve klip çekin"</string>
@@ -831,7 +838,9 @@
     <string name="native_95204ae1796ddfab" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s, ClawHub\'dan yüklenemedi."</string>
     <string name="native_953a8bd0a18d7a3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'a hoş geldiniz"</string>
     <string name="native_95d0536838bd0e14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sinyal Dizini"</string>
+    <string name="native_963e80a1954e4b73" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s:%2$s"</string>
     <string name="native_966dccd25d82bd2a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'a %1$s söyle"</string>
+    <string name="native_96a5ba634bfc2ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keşfedildi"</string>
     <string name="native_973769a32161f8de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI."</string>
     <string name="native_97a5e41b45ddd2b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"uygula"</string>
     <string name="native_97cbc43c27dd76ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kullanım verileri yüklenemedi."</string>
@@ -839,6 +848,7 @@
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sonraki Uyanma"</string>
     <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son günlük girdisi yok."</string>
+    <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Manuel Gateway"</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Grubu yeniden adlandır"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sağlayıcı erişilebilirliği bilinmiyor"</string>
@@ -866,7 +876,6 @@
     <string name="native_9ca009adf23586a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Model güncellenemedi."</string>
     <string name="native_9cb615d253908670" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread reply"</string>
     <string name="native_9ce78fe395f3890f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sil…"</string>
-    <string name="native_9d0e97acbb5f4ac6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlantı Kurulumu"</string>
     <string name="native_9d2284f4257946b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"SON GÜNLÜKLER"</string>
     <string name="native_9d24f4ffb6b7824d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son çalıştırmalar yükleniyor…"</string>
     <string name="native_9d286bcbb56ea44b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu dosya önizlenemiyor. İkili biçimde veya çok büyük olabilir."</string>
@@ -926,6 +935,7 @@
     <string name="native_a7b90ee8facf0aed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
     <string name="native_a89bac8b89022bde" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dinleniyor · %1$s kuyrukta"</string>
     <string name="native_a8bbbd7231a6c191" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Asistan konuşması sessize alındı"</string>
+    <string name="native_a8ef5cdf31a6505a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Henüz Gateway bulunamadı. Keşif engellenmişse manuel kurulumu kullanın."</string>
     <string name="native_a92f0449a9f7235b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çalışıyor"</string>
     <string name="native_a9624cf0b6ae80c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmaya başlayın..."</string>
     <string name="native_a9ac253267d07365" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon Düğümü"</string>
@@ -1059,6 +1069,7 @@
     <string name="native_c2d66755e6d0b42f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"karantinaya al"</string>
     <string name="native_c2eb8cd9d9564314" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikkat"</string>
     <string name="native_c31723ab330289fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aranıyor…"</string>
+    <string name="native_c34dd5eb8b0af56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kurulum kodunu nereden alabilirim?"</string>
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill etkinleştirilemedi."</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>
     <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% çevrimiçi"</string>
@@ -1089,7 +1100,6 @@
     <string name="native_c6d5ed757b66bfd3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hayal"</string>
     <string name="native_c6dd061350fc69b8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Engellenen uygulama yok. Engelleme eklemediğiniz sürece uygulamalar yönlendirme yapabilir."</string>
     <string name="native_c753cdf0c19f1e38" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşma tanıyıcı kullanılamıyor"</string>
-    <string name="native_c759c34804a2aea6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kurulum Kodu"</string>
     <string name="native_c7985fa72daa6ea4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway, %1$s kurulumunu döndürmedi"</string>
     <string name="native_c7b6dfd5c3a183c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway unutulsun mu?"</string>
     <string name="native_c7b7b7f01360f6a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İsteğe bağlı açıklama"</string>
@@ -1228,7 +1238,7 @@
     <string name="native_e02b4aac2b335f6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Asistan çalışıyor"</string>
     <string name="native_e02b54dc002b9644" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw, başlatıcıda görünen uygulamaları listeleyebilir."</string>
     <string name="native_e064109f58271ec5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşma başarısız oldu: %1$s"</string>
-    <string name="native_e06f5f8456a05351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yüklü skill\'lerde ara"</string>
+    <string name="native_e06f5f8456a05351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yüklü Skills içinde ara"</string>
     <string name="native_e0723a86a5b9408a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İncele"</string>
     <string name="native_e083bd83e9d3e97e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Process"</string>
     <string name="native_e0926fdac700b094" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terminal"</string>
@@ -1254,6 +1264,7 @@
     <string name="native_e4582b6fb1f57494" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway’i yeniden bağla"</string>
     <string name="native_e4696640127b9126" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Üçüncü taraf"</string>
     <string name="native_e482357257d6c2fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hazır olma durumunu incele"</string>
+    <string name="native_e5125d9f63d2947b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sınırlı"</string>
     <string name="native_e51aa2de89dcd71a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw logosu"</string>
     <string name="native_e52b3044724b9f4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modelin sabitlemesini kaldır"</string>
     <string name="native_e5584bc5057284ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu gateway’e bağlı mesajlaşma yüzeyleri."</string>
@@ -1321,6 +1332,7 @@
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arama Günlüğünü Oku"</string>
     <string name="native_f197b44d96f9315f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s kuyrukta · gateway bekleniyor"</string>
     <string name="native_f1c038660cfb46e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gruba taşı"</string>
+    <string name="native_f1c3989a92ef10d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirmek için QR Kodunu Tara"</string>
     <string name="native_f2000dce9b5d40c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Onay reddedildi."</string>
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Workshop önerisi incelenemedi."</string>
     <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sabitlenmiş"</string>
@@ -1329,6 +1341,7 @@
     <string name="native_f2316e644b1d2621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mesaj daha sonra teslim edilmek üzere kuyruğa alınamadı."</string>
     <string name="native_f24a1d904fd1b482" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Karantina"</string>
     <string name="native_f24bcd9352795c36" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zamanlama · %1$s"</string>
+    <string name="native_f24f2f3f09ce256d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünme düzeyi güncellenemedi."</string>
     <string name="native_f28cb795c9721dd0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünme düzeyi seçicisini aç"</string>
     <string name="native_f2bfed0b0c0055db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sesli yanıt zaman aşımına uğradı; sıraya alınan istek yeniden deneniyor"</string>
     <string name="native_f2cb21c53a33f72c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düzen: Ayrıntılı"</string>
@@ -1368,7 +1381,7 @@
     <string name="native_f85ae4b0b7ed13c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dismiss Task"</string>
     <string name="native_f87908f1a1e901c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sohbet başarısız oldu"</string>
     <string name="native_f89aeeeee0922951" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw · Canlı"</string>
-    <string name="native_f8b32f4e92bd84ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yüklendi"</string>
+    <string name="native_f8b32f4e92bd84ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yüklü"</string>
     <string name="native_f8c2745155505d39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıt beklenirken zaman aşımına uğradı; tekrar deneyin veya yenileyin."</string>
     <string name="native_f8cd133f0ea1031b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Önceki konuşmaları bulun"</string>
     <string name="native_f92e2ad582c0e13f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yenileniyor"</string>

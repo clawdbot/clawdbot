@@ -250,17 +250,12 @@ const ModelCompatSchema = z
   })
   .strict()
   .optional();
-
-type AssertAssignable<_T extends U, U> = true;
-export type _ModelCompatSchemaAssignableToType = AssertAssignable<
-  z.infer<typeof ModelCompatSchema>,
-  ModelCompatConfig | undefined
->;
-export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
-  ModelCompatConfig | undefined,
-  z.infer<typeof ModelCompatSchema>
->;
-
+type AssertAssignable<_Left extends _Right, _Right> = true;
+const modelCompatSchemaContract: [
+  AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>,
+  AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>,
+] = [] as never;
+void modelCompatSchemaContract;
 const ConfiguredProviderRequestTlsSchema = z
   .object({
     ca: SecretInputSchema.optional().register(sensitive),
@@ -603,7 +598,7 @@ export const VisibleRepliesSchema = z
     return value;
   });
 
-export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
 
 export const MentionPatternsPolicySchema = z
   .object({
@@ -676,15 +671,30 @@ export const BlockStreamingCoalesceSchema = z
   })
   .strict();
 
+export const TextChunkModeSchema = z.enum(["length", "newline"]);
+
+export const ChannelStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+
+/** Delivery-only nested streaming config for channels without preview modes. */
+export const ChannelDeliveryStreamingConfigSchema = z
+  .object({
+    chunkMode: TextChunkModeSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().positive().optional(),
 };
@@ -699,7 +709,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
+const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
   .object({
@@ -862,7 +872,7 @@ export const CliBackendSchema = z
   })
   .strict();
 
-export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
+const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   normalizeStringEntries(values);
 
 /**
@@ -1100,17 +1110,18 @@ export const ToolsMediaSchema = z
   })
   .strict()
   .optional();
-
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
-  ToolsMediaConfigFromSchema["asyncCompletion"],
-  MediaToolsConfig["asyncCompletion"]
->;
-export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
-  MediaToolsConfig["asyncCompletion"],
-  ToolsMediaConfigFromSchema["asyncCompletion"]
->;
-
+const toolsMediaAsyncCompletionSchemaContract: [
+  AssertAssignable<
+    ToolsMediaConfigFromSchema["asyncCompletion"],
+    MediaToolsConfig["asyncCompletion"]
+  >,
+  AssertAssignable<
+    MediaToolsConfig["asyncCompletion"],
+    ToolsMediaConfigFromSchema["asyncCompletion"]
+  >,
+] = [] as never;
+void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

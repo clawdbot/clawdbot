@@ -1,7 +1,7 @@
 // Memory Host SDK module implements qmd query parser behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./error-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 // Parser for qmd query JSON output, including noisy CLI wrapper output.
 

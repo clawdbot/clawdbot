@@ -11,11 +11,10 @@ import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
-let bundledPluginsDirOverrideForTest: string | undefined;
 const bundledPluginsDirCache = new Map<string, string | undefined>();
 
 /** Diagnostic emitted when source-checkout bundled plugins lack dependency installs. */
-export type SourceCheckoutDependencyDiagnostic = {
+type SourceCheckoutDependencyDiagnostic = {
   source: string;
   message: string;
 };
@@ -210,17 +209,12 @@ function createBundledPluginsDirCacheKey(env: NodeJS.ProcessEnv): string {
     openClawHome: env.OPENCLAW_HOME ?? "",
     home: env.HOME ?? "",
     userProfile: env.USERPROFILE ?? "",
-    testOverride: bundledPluginsDirOverrideForTest ?? "",
   });
 }
 
 function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | undefined {
   if (areBundledPluginsDisabled(env)) {
     return resolveDisabledBundledPluginsDir();
-  }
-
-  if (bundledPluginsDirOverrideForTest) {
-    return bundledPluginsDirOverrideForTest;
   }
 
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
@@ -308,12 +302,4 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   const resolved = resolveBundledPluginsDirUncached(env);
   bundledPluginsDirCache.set(cacheKey, resolved);
   return resolved;
-}
-
-export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
-  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
-    throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");
-  }
-  bundledPluginsDirOverrideForTest = dir;
-  bundledPluginsDirCache.clear();
 }

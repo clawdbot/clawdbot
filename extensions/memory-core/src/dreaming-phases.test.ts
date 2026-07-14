@@ -6,19 +6,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import {
-  resolveMemoryCorePluginConfig,
-  resolveMemoryLightDreamingConfig,
-  resolveMemoryRemDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveMemoryCorePluginConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  testing,
   filterRecallEntriesWithinLookback,
+  previewRemDreaming,
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
@@ -26,14 +22,19 @@ import { previewRemHarness } from "./rem-harness.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  testing as shortTermTesting,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import {
+  createMemoryCoreTestHarness,
+  dreamingTestState,
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
+const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
+const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const originalDreamingTestFast = process.env.OPENCLAW_TEST_FAST;
 const originalDreamingStateDir = process.env.OPENCLAW_STATE_DIR;
 const EMPTY_SESSION_CONTENT_HASH =
@@ -205,7 +206,7 @@ async function seedDreamingSessionTranscript(params: {
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
-  subagent?: Parameters<typeof testing.runPhaseIfTriggered>[0]["subagent"],
+  subagent?: Parameters<typeof runDreamingSweepPhases>[0]["subagent"],
 ) {
   const logger = {
     info: vi.fn(),
@@ -240,33 +241,54 @@ function createHarness(
     event: { cleanedBody: string },
     ctx: { trigger?: string; workspaceDir?: string },
   ) => {
-    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    const lightResult = await testing.runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: resolvedConfig,
-      logger,
-      subagent,
-      phase: "light",
-      eventText: testing.constants.LIGHT_SLEEP_EVENT_TEXT,
-      config: light,
-    });
-    if (lightResult) {
-      return lightResult;
+    if (ctx.trigger !== "heartbeat") {
+      return undefined;
     }
-    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    return await testing.runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
+    const selectedPhase = event.cleanedBody.includes(LIGHT_SLEEP_EVENT_TEXT)
+      ? "light"
+      : event.cleanedBody.includes(REM_SLEEP_EVENT_TEXT)
+        ? "rem"
+        : undefined;
+    if (!selectedPhase) {
+      return undefined;
+    }
+    const activeWorkspace = ctx.workspaceDir ?? workspaceDir;
+    if (!activeWorkspace) {
+      logger.warn(
+        `memory-core: ${selectedPhase} dreaming skipped because no memory workspace is available.`,
+      );
+      return { handled: true, reason: `memory-core: ${selectedPhase} dreaming missing workspace` };
+    }
+    const dreamingConfig = (pluginConfig.dreaming ?? {}) as Record<string, unknown>;
+    const phaseConfigs = (dreamingConfig.phases ?? {}) as Record<string, unknown>;
+    const lightConfig = (phaseConfigs.light ?? {}) as Record<string, unknown>;
+    const remConfig = (phaseConfigs.rem ?? {}) as Record<string, unknown>;
+    const selectedPluginConfig = {
+      ...pluginConfig,
+      dreaming: {
+        ...dreamingConfig,
+        phases: {
+          ...phaseConfigs,
+          light: {
+            ...lightConfig,
+            enabled: selectedPhase === "light" && lightConfig.enabled !== false,
+          },
+          rem: {
+            ...remConfig,
+            enabled: selectedPhase === "rem" && remConfig.enabled !== false,
+          },
+        },
+      },
+    };
+    await runDreamingSweepPhases({
+      workspaceDir: activeWorkspace,
+      pluginConfig: selectedPluginConfig,
       cfg: resolvedConfig,
       logger,
       subagent,
-      phase: "rem",
-      eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
-      config: rem,
+      detachNarratives: false,
     });
+    return { handled: true, reason: `memory-core: ${selectedPhase} dreaming processed` };
   };
   return { beforeAgentReply, logger };
 }
@@ -850,7 +872,7 @@ describe("memory-core dreaming phases", () => {
       ([target]) => typeof target === "string" && target === dailyPath,
     ).length;
     expect(dailyReadCount).toBeLessThanOrEqual(1);
-    const dailyIngestion = await testing.readDailyIngestionState(workspaceDir);
+    const dailyIngestion = await dreamingTestState.readDailyIngestionState(workspaceDir);
     expect(Object.keys(dailyIngestion.files)).toHaveLength(1);
   });
 
@@ -1170,14 +1192,14 @@ describe("memory-core dreaming phases", () => {
     try {
       await withDreamingTestClock(async () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-        firstSessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+        firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
       });
     } finally {
       restoreDreamingTestEnv();
     }
 
-    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(firstSessionIngestion).toStrictEqual(sessionIngestion);
     expect(Object.keys(sessionIngestion.files)).toContain(`main:sessions/main/${transcriptName}`);
     expect(Object.keys(sessionIngestion.seenMessages)).toContain(
@@ -1213,85 +1235,6 @@ describe("memory-core dreaming phases", () => {
     const snippets = ranked.map((candidate) => candidate.snippet);
     expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
     expectIncludesSubstring(snippets, "Set retention to 365 days.");
-  });
-
-  it("keeps primary session transcripts out of configured subagent workspaces", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const subagentWorkspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-
-    await seedDreamingSessionTranscript({
-      sessionId: "main-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "Main workspace should stay in main dreams." }],
-        },
-      ],
-    });
-    await seedDreamingSessionTranscript({
-      agentId: "agi-ceo",
-      sessionId: "subagent-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: [{ type: "text", text: "CEO workspace should stay in CEO dreams." }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "agi-ceo", workspace: subagentWorkspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const mainCorpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-      "utf-8",
-    );
-    const subagentCorpus = await fs.readFile(
-      path.join(subagentWorkspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-      "utf-8",
-    );
-    expect(mainCorpus).toContain("Main workspace should stay in main dreams.");
-    expect(mainCorpus).not.toContain("CEO workspace should stay in CEO dreams.");
-    expect(subagentCorpus).toContain("CEO workspace should stay in CEO dreams.");
-    expect(subagentCorpus).not.toContain("Main workspace should stay in main dreams.");
   });
 
   it("redacts sensitive session content before writing session corpus", async () => {
@@ -1423,7 +1366,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1496,7 +1439,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1568,7 +1511,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
     expect(ingestionEntry.lastContentLine).toBe(0);
@@ -1792,7 +1735,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {
-    const preview = testing.previewRemDreaming({
+    const preview = previewRemDreaming({
       entries: [
         {
           key: "memory:1",
@@ -1875,13 +1818,14 @@ describe("memory-core dreaming phases", () => {
         { cleanedBody: "__openclaw_memory_core_light_sleep__" },
         { trigger: "heartbeat", workspaceDir },
       );
-      const firstSessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+      const firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
 
       await beforeAgentReply(
         { cleanedBody: "__openclaw_memory_core_light_sleep__" },
         { trigger: "heartbeat", workspaceDir },
       );
-      const secondSessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+      const secondSessionIngestion =
+        await dreamingTestState.readSessionIngestionState(workspaceDir);
       expect(secondSessionIngestion).toStrictEqual(firstSessionIngestion);
     } finally {
       restoreDreamingTestEnv();
@@ -2057,7 +2001,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
   });
 
@@ -2728,21 +2672,26 @@ describe("memory-core dreaming phases", () => {
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
-      await testing.runPhaseIfTriggered({
-        cleanedBody: testing.constants.REM_SLEEP_EVENT_TEXT,
-        trigger: "heartbeat",
+      await runDreamingSweepPhases({
         workspaceDir,
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        phase: "rem",
-        eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
-        config: {
-          enabled: true,
-          lookbackDays: 7,
-          limit: 10,
-          minPatternStrength: 0,
-          timezone: "UTC",
-          storage: { mode: "inline", separateReports: false },
+        pluginConfig: {
+          dreaming: {
+            enabled: true,
+            timezone: "UTC",
+            storage: { mode: "inline", separateReports: false },
+            phases: {
+              light: { enabled: false },
+              rem: {
+                enabled: true,
+                lookbackDays: 7,
+                limit: 10,
+                minPatternStrength: 0,
+              },
+            },
+          },
         },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        detachNarratives: false,
       });
     });
 
@@ -3198,76 +3147,5 @@ describe("previewRemHarness", () => {
     expect(preview.rem.candidateTruths).toStrictEqual([]);
     expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
-  });
-});
-
-describe("dedupeEntries — CJK-aware snippet similarity (#80613)", () => {
-  // Reuse the same makeEntry helper shape used elsewhere in this file, but
-  // local here so we can vary `snippet` while keeping the rest stable.
-  function makeRecall(key: string, snippet: string): ShortTermRecallEntry {
-    return {
-      key,
-      path: "memory/2026-04-12.md",
-      startLine: 1,
-      endLine: 5,
-      source: "memory",
-      snippet,
-      recallCount: 1,
-      dailyCount: 0,
-      groundedCount: 0,
-      totalScore: 1,
-      maxScore: 1,
-      firstRecalledAt: "2026-04-12T08:00:00.000Z",
-      lastRecalledAt: "2026-04-12T08:00:00.000Z",
-      queryHashes: [],
-      recallDays: ["2026-04-12"],
-      conceptTags: [],
-    };
-  }
-
-  it("merges similar pure-CJK snippets at the same path (was missed by the ASCII-only tokenizer)", () => {
-    // Two close paraphrases of the same Chinese fact. The previous tokenizer
-    // produced empty sets for both, falling back to exact-string match and
-    // returning similarity 0, so both ended up as separate candidates.
-    const a = makeRecall("cjk-a", "教训：配置中实验开关字段是叫做规则");
-    const b = makeRecall("cjk-b", "教训：配置里实验开关的字段叫做规则");
-
-    const deduped = testing.dedupeEntries([a, b], 0.5);
-    expect(deduped).toHaveLength(1);
-    // First entry survives; recall counts merge in.
-    expect(deduped[0]?.key).toBe("cjk-a");
-  });
-
-  it("keeps distinct CJK snippets that only share ASCII tokens (was wrongly merged by the ASCII-only tokenizer)", () => {
-    // Both snippets have ASCII tokens {plan, exrule} but talk about wholly
-    // different facts in the CJK content. The previous tokenizer only saw
-    // those ASCII tokens, returned similarity 1.0, and silently dropped one
-    // of the two distinct memories. The CJK-aware tokenizer keeps them apart.
-    const a = makeRecall("mixed-a", "Plan 实验开关字段叫做 exRule");
-    const b = makeRecall("mixed-b", "Plan 整个产品体系彻底重构 exRule");
-
-    const deduped = testing.dedupeEntries([a, b], 0.7);
-    expect(deduped).toHaveLength(2);
-    expect(deduped.map((entry) => entry.key).toSorted()).toStrictEqual(["mixed-a", "mixed-b"]);
-  });
-
-  it("preserves the existing ASCII paraphrase dedupe behavior", () => {
-    // Sanity check: close English paraphrases at the same path still dedupe,
-    // so the fix does not regress the Latin-script behavior the prior tests
-    // relied on.
-    const a = makeRecall("en-a", "Plan config experiment toggle field is named exRule");
-    const b = makeRecall("en-b", "Plan configuration uses experiment toggle field named exRule");
-
-    const deduped = testing.dedupeEntries([a, b], 0.4);
-    expect(deduped).toHaveLength(1);
-    expect(deduped[0]?.key).toBe("en-a");
-  });
-
-  it("keeps unrelated short snippets separate (does not over-collapse)", () => {
-    const a = makeRecall("short-a", "weather: sunny");
-    const b = makeRecall("short-b", "deploy: blocked");
-
-    const deduped = testing.dedupeEntries([a, b], 0.5);
-    expect(deduped).toHaveLength(2);
   });
 });

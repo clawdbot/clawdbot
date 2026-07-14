@@ -67,7 +67,7 @@ export type CodexAppServerTurnRouter = {
   }) => CodexNativeTurnCompletionWatch;
 };
 
-export type CodexNativeTurnCompletionWatch = {
+type CodexNativeTurnCompletionWatch = {
   completion: Promise<boolean>;
   cancel: () => void;
 };
@@ -552,7 +552,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 }
 
 /** True after Codex will not continue the exact turn. */
-export function isCodexTerminalTurnNotification(notification: CodexServerNotification): boolean {
+function isCodexTerminalTurnNotification(notification: CodexServerNotification): boolean {
   if (notification.method === "turn/completed") {
     return true;
   }

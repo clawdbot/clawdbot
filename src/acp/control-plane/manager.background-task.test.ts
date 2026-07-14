@@ -13,11 +13,11 @@ const LOBSTER = "🦞";
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
 function fakeDeps(): AcpSessionManagerDeps {
-  const readSessionEntry = (params: { sessionKey: string }) =>
+  const loadSessionEntry = (params: { sessionKey: string }) =>
     params.sessionKey === "child-session"
       ? { entry: { spawnedBy: "requester-session" } }
       : { entry: {} };
-  return { readSessionEntry } as unknown as AcpSessionManagerDeps;
+  return { loadSessionEntry } as unknown as AcpSessionManagerDeps;
 }
 
 describe("appendBackgroundTaskProgressSummary", () => {

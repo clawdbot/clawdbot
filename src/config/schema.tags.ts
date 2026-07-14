@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
 /** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
-export const CONFIG_TAGS = [
+const CONFIG_TAGS = [
   "security",
   "auth",
   "network",
@@ -21,7 +21,7 @@ export const CONFIG_TAGS = [
   "advanced",
 ] as const;
 
-export type ConfigTag = (typeof CONFIG_TAGS)[number];
+type ConfigTag = (typeof CONFIG_TAGS)[number];
 
 const TAG_PRIORITY: Record<ConfigTag, number> = {
   security: 0,
@@ -65,6 +65,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "mcp.apps.sandboxPort": ["network", "advanced"],
   "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
   "gateway.nodes.skills.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.mcp.servers": ["tools", "network", "advanced"],
   "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
@@ -161,7 +162,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 }
 
 /** Derive known config UI tags from a schema path and optional hint metadata. */
-export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
+function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
   if (override) {

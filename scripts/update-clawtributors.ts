@@ -2,6 +2,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
@@ -625,39 +626,22 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
-      return entry;
-    }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
-  });
+  const results = await pMap(
+    entriesResult,
+    async (entry) => {
+      const login = entry.login ?? entry.key;
+      if (!login) {
+        return entry;
+      }
+      const normalized = normalizeLogin(login)?.toLowerCase();
+      if (normalized && hiddenLogins.has(normalized)) {
+        return null;
+      }
+      return (await isDefaultGitHubAvatar(login)) ? null : entry;
+    },
+    { concurrency: 8, stopOnError: true },
+  );
   return results.filter((entry): entry is Entry => entry !== null);
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(
-        expectDefined(items[index], `clawtributor concurrency input at index ${index}`),
-        index,
-      );
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {

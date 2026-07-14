@@ -145,6 +145,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
+    expect(bundled.slice(0, 2).map((shard) => shard.shardName)).toEqual([
+      "core-tooling",
+      "auto-reply-reply-commands",
+    ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
     );
@@ -180,7 +184,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(20);
+    expect(compact).toHaveLength(15);
+    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(14);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
@@ -233,7 +238,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     expect(
       largeJobs.map((shard) => shard.groups.filter((group) => !group.includePatterns).length),
-    ).toEqual([2, 2, 1, 1]);
+    ).toEqual([2, 2, 2]);
     expect(
       compact.some((shard) => shard.checkName.startsWith("checks-node-compact-large-whole-")),
     ).toBe(false);

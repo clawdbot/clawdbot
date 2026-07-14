@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
+  clearSessionSuspensionTimers: vi.fn(() => 0),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -62,6 +63,10 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
 
+vi.mock("../agents/session-suspension.js", () => ({
+  clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
+}));
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
     debug: vi.fn(),
@@ -72,12 +77,8 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const {
-  finishGatewayRestartTrace,
-  recordGatewayRestartTraceSpan,
-  resetGatewayRestartTraceForTest,
-  startGatewayRestartTrace,
-} = await import("./restart-trace.js");
+const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
+  await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
@@ -161,11 +162,12 @@ describe("createGatewayCloseHandler", () => {
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.disposeAllBundleLspRuntimes.mockClear();
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
+    mocks.clearSessionSuspensionTimers.mockReset();
+    mocks.clearSessionSuspensionTimers.mockReturnValue(0);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    resetGatewayRestartTraceForTest();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {
@@ -184,6 +186,67 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins an in-flight config reload before mutable runtime teardown", async () => {
+    const events: string[] = [];
+    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+      events.push("session-suspension-timers");
+      return 1;
+    });
+    let releaseReload!: () => void;
+    const reloadStopped = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("reload:stopping");
+        await reloadStopped;
+        events.push("reload:stopped");
+      }),
+    };
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:stopped");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugins:stopped");
+      }),
+    };
+    const stopChannel = vi.fn(async () => {
+      events.push("channel:stopped");
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        configReloader,
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
+    });
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(pluginServices.stop).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+
+    releaseReload();
+    await closePromise;
+
+    expect(events).toEqual([
+      "session-suspension-timers",
+      "reload:stopping",
+      "reload:stopped",
+      "sidecar:stopped",
+      "plugins:stopped",
+      "channel:stopped",
+    ]);
   });
 
   it("stops plugin services before channel runtimes", async () => {
@@ -250,6 +313,45 @@ describe("createGatewayCloseHandler", () => {
 
     expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears session suspension timers before sidecars, plugin services, and channels stop", async () => {
+    const events: string[] = [];
+    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+      events.push("session-suspension-timers");
+      return 1;
+    });
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test shutdown" });
+
+    expect(mocks.clearSessionSuspensionTimers).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "session-suspension-timers",
+      "sidecar",
+      "plugin-services",
+      "channel:discord",
+    ]);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {

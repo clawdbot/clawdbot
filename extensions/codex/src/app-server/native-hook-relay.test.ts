@@ -5,14 +5,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   emitCodexNativePreToolUseFailureDiagnostic,
-  resolveCodexNativeHookRelayCommandTimeoutMs,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
@@ -281,12 +278,6 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("reserves relay timeout margin before Codex can kill the hook subprocess", () => {
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(undefined)).toBe(9000);
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(1)).toBe(750);
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(7)).toBe(6000);
-  });
-
   it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
@@ -309,12 +300,6 @@ describe("Codex native hook relay config", () => {
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
     });
-  });
-
-  it("caps oversized native hook cleanup grace before scheduling", () => {
-    expect(resolveCodexNativeHookRelayUnregisterGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 
   it.each([

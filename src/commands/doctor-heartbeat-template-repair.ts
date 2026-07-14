@@ -100,9 +100,7 @@ function linesEqual(left: readonly string[], right: readonly string[]): boolean 
 }
 
 /** Classifies heartbeat template content as clean, repairable, or risky because it has user text. */
-export function analyzeHeartbeatTemplateForRepair(
-  content: string,
-): HeartbeatTemplateRepairAnalysis {
+function analyzeHeartbeatTemplateForRepair(content: string): HeartbeatTemplateRepairAnalysis {
   const lines = content
     .split(/\r?\n/)
     .map((line) => line.trim())

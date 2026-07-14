@@ -1,7 +1,7 @@
 // Covers the chat.history final byte-budget fallback, including the sentinel
 // that prevents an empty (blank) transcript from being returned to the dashboard.
 import { describe, expect, it } from "vitest";
-import { enforceChatHistoryFinalBudget } from "./chat.js";
+import { enforceChatHistoryFinalBudget } from "./chat-history-budget.js";
 
 type DisplayMessage = {
   role?: string;

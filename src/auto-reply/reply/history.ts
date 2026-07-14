@@ -29,7 +29,7 @@ export function evictOldHistoryKeys<T>(
   }
 }
 
-export type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
+export type { HistoryEntry } from "./history.types.js";
 
 /** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {
@@ -48,7 +48,7 @@ export function buildHistoryContext(params: {
 }
 
 /** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
-export function appendHistoryEntry<T extends HistoryEntry>(params: {
+function appendHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
   entry: T;

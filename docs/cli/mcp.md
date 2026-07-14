@@ -872,9 +872,9 @@ Behavior and security boundaries:
 - OpenClaw advertises the `io.modelcontextprotocol/ui` extension only when Apps are enabled.
 - Only `ui://` resources with the exact `text/html;profile=mcp-app` MIME type render.
 - UI resources are capped at 2 MiB, placed behind a double-iframe proxy on a dedicated outer origin, loaded into an opaque inner App origin, and constrained by CSP derived from the resource metadata.
-- App-only tools (`_meta.ui.visibility: ["app"]`) stay out of model tool lists. Apps can call only app-visible tools on their owning server.
+- App-only tools (`_meta.ui.visibility: ["app"]`) stay out of model tool lists. Apps can call only app-visible tools on their owning server that also pass the effective OpenClaw tool policy for the run that created the view.
 - Origin-bound App permissions such as camera, microphone, and geolocation are not granted while inner App documents use opaque origins for cross-App isolation.
-- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease. They are not written to disk or copied into transcript preview metadata, and an expired view does not restart its MCP runtime.
+- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` resource; reconstructed views are read-only until a fresh run establishes current tool permissions.
 - `openclaw security audit` warns while the bridge is enabled. Disable it with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.
 
 ## Current limits

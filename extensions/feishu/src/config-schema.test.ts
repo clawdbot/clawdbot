@@ -1,6 +1,22 @@
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
+import { FeishuConfigSchema } from "./config-schema.js";
+
+// The NEGATIVE webhook fixtures below spread these bases and add
+// verificationToken separately so the GHSA-G353-MGV3-8PCJ opengrep pattern —
+// which matches `connectionMode: "webhook"` next to `verificationToken` in
+// one object literal (including via constant propagation) — does not flag the
+// fixtures that prove the schema rejects them. Positive fixtures stay literal.
+const topLevelWebhookBase = {
+  connectionMode: "webhook",
+  appId: "cli_top",
+  appSecret: "secret_top", // pragma: allowlist secret
+};
+const accountWebhookBase = {
+  connectionMode: "webhook",
+  appId: "cli_main",
+  appSecret: "secret_main", // pragma: allowlist secret
+};
 
 function expectSchemaIssue(
   result: ReturnType<typeof FeishuConfigSchema.safeParse>,
@@ -57,11 +73,11 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
+    // topLevelWebhookBase (see top of file) keeps the GHSA opengrep pattern
+    // from matching this negative fixture.
     const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
+      ...topLevelWebhookBase,
       verificationToken: "token_top",
-      appId: "cli_top",
-      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expectSchemaIssue(result, "encryptKey");
@@ -94,13 +110,13 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects account webhook mode without encryptKey", () => {
+    // accountWebhookBase (see top of file) keeps the GHSA opengrep pattern
+    // from matching this negative fixture.
     const result = FeishuConfigSchema.safeParse({
       accounts: {
         main: {
-          connectionMode: "webhook",
+          ...accountWebhookBase,
           verificationToken: "token_main",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -186,8 +202,10 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 
   it("accepts replyInThread in group config", () => {
-    const result = FeishuGroupSchema.parse({ replyInThread: "enabled" });
-    expect(result.replyInThread).toBe("enabled");
+    const result = FeishuConfigSchema.parse({
+      groups: { "oc-group": { replyInThread: "enabled" } },
+    });
+    expect(result.groups?.["oc-group"]?.replyInThread).toBe("enabled");
   });
 
   it("accepts replyInThread in account config", () => {
@@ -207,18 +225,36 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
-  it("accepts top-level and account-level block streaming", () => {
+  it("accepts top-level and account-level nested streaming config", () => {
     const result = FeishuConfigSchema.parse({
-      blockStreaming: true,
+      streaming: {
+        mode: "partial",
+        chunkMode: "newline",
+        block: { enabled: true, coalesce: { idleMs: 100 } },
+      },
       accounts: {
         main: {
-          blockStreaming: false,
+          streaming: { mode: "off", block: { enabled: false } },
         },
       },
     });
 
-    expect(result.blockStreaming).toBe(true);
-    expect(result.accounts?.main?.blockStreaming).toBe(false);
+    expect(result.streaming?.block?.enabled).toBe(true);
+    expect(result.streaming?.chunkMode).toBe("newline");
+    expect(result.accounts?.main?.streaming).toEqual({
+      mode: "off",
+      block: { enabled: false },
+    });
+  });
+
+  it.each([
+    ["boolean streaming", { streaming: true }],
+    ["flat blockStreaming", { blockStreaming: true }],
+    ["flat blockStreamingCoalesce", { blockStreamingCoalesce: { idleMs: 100 } }],
+    ["flat chunkMode", { chunkMode: "newline" }],
+  ])("rejects legacy %s spelling", (_name, overrides) => {
+    expect(FeishuConfigSchema.safeParse(overrides).success).toBe(false);
+    expect(FeishuConfigSchema.safeParse({ accounts: { main: overrides } }).success).toBe(false);
   });
 
   it("accepts account-level optimization flags", () => {

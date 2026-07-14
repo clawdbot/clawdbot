@@ -21,7 +21,7 @@ import { loadSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";

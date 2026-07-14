@@ -23,12 +23,8 @@ import {
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
   shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
   shouldReplaceStoredOAuthCredential,
-  type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import {
@@ -39,7 +35,7 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
-export type OAuthManagerAdapter = {
+type OAuthManagerAdapter = {
   buildApiKey: (
     provider: string,
     credentials: OAuthCredential,
@@ -134,19 +130,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     };
   }
 }
-
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
-  shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
-  shouldReplaceStoredOAuthCredential,
-};
-export type { RuntimeExternalOAuthProfile };
 
 function hasOAuthCredentialChanged(
   previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,

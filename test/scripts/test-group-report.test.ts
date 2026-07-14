@@ -400,6 +400,67 @@ describe("scripts/test-group-report aggregation", () => {
     }
   });
 
+  it("stops admitting report plans after a parallel failure", async () => {
+    const tempDir = makeTempDir();
+    const labels = ["first", "second", "third"];
+    const started: string[] = [];
+    const resolvers = new Map<string, (status: number) => void>();
+    try {
+      const runPromise = runReportPlans({
+        args: parseTestGroupReportArgs([
+          ...labels.flatMap((label) => ["--config", `${label}.config.ts`]),
+          "--concurrency",
+          "2",
+          "--no-rss",
+        ]),
+        logDir: path.join(tempDir, "logs"),
+        reportDir: path.join(tempDir, "reports"),
+        runPlans: labels.map((label) => ({
+          config: `${label}.config.ts`,
+          forwardedArgs: [],
+          label,
+        })),
+        runVitestJsonReport: async (params: {
+          config: string;
+          label: string;
+          logPath: string;
+          reportPath: string;
+        }) => {
+          started.push(params.label);
+          const status = await new Promise<number>((resolve) => {
+            resolvers.set(params.label, resolve);
+          });
+          return {
+            config: params.config,
+            elapsedMs: 10,
+            label: params.label,
+            logPath: params.logPath,
+            maxRssBytes: null,
+            reportPath: params.reportPath,
+            status,
+          };
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(started).toStrictEqual(["first", "second"]);
+      });
+      resolvers.get("first")?.(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(started).toStrictEqual(["first", "second"]);
+      resolvers.get("second")?.(0);
+
+      const result = await runPromise;
+      expect(result.exitCode).toBe(1);
+      expect(result.failed).toBe(true);
+      expect(result.runs.map((run) => run.label)).toStrictEqual(["first", "second"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prints slow tests as soon as each config report completes", async () => {
     const tempDir = makeTempDir();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

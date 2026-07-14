@@ -101,7 +101,7 @@ export function shouldLogWs(): boolean {
 }
 
 /** Compacts long ids while keeping enough entropy for log correlation. */
-export function shortId(value: string): string {
+function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {
     return `${s.slice(0, 8)}…${s.slice(-4)}`;

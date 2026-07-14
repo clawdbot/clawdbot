@@ -7,7 +7,6 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   refreshClientPluginNodeCapability,
-  replacePluginNodeCapabilityInScopedHostUrl,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -67,15 +66,6 @@ describe("plugin node capability helpers", () => {
       scopedPath: true,
       malformedScopedPath: false,
     });
-  });
-
-  test("replaces scoped capability tokens without nesting capability prefixes", () => {
-    expect(
-      replacePluginNodeCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token/__openclaw__/a2ui/",
-        "new token",
-      ),
-    ).toBe("http://127.0.0.1:18789/__openclaw__/cap/new%20token/__openclaw__/a2ui");
   });
 
   test("marks malformed scoped urls without authorizing a path capability", () => {

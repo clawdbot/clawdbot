@@ -4,7 +4,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { startGmailWatcher } from "./gmail-watcher.js";
 
 /** Logging surface used while starting the Gmail watcher during gateway startup. */
-export type GMailWatcherLog = {
+type GMailWatcherLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
   error: (msg: string) => void;

@@ -4,10 +4,10 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import {
   createSkillWorkshopState,
-  loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
+  selectSkillWorkshopProposal,
   type SkillWorkshopContext,
   type SkillWorkshopState,
 } from "./proposals.ts";
@@ -40,7 +40,7 @@ function createFixture(
   const context: SkillWorkshopContext = {
     agentSelection: {
       get state() {
-        return { selectedId: snapshot.assistantAgentId };
+        return { selectedId: snapshot.assistantAgentId, scopeId: snapshot.assistantAgentId };
       },
     },
     gateway: {
@@ -164,19 +164,20 @@ describe("Skill Workshop proposal RPCs", () => {
     });
   });
 
-  it("inspects proposals with the current agent from the selected session", async () => {
+  it("inspects a selected proposal with the agent from the current session", async () => {
     const { state, context, request } = createFixture(
       { skillWorkshopProposals: [proposal({ body: "" })] },
       { sessionKey: "agent:ops-team:main" },
     );
     request.mockResolvedValue(inspectResult());
 
-    await loadSkillWorkshopProposalDetail(state, context, "proposal-1");
+    await selectSkillWorkshopProposal(state, context, "proposal-1");
 
     expect(request).toHaveBeenCalledWith("skills.proposals.inspect", {
       agentId: "ops-team",
       proposalId: "proposal-1",
     });
+    expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
   });
 
   it.each([
@@ -287,6 +288,26 @@ describe("Skill Workshop proposal RPCs", () => {
     expect(request).toHaveBeenCalledWith("skills.proposals.list", { agentId: "ops" });
   });
 
+  it("discards selected proposal detail that resolves after the agent scope changes", async () => {
+    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ body: "" })],
+    });
+    request.mockReturnValueOnce(detail.promise);
+
+    const loading = selectSkillWorkshopProposal(state, context, "proposal-1");
+    state.skillWorkshopAgentId = "ops";
+    state.skillWorkshopProposals = [proposal({ body: "Ops proposal." })];
+    state.skillWorkshopInspectingKey = "proposal-1";
+    detail.resolve(inspectResult());
+    await loading;
+
+    expect(state.skillWorkshopProposals[0]?.body).toBe("Ops proposal.");
+    expect(state.skillWorkshopInspectingKey).toBe("proposal-1");
+    expect(state.skillWorkshopSelectedKey).toBeNull();
+  });
+
   it("preserves the loaded proposal agent for originless revisions", async () => {
     const { state, context } = createFixture({
       skillWorkshopAgentId: "research",
@@ -302,25 +323,6 @@ describe("Skill Workshop proposal RPCs", () => {
       expect.objectContaining({ key: "proposal-1" }),
       "research",
     );
-  });
-
-  it("discards proposal detail that resolves after the agent scope changes", async () => {
-    const detail = createDeferred<ReturnType<typeof inspectResult>>();
-    const { state, context, request } = createFixture({
-      skillWorkshopAgentId: "research",
-      skillWorkshopProposals: [proposal({ body: "" })],
-    });
-    request.mockReturnValueOnce(detail.promise);
-
-    const loading = loadSkillWorkshopProposalDetail(state, context, "proposal-1");
-    state.skillWorkshopAgentId = "ops";
-    state.skillWorkshopProposals = [proposal({ body: "Ops proposal." })];
-    state.skillWorkshopInspectingKey = "proposal-1";
-    detail.resolve(inspectResult());
-    await loading;
-
-    expect(state.skillWorkshopProposals[0]?.body).toBe("Ops proposal.");
-    expect(state.skillWorkshopInspectingKey).toBe("proposal-1");
   });
 
   it("does not send an originless revision after the agent scope changes", async () => {

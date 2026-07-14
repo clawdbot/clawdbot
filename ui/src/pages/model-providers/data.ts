@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../../src/infra/provider-usage.shared.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
 // cost) into one card list for the Model Providers settings page.
@@ -8,6 +9,7 @@ import type {
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
   ModelAuthStatusProvider,
+  ModelAuthStatusProfile,
   ModelAuthStatusResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
@@ -15,23 +17,39 @@ import { providerDisplayLabel } from "../../components/provider-icon.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
-export type ModelProviderAuthSummary = {
+type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
   profileCount: number;
   expiryLabel?: string;
 };
 
-export type ModelProviderLocalCost = {
+type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
   sessionCount: number;
 };
 
+export type ModelProviderLogoutTarget = {
+  provider: string;
+  profileIds: string[];
+};
+
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
+  /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
+  configKey?: string;
+  configAuthMode?: string;
+  apiKeySupported?: boolean;
+  /** Provider ids that own credentials merged into this card. */
+  credentialProviderIds: string[];
+  /** Saved OAuth/token profiles eligible for targeted logout. */
+  logoutTargets: ModelProviderLogoutTarget[];
   displayName: string;
   auth?: ModelProviderAuthSummary;
+  profiles: ModelAuthStatusProfile[];
+  apiKey?: ModelAuthStatusProvider["apiKey"];
+  hasConfigApiKey: boolean;
   modelCount: number;
   availableModelCount: number;
   /** Live provider-reported usage (quota windows, billing, cost history). */
@@ -40,9 +58,13 @@ export type ModelProviderCard = {
   localCost?: ModelProviderLocalCost;
 };
 
-export type ModelProviderCardsInput = {
+type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
+  catalogModels?: ModelCatalogEntry[] | null;
+  configProviderIds?: string[] | null;
+  configApiKeyProviderIds?: string[] | null;
+  configProviderAuthModes?: Record<string, string> | null;
   providerUsage: UsageSummary | null;
   costByProvider: SessionModelUsage[] | null;
 };
@@ -114,12 +136,47 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
   }
   const draft: CardDraft = {
     ids: new Set([id]),
-    card: { id, displayName, modelCount: 0, availableModelCount: 0 },
+    card: {
+      id,
+      displayName,
+      profiles: [],
+      credentialProviderIds: [],
+      logoutTargets: [],
+      hasConfigApiKey: false,
+      modelCount: 0,
+      availableModelCount: 0,
+    },
     hasAuthRow: false,
     hasUsageSnapshot: false,
   };
   drafts.push(draft);
   return draft;
+}
+
+function addProviderId(ids: string[], provider: string): void {
+  const normalized = normalizeProviderId(provider);
+  if (normalized && !ids.some((candidate) => normalizeProviderId(candidate) === normalized)) {
+    ids.push(provider);
+  }
+}
+
+function addLogoutTarget(
+  targets: ModelProviderLogoutTarget[],
+  provider: string,
+  profileIds: string[],
+): void {
+  if (profileIds.length === 0) {
+    return;
+  }
+  const normalized = normalizeProviderId(provider);
+  const existing = targets.find(
+    (candidate) => normalizeProviderId(candidate.provider) === normalized,
+  );
+  if (!existing) {
+    targets.push({ provider, profileIds: [...new Set(profileIds)] });
+    return;
+  }
+  existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
 /**
@@ -132,6 +189,36 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
  */
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
+  const apiKeyCapabilities = new Map<string, boolean>();
+  for (const entry of input.catalogModels ?? []) {
+    const id = canonicalProviderId(entry.provider);
+    if (!id || entry.apiKeySupported === undefined) {
+      continue;
+    }
+    apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || entry.apiKeySupported);
+  }
+
+  for (const provider of input.configProviderIds ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id)).card.configKey ??= provider;
+    }
+  }
+  for (const provider of input.configApiKeyProviderIds ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      const card = ensureDraft(drafts, id, providerDisplayLabel(id)).card;
+      card.configKey = provider;
+      card.hasConfigApiKey = true;
+      addProviderId(card.credentialProviderIds, provider);
+    }
+  }
+  for (const [provider, authMode] of Object.entries(input.configProviderAuthModes ?? {})) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id)).card.configAuthMode = authMode;
+    }
+  }
 
   for (const entry of input.models ?? []) {
     const id = canonicalProviderId(entry.provider);
@@ -167,6 +254,18 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       profileCount: provider.profiles.length,
       ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
     });
+    draft.card.profiles.push(...provider.profiles);
+    if (provider.apiKey || provider.profiles.length > 0) {
+      addProviderId(draft.card.credentialProviderIds, provider.provider);
+    }
+    addLogoutTarget(
+      draft.card.logoutTargets,
+      provider.provider,
+      provider.profiles
+        .filter((profile) => profile.logoutSupported === true)
+        .map((profile) => profile.profileId),
+    );
+    draft.card.apiKey ??= provider.apiKey;
     draft.hasAuthRow = true;
     const usage = provider.usage;
     if (usage && !draft.card.usage) {
@@ -221,11 +320,141 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     .filter(
       (draft) =>
         draft.hasAuthRow ||
+        (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
         draft.hasUsageSnapshot ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
-    .map((draft) => draft.card)
+    .map((draft) => {
+      const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      return Object.assign(
+        {},
+        draft.card,
+        apiKeySupported === undefined ? {} : { apiKeySupported },
+      );
+    })
     .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export type DefaultModelSelection = {
+  primary: string;
+  fallbacks: string[];
+  /** null = automatic/unset; empty string = explicitly disabled. */
+  utilityModel: string | null;
+};
+
+export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
+
+export function modelCatalogRef(model: ModelPickerEntry): string {
+  if (model.selectionRef !== undefined) {
+    return model.selectionRef;
+  }
+  return model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
+}
+
+export function buildSelectableDefaultModels(
+  models: ModelCatalogEntry[] | null,
+  selection: DefaultModelSelection,
+): ModelPickerEntry[] {
+  const selected = new Set<string>(
+    [selection.primary, ...selection.fallbacks, selection.utilityModel].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    ),
+  );
+  const selectable: ModelPickerEntry[] = (models ?? []).filter(
+    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
+  );
+  const seen = new Set(selectable.map(modelCatalogRef));
+  for (const ref of selected) {
+    if (seen.has(ref)) {
+      continue;
+    }
+    const slash = ref.indexOf("/");
+    if (slash <= 0 || slash === ref.length - 1) {
+      const normalized = ref.trim().toLowerCase();
+      const match = (models ?? []).find(
+        (model) =>
+          model.alias?.trim().toLowerCase() === normalized || model.id.trim() === ref.trim(),
+      );
+      selectable.push({
+        ...(match ?? { provider: "", id: ref, name: ref, available: false }),
+        selectionRef: ref,
+      });
+      continue;
+    }
+    selectable.push({
+      provider: ref.slice(0, slash),
+      id: ref.slice(slash + 1),
+      name: ref,
+      available: false,
+    });
+  }
+  return selectable;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function readModelProviderConfig(config: Record<string, unknown> | null): {
+  providerIds: string[];
+  apiKeyProviderIds: string[];
+  providerAuthModes: Record<string, string>;
+  defaults: DefaultModelSelection;
+} {
+  const models = asRecord(config?.models);
+  const providers = asRecord(models?.providers);
+  const agents = asRecord(config?.agents);
+  const defaults = asRecord(agents?.defaults);
+  const model = defaults?.model;
+  const modelObject = asRecord(model);
+  const primary =
+    typeof model === "string"
+      ? model
+      : typeof modelObject?.primary === "string"
+        ? modelObject.primary
+        : "";
+  const fallbacks = Array.isArray(modelObject?.fallbacks)
+    ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return {
+    providerIds: Object.keys(providers ?? {}),
+    apiKeyProviderIds: Object.entries(providers ?? {})
+      .filter(([, value]) => {
+        const provider = asRecord(value);
+        return provider ? Object.hasOwn(provider, "apiKey") && provider.apiKey != null : false;
+      })
+      .map(([id]) => id),
+    providerAuthModes: Object.fromEntries(
+      Object.entries(providers ?? {}).flatMap(([id, value]) => {
+        const auth = asRecord(value)?.auth;
+        return typeof auth === "string" ? [[id, auth]] : [];
+      }),
+    ),
+    defaults: {
+      primary,
+      fallbacks,
+      utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+    },
+  };
+}
+
+export type ProviderOption = { id: string; displayName: string };
+
+export function buildUnconfiguredProviderOptions(
+  models: ModelCatalogEntry[] | null,
+  configuredProviderIds: Iterable<string>,
+): ProviderOption[] {
+  const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
+  const options = new Map<string, ProviderOption>();
+  for (const model of models ?? []) {
+    const id = canonicalProviderId(model.provider);
+    if (model.apiKeySupported === true && id && !configured.has(id) && !options.has(id)) {
+      options.set(id, { id, displayName: providerDisplayLabel(id) });
+    }
+  }
+  return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }

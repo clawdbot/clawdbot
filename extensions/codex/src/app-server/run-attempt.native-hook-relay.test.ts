@@ -13,6 +13,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   createParams,
   createResumeHarness,
@@ -23,13 +24,18 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
+
+const testing = {
+  flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+    nativeHookRelayUnregisterQueue.flush();
+  },
+};
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -86,7 +92,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
-    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+    nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -681,25 +687,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       currentGeneration,
     );
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
-  });
-
-  it("builds deterministic opaque Codex native hook relay ids", () => {
-    const relayId = testing.buildCodexNativeHookRelayId({
-      agentId: "dev-codex",
-      sessionId: "cu-pr-relay-smoke",
-      sessionKey: "agent:dev-codex:cu-pr-relay-smoke",
-    });
-
-    expect(relayId).toBe("codex-8810b5252975550c887ff0def512b25e944bac39");
-    expect(relayId).not.toContain("dev-codex");
-    expect(relayId).not.toContain("cu-pr-relay-smoke");
-  });
-
-  it("extends native hook relay cleanup grace for configured hook timeouts", () => {
-    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(undefined)).toBe(15_000);
-    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(5)).toBe(10_000);
-    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(9)).toBe(14_000);
-    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(60)).toBe(65_000);
   });
 
   it("sends clearing Codex native hook config when the relay is disabled", async () => {

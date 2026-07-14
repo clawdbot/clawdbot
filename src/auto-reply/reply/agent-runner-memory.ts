@@ -366,7 +366,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
 }
 
 /** Usage snapshot read from a session transcript before compaction. */
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
   trailingBytesTokens?: number;

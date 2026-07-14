@@ -33,12 +33,12 @@ export const WIDGET_CSP =
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
 
-export type WidgetServeDeps = {
+type WidgetServeDeps = {
   store: WorkspaceStore;
   stateDir?: string;
 };
 
-export type WidgetServeRequest = {
+type WidgetServeRequest = {
   method: string | undefined;
   /** URL pathname (no query/hash), already URL-decoded per segment by the caller. */
   pathname: string;
@@ -87,7 +87,7 @@ function hasControlCharacter(value: string): boolean {
 }
 
 /** True when the pathname is under this route's prefix (so the route owns it). */
-export function isWidgetRoutePath(pathname: string): boolean {
+function isWidgetRoutePath(pathname: string): boolean {
   return pathname === WIDGETS_ROUTE_PREFIX || pathname.startsWith(`${WIDGETS_ROUTE_PREFIX}/`);
 }
 

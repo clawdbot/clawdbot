@@ -31,7 +31,7 @@ const CURATOR_STATE_ID = 1;
 const EMPTY_RESULT_JSON = "{}";
 let loggedArchivedSkillReadFailure = false;
 
-export type SkillLifecycleState = "active" | "archived" | "stale";
+type SkillLifecycleState = "active" | "archived" | "stale";
 
 type CuratorDatabase = Pick<
   OpenClawStateDatabase,
@@ -47,13 +47,13 @@ type CuratedSkill = {
   skillName: string;
 };
 
-export type SkillOverlapCandidate = {
+type SkillOverlapCandidate = {
   left: string;
   right: string;
   score: number;
 };
 
-export type SkillCuratorSweepResult = {
+type SkillCuratorSweepResult = {
   examined: number;
   stale: number;
   archived: number;

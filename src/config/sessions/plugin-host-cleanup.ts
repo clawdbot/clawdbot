@@ -5,7 +5,7 @@ import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-k
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
-export type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
+type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
 
 export type PluginHostSessionCleanupStoreParams = {
   /** Agent that owns the resolved session store target. */

@@ -435,12 +435,6 @@ export async function fetchBrowserJson<T>(
   }
 }
 
-/** Focused test hooks for browser client transport internals. */
-export const testApi = {
-  withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
-};
-export { testApi as __test };
-
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;

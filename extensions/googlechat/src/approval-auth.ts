@@ -1,8 +1,5 @@
 // Googlechat plugin module implements approval auth behavior.
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { isGoogleChatUserTarget, normalizeGoogleChatTarget } from "./targets.js";
@@ -19,20 +16,14 @@ export function normalizeGoogleChatApproverId(value: string | number): string | 
   return `users/${suffix}`;
 }
 
-export function getGoogleChatApprovalApprovers(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
-  accountId?: string | null;
-}): string[] {
-  const account = resolveGoogleChatAccount(params).config;
-  return resolveApprovalApprovers({
-    allowFrom: account.dm?.allowFrom,
-    defaultTo: account.defaultTo,
-    normalizeApprover: normalizeGoogleChatApproverId,
-  });
-}
-
-export const googleChatApprovalAuth = createResolvedApproverActionAuthAdapter({
+const googleChatApproval = createChannelApprovalAuth({
   channelLabel: "Google Chat",
-  resolveApprovers: getGoogleChatApprovalApprovers,
-  normalizeSenderId: (value) => normalizeGoogleChatApproverId(value),
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveGoogleChatAccount({ cfg, accountId }).config;
+    return { allowFrom: account.dm?.allowFrom, defaultTo: account.defaultTo };
+  },
+  normalizeApprover: normalizeGoogleChatApproverId,
 });
+
+export const getGoogleChatApprovalApprovers = googleChatApproval.resolveApprovers;
+export const googleChatApprovalAuth = googleChatApproval.approvalAuth;

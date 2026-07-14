@@ -28,7 +28,7 @@ const OPENAI_PROVIDER_ID = "openai";
 
 type PreflightFailureKind = "tls-cert" | "network";
 
-export type OpenAIOAuthTlsPreflightResult =
+type OpenAIOAuthTlsPreflightResult =
   | { ok: true }
   | {
       ok: false;

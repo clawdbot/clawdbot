@@ -26,7 +26,7 @@ export function resolveMattermostTrustedChatKind(params: {
   return params.fallback ?? "direct";
 }
 
-export type MattermostRequireMentionResolverInput = {
+type MattermostRequireMentionResolverInput = {
   cfg: OpenClawConfig;
   channel: "mattermost";
   accountId: string;
@@ -34,7 +34,7 @@ export type MattermostRequireMentionResolverInput = {
   requireMentionOverride?: boolean;
 };
 
-export type MattermostMentionGateInput = {
+type MattermostMentionGateInput = {
   kind: ChatType;
   cfg: OpenClawConfig;
   accountId: string;

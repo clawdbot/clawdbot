@@ -17,7 +17,7 @@ export const OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV =
   "OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED";
 export const OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV = "OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL";
 
-export const OPENCLAW_TOOLS_MCP_TOOL_IDS = ["cron", "crestodian"] as const;
+const OPENCLAW_TOOLS_MCP_TOOL_IDS = ["cron", "crestodian"] as const;
 export type OpenClawToolsMcpToolId = (typeof OPENCLAW_TOOLS_MCP_TOOL_IDS)[number];
 
 function isOpenClawToolsMcpToolId(value: string): value is OpenClawToolsMcpToolId {

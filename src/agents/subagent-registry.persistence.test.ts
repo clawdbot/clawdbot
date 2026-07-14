@@ -8,10 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -21,6 +17,7 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
@@ -252,8 +249,7 @@ describe("subagent registry persistence", () => {
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     resetDetachedTaskLifecycleRuntimeForTests();
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    await cleanupSessionStateForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;

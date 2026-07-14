@@ -1,7 +1,6 @@
 // Slack tests cover home plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-let buildSlackHomeView: typeof import("./home.js").buildSlackHomeView;
 let registerSlackHomeEvents: typeof import("./home.js").registerSlackHomeEvents;
 let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
@@ -34,7 +33,7 @@ function createHomeContext(params?: {
 
 describe("registerSlackHomeEvents", () => {
   beforeAll(async () => {
-    ({ buildSlackHomeView, registerSlackHomeEvents } = await import("./home.js"));
+    ({ registerSlackHomeEvents } = await import("./home.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
   });
 
@@ -66,9 +65,9 @@ describe("registerSlackHomeEvents", () => {
     expect(publish).toHaveBeenCalledWith({
       token: "xoxb-test",
       user_id: "U123",
-      view: buildSlackHomeView(),
+      view: expect.any(Object),
     });
-    expect(buildSlackHomeView().blocks[1]).toMatchObject({
+    expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
       type: "section",
       text: {
         text: "Send a DM or mention OpenClaw in a channel to start a session.",
@@ -92,9 +91,9 @@ describe("registerSlackHomeEvents", () => {
     expect(publish).toHaveBeenCalledWith({
       token: "xoxb-test",
       user_id: "U123",
-      view: buildSlackHomeView("acme"),
+      view: expect.any(Object),
     });
-    expect(buildSlackHomeView("acme").blocks[1]).toMatchObject({
+    expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
       type: "section",
       text: {
         text: "Send a DM, mention OpenClaw in a channel, or use `/acme` to start a session.",

@@ -151,23 +151,18 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.emulateMedia({ reducedMotion: "reduce" });
-      await page.goto(`${server.baseUrl}chat`);
-      await page.setViewportSize({ width: 320, height: 720 });
-      await expect
-        .poll(() => page.getByRole("button", { name: "Microphone input" }).count())
-        .toBe(0);
-      const settings = page.getByRole("button", { name: "Chat settings" });
-      await settings.click();
-      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
-      const microphoneSelect = settingsDialog.locator('[data-talk-select="microphone"] select');
+      // The microphone picker lives on the Settings appearance page; the
+      // selection persists and applies to talk sessions started from chat.
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const microphoneSelect = page.locator("[data-settings-microphone]");
       await expect
         .poll(async () =>
           (await microphoneSelect.locator("option").allTextContents()).map((label) => label.trim()),
         )
         .toEqual(["System default", "Built-in Microphone", "USB Audio Interface"]);
       await microphoneSelect.selectOption("usb");
-      await settings.click();
-      await expect.poll(() => settingsDialog.isVisible()).toBe(false);
+      await page.goto(`${server.baseUrl}chat`);
+      await page.setViewportSize({ width: 320, height: 720 });
       await page.getByRole("button", { name: "Start voice input" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
@@ -499,31 +494,15 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.setViewportSize({ width: 320, height: 720 });
-      await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Chat settings" }).click();
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.getByRole("button", { name: "Refresh: Microphone input" }).click();
 
-      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
-      await settingsDialog.getByRole("button", { name: "Refresh: Microphone input" }).click();
-      const permissionAlert = settingsDialog.getByRole("alert");
+      const permissionAlert = page.getByRole("alert");
       await expect.poll(() => permissionAlert.isVisible()).toBe(true);
-
-      const [settingsBounds, alertBounds] = await Promise.all([
-        settingsDialog.boundingBox(),
-        permissionAlert.boundingBox(),
-      ]);
-      expect(settingsBounds).not.toBeNull();
+      const alertBounds = await permissionAlert.boundingBox();
       expect(alertBounds).not.toBeNull();
-      expect(settingsBounds?.width ?? 0).toBeGreaterThanOrEqual(280);
-      expect(settingsBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
-      expect((settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0)).toBeLessThanOrEqual(312);
-      expect(alertBounds?.x ?? 0).toBeGreaterThanOrEqual(settingsBounds?.x ?? 0);
-      expect((alertBounds?.x ?? 0) + (alertBounds?.width ?? 0)).toBeLessThanOrEqual(
-        (settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0),
-      );
-      expect(alertBounds?.y ?? 0).toBeGreaterThanOrEqual(settingsBounds?.y ?? 0);
-      expect((alertBounds?.y ?? 0) + (alertBounds?.height ?? 0)).toBeLessThanOrEqual(
-        (settingsBounds?.y ?? 0) + (settingsBounds?.height ?? 0),
-      );
+      expect(alertBounds?.x ?? 0).toBeGreaterThanOrEqual(0);
+      expect((alertBounds?.x ?? 0) + (alertBounds?.width ?? 0)).toBeLessThanOrEqual(320);
       await expect
         .poll(() => permissionAlert.textContent())
         .toContain("Microphone access is blocked.");

@@ -139,6 +139,37 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "partial"],
+            "description": "\"partial\" (default) enables streaming-card replies; \"off\" sends one final message."
+          },
+          "chunkMode": {
+            "type": "string",
+            "enum": ["length", "newline"]
+          },
+          "block": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "coalesce": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "minChars": { "type": "integer", "minimum": 1 },
+                  "maxChars": { "type": "integer", "minimum": 1 },
+                  "idleMs": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      },
       "account": {
         "type": "object",
         "additionalProperties": true,
@@ -169,8 +200,7 @@
             "type": "string",
             "enum": ["auto", "raw", "card"]
           },
-          "streaming": { "type": "boolean" },
-          "blockStreaming": { "type": "boolean" },
+          "streaming": { "$ref": "#/$defs/streaming" },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
@@ -206,8 +236,7 @@
         "type": "string",
         "enum": ["auto", "raw", "card"]
       },
-      "streaming": { "type": "boolean" },
-      "blockStreaming": { "type": "boolean" },
+      "streaming": { "$ref": "#/$defs/streaming" },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]

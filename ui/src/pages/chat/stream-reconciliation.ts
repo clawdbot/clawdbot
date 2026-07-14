@@ -1,4 +1,5 @@
 // Control UI chat module implements stream reconciliation behavior.
+import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -17,7 +18,7 @@ import {
 } from "../../lib/string-coerce.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
-export type StreamReconciliationState = {
+type StreamReconciliationState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
 };
@@ -48,12 +49,6 @@ type ToolMessageRef = {
 };
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
-
-function asToolRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function addToolRef(refs: ToolMessageRef[], seen: Set<string>, id: string | undefined) {
   if (!id || seen.has(id)) {

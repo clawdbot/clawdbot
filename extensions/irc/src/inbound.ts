@@ -5,6 +5,7 @@ import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -394,6 +395,7 @@ export async function handleIrcInbound(params: {
   });
 
   const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -449,9 +451,7 @@ export async function handleIrcInbound(params: {
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
       disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
     record: {
       onRecordError: (err) => {

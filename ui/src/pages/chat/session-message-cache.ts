@@ -51,7 +51,7 @@ function resolveCanonicalSessionKey(host: ChatMessageCacheHost, sessionKey: stri
     : normalized;
 }
 
-export function resolveChatMessageCacheKey(
+function resolveChatMessageCacheKey(
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
 ): string {

@@ -394,6 +394,9 @@ final class NodeAppModel {
         didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
     }
 
+    // Live connection problems drive retry behavior. lastGatewayProblem may outlive both so the UI
+    // keeps the previous failure readable while an explicit reconnect starts a fresh attempt.
+    private var nodeGatewayProblem: GatewayConnectionProblem?
     private var operatorGatewayProblem: GatewayConnectionProblem?
     var gatewayDisplayStatusText: String {
         self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
@@ -1232,6 +1235,7 @@ final class NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
@@ -1386,10 +1390,9 @@ final class NodeAppModel {
                   sourceStore.gatewayID == sourceGatewayID,
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
+            let request = OpenClawChatGatewayRequests.agentsList(timeoutMs: 8000)
             let res = try await operatorGateway.request(
-                method: "agents.list",
-                paramsJSON: "{}",
-                timeoutSeconds: 8,
+                request,
                 ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(AgentsListResult.self, from: res)
             let routingIdentity = OpenClawChatSessionRoutingIdentity(
@@ -3409,9 +3412,15 @@ extension NodeAppModel {
             nodeOptions: connectOptions)
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
+        let preserveGatewayProblem = previousGatewayStableID.map {
+            !$0.isEmpty && GatewayStableIdentifier.matches($0, effectiveStableID)
+        } ?? false
         let targetChanged = previousGatewayStableID.map {
             !$0.isEmpty && !GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
+        if targetChanged {
+            self.clearGatewayProblemForCommittedTargetSwitch(to: effectiveStableID)
+        }
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
         }
@@ -3438,7 +3447,9 @@ extension NodeAppModel {
 
         self.gatewayRouteGeneration &+= 1
         self.activeGatewayConnectConfig = nextConfig
-        prepareForGatewayConnect(stableID: effectiveStableID)
+        prepareForGatewayConnect(
+            stableID: effectiveStableID,
+            preservingGatewayProblem: preserveGatewayProblem)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
                 url: url,
@@ -3634,6 +3645,7 @@ extension NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         // Publish teardown through the shared barrier before returning. A replacement connect
         // must await old loop cleanup instead of racing this synchronous UI action.
@@ -3679,7 +3691,10 @@ extension NodeAppModel {
         }
     }
 
-    private func prepareForGatewayConnect(stableID: String) {
+    private func prepareForGatewayConnect(
+        stableID: String,
+        preservingGatewayProblem: Bool = false)
+    {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
         self.chatSessionRoutingRestoreTask?.cancel()
@@ -3688,8 +3703,15 @@ extension NodeAppModel {
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
-        self.lastGatewayProblem = nil
+        // A retained error is presentation history, not live operator control. Explicit retries
+        // must retire the old pairing state so the replacement session can clear the snapshot.
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
+        if !preservingGatewayProblem {
+            // Same-target reconnects keep the prior failure readable until success or a new failure.
+            // Initial connects and target changes must not inherit another gateway's problem state.
+            self.clearGatewayConnectionProblem()
+        }
         self.credentialHandoffFailureGeneration = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
@@ -3720,6 +3742,7 @@ extension NodeAppModel {
     }
 
     private func clearGatewayConnectionProblem() {
+        self.nodeGatewayProblem = nil
         if let operatorGatewayProblem {
             self.lastGatewayProblem = operatorGatewayProblem
             if operatorGatewayProblem.needsPairingApproval {
@@ -3737,7 +3760,9 @@ extension NodeAppModel {
     }
 
     func beginGatewayPreconnectVerification(statusText: String) {
-        self.lastGatewayProblem = nil
+        // Preflight has not committed the replacement target yet. Keep the readable snapshot
+        // while retiring live pairing control; the committed route switch clears the snapshot.
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -3746,6 +3771,7 @@ extension NodeAppModel {
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
         guard !self.isLocalGatewayFixtureEnabled else { return }
+        self.nodeGatewayProblem = problem
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
         self.gatewayServerName = nil
@@ -3795,9 +3821,17 @@ extension NodeAppModel {
         guard let operatorGatewayProblem else { return }
         self.operatorGatewayProblem = nil
         guard self.lastGatewayProblem == operatorGatewayProblem else { return }
-        self.lastGatewayProblem = nil
-        self.gatewayPairingPaused = false
-        self.gatewayPairingRequestId = nil
+        if let nodeGatewayProblem {
+            self.lastGatewayProblem = nodeGatewayProblem
+            self.gatewayPairingPaused = nodeGatewayProblem.needsPairingApproval
+            self.gatewayPairingRequestId = nodeGatewayProblem.needsPairingApproval
+                ? nodeGatewayProblem.requestId
+                : nil
+        } else {
+            self.lastGatewayProblem = nil
+            self.gatewayPairingPaused = false
+            self.gatewayPairingRequestId = nil
+        }
         if self.gatewayServerName != nil {
             self.gatewayStatusText = "Connected"
         }
@@ -3806,11 +3840,14 @@ extension NodeAppModel {
         }
     }
 
-    private func shouldKeepGatewayProblemStatus(forDisconnectReason reason: String) -> Bool {
-        guard let lastGatewayProblem else { return false }
-        return GatewayConnectionProblemMapper.shouldPreserve(
-            previousProblem: lastGatewayProblem,
-            overDisconnectReason: reason)
+    private func currentGatewayProblemToKeep(forDisconnectReason reason: String) -> GatewayConnectionProblem? {
+        guard let lastGatewayProblem,
+              lastGatewayProblem == self.nodeGatewayProblem || lastGatewayProblem == self.operatorGatewayProblem,
+              GatewayConnectionProblemMapper.shouldPreserve(
+                  previousProblem: lastGatewayProblem,
+                  overDisconnectReason: reason)
+        else { return nil }
+        return lastGatewayProblem
     }
 
     private func shouldStartOperatorGatewayLoop(
@@ -4497,10 +4534,8 @@ extension NodeAppModel {
                                   generation: context.routeGeneration,
                                   stableID: context.stableID)
                         else { return }
-                        if self.shouldKeepGatewayProblemStatus(forDisconnectReason: reason),
-                           let lastGatewayProblem = self.lastGatewayProblem
-                        {
-                            self.gatewayStatusText = lastGatewayProblem.statusText
+                        if let currentProblem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
+                            self.gatewayStatusText = currentProblem.statusText
                         } else {
                             self.gatewayStatusText = "Disconnected: \(reason)"
                         }
@@ -4604,25 +4639,51 @@ extension NodeAppModel {
         _ error: Error,
         context: NodeGatewayLoopContext) -> GatewayConnectionProblem?
     {
-        let nextProblem = GatewayConnectionProblemMapper.map(
-            error: error,
-            preserving: self.lastGatewayProblem)
+        let nextProblem = self.mapNodeGatewayConnectionError(error)
         guard !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(
                   generation: context.routeGeneration,
                   stableID: context.stableID)
         else { return nil }
+        self.recordNodeGatewayConnectionError(nextProblem, error: error)
+        return nextProblem
+    }
+
+    private func recordNodeGatewayConnectionError(
+        _ nextProblem: GatewayConnectionProblem?,
+        error: Error)
+    {
         if let nextProblem {
-            self.applyGatewayConnectionProblem(nextProblem)
+            if nextProblem == self.operatorGatewayProblem {
+                // A node cancellation may echo an active operator approval failure. Keep its
+                // control state owner-specific so resolving operator approval clears it cleanly.
+                self.lastGatewayProblem = nextProblem
+                self.gatewayStatusText = nextProblem.statusText
+            } else {
+                self.applyGatewayConnectionProblem(nextProblem)
+            }
         } else {
-            self.lastGatewayProblem = nil
-            self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
+            self.nodeGatewayProblem = nil
+            if let operatorGatewayProblem {
+                self.lastGatewayProblem = operatorGatewayProblem
+                self.gatewayStatusText = operatorGatewayProblem.statusText
+            } else {
+                self.lastGatewayProblem = nil
+                self.gatewayPairingPaused = false
+                self.gatewayPairingRequestId = nil
+                self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
+            }
             self.gatewayServerName = nil
             self.gatewayRemoteAddress = nil
             self.gatewayConnected = false
             self.showLocalCanvasOnDisconnect()
         }
-        return nextProblem
+    }
+
+    private func mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
+        GatewayConnectionProblemMapper.map(
+            error: error,
+            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(_ context: NodeGatewayLoopContext) {
@@ -4632,6 +4693,7 @@ extension NodeAppModel {
                   generation: context.routeGeneration,
                   stableID: context.stableID)
         else { return }
+        self.nodeGatewayProblem = nil
         self.lastGatewayProblem = nil
         self.gatewayStatusText = "Offline"
         LiveActivityManager.shared.endActivity(reason: "gateway_loop_stopped")
@@ -4825,6 +4887,7 @@ extension NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.credentialHandoffFailureGeneration = nil
         self.nodeGatewayTask?.cancel()
@@ -4872,6 +4935,7 @@ extension NodeAppModel {
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
+        self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
@@ -4926,11 +4990,6 @@ extension NodeAppModel {
     }
 
     private func refreshShareRouteFromGateway(shouldApply: () -> Bool = { true }) async {
-        struct Params: Codable {
-            var includeGlobal: Bool
-            var includeUnknown: Bool
-            var limit: Int
-        }
         struct SessionRow: Decodable {
             var key: String
             var updatedAt: Double?
@@ -4947,13 +5006,12 @@ extension NodeAppModel {
         }
 
         do {
-            let data = try JSONEncoder().encode(
-                Params(includeGlobal: true, includeUnknown: false, limit: 80))
-            guard let json = String(data: data, encoding: .utf8) else { return }
-            let response = try await operatorGateway.request(
-                method: "sessions.list",
-                paramsJSON: json,
-                timeoutSeconds: 10)
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 80,
+                search: nil,
+                archived: false,
+                timeoutMs: 10000)
+            let response = try await operatorGateway.request(request)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
             let currentKey = self.mainSessionKey
             let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
@@ -9982,8 +10040,13 @@ extension NodeAppModel {
         self.applyMainSessionKey(key)
     }
 
-    func _test_prepareForGatewayConnect(stableID: String) {
-        self.prepareForGatewayConnect(stableID: stableID)
+    func _test_prepareForGatewayConnect(
+        stableID: String,
+        preservingGatewayProblem: Bool = false)
+    {
+        self.prepareForGatewayConnect(
+            stableID: stableID,
+            preservingGatewayProblem: preservingGatewayProblem)
     }
 
     func _test_admitTalkAfterSessionHydration() async {
@@ -10134,6 +10197,16 @@ extension NodeAppModel {
 
     func _test_clearGatewayConnectionProblem() {
         self.clearGatewayConnectionProblem()
+    }
+
+    func _test_mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
+        self.mapNodeGatewayConnectionError(error)
+    }
+
+    func _test_applyNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
+        let nextProblem = self.mapNodeGatewayConnectionError(error)
+        self.recordNodeGatewayConnectionError(nextProblem, error: error)
+        return nextProblem
     }
 
     func _test_pendingExecApprovalPrompt() -> ExecApprovalPrompt? {
@@ -10679,4 +10752,19 @@ extension NodeAppModel {
     }
 }
 #endif
+
+extension NodeAppModel {
+    private func clearGatewayProblemForCommittedTargetSwitch(to stableID: String) {
+        guard let currentStableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? self.connectedGatewayID,
+            !GatewayStableIdentifier.matches(currentStableID, stableID)
+        else { return }
+        // This runs only when the replacement config commits, without a suspension before the
+        // route generation advances. Preflight retains the prior snapshot until this boundary.
+        self.operatorGatewayProblem = nil
+        self.clearGatewayConnectionProblem()
+        self.setGatewayConnectionProgress(reconnecting: false)
+    }
+}
+
 // swiftlint:enable type_body_length file_length

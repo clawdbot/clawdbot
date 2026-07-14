@@ -1,9 +1,7 @@
 // Msteams tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  decodeHtmlEntities,
   extractMSTeamsQuoteInfo,
-  htmlToPlainText,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -68,36 +66,6 @@ describe("msteams inbound", () => {
           entities: [{ type: "mention", mentioned: { id: "other" } }],
         }),
       ).toBe(false);
-    });
-  });
-
-  describe("decodeHtmlEntities", () => {
-    it("decodes common entities", () => {
-      expect(decodeHtmlEntities("&amp;&lt;&gt;&quot;&#39;&#x27;&nbsp;")).toBe("&<>\"'' ");
-    });
-
-    it("leaves plain text unchanged", () => {
-      expect(decodeHtmlEntities("hello world")).toBe("hello world");
-    });
-
-    it("prevents double-decoding: &amp;lt; should become &lt; not <", () => {
-      // If &amp; were decoded first, &amp;lt; → &lt; → < (wrong).
-      // With &amp; decoded last, &amp;lt; stays as &lt; (correct).
-      expect(decodeHtmlEntities("&amp;lt;b&amp;gt;")).toBe("&lt;b&gt;");
-    });
-  });
-
-  describe("htmlToPlainText", () => {
-    it("strips tags and decodes entities", () => {
-      expect(htmlToPlainText("<strong>Hello &amp; world</strong>")).toBe("Hello & world");
-    });
-
-    it("collapses whitespace from tag removal", () => {
-      expect(htmlToPlainText("<p>foo</p><p>bar</p>")).toBe("foo bar");
-    });
-
-    it("trims leading and trailing whitespace", () => {
-      expect(htmlToPlainText("  <span>hi</span>  ")).toBe("hi");
     });
   });
 

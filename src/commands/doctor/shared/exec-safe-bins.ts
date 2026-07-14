@@ -17,7 +17,7 @@ import {
 import { getTrustedSafeBinDirs, isTrustedSafeBinPath } from "../../../infra/exec-safe-bin-trust.js";
 import { asObjectRecord } from "./object.js";
 
-export type ExecSafeBinCoverageHit = {
+type ExecSafeBinCoverageHit = {
   /** Config scope that owns the safeBins entry. */
   scopePath: string;
   /** Normalized binary name from safeBins. */
@@ -38,7 +38,7 @@ type ExecSafeBinScopeRef = {
   trustedSafeBinDirs: ReadonlySet<string>;
 };
 
-export type ExecSafeBinTrustedDirHintHit = {
+type ExecSafeBinTrustedDirHintHit = {
   /** Config scope that owns the safeBins entry. */
   scopePath: string;
   /** Binary name configured in safeBins. */

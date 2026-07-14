@@ -9,6 +9,7 @@ import { completeSimple, type AssistantMessage, type Model } from "openclaw/plug
 import * as ts from "typescript";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -509,16 +510,7 @@ export function buildBatchPrompt(
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1_000) {
-    return `${Math.round(ms)}ms`;
-  }
-  if (ms < 60_000) {
-    return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  }
-  const totalSeconds = Math.round(ms / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${seconds}s`;
+  return formatDurationCompact(ms, { spaced: true }) ?? "0ms";
 }
 
 function logProgress(message: string) {

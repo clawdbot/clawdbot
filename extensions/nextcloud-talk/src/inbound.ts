@@ -3,6 +3,7 @@ import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   normalizeOptionalString,
@@ -325,6 +326,7 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -387,9 +389,7 @@ export async function handleNextcloudTalkInbound(params: {
     replyOptions: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
     record: {
       onRecordError: (err) => {

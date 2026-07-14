@@ -19,7 +19,7 @@ import type {
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
-export type ProviderWizardOption = {
+type ProviderWizardOption = {
   value: string;
   label: string;
   hint?: string;

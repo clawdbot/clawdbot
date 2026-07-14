@@ -1,13 +1,9 @@
 // Slack tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  markdownToSlackMrkdwn,
-  markdownToSlackMrkdwnChunks,
-  normalizeSlackOutboundText,
-} from "./format.js";
+import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
-describe("markdownToSlackMrkdwn", () => {
+describe("normalizeSlackOutboundText", () => {
   it("handles core markdown formatting conversions", () => {
     const cases = [
       ["converts bold from double asterisks to single", "**bold text**", "*bold text*"],
@@ -44,18 +40,18 @@ describe("markdownToSlackMrkdwn", () => {
       ["renders blockquotes", "> Quote", "> Quote"],
     ] as const;
     for (const [name, input, expected] of cases) {
-      expect(markdownToSlackMrkdwn(input), name).toBe(expected);
+      expect(normalizeSlackOutboundText(input), name).toBe(expected);
     }
   });
 
   it("handles nested list items", () => {
-    const res = markdownToSlackMrkdwn("- item\n  - nested");
+    const res = normalizeSlackOutboundText("- item\n  - nested");
     // markdown-it correctly parses this as a nested list
     expect(res).toBe("• item\n  • nested");
   });
 
   it("handles complex message with multiple elements", () => {
-    const res = markdownToSlackMrkdwn(
+    const res = normalizeSlackOutboundText(
       "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
     );
     expect(res).toBe(
@@ -64,7 +60,7 @@ describe("markdownToSlackMrkdwn", () => {
   });
 
   it("returns empty text when input is undefined at runtime", () => {
-    expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
+    expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
 
   it("re-chunks on rendered length and still prefers word boundaries", () => {

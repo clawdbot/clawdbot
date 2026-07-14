@@ -156,7 +156,7 @@ export function assertFeishuChatReadAllowed(params: {
   return authorization.chatId;
 }
 
-export type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
+type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
 
 export function resolveFeishuChatReadPreliminaryAuthorization(params: {
   cfg: OpenClawConfig;

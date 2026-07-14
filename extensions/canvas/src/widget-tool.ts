@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCanvasHostConfig } from "./config.js";
 import { createCanvasDocument } from "./documents.js";
 import { SHOW_WIDGET_REQUIRED_CLIENT_CAPS, ShowWidgetToolSchema } from "./tool-schema.js";
@@ -22,15 +23,6 @@ class WidgetToolInputError extends Error {
     super(message);
     this.name = "ToolInputError";
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function buildWidgetDocument(title: string, widgetCode: string): string {

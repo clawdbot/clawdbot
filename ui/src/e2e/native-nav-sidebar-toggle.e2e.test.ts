@@ -1,7 +1,6 @@
-// The macOS app hosts a native titlebar sidebar toggle and stamps
-// `openclaw-native-nav` on the document root (DashboardWindowController);
-// the web UI must then hide its own expand/collapse buttons or every state
-// shows two toggles. Plain browsers keep the web controls.
+// Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
+// at document start and stamp `openclaw-native-web-chrome` at document end.
+// Plain browsers keep their normal in-page controls.
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -40,7 +39,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     context = undefined;
   });
 
-  async function openPage(options: { nativeNav: boolean; width?: number }) {
+  async function openPage(options: { nativeNav?: boolean; webChrome?: boolean; width?: number }) {
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -70,6 +69,29 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         });
         const stamp = () =>
           document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
+        if (document.documentElement) {
+          stamp();
+        } else {
+          document.addEventListener("DOMContentLoaded", stamp);
+        }
+      });
+    }
+    if (options.webChrome) {
+      await page.addInitScript(() => {
+        const nativeWindow = window as Window & {
+          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
+          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
+        };
+        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
+        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
+          canGoBack: false,
+          canGoForward: false,
+        };
+        const stamp = () =>
+          document.documentElement.classList.add(
+            "openclaw-native-macos",
+            "openclaw-native-web-chrome",
+          );
         if (document.documentElement) {
           stamp();
         } else {
@@ -167,8 +189,86 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
   });
 
+  it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
+    const page = await openPage({ webChrome: true });
+    const toolbar = page.locator(".macos-titlebar-controls");
+    await expect.poll(() => toolbar.isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+
+    const back = toolbar.getByRole("button", { name: "Back" });
+    const forward = toolbar.getByRole("button", { name: "Forward" });
+    await expect.poll(() => back.isDisabled()).toBe(true);
+    await expect.poll(() => forward.isDisabled()).toBe(true);
+
+    await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--nav-collapsed");
+    await toolbar.getByRole("button", { name: "Open command palette" }).click();
+    await expect
+      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
+      .not.toBeNull();
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: true, canGoForward: false },
+        }),
+      );
+    });
+    await expect.poll(() => back.isDisabled()).toBe(false);
+    await expect.poll(() => forward.isDisabled()).toBe(true);
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: false, canGoForward: true },
+        }),
+      );
+    });
+    await expect.poll(() => back.isDisabled()).toBe(true);
+    await expect.poll(() => forward.isDisabled()).toBe(false);
+
+    await toolbar.getByRole("button", { name: "New session" }).click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--nav-collapsed");
+  });
+
+  it("keeps only history controls in the Settings titlebar", async () => {
+    const page = await openPage({ webChrome: true });
+    const response = await page.goto(`${server.baseUrl}settings/general`);
+    expect(response?.status()).toBe(200);
+
+    const toolbar = page.locator(".macos-titlebar-controls");
+    await expect.poll(() => toolbar.isVisible()).toBe(true);
+    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
+    await expect.poll(() => toolbar.getByRole("button", { name: "Back" }).isVisible()).toBe(true);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Forward" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Expand sidebar" }).count())
+      .toBe(0);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
+      .toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+  });
+
   it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
+    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+  });
+
+  it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
+    const page = await openPage({ webChrome: true, width: 900 });
+    // The web toolbar hides below the drawer breakpoint, so the hamburger is
+    // the only remaining sidebar toggle there.
+    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
   });
 

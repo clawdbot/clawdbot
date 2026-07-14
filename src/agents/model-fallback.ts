@@ -40,6 +40,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
+  findCliMaxTurnsError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
@@ -1804,6 +1805,11 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    // Max-turn termination can follow successful tool actions. Stop before
+    // candidate fallback so the user can verify effects before any replay.
+    if (findCliMaxTurnsError(err)) {
+      throw err;
+    }
     if (
       !attemptRun.classifiedResult &&
       params.canFallbackAfterError &&

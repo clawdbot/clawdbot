@@ -1,5 +1,4 @@
 // Stages inbound media into sandbox workspaces before agent execution.
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,13 +11,13 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
@@ -369,54 +368,27 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   if (!safeRemotePath) {
     throw new Error("invalid remote path for SCP");
   }
-  return new Promise((resolve, reject) => {
-    const child = spawn(
+  const result = await runCommandWithTimeout(
+    [
       "scp",
-      [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "--",
-        `${safeRemoteHost}:${safeRemotePath}`,
-        localPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-
-    let stderr = "";
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendScpStderrTail(stderr, chunk);
-    });
-    child.stderr?.on("error", (error) => {
-      // stderr is diagnostic; child close remains transfer authority so the
-      // caller cannot remove the staging directory while scp is still alive.
-      stderr = appendScpStderrTail(stderr, formatErrorMessage(error));
-    });
-
-    child.once("error", finish);
-    child.once("close", (code) => {
-      if (code === 0) {
-        finish();
-      } else {
-        finish(new Error(`scp failed (${code}): ${stderr.trim()}`));
-      }
-    });
-  });
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "--",
+      `${safeRemoteHost}:${safeRemotePath}`,
+      localPath,
+    ],
+    {
+      // Four UTF-8 bytes per code point preserves enough data for the existing
+      // UTF-16 diagnostic tail contract without retaining unbounded stderr.
+      maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+    },
+  );
+  if (result.code !== 0) {
+    const stderr = appendScpStderrTail("", result.stderr).trim();
+    throw new Error(`scp failed (${result.code}): ${stderr}`);
+  }
 }
 
 export function appendScpStderrTail(

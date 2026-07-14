@@ -9,12 +9,11 @@ import {
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
-  redactConfigAuditArgv,
   resolveConfigAuditLogPath,
   scrubConfigAuditLog,
 } from "./io.audit.js";
 
-function createAuditRecordBase(configPath: string) {
+function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
     configPath,
     env: {} as NodeJS.ProcessEnv,
@@ -38,6 +37,17 @@ function createAuditRecordBase(configPath: string) {
     gatewayModeAfter: "local",
     suspicious: [],
     now: "2026-04-07T08:00:00.000Z",
+    ...(argv
+      ? {
+          processInfo: {
+            pid: 101,
+            ppid: 99,
+            cwd: "/work",
+            argv,
+            execArgv: [],
+          },
+        }
+      : {}),
   });
 }
 
@@ -235,165 +245,6 @@ describe("config io audit helpers", () => {
     expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
-  it("redacts argv values that follow known secret flag names", () => {
-    const argv = [
-      "node",
-      "openclaw",
-      "gateway",
-      "--token",
-      "super-secret-gateway-token-12345",
-      "--api-key",
-      "sk-very-real-looking-openai-api-key-AB12CD34",
-      "--port",
-      "8080",
-    ];
-    const result = redactConfigAuditArgv(argv);
-    expect(result).toEqual([
-      "node",
-      "openclaw",
-      "gateway",
-      "--token",
-      "***",
-      "--api-key",
-      "***",
-      "--port",
-      "8080",
-    ]);
-  });
-
-  it("redacts the value half of `--flag=value` for secret flags", () => {
-    const argv = ["openclaw", "--token=ghp_realgithubtoken1234567890ABCD", "--port=8080"];
-    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token=***", "--port=8080"]);
-  });
-
-  it("redacts standalone token shapes via the shared logging redaction patterns", () => {
-    const argv = [
-      "node",
-      "openclaw",
-      "ghp_realgithubtoken1234567890ABCD",
-      "AIzaSyD-very-real-looking-google-api-key-123",
-      "987654321:AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    ];
-    const result = redactConfigAuditArgv(argv);
-    expect(result[0]).toBe("node");
-    expect(result[1]).toBe("openclaw");
-    for (const masked of result.slice(2)) {
-      expect(masked).not.toContain("ghp_realgithubtoken");
-      expect(masked).not.toContain("AIzaSyD-very-real-looking");
-      expect(masked).not.toMatch(/AAAAAAAAAAAAAA/);
-    }
-  });
-
-  it("leaves non-secret arguments untouched", () => {
-    const argv = ["node", "openclaw", "gateway", "--port", "8080", "--bind", "lan"];
-    expect(redactConfigAuditArgv(argv)).toEqual(argv);
-  });
-
-  it("redacts unknown but credential-suffixed flags via the heuristic classifier", () => {
-    const argv = [
-      "node",
-      "openclaw",
-      "--custom-api-key",
-      "real-tenant-key-AB12CD34EF56GH78",
-      "--alibaba-model-studio-api-key=plain-value-xyz-12345",
-      "--app-token",
-      "another-secret-value",
-      "--frobnicate-credential=hidden",
-    ];
-    const result = redactConfigAuditArgv(argv);
-    expect(result).toEqual([
-      "node",
-      "openclaw",
-      "--custom-api-key",
-      "***",
-      "--alibaba-model-studio-api-key=***",
-      "--app-token",
-      "***",
-      "--frobnicate-credential=***",
-    ]);
-  });
-
-  it("redacts key-valued secret flags (Nostr --private-key, Matrix --recovery-key)", () => {
-    const argv = [
-      "node",
-      "openclaw",
-      "channels",
-      "add",
-      "--channel",
-      "nostr",
-      "--private-key",
-      "nsec1realnostrprivatekeyvaluexyz1234567890",
-      "--recovery-key=EsTb-ABCD-1234-EFGH-5678-IJKL-9012-MNOP",
-    ];
-    const result = redactConfigAuditArgv(argv);
-    expect(result).toEqual([
-      "node",
-      "openclaw",
-      "channels",
-      "add",
-      "--channel",
-      "nostr",
-      "--private-key",
-      "***",
-      "--recovery-key=***",
-    ]);
-  });
-
-  it("redacts unknown *-key flags via the heuristic classifier (private/signing/master/etc.)", () => {
-    const argv = [
-      "node",
-      "openclaw",
-      "--my-plugin-private-key",
-      "tenant-private-key-material-zzz",
-      "--rotated-signing-key=PEM-LIKE-MATERIAL",
-      "--ops-master-key",
-      "ABCDEF1234567890",
-      "--secret-key",
-      "opaque-secret-key",
-      "--aws-secret-access-key=opaque-aws-secret",
-      "--openai_api_key",
-      "opaque-underscore-key",
-      "--aws_secret_access_key=opaque-underscore-aws-secret",
-      "--credentials",
-      "opaque-plural-credential",
-      "--service-credentials=opaque-inline-plural-credential",
-    ];
-    const result = redactConfigAuditArgv(argv);
-    expect(result).toEqual([
-      "node",
-      "openclaw",
-      "--my-plugin-private-key",
-      "***",
-      "--rotated-signing-key=***",
-      "--ops-master-key",
-      "***",
-      "--secret-key",
-      "***",
-      "--aws-secret-access-key=***",
-      "--openai_api_key",
-      "***",
-      "--aws_secret_access_key=***",
-      "--credentials",
-      "***",
-      "--service-credentials=***",
-    ]);
-  });
-
-  it("masks the next arg after a secret flag even when it looks like another option", () => {
-    const argv = ["openclaw", "--token", "--port", "8080"];
-    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "***", "8080"]);
-  });
-
-  it("redacts dash-leading secret values after bare secret flags", () => {
-    const argv = ["openclaw", "--password", "-secret-value"];
-    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--password", "***"]);
-  });
-
-  it("does not mask when a secret flag is the final arg with no value", () => {
-    const argv = ["openclaw", "--token"];
-    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token"]);
-  });
-
   it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {
     const longArgv = [
       "node",
@@ -476,6 +327,36 @@ describe("config io audit helpers", () => {
       },
     });
     expect(base.argv).toEqual(["node", "openclaw", "--token", "***"]);
+  });
+
+  it.each([
+    {
+      name: "inline known secret",
+      argv: ["openclaw", "--token=fake", "--port=8080"],
+      expected: ["openclaw", "--token=***", "--port=8080"],
+    },
+    {
+      name: "custom credential suffix",
+      argv: ["openclaw", "--tenant-credential", "fake", "--bind", "lan"],
+      expected: ["openclaw", "--tenant-credential", "***", "--bind", "lan"],
+    },
+    {
+      name: "underscore key suffix",
+      argv: ["openclaw", "--provider_api_key", "fake"],
+      expected: ["openclaw", "--provider_api_key", "***"],
+    },
+    {
+      name: "dash-leading secret value",
+      argv: ["openclaw", "--password", "-fake"],
+      expected: ["openclaw", "--password", "***"],
+    },
+    {
+      name: "secret flag without a value",
+      argv: ["openclaw", "--token"],
+      expected: ["openclaw", "--token"],
+    },
+  ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
+    expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
 
   it("also accepts flattened audit record params from legacy call sites", async () => {

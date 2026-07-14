@@ -2,7 +2,7 @@ import type { ConfigFileSnapshot } from "../../../config/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
-export type StateMigrationConfigInput = {
+type StateMigrationConfigInput = {
   cfg?: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
 };

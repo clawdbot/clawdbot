@@ -12,6 +12,7 @@ import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
@@ -28,13 +29,6 @@ const SESSION_SEARCH_DEBOUNCE_MS = 250;
 const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
-
-export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
-
-export type CommandPaletteTargetDetail = {
-  owner: Element;
-  onSlashCommand: ((command: string) => void) | null;
-};
 
 function getPaletteBaseItems(): PaletteItem[] {
   return [
@@ -496,7 +490,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     return this.open;
   }
 
-  private readonly togglePalette = () => {
+  readonly togglePalette = () => {
     if (this.open) {
       this.open = false;
       this.clearSessionSearch();
@@ -652,7 +646,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.togglePalette();
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
+    if (isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
     }

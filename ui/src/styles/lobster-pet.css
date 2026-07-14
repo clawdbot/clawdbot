@@ -8,8 +8,8 @@
   position: relative;
 }
 
-/* Host is a zero-layout overlay strip above the footer bar. Its bottom edge
-   sits 3px inside the footer so feet dangle over the divider, and
+/* Every visit variant shares this zero-layout overlay strip above the footer.
+   Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
    overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
 openclaw-lobster-pet {
   position: absolute;
@@ -20,17 +20,6 @@ openclaw-lobster-pet {
   height: 52px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* Bar anchor: the pet stands inside the footer bar's free stretch, between
-   the status dot and the settings icons. */
-openclaw-lobster-pet[data-spot="bar"] {
-  bottom: 0;
-  height: 34px;
-}
-
-openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
-  bottom: 2px;
 }
 
 /* Departure/dismissal: duck down behind the ledge and fade. */

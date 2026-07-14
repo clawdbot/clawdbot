@@ -50,4 +50,3 @@ export const testing = {
   normalizeMatrixQaProfile: matrixQaProfileTesting.normalizeMatrixQaProfile,
   resolveMatrixQaScenarioRoomId,
 };
-export { testing as __testing };

@@ -10,13 +10,16 @@ import {
 } from "../../audit/message-audit-events.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
-import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageSendMediaContext,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
-import { addTestHook } from "../../plugins/hooks.test-helpers.js";
+import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
@@ -132,7 +135,6 @@ vi.mock("../../logging/subsystem.js", () => ({
 type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
-let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
 
 const matrixChunkConfig: OpenClawConfig = {
@@ -303,11 +305,8 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    ({
-      deliverOutboundPayloads,
-      normalizeOutboundPayloads,
-      resolveOutboundDurableFinalDeliverySupport,
-    } = await import("./deliver.js"));
+    ({ deliverOutboundPayloads, resolveOutboundDurableFinalDeliverySupport } =
+      await import("./deliver.js"));
   });
 
   beforeEach(() => {
@@ -1052,6 +1051,103 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendMedia).toHaveBeenCalledOnce();
   });
 
+  it("passes stable part indexes to exact multi-media sends", async () => {
+    const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) => ({
+      messageId: `media-${ctx.deliveryPartIndex}`,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: `media-${ctx.deliveryPartIndex}` }],
+        kind: "media",
+      }),
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: {
+                capabilities: { text: true, media: true, reconcileUnknownSend: true },
+                reconcileUnknownSendKinds: { media: true },
+                reconcileUnknownSend: async () => ({ status: "not_sent" }),
+              },
+              send: { text: vi.fn(), media: messageSendMedia },
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+          },
+        ],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+      }),
+    ).resolves.toHaveLength(2);
+    expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
+  });
+
+  it("rejects exact sends when reply payload hooks change platform fan-out", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValue({
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+      },
+    });
+    const messageSendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: {
+                capabilities: { text: true, media: true, reconcileUnknownSend: true },
+                reconcileUnknownSendKinds: { media: true },
+                reconcileUnknownSend: async () => ({ status: "not_sent" }),
+              },
+              send: { text: vi.fn(), media: messageSendMedia },
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "caption", mediaUrl: "https://example.com/original.png" }],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow(/changed platform fan-out after outbound transforms/);
+    expect(messageSendMedia).not.toHaveBeenCalled();
+  });
+
   it("keeps an explicitly reconciled send retryable when dispatch state cannot persist", async () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
@@ -1157,7 +1253,7 @@ describe("deliverOutboundPayloads", () => {
           context: { channelId: "matrix", conversationId: "!room:example" },
         },
       }),
-    ).rejects.toThrow(/media unknown-send reconciliation is unavailable/);
+    ).rejects.toThrow(/changed platform fan-out after outbound transforms/);
     expect(sendText).not.toHaveBeenCalled();
     expect(sendMedia).not.toHaveBeenCalled();
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
@@ -4018,18 +4114,6 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixCall[0]).toBe("!room:example");
     expect(sendMatrixCall[1]).toBe("Chart now");
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
-  it("normalizes payloads and drops empty entries", () => {
-    const normalized = normalizeOutboundPayloads([
-      { text: "hi" },
-      { text: "MEDIA:https://x.test/a.jpg" },
-      { text: " ", mediaUrls: [] },
-    ]);
-    expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
-    ]);
   });
 
   it("continues on errors when bestEffort is enabled", async () => {

@@ -200,6 +200,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
   operatorScopes: string[];
   operatorName: string;
   nodeId: string;
+  commands: string[];
   expectedMessage: string;
 }): Promise<void> {
   const ws = await openTrackedWs(params.started.port);
@@ -214,7 +215,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
       nodeId: params.nodeId,
       platform: "macos",
       deviceFamily: "Mac",
-      commands: ["system.run"],
+      commands: params.commands,
     });
 
     const approve = await rpcReq(ws, "node.pair.approve", {
@@ -351,6 +352,22 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.pairing"],
         operatorName: "operator-pairing",
         nodeId: "node-rpc-approve-reject-admin",
+        commands: ["system.run"],
+        expectedMessage: "missing scope: operator.admin",
+      });
+    });
+
+    test.each([
+      ["fs.listDir", "fs-list-dir"],
+      ["system.execApprovals.get", "exec-approvals-get"],
+      ["system.execApprovals.set", "exec-approvals-set"],
+    ])("rejects %s node pairing approval without admin scope through rpc", async (command, id) => {
+      await expectRpcNodePairingApprovalRejected({
+        started: getStarted(),
+        operatorScopes: ["operator.pairing", "operator.write"],
+        operatorName: `operator-write-${id}`,
+        nodeId: `node-rpc-${id}`,
+        commands: [command],
         expectedMessage: "missing scope: operator.admin",
       });
     });
@@ -361,6 +378,7 @@ describe("gateway node pairing authorization", () => {
         operatorScopes: ["operator.write"],
         operatorName: "operator-write",
         nodeId: "node-rpc-approve-reject-pairing",
+        commands: ["system.run"],
         expectedMessage: "operator.pairing",
       });
     });

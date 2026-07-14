@@ -36,7 +36,7 @@ function resolveAccountChannels(
   return { channels: matchKey ? accounts[matchKey]?.channels : undefined };
 }
 
-export function migrateSlackChannelsInPlace(
+function migrateSlackChannelsInPlace(
   channels: SlackChannels | undefined,
   oldChannelId: string,
   newChannelId: string,

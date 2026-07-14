@@ -21,9 +21,7 @@ async function runQaTelegram(opts: LiveTransportQaCommandOptions) {
   await (await loadTelegramQaCliRuntime()).runQaTelegramCommand(opts);
 }
 
-export const telegramQaAdapterFactory: NonNullable<
-  LiveTransportQaCliRegistration["adapterFactory"]
-> = {
+const telegramQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "telegram",
   scenarioIds: ["channel-chat-baseline", ...TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",

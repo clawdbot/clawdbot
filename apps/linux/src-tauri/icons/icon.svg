@@ -1,0 +1,10 @@
+<svg viewBox="0 0 216 192" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- OpenClaw claw mark: two pill outlines mirroring the Control UI / app
+       header .brand-mark geometry (15x19 pills, 3px #ff5c5c stroke, ±20°). -->
+  <g stroke="#ff5c5c" stroke-width="24" fill="none">
+    <path transform="rotate(-20 60 108)"
+      d="M 22 92 A 38 38 0 0 1 60 54 A 38 38 0 0 1 98 92 L 98 146 A 22 22 0 0 1 76 168 L 44 168 A 22 22 0 0 1 22 146 Z"/>
+    <path transform="rotate(20 156 108)"
+      d="M 118 92 A 38 38 0 0 1 156 54 A 38 38 0 0 1 194 92 L 194 146 A 22 22 0 0 1 172 168 L 140 168 A 22 22 0 0 1 118 146 Z"/>
+  </g>
+</svg>

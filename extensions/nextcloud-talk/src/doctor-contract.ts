@@ -1,10 +1,37 @@
 // Nextcloud Talk plugin module implements doctor contract behavior.
+import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { createLegacyPrivateNetworkDoctorContract } from "openclaw/plugin-sdk/ssrf-runtime";
 
-const contract = createLegacyPrivateNetworkDoctorContract({
+const networkContract = createLegacyPrivateNetworkDoctorContract({
   channelKey: "nextcloud-talk",
 });
 
-export const legacyConfigRules = contract.legacyConfigRules;
+// Nextcloud Talk's nested streaming schema is delivery-only ({chunkMode,
+// block}); it has no preview mode, so only the delivery flat aliases are
+// legal legacy input. Account merge replaces the root streaming object
+// wholesale (resolveMergedAccountConfig without a streaming deep-merge), so
+// migration seeds materialized account objects with inherited root settings.
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "nextcloud-talk",
+  streaming: { defaultMode: "partial", deliveryOnly: true },
+  accountStreamingReplacesRoot: true,
+});
 
-export const normalizeCompatibilityConfig = contract.normalizeCompatibilityConfig;
+export const legacyConfigRules = [
+  ...networkContract.legacyConfigRules,
+  ...streamingAliasMigration.legacyConfigRules,
+];
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const network = networkContract.normalizeCompatibilityConfig({ cfg });
+  return streamingAliasMigration.normalizeChannelConfig({
+    cfg: network.config,
+    changes: network.changes,
+  });
+}

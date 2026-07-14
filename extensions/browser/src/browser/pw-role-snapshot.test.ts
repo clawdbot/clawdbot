@@ -4,7 +4,6 @@ import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
-  getRoleSnapshotStats,
   parseRoleRef,
 } from "./pw-role-snapshot.js";
 
@@ -55,16 +54,6 @@ describe("pw-role-snapshot", () => {
     const res = buildRoleSnapshotFromAriaSnapshot(aria, { compact: true });
 
     expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
-  });
-
-  it("computes stats", () => {
-    const aria = ['- button "OK"', '- button "Cancel"'].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria);
-    const stats = getRoleSnapshotStats(res.snapshot, res.refs);
-    expect(stats.refs).toBe(2);
-    expect(stats.interactive).toBe(2);
-    expect(stats.lines).toBeGreaterThan(0);
-    expect(stats.chars).toBeGreaterThan(0);
   });
 
   it("caps complete lines and derives refs and stats from the returned snapshot", () => {

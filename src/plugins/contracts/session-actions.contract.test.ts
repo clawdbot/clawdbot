@@ -14,7 +14,7 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";

@@ -264,6 +264,7 @@ function resolveClaudeCliPromptTextCandidates(
 function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
+  sourceLineNumber: number,
   toolNameRegistry: ToolNameRegistry,
   options: {
     reseedMode: "recover" | "preserve";
@@ -280,10 +281,12 @@ function parseClaudeCliHistoryEntry(
   }
 
   const timestamp = resolveTimestampMs(entry.timestamp);
+  const externalId = normalizeOptionalString(entry.uuid);
   const baseMeta = {
+    id: externalId ?? `${CLAUDE_CLI_PROVIDER}:${cliSessionId}:line:${sourceLineNumber}`,
     importedFrom: CLAUDE_CLI_PROVIDER,
     cliSessionId,
-    ...(normalizeOptionalString(entry.uuid) ? { externalId: entry.uuid } : {}),
+    ...(externalId ? { externalId } : {}),
   };
 
   let content =
@@ -379,7 +382,7 @@ function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -449,16 +452,24 @@ export function readClaudeCliSessionMessages(params: {
         : undefined,
     inspectedFirstUser: false,
   };
-  for (const line of content.split(/\r?\n/)) {
+  const lines = content.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
     if (!line.trim()) {
       continue;
     }
     try {
       const parsed = JSON.parse(line) as ClaudeCliProjectEntry;
-      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry, {
-        reseedMode: "recover",
-        reseedState,
-      });
+      const message = parseClaudeCliHistoryEntry(
+        parsed,
+        params.cliSessionId,
+        lineIndex + 1,
+        toolNameRegistry,
+        {
+          reseedMode: "recover",
+          reseedState,
+        },
+      );
       if (message) {
         messages.push(message);
       }
@@ -535,7 +546,9 @@ export function readClaudeCliFallbackSeed(params: {
   let windowedTurns: TranscriptLikeMessage[] = [];
   const toolNameRegistry: ToolNameRegistry = new Map();
 
-  for (const line of content.split(/\r?\n/)) {
+  const lines = content.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
     if (!line.trim()) {
       continue;
     }
@@ -563,9 +576,15 @@ export function readClaudeCliFallbackSeed(params: {
       continue;
     }
 
-    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry, {
-      reseedMode: "preserve",
-    });
+    const message = parseClaudeCliHistoryEntry(
+      parsed,
+      params.cliSessionId,
+      lineIndex + 1,
+      toolNameRegistry,
+      {
+        reseedMode: "preserve",
+      },
+    );
     if (message) {
       windowedTurns.push(message);
     }

@@ -47,12 +47,14 @@ describe("crabline transport", () => {
             },
           },
         });
-        expect(transport.buildAgentDelivery({ target: "dm:alice" })).toEqual({
+        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+        expect(delivery).toMatchObject({
           channel: "telegram",
-          to: "100001",
           replyChannel: "telegram",
-          replyTo: "100001",
+          replyTo: expect.stringMatching(/^[1-9]\d+$/u),
+          to: expect.stringMatching(/^[1-9]\d+$/u),
         });
+        expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
           fs.access(path.join(outputDir, "crabline-fake-provider-server.json")),
@@ -377,7 +379,7 @@ describe("crabline transport", () => {
           CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
           CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
           OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
-            /^ws:\/\/127\.0\.0\.1:\d+\/crabline\/whatsapp\/ws\/chat\?access_token=/u,
+            /^ws:\/\/127\.0\.0\.1:\d+\/ws\/chat\?access_token=/u,
           ),
         });
         expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
@@ -399,7 +401,7 @@ describe("crabline transport", () => {
       try {
         const message = await transport.state.addInboundMessage({
           conversation: {
-            id: "15551234567@s.whatsapp.net",
+            id: "15557654321@s.whatsapp.net",
             kind: "direct",
           },
           senderId: "15557654321@s.whatsapp.net",
@@ -408,7 +410,7 @@ describe("crabline transport", () => {
         });
         expect(message).toMatchObject({
           conversation: {
-            id: "15551234567@s.whatsapp.net",
+            id: "15557654321@s.whatsapp.net",
             kind: "direct",
           },
           direction: "inbound",
@@ -443,12 +445,18 @@ describe("crabline transport", () => {
           },
         });
         expect(transport.createRuntimeEnvPatch?.()).toEqual({});
-        expect(transport.buildAgentDelivery({ target: "dm:alice" })).toMatchObject({
+        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+        expect(delivery).toMatchObject({
           channel: "signal",
           replyChannel: "signal",
-          replyTo: expect.stringMatching(/^\+1555\d{7}$/u),
-          to: expect.stringMatching(/^\+1555\d{7}$/u),
+          replyTo: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+          ),
+          to: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+          ),
         });
+        expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
           transport.state.addInboundMessage({
@@ -529,7 +537,10 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["mattermost"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const mattermostGatewayConfig = transport.createGatewayConfig({
+          baseUrl: "http://127.0.0.1:1",
+        }) as { channels?: { mattermost?: Record<string, unknown> } };
+        expect(mattermostGatewayConfig).toMatchObject({
           channels: {
             mattermost: {
               baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
@@ -549,6 +560,7 @@ describe("crabline transport", () => {
           replyTo: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
           to: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
         });
+        expect(mattermostGatewayConfig.channels?.mattermost?.streaming).toEqual({ mode: "off" });
 
         await expect(
           transport.state.addInboundMessage({
@@ -633,7 +645,10 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["matrix"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const matrixGatewayConfig = transport.createGatewayConfig({
+          baseUrl: "http://127.0.0.1:1",
+        }) as { channels?: { matrix?: Record<string, unknown> } };
+        expect(matrixGatewayConfig).toMatchObject({
           channels: {
             matrix: {
               accessToken: expect.any(String),
@@ -645,6 +660,11 @@ describe("crabline transport", () => {
             },
           },
         });
+        expect(matrixGatewayConfig.channels?.matrix?.streaming).toEqual({
+          mode: "off",
+          block: { enabled: false },
+        });
+        expect(matrixGatewayConfig.channels?.matrix?.blockStreaming).toBeUndefined();
         expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
           MATRIX_ACCESS_TOKEN: expect.any(String),
           MATRIX_BASE_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
@@ -816,9 +836,9 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.state.addInboundMessage({
+        const inbound = await transport.state.addInboundMessage({
           conversation: {
-            id: "-1001234567890",
+            id: "telegram-command-room",
             kind: "channel",
           },
           senderId: "100001",
@@ -836,7 +856,7 @@ describe("crabline transport", () => {
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: -1001234567890,
+              chat_id: inbound.conversation.id,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },
@@ -850,14 +870,14 @@ describe("crabline transport", () => {
 
         await expect(
           transport.waitForOutbound({
-            conversation: { id: "-1001234567890", kind: "group" },
+            conversation: { id: "telegram-command-room", kind: "channel" },
             textIncludes: "assistant via fake telegram",
             timeoutMs: 1_000,
           }),
         ).resolves.toMatchObject({
           conversation: {
-            id: "-1001234567890",
-            kind: "group",
+            id: "telegram-command-room",
+            kind: "channel",
           },
           direction: "outbound",
           text: "assistant via fake telegram",

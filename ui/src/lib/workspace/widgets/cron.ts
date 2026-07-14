@@ -10,7 +10,7 @@ import { isRecord, toFiniteNumber, widgetProps } from "./types.ts";
 
 const DEFAULT_LIMIT = 8;
 
-export type CronJobModel = {
+type CronJobModel = {
   id: string;
   name: string;
   enabled: boolean;
@@ -18,7 +18,7 @@ export type CronJobModel = {
   lastStatus: string | null;
 };
 
-export type CronModel = {
+type CronModel = {
   jobs: CronJobModel[];
   total: number;
 };
@@ -31,7 +31,7 @@ function jobStatus(state: Record<string, unknown> | undefined): string | null {
   return typeof status === "string" ? status : null;
 }
 
-export function mapCron(widget: WorkspaceWidget, value: unknown): CronModel {
+function mapCron(widget: WorkspaceWidget, value: unknown): CronModel {
   const raw = isRecord(value) && Array.isArray(value.jobs) ? value.jobs : [];
   const limitProp = toFiniteNumber(widgetProps(widget).limit);
   const limit = limitProp && limitProp > 0 ? Math.trunc(limitProp) : DEFAULT_LIMIT;

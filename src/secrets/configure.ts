@@ -49,7 +49,7 @@ import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 /** Result returned after interactive secrets configure builds and preflights an apply plan. */
-export type SecretsConfigureResult = {
+type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
 };

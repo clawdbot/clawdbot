@@ -1,6 +1,5 @@
 /**
- * Shared Claude CLI backend normalization. It sanitizes command args, maps
- * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
 import type {
   CliBackendConfig,
@@ -32,6 +31,8 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
+  // Re-injected per run from OpenClaw's canonical context budget.
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -111,6 +112,22 @@ export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
 /** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
+}
+
+/** Map OpenClaw's effective context budget to Claude Code's native compactor. */
+export function resolveClaudeCliAutoCompactEnv(
+  contextTokenBudget: number | undefined,
+): Record<string, string> | undefined {
+  if (typeof contextTokenBudget !== "number" || !Number.isFinite(contextTokenBudget)) {
+    return undefined;
+  }
+  const normalizedBudget = Math.floor(contextTokenBudget);
+  if (normalizedBudget <= 0) {
+    return undefined;
+  }
+  return {
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(normalizedBudget),
+  };
 }
 
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {

@@ -41,7 +41,7 @@ export type WorkerTranscriptCommitOutcome =
   | { ok: true; result: WorkerTranscriptCommitResult }
   | { ok: false; reason: WorkerTranscriptCommitErrorReason };
 
-export type WorkerTranscriptCommitBeginResult =
+type WorkerTranscriptCommitBeginResult =
   | { kind: "claimed" }
   | { kind: "recover" }
   | { kind: "replay"; outcome: WorkerTranscriptCommitOutcome }

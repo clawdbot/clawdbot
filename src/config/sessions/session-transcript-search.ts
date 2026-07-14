@@ -206,13 +206,3 @@ export function searchSessionTranscripts(params: {
   });
   return { hits: hits.slice(0, limit), indexing, truncated: hits.length > limit };
 }
-
-/** Await active reconcile passes in focused tests. */
-export async function waitForSessionTranscriptReconcileForTest(): Promise<void> {
-  await Promise.all(runningReconciles.values());
-}
-
-/** Reset process-local reconcile state between focused tests. */
-export function resetSessionTranscriptSearchForTest(): void {
-  runningReconciles.clear();
-}

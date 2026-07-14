@@ -5,7 +5,7 @@ import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
+import { setSlackRuntime } from "./runtime.js";
 
 const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
@@ -472,13 +472,13 @@ describe("slackPlugin actions", () => {
 
 describe("slackPlugin status", () => {
   it("uses the direct Slack probe helper when runtime is not initialized", async () => {
+    setSlackRuntime(null as never);
     const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
       ok: true,
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
     });
-    clearSlackRuntime();
     const cfg = {
       channels: {
         slack: {

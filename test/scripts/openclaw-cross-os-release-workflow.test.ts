@@ -349,7 +349,6 @@ describe("cross-OS release checks workflow", () => {
     expect(packageJson.scripts["test:windows:ci"]).toContain(
       "test/scripts/openclaw-cross-os-release-workflow.test.ts",
     );
-
     const result = spawnSync(
       BASH_BIN,
       [

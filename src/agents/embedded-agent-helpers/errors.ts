@@ -17,10 +17,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 export {
-  extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -61,16 +58,13 @@ export {
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -749,39 +743,6 @@ export function isTransientHttpError(raw: string): boolean {
     return false;
   }
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
-}
-
-export function classifyFailoverReasonFromHttpStatus(
-  status: number | undefined,
-  message?: string,
-  opts?: { provider?: string },
-): FailoverReason | null {
-  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
-  const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
-        includeProviderPluginHooks: !hasProviderStatusSignal,
-      })
-    : null;
-  const providerPluginReason = hasProviderStatusSignal
-    ? classifyProviderPluginError({
-        errorMessage: message ?? "",
-        provider: opts?.provider,
-        status,
-      })
-    : null;
-  const effectiveMessageClassification = providerPluginReason
-    ? toReasonClassification(providerPluginReason)
-    : messageClassification;
-  return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(
-      status,
-      message,
-      effectiveMessageClassification,
-      status,
-      opts?.provider,
-      { preserveProviderSignalClassification: providerPluginReason !== null },
-    ),
-  );
 }
 
 function classifyFailoverClassificationFromHttpStatus(
@@ -1737,7 +1698,7 @@ export function parseImageDimensionError(raw: string): {
   };
 }
 
-export function isImageDimensionErrorMessage(raw: string): boolean {
+function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
@@ -1759,7 +1720,7 @@ export function parseImageSizeError(raw: string): {
   };
 }
 
-export function isImageSizeError(errorMessage?: string): boolean {
+function isImageSizeError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }

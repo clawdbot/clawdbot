@@ -56,6 +56,14 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
   </Accordion>
 </AccordionGroup>
 
+## Configure providers in the Control UI
+
+Open **Settings → Model Providers** in the Control UI to add, replace, or remove provider API keys stored in `models.providers.<id>.apiKey`. The page identifies whether each API key comes from OpenClaw config or an environment variable without displaying the credential. Environment-provided keys remain managed by the gateway process environment.
+
+Use **Test connection** to run a live provider probe and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A probe makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
+
+The **Default models** card manages the primary model, ordered fallbacks, and utility model from the configured model catalog. Choose the models, then save them together to the existing `agents.defaults.model` and `agents.defaults.utilityModel` settings. For the utility model, **Automatic** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
+
 ## Plugin-owned provider behavior
 
 Most provider-specific logic lives in provider plugins (`registerProvider(...)`) while OpenClaw keeps the generic inference loop. Plugins own onboarding, model catalogs, auth env-var mapping, transport/config normalization, tool-schema cleanup, failover classification, OAuth refresh, usage reporting, thinking/reasoning profiles, and more.

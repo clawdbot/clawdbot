@@ -97,6 +97,21 @@ describe("codex plugin lifecycle: pinned-old codex plugin with new OpenClaw", ()
       'Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".',
     );
   });
+
+  it("treats an equal-base prerelease plugin as older than the stable host", async () => {
+    const agentDir = await createAgentDir("qa-codex-plugin-prerelease-");
+    await seedCodexPluginAt("2026.5.21-beta.1", agentDir);
+    await seedAuthProfiles("oauth-only", agentDir);
+
+    const result = evaluateCodexPluginLifecycle({
+      plugin: await snapshotCodexPluginState(agentDir),
+      auth: await snapshotAuthProfiles(agentDir),
+      hostVersion: "2026.5.21",
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.remediation).toContain("is older than OpenClaw 2026.5.21");
+  });
 });
 
 describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", () => {
@@ -115,6 +130,21 @@ describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", ()
     expect(result.remediation).toBe(
       "Codex plugin version 2026.5.22 requires a newer OpenClaw host than 2026.5.21. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.21.",
     );
+  });
+
+  it("orders a numeric correction plugin after the base stable host", async () => {
+    const agentDir = await createAgentDir("qa-codex-plugin-correction-");
+    await seedCodexPluginAt("2026.5.21-1", agentDir);
+    await seedAuthProfiles("oauth-only", agentDir);
+
+    const result = evaluateCodexPluginLifecycle({
+      plugin: await snapshotCodexPluginState(agentDir),
+      auth: await snapshotAuthProfiles(agentDir),
+      hostVersion: "2026.5.21",
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.remediation).toContain("requires a newer OpenClaw host than 2026.5.21");
   });
 });
 

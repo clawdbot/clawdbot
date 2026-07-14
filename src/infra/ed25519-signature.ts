@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
-export function base64UrlEncode(buf: Buffer): string {
+function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 

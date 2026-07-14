@@ -14,12 +14,14 @@ import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
-  listPluginSessionSchedulerJobs,
-  PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
   dispatchPluginAgentEventSubscriptions,
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
+import {
+  listPluginSessionSchedulerJobs,
+  PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
+} from "../host-hook-runtime.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";

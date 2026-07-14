@@ -302,6 +302,7 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
+            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,

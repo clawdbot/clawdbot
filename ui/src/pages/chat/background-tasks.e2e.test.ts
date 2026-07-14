@@ -99,6 +99,24 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
           },
         ],
         methodResponses: {
+          "chat.history": {
+            cases: [
+              {
+                match: { sessionKey: runningSubagent.childSessionKey },
+                response: {
+                  messages: [
+                    {
+                      content: [{ type: "text", text: "Subagent transcript proof." }],
+                      role: "assistant",
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  sessionId: "subagent-transcript",
+                  thinkingLevel: null,
+                },
+              },
+            ],
+          },
           "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
           "tasks.cancel": {
             found: true,
@@ -170,6 +188,21 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       await expect
         .poll(() => new URL(page.url()).searchParams.get("session"))
         .toBe("agent:main:subagent:routing");
+      await page.getByText("Subagent transcript proof.").waitFor({ state: "visible" });
+      await page.getByText("Background tasks rail proof.").waitFor({ state: "detached" });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).some(
+            (request) =>
+              (request.params as { sessionKey?: string }).sessionKey ===
+              runningSubagent.childSessionKey,
+          ),
+        )
+        .toBe(true);
+      await page.screenshot({
+        path: path.join(artifactDir, "03-transcript-open.png"),
+        fullPage: true,
+      });
     } finally {
       await context.close();
     }

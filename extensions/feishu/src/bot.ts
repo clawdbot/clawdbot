@@ -11,11 +11,7 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  asDateTimestampMs,
-  parseStrictNonNegativeInteger,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -31,6 +27,8 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { buildFeishuAgentBody } from "./bot-agent-body.js";
+import { buildBroadcastSessionKey, resolveBroadcastAgents } from "./bot-broadcast.js";
 import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
@@ -41,14 +39,14 @@ import {
   resolveFeishuMediaList,
   resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
+import { resolveGroupName } from "./bot-group-name.js";
 import {
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
   resolveChannelContextVisibilityMode,
 } from "./bot-runtime-api.js";
 import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
-import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
-import { getChatInfo } from "./chat.js";
+import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
 import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
@@ -75,19 +73,12 @@ import {
   type FeishuMessageContext,
   type FeishuMediaInfo,
   type FeishuMessageInfo,
-  type ResolvedFeishuAccount,
 } from "./types.js";
-
-export { toMessageResourceType } from "./bot-content.js";
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
-const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
@@ -115,87 +106,6 @@ function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
 ): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
-}
-
-function evictGroupNameCache(): void {
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    groupNameCache.clear();
-    return;
-  }
-  for (const [key, val] of groupNameCache) {
-    const expiresAt = asDateTimestampMs(val.expiresAt);
-    if (expiresAt === undefined || expiresAt <= now) {
-      groupNameCache.delete(key);
-    }
-  }
-
-  if (groupNameCache.size > GROUP_NAME_CACHE_MAX_SIZE) {
-    const excess = groupNameCache.size - GROUP_NAME_CACHE_MAX_SIZE;
-    let removed = 0;
-    for (const key of groupNameCache.keys()) {
-      if (removed >= excess) {
-        break;
-      }
-      groupNameCache.delete(key);
-      removed++;
-    }
-  }
-}
-
-function setCacheEntry(key: string, name: string): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_NAME_CACHE_TTL_MS);
-  groupNameCache.delete(key);
-  if (expiresAt !== undefined) {
-    groupNameCache.set(key, { name, expiresAt });
-  }
-}
-
-export function clearGroupNameCache(): void {
-  groupNameCache.clear();
-}
-
-export async function resolveGroupName(params: {
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  log: (...args: unknown[]) => void;
-}): Promise<string | undefined> {
-  const { account, chatId, log } = params;
-  if (!account.configured) {
-    return undefined;
-  }
-
-  const cacheKey = `${account.accountId}:${chatId}`;
-
-  const cached = groupNameCache.get(cacheKey);
-  if (cached) {
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = asDateTimestampMs(cached.expiresAt);
-    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
-      return cached.name || undefined;
-    }
-    groupNameCache.delete(cacheKey);
-  }
-
-  let resolvedName: string | undefined;
-  try {
-    const client = createFeishuClient(account);
-    const chatInfo = await getChatInfo(client, chatId);
-    const name = chatInfo?.name?.trim();
-    if (name) {
-      setCacheEntry(cacheKey, name);
-      resolvedName = name;
-    } else {
-      setCacheEntry(cacheKey, "");
-    }
-  } catch (err) {
-    log(`feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`);
-    setCacheEntry(cacheKey, "");
-  }
-
-  evictGroupNameCache();
-
-  return resolvedName;
 }
 
 async function resolveFeishuAudioPreflightTranscript(params: {
@@ -227,35 +137,6 @@ async function resolveFeishuAudioPreflightTranscript(params: {
     params.log(`feishu: audio preflight transcription failed: ${String(err)}`);
     return undefined;
   }
-}
-
-// --- Broadcast support ---
-// Resolve broadcast agent list for a given peer (group) ID.
-// Returns null if no broadcast config exists or the peer is not in the broadcast list.
-export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
-  const broadcast = (cfg as Record<string, unknown>).broadcast;
-  if (!broadcast || typeof broadcast !== "object") {
-    return null;
-  }
-  const agents = (broadcast as Record<string, unknown>)[peerId];
-  if (!Array.isArray(agents) || agents.length === 0) {
-    return null;
-  }
-  return agents as string[];
-}
-
-// Build a session key for a broadcast target agent by replacing the agent ID prefix.
-// Session keys follow the format: agent:<agentId>:<channel>:<peerKind>:<peerId>
-export function buildBroadcastSessionKey(
-  baseSessionKey: string,
-  originalAgentId: string,
-  targetAgentId: string,
-): string {
-  const prefix = `agent:${originalAgentId}:`;
-  if (baseSessionKey.startsWith(prefix)) {
-    return `agent:${targetAgentId}:${baseSessionKey.slice(prefix.length)}`;
-  }
-  return baseSessionKey;
 }
 
 /**
@@ -310,68 +191,6 @@ export function parseFeishuMessageEvent(
   }
 
   return ctx;
-}
-
-const MAX_MENTION_CONTEXT_NAME_LENGTH = 80;
-
-function formatMentionNameForAgentContext(name: string): string {
-  const stripped = Array.from(name, (char) => {
-    const code = char.charCodeAt(0);
-    return code < 0x20 || char === "[" || char === "]" ? " " : char;
-  }).join("");
-  const normalized = stripped.replace(/\s+/g, " ").trim();
-  const bounded =
-    normalized.length > MAX_MENTION_CONTEXT_NAME_LENGTH
-      ? `${truncateUtf16Safe(normalized, MAX_MENTION_CONTEXT_NAME_LENGTH - 3)}...`
-      : normalized;
-  return JSON.stringify(bounded || "unknown");
-}
-
-export function buildFeishuAgentBody(params: {
-  ctx: Pick<
-    FeishuMessageContext,
-    "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
-  >;
-  quotedContent?: string;
-  permissionErrorForAgent?: FeishuPermissionError;
-  botOpenId?: string;
-}): string {
-  const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
-  let messageBody = ctx.content;
-  if (quotedContent) {
-    messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
-  }
-
-  // DMs already have per-sender sessions, but this label still improves attribution.
-  const speaker = ctx.senderName ?? ctx.senderOpenId;
-  messageBody = `${speaker}: ${messageBody}`;
-
-  if (ctx.hasAnyMention) {
-    const botIdHint = botOpenId?.trim();
-    messageBody +=
-      `\n\n[System: The content may include mention tags in the form <at user_id="...">name</at>. ` +
-      `Treat these as real mentions of Feishu entities (users or bots).]`;
-    if (botIdHint) {
-      messageBody += `\n[System: If user_id is "${botIdHint}", that mention refers to you.]`;
-    }
-  }
-
-  if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
-    const targetNames = ctx.mentionTargets
-      .map((t) => formatMentionNameForAgentContext(t.name))
-      .join(", ");
-    messageBody += `\n\n[System: Feishu users mentioned in the incoming message, for context only: ${targetNames}. Do not notify or mention these users solely because they are listed here.]`;
-  }
-
-  // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
-  messageBody = `[message_id: ${ctx.messageId}]\n${messageBody}`;
-
-  if (permissionErrorForAgent) {
-    const grantUrl = permissionErrorForAgent.grantUrl ?? "";
-    messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
-  }
-
-  return messageBody;
 }
 
 async function shouldIncludeFetchedGroupContextMessage(params: {

@@ -14,7 +14,7 @@ import {
   type ChannelRouteParsedTarget,
 } from "../../plugin-sdk/channel-route.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
-import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
 export type { ChannelRouteParsedTarget } from "../../plugin-sdk/channel-route.js";
 

@@ -1,15 +1,52 @@
 /** Top-level doctor command wrapper, including post-upgrade probe mode. */
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import {
+  isDestructiveDoctorSessionSqliteMode,
+  withDoctorSqliteMaintenanceLock,
+} from "./doctor-sqlite-maintenance-lock.js";
+
+function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): string[] {
+  if (!options.sessionSqliteStore) {
+    return [];
+  }
+  // Explicit path mode intentionally bypasses runtime config. Resolve through
+  // the same selector as the migration so ownership checks cover exact targets.
+  const targets = resolveSessionStoreTargets(
+    {},
+    {
+      store: options.sessionSqliteStore,
+      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+    },
+    { env: process.env },
+  );
+  const protectedPaths = new Set<string>();
+  for (const target of targets) {
+    protectedPaths.add(target.storePath);
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+    }).path;
+    if (sqlitePath) {
+      for (const databasePath of resolveSqliteDatabaseFilePaths(sqlitePath)) {
+        protectedPaths.add(databasePath);
+      }
+    }
+  }
+  return [...protectedPaths];
+}
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
   if (options?.stateSqlite) {
     const outputRuntime = runtime ?? defaultRuntime;
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
-    const report = runDoctorStateSqliteCompact();
+    const report = await runDoctorStateSqliteCompact();
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else if (report.skipped) {
@@ -30,14 +67,26 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   }
   if (options?.sessionSqlite) {
     const outputRuntime = runtime ?? defaultRuntime;
+    const sessionSqliteMode = options.sessionSqlite;
     const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-    const report = await runDoctorSessionSqlite({
-      mode: options.sessionSqlite,
-      ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
-      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
-      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
-    });
-    if (options.sessionSqlite === "recover" && options.sessionSqliteGithubIssue === true) {
+    const runSessionSqlite = async () =>
+      await runDoctorSessionSqlite({
+        mode: sessionSqliteMode,
+        ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
+        ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+        ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+      });
+    const report = isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
+      ? await withDoctorSqliteMaintenanceLock({
+          env: process.env,
+          operation: `session SQLite ${sessionSqliteMode}`,
+          ...(options.sessionSqliteStore
+            ? { protectedPaths: resolveExplicitSessionSqliteMaintenancePaths(options) }
+            : {}),
+          run: runSessionSqlite,
+        })
+      : await runSessionSqlite();
+    if (sessionSqliteMode === "recover" && options.sessionSqliteGithubIssue === true) {
       await maybeCreateSessionSqliteGithubIssue(outputRuntime, report, options);
     }
     if (options.json) {

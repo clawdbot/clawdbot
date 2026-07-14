@@ -20,13 +20,13 @@ export type DoctorSessionSqliteRestoreReport = {
   skippedFiles: string[];
 };
 
-export type DoctorSessionSqliteLargestSession = {
+type DoctorSessionSqliteLargestSession = {
   events: number;
   rowBytes: number;
   sessionId: string;
 };
 
-export type DoctorSessionSqliteDbStats = {
+type DoctorSessionSqliteDbStats = {
   dbSizeBytes: number;
   integrityCheck?: string;
   largestSessions: DoctorSessionSqliteLargestSession[];
@@ -46,7 +46,7 @@ export type DoctorSessionSqliteCompactReport = {
   walSizeBeforeBytes: number;
 };
 
-export type DoctorSessionSqliteCorruptRecovery = {
+type DoctorSessionSqliteCorruptRecovery = {
   movedFiles: string[];
   skippedFiles: string[];
 };

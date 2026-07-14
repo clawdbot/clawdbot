@@ -161,16 +161,16 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       expect(chips.some((chip) => chip.includes("In the reef since"))).toBe(true);
       expect(chips.some((chip) => chip.includes("Whatsapp"))).toBe(true);
 
-      const statValues = await page.locator(".profile-stats .stat-value").allTextContents();
+      const statValues = await page.locator(".profile-stats__value").allTextContents();
       expect(statValues[0]?.trim()).toBe("2.8T");
       expect(statValues[1]?.trim()).toBe("82.1B");
-      expect(statValues[2]?.trim()).toBe("59h 4m");
+      expect(statValues[2]?.trim()).toBe("2d 11h");
       expect(statValues[3]?.trim()).toBe("3 days");
 
       const cellCount = await page.locator(".profile-heatmap__svg rect").count();
       expect(cellCount).toBe(52 * 7);
 
-      const insightValues = await page.locator(".profile-insights__value").allTextContents();
+      const insightValues = await page.locator(".settings-kv dd").allTextContents();
       expect(insightValues[0]?.trim()).toBe("claude-opus-4-8");
       expect(insightValues.some((value) => value.replace(/[^0-9]/gu, "") === "2787815")).toBe(true);
 
@@ -200,10 +200,10 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
 
-      await page.locator(".profile-note").waitFor({ timeout: 10_000 });
+      await page.locator(".settings-empty").waitFor({ timeout: 10_000 });
       // Zero totals with a refreshing cache must not claim a fresh shell.
-      await expect(page.locator(".profile-note .card-title").count()).resolves.toBe(0);
-      await expect(page.locator(".profile-note").textContent()).resolves.toContain(
+      await expect(page.locator(".settings-empty strong").count()).resolves.toBe(0);
+      await expect(page.locator(".settings-empty").textContent()).resolves.toContain(
         "Diving for stats",
       );
     } finally {
@@ -233,8 +233,8 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
 
-      await page.locator(".profile-note .card-title").waitFor({ timeout: 10_000 });
-      await expect(page.locator(".profile-note .card-title").textContent()).resolves.toContain(
+      await page.locator(".settings-empty strong").waitFor({ timeout: 10_000 });
+      await expect(page.locator(".settings-empty strong").textContent()).resolves.toContain(
         "A fresh shell",
       );
       await expect(page.locator(".profile-heatmap__svg").count()).resolves.toBe(0);

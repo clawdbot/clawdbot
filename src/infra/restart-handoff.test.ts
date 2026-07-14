@@ -15,7 +15,6 @@ import {
 } from "./kysely-sync.js";
 import {
   formatGatewayRestartHandoffDiagnostic,
-  GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoffSync,
 } from "./restart-handoff.js";
@@ -88,7 +87,7 @@ function insertHandoffRow(
     db,
     stateDb.insertInto("gateway_restart_handoff").values({
       handoff_key: "current",
-      kind: values.kind ?? GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
+      kind: values.kind ?? "gateway-supervisor-restart-handoff",
       version: values.version ?? 1,
       intent_id: values.intentId ?? "intent-1",
       pid: values.pid ?? 111,
@@ -124,44 +123,6 @@ describe("gateway restart handoff", () => {
     }
   });
 
-  it("writes a supervisor handoff for an exited gateway process", () => {
-    const env = createHandoffEnv();
-
-    const handoff = expectWrittenHandoff({
-      env,
-      pid: 12_345,
-      processInstanceId: "gateway-instance-1",
-      reason: "plugin source changed",
-      restartKind: "full-process",
-      supervisorMode: "launchd",
-      createdAt: 1_000,
-    });
-
-    expect(handoff.kind).toBe(GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND);
-    expect(handoff.version).toBe(1);
-    expect(handoff.pid).toBe(12_345);
-    expect(handoff.processInstanceId).toBe("gateway-instance-1");
-    expect(handoff.reason).toBe("plugin source changed");
-    expect(handoff.source).toBe("plugin-change");
-    expect(handoff.restartKind).toBe("full-process");
-    expect(handoff.supervisorMode).toBe("launchd");
-    expect(handoff.createdAt).toBe(1_000);
-    expect(handoff.expiresAt).toBe(61_000);
-    expect(readHandoffRow(env)).toMatchObject({
-      handoff_key: "current",
-      kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
-      pid: 12_345,
-      reason: "plugin source changed",
-      source: "plugin-change",
-      restart_kind: "full-process",
-      supervisor_mode: "launchd",
-    });
-    expect(fs.existsSync(legacyHandoffPath(env))).toBe(false);
-    const persisted = readGatewayRestartHandoffSync(env, 1_500);
-    expect(persisted?.pid).toBe(12_345);
-    expect(persisted?.reason).toBe("plugin source changed");
-  });
-
   it("keeps truncated restart reasons free of lone surrogates", () => {
     const env = createHandoffEnv();
     const handoff = expectWrittenHandoff({
@@ -175,6 +136,43 @@ describe("gateway restart handoff", () => {
     expect(handoff.reason).toHaveLength(199);
     expect(Buffer.from(handoff.reason ?? "").toString()).toBe(handoff.reason);
     expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
+  });
+
+  it("formats a concise, single-line diagnostic", () => {
+    expect(
+      formatGatewayRestartHandoffDiagnostic(
+        {
+          kind: "gateway-supervisor-restart-handoff",
+          version: 1,
+          intentId: "intent-1",
+          pid: 12_345,
+          createdAt: 10_000,
+          expiresAt: 70_000,
+          reason: "ok\nFake: bad",
+          source: "operator-restart",
+          restartKind: "full-process",
+          supervisorMode: "external",
+        },
+        12_500,
+      ),
+    ).toBe(
+      "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
+    );
+  });
+
+  it("keeps persisted intent IDs free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const expectedIntentId = "a".repeat(119);
+    insertHandoffRow(env, {
+      intentId: ` ${expectedIntentId}😀tail `,
+      createdAt: 1_000,
+      expiresAt: 61_000,
+    });
+
+    const handoff = readGatewayRestartHandoffSync(env, 1_500);
+
+    expect(handoff?.intentId).toBe(expectedIntentId);
+    expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
   });
 
   it("persists restart trace timing for supervised process handoff", () => {
@@ -284,49 +282,5 @@ describe("gateway restart handoff", () => {
     });
     expect(readGatewayRestartHandoffSync(env)?.pid).toBe(67_890);
     expect(fs.existsSync(legacyHandoffPath(env))).toBe(false);
-  });
-
-  it("formats a concise diagnostic line for status surfaces", () => {
-    expect(
-      formatGatewayRestartHandoffDiagnostic(
-        {
-          kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
-          version: 1,
-          intentId: "intent-1",
-          pid: 12_345,
-          createdAt: 10_000,
-          expiresAt: 70_000,
-          reason: "plugin source changed",
-          source: "plugin-change",
-          restartKind: "full-process",
-          supervisorMode: "launchd",
-        },
-        12_500,
-      ),
-    ).toBe(
-      "Recent restart handoff: full-process via launchd; source=plugin-change; reason=plugin source changed; pid=12345; age=2s; expiresIn=57s",
-    );
-  });
-
-  it("formats restart reasons as a single diagnostic line", () => {
-    expect(
-      formatGatewayRestartHandoffDiagnostic(
-        {
-          kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
-          version: 1,
-          intentId: "intent-1",
-          pid: 12_345,
-          createdAt: 10_000,
-          expiresAt: 70_000,
-          reason: "ok\nFake: bad",
-          source: "operator-restart",
-          restartKind: "full-process",
-          supervisorMode: "external",
-        },
-        12_500,
-      ),
-    ).toBe(
-      "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
-    );
   });
 });

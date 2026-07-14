@@ -26,7 +26,7 @@ export function describeSessionsListTool(): string {
 export function describeSessionsHistoryTool(): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Supports limit/offset/tool messages.",
+    "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
   ].join(" ");
 }
 
@@ -34,7 +34,7 @@ export function describeSessionsHistoryTool(): string {
 export function describeSessionsSearchTool(): string {
   return [
     "Search your own past sessions for matching user and assistant text.",
-    "Follow up with sessions_history using a returned sessionKey for full context.",
+    "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   ].join(" ");
 }
 

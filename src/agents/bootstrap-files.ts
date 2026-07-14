@@ -55,12 +55,6 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
-/** Clears the per-process bootstrap warning dedupe cache for isolated tests. */
-export function resetBootstrapWarningCacheForTest(): void {
-  seenBootstrapWarnings.clear();
-  bootstrapWarningOrder.length = 0;
-}
-
 /** Resolves the effective bootstrap injection mode for a session agent. */
 export function resolveContextInjectionMode(
   config?: OpenClawConfig,

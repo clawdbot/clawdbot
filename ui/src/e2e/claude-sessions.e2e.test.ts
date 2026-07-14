@@ -70,6 +70,7 @@ suite("Claude native session catalog", () => {
           cases: [
             {
               match: {
+                agentId: "main",
                 catalogId: "claude",
                 cursors: { "node:devbox": "catalog-page-2" },
               },
@@ -119,6 +120,7 @@ suite("Claude native session catalog", () => {
     await page.getByRole("button", { name: "Load more sessions" }).click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
+      agentId: "main",
       catalogId: "claude",
       cursors: { "node:devbox": "catalog-page-2" },
     });
@@ -172,6 +174,110 @@ suite("Claude native session catalog", () => {
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
+    await page.close();
+  });
+
+  it("auto-loads older native history with a spinner and stable viewport", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.clock.install();
+    const historyMessage = (seq: number, prefix: string) => ({
+      __openclaw: { seq },
+      content: [
+        {
+          type: "text",
+          text: `${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}`,
+        },
+      ],
+      role: seq % 2 === 0 ? "assistant" : "user",
+      timestamp: Date.now() + seq,
+    });
+    const recent = Array.from({ length: 100 }, (_, index) =>
+      historyMessage(index + 41, "recent native message"),
+    );
+    const older = Array.from({ length: 40 }, (_, index) =>
+      historyMessage(index + 1, "older native message"),
+    );
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": {
+          messages: recent,
+          hasMore: true,
+          nextOffset: 100,
+          totalMessages: 140,
+          sessionId: "native-scrollback",
+          thinkingLevel: null,
+        },
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 100 },
+              response: {
+                messages: older,
+                hasMore: false,
+                totalMessages: 140,
+                sessionId: "native-scrollback",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText(/^recent native message 140\n/).waitFor();
+    const thread = page.locator(".chat-thread");
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
+      .toBe(true);
+    await page.locator(".chat-history-sentinel").waitFor();
+    await thread.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await gateway.deferNext("chat.history");
+    const before = await thread.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+      return { scrollHeight: element.scrollHeight, scrollTop: element.scrollTop };
+    });
+    await gateway.waitForRequest("chat.history");
+    await page.locator(".chat-history-loading").waitFor();
+    await gateway.resolveDeferred("chat.history");
+    await expect
+      .poll(() =>
+        page
+          .locator("openclaw-chat-pane")
+          .evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
+      )
+      .toBe(140);
+    await page.getByText(/^older native message 1\n/).waitFor();
+
+    const after = await thread.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    }));
+    expect(after.scrollTop).toBeGreaterThan(0);
+    expect(after.scrollTop).toBeCloseTo(
+      before.scrollTop + (after.scrollHeight - before.scrollHeight),
+      0,
+    );
+    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
+      limit: 100,
+      offset: 100,
+    });
+    const exhaustedRequestCount = (await gateway.getRequests("chat.history")).length;
+    await thread.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.clock.runFor(300);
+    expect(await page.locator(".chat-history-loading").count()).toBe(0);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
     await page.close();
   });
 });

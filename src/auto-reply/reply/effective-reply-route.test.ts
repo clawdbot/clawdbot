@@ -1,11 +1,10 @@
 // Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
-import {
-  isSystemEventProvider,
-  resolveEffectiveReplyRoute,
-  type EffectiveReplyRouteContext,
-  type EffectiveReplyRouteEntry,
-} from "./effective-reply-route.js";
+import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+
+type EffectiveReplyRouteParams = Parameters<typeof resolveEffectiveReplyRoute>[0];
+type EffectiveReplyRouteContext = EffectiveReplyRouteParams["ctx"];
+type EffectiveReplyRouteEntry = NonNullable<EffectiveReplyRouteParams["entry"]>;
 
 const ctx = (params: EffectiveReplyRouteContext): EffectiveReplyRouteContext => params;
 const entry = (params: EffectiveReplyRouteEntry): EffectiveReplyRouteEntry => params;

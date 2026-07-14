@@ -10,7 +10,7 @@ import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
+import { parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -25,9 +25,6 @@ import {
   type ComponentData,
   type MessagePayloadObject,
 } from "../internal/discord.js";
-
-export { buildExecApprovalCustomId, parseExecApprovalData };
-export { extractDiscordChannelId } from "../approval-native.js";
 
 type ExecApprovalButtonContext = {
   getApprovers: () => string[];

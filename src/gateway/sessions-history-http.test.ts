@@ -12,10 +12,7 @@ import {
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -883,7 +880,7 @@ describe("session history HTTP endpoints", () => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
       await expectHistoryEventTexts(stream, ["first message"]);
 
-      emitInternalSessionTranscriptUpdate({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "sess-main",

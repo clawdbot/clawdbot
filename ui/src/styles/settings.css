@@ -1,0 +1,531 @@
+/* ── Settings design language ──────────────────────────────────────────────
+ *
+ * One structural pattern for every settings surface:
+ *   .settings-page > .settings-section > .settings-group > .settings-row
+ *
+ * Rules (see ui/docs/settings-design.md):
+ * - Sections are typography (heading outside any surface), not chrome.
+ * - Exactly one level of elevation: the group. Never nest a card in a group.
+ * - Status is a dot + plain text, never a colored pill.
+ * - Spacing uses --space-* tokens only.
+ *
+ * Templates should be built through the helpers in
+ * ui/src/components/settings-ui.ts rather than hand-rolled markup.
+ */
+
+/* ── Workspace shell (shared by every settings takeover page) ── */
+
+.settings-workspace {
+  width: 100%;
+}
+
+.settings-workspace__body {
+  width: 100%;
+}
+
+.content-header + .settings-workspace,
+.config-view-toggle-row + .settings-workspace {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace__body > * + * {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace--fill-height {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height > .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The page headline adopts the column of the page below it; without this the
+   shell caps headers at 1120px while narrow pages use a 760px column, leaving
+   the title floating left of the content. */
+.shell--settings .content:has(.settings-page) .content-header,
+.shell--settings .content:has(.settings-page) .config-view-toggle-row {
+  max-width: 760px;
+  padding-inline: var(--space-4);
+}
+
+.shell--settings .content:has(.settings-page--wide) .content-header,
+.shell--settings .content:has(.settings-page--wide) .config-view-toggle-row {
+  max-width: 1120px;
+}
+
+/* ── Page ── */
+
+.settings-page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+}
+
+/* Table/list-heavy pages (sessions, automations, plugins) need more width. */
+.settings-page--wide {
+  max-width: 1120px;
+}
+
+.settings-page__intro {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ── Section ── */
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.settings-section__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-1);
+}
+
+.settings-section__heading {
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted-strong);
+  text-transform: uppercase;
+}
+
+.settings-section__desc {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  padding: 0 var(--space-1);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.settings-section__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* ── Group (the only surface) ── */
+
+.settings-group {
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.settings-group--danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
+}
+
+/* ── Row ── */
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  min-height: 48px;
+}
+
+.settings-row + .settings-row,
+.settings-row + .settings-subrows,
+.settings-subrows + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.settings-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.settings-row__title {
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  color: var(--text-strong);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__desc {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+/* Rows that carry only a control (action/button rows) hug the right edge. */
+.settings-row > .settings-row__control:only-child {
+  margin-left: auto;
+}
+
+/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
+.settings-row__value {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__value--mono {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Stacked variant: title/description above a full-width control
+   (textareas, wide inputs, segmented controls that would wrap). */
+.settings-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.settings-row--stacked .settings-row__control {
+  max-width: none;
+  justify-content: flex-start;
+}
+
+/* Label-wrapped toggle row: whole row toggles the switch. */
+.settings-row--toggle {
+  cursor: pointer;
+}
+
+.settings-row--toggle:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+/* Clickable drill-in row. */
+.settings-row--nav {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.settings-row--nav:hover {
+  background: var(--bg-hover);
+}
+
+/* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
+.settings-row--nav:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
+}
+
+.settings-row__chevron {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+
+.settings-row__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Indented child rows (e.g. per-item options under a parent toggle). */
+.settings-subrows .settings-row {
+  padding-left: var(--space-7);
+}
+
+.settings-subrows .settings-row + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+/* ── Controls ── */
+
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.settings-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-toggle__track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--border) 30%);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-full);
+  transition:
+    background var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.settings-toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition:
+    transform var(--duration-normal) var(--ease-spring),
+    background var(--duration-normal) var(--ease-out);
+}
+
+.settings-toggle input:checked + .settings-toggle__track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-toggle input:checked + .settings-toggle__track::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+.settings-toggle input:focus-visible + .settings-toggle__track {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.settings-toggle input:disabled + .settings-toggle__track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.settings-segmented__btn {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  padding: 4px 12px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.settings-segmented__btn:hover {
+  color: var(--text);
+}
+
+.settings-segmented__btn:focus-visible {
+  outline: none;
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.settings-segmented__btn--active {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-segmented__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-input-text-size);
+  padding: 7px 10px;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
+  width: auto;
+  min-width: min(220px, 100%);
+}
+
+.settings-input::placeholder {
+  color: var(--muted);
+}
+
+.settings-input:focus-visible,
+.settings-select:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+textarea.settings-input {
+  min-height: 88px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Keep >=16px on touch so focusing an editor does not trigger mobile zoom. */
+@media (hover: none) and (pointer: coarse) {
+  textarea.settings-input {
+    font-size: 16px;
+  }
+}
+
+/* ── Status (dot + text — replaces status pills) ── */
+
+.settings-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.settings-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.settings-status--ok {
+  color: var(--text);
+}
+
+.settings-status--ok .settings-status__dot {
+  background: var(--ok);
+}
+
+.settings-status--warn .settings-status__dot {
+  background: var(--warn);
+}
+
+.settings-status--danger .settings-status__dot {
+  background: var(--danger);
+}
+
+.settings-status--accent .settings-status__dot {
+  background: var(--accent);
+}
+
+/* ── Count badge (quiet; genuine counts/alerts only, not status) ── */
+
+.settings-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--border) 20%);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Empty state ── */
+
+.settings-empty {
+  padding: var(--space-5) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── Key/value facts (About build info, agent facts) ── */
+
+.settings-kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-kv dt {
+  color: var(--muted);
+}
+
+.settings-kv dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.settings-kv code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* ── Mobile ── */
+
+@media (max-width: 640px) {
+  .settings-page {
+    padding-inline: var(--space-3);
+  }
+
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row__control {
+    max-width: 100%;
+  }
+}

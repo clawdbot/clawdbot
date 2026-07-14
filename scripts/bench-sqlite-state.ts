@@ -22,7 +22,7 @@ type ProfileConfig = {
   agentCount: number;
   channelIngressEvents: number;
   cronJobs: number;
-  cronRunLogs: number;
+  cronTaskRuns: number;
   deliveryQueueEntries: number;
   pluginStateEntries: number;
   queryRuns: number;
@@ -54,7 +54,7 @@ type BenchmarkReport = {
     agentDatabases: number;
     channelIngressEvents: number;
     cronJobs: number;
-    cronRunLogs: number;
+    cronTaskRuns: number;
     deliveryQueueEntries: number;
     pluginStateEntries: number;
     stateRows: number;
@@ -78,7 +78,7 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     agentCount: 2,
     channelIngressEvents: 1_000,
     cronJobs: 100,
-    cronRunLogs: 1_000,
+    cronTaskRuns: 1_000,
     deliveryQueueEntries: 1_000,
     pluginStateEntries: 1_000,
     queryRuns: 12,
@@ -88,7 +88,7 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     agentCount: 5,
     channelIngressEvents: 10_000,
     cronJobs: 1_000,
-    cronRunLogs: 50_000,
+    cronTaskRuns: 50_000,
     deliveryQueueEntries: 50_000,
     pluginStateEntries: 20_000,
     queryRuns: 30,
@@ -98,7 +98,7 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     agentCount: 10,
     channelIngressEvents: 100_000,
     cronJobs: 5_000,
-    cronRunLogs: 250_000,
+    cronTaskRuns: 250_000,
     deliveryQueueEntries: 200_000,
     pluginStateEntries: 100_000,
     queryRuns: 40,
@@ -193,7 +193,7 @@ function applyScale(config: ProfileConfig): ProfileConfig {
     agentCount: config.agentCount,
     channelIngressEvents: config.channelIngressEvents * scale,
     cronJobs: config.cronJobs * scale,
-    cronRunLogs: config.cronRunLogs * scale,
+    cronTaskRuns: config.cronTaskRuns * scale,
     deliveryQueueEntries: config.deliveryQueueEntries * scale,
     pluginStateEntries: config.pluginStateEntries * scale,
     queryRuns: config.queryRuns,
@@ -237,7 +237,7 @@ function stateRowCount(config: ProfileConfig): number {
   return (
     config.channelIngressEvents +
     config.cronJobs +
-    config.cronRunLogs +
+    config.cronTaskRuns +
     config.deliveryQueueEntries +
     config.pluginStateEntries
   );
@@ -247,7 +247,7 @@ function seedStateDatabase(db: DatabaseSync, config: ProfileConfig): void {
   db.exec("BEGIN IMMEDIATE;");
   try {
     seedCronJobs(db, config.cronJobs);
-    seedCronRunLogs(db, config.cronRunLogs);
+    seedCronTaskRuns(db, config.cronTaskRuns);
     seedDeliveryQueue(db, config.deliveryQueueEntries);
     seedPluginState(db, config.pluginStateEntries);
     seedChannelIngress(db, config.channelIngressEvents);
@@ -314,38 +314,38 @@ function seedCronJobs(db: DatabaseSync, count: number): void {
   }
 }
 
-function seedCronRunLogs(db: DatabaseSync, count: number): void {
+function seedCronTaskRuns(db: DatabaseSync, count: number): void {
   const insert = db.prepare(`
-    INSERT INTO cron_run_logs (
-      store_key, job_id, seq, ts, status, error, summary, diagnostics_summary,
-      delivery_status, delivery_error, delivered, session_id, session_key, run_id,
-      run_at_ms, duration_ms, next_run_at_ms, model, provider, total_tokens,
-      entry_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO task_runs (
+      task_id, runtime, source_id, requester_session_key, owner_key, scope_kind,
+      child_session_key, run_id, task, status, delivery_status, notify_policy,
+      created_at, started_at, ended_at, last_event_at, error, terminal_summary,
+      terminal_outcome, detail_json
+    ) VALUES (?, 'cron', ?, '', '', 'system', ?, ?, ?, ?, 'not_applicable', 'silent',
+      ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (let i = 0; i < count; i += 1) {
     const jobId = `job-${String(i % Math.max(1, Math.floor(count / 20))).padStart(8, "0")}`;
     const ts = 1_700_000_000_000 + i;
+    const succeeded = i % 17 !== 0;
+    const runId = `run-${i}`;
+    const status = succeeded ? "ok" : "error";
+    const storeKey = `/state/cron/jobs-${i % 8}.json`;
     insert.run(
-      `/state/cron/jobs-${i % 8}.json`,
+      `cron-benchmark-${i}`,
       jobId,
-      Math.floor(i / 20),
-      ts,
-      i % 17 === 0 ? "failed" : "completed",
-      `run ${i}`,
-      i % 17 === 0 ? "failed" : "sent",
-      i % 17 === 0 ? 0 : 1,
-      `session-${i}`,
       `agent:agent-${i % 16}:main`,
-      `run-${i}`,
+      runId,
+      jobId,
+      succeeded ? "succeeded" : "failed",
       ts,
-      20 + (i % 1_000),
-      ts + 60_000,
-      "openai/gpt-5.6-luna",
-      "openai",
-      100 + (i % 2_000),
-      JSON.stringify({ ts, jobId, action: "finished" }),
       ts,
+      ts + 20 + (i % 1_000),
+      ts + 20 + (i % 1_000),
+      succeeded ? null : `run ${i} failed`,
+      `run ${i}`,
+      succeeded ? "succeeded" : null,
+      JSON.stringify({ kind: "cron-run", storeKey, action: "finished", status, runId }),
     );
   }
 }
@@ -629,7 +629,7 @@ function main(): void {
         agentDatabases: config.agentCount,
         channelIngressEvents: config.channelIngressEvents,
         cronJobs: config.cronJobs,
-        cronRunLogs: config.cronRunLogs,
+        cronTaskRuns: config.cronTaskRuns,
         deliveryQueueEntries: config.deliveryQueueEntries,
         pluginStateEntries: config.pluginStateEntries,
         stateRows: stateRowCount(config),

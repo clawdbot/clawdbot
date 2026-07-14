@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronQuarantineFile,
@@ -13,6 +12,8 @@ import {
   resolveCronQuarantinePath,
   saveCronStore,
 } from "../../../cron/store.js";
+import { cronStoreKey } from "../../../cron/store/key.js";
+import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
@@ -1331,7 +1332,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const entries = readCronRunLogEntriesSync({ storePath, jobId: "sqlite-job" });
+    const entries = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(storePath),
+      jobId: "sqlite-job",
+    }).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.jobId).toBe("sqlite-job");
     expect(entries[0]?.summary).toBe("done");

@@ -84,7 +84,7 @@ export function listAgentModelsJsonPaths(
 }
 
 /** Limits for safe opportunistic JSON reads during local storage scans. */
-export type ReadJsonObjectOptions = {
+type ReadJsonObjectOptions = {
   /** Reject files larger than this byte count before reading content. */
   maxBytes?: number;
   /** Reject directories, symlinks, and other non-regular paths before JSON parsing. */

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -58,26 +58,19 @@ async function makeFakeOpenClawPackage(root: string) {
 
 describe("git commit resolution", () => {
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
-  let testing: (typeof import("./git-commit.js"))["testing"];
 
-  beforeAll(async () => {
-    vi.doUnmock("node:fs");
-    vi.doUnmock("node:module");
-    ({ resolveCommitHash, testing } = await import("./git-commit.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    testing.clearCachedGitCommits();
+    vi.resetModules();
+    ({ resolveCommitHash } = await import("./git-commit.js"));
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    testing.clearCachedGitCommits();
     await tempDirs.cleanup();
   });
 

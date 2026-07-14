@@ -23,7 +23,7 @@ struct MenuContent: View {
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
     @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
@@ -278,7 +278,7 @@ struct MenuContent: View {
                 }
                 Menu {
                     Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                        ForEach(AppLogLevel.allCases) { level in
+                        ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                             Text(level.title).tag(level.rawValue)
                         }
                     }

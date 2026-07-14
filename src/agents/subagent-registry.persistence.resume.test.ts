@@ -5,11 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
@@ -128,8 +125,7 @@ describe("subagent registry persistence resume", () => {
     announceSpy.mockClear();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    await cleanupSessionStateForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;

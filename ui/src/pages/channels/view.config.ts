@@ -76,13 +76,10 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
     return null;
   }
   return html`
-    <div class="status-list" style="margin-top: 12px;">
+    <div>
       ${entries.map(
         ([field, raw]) => html`
-          <div>
-            <span class="label">${field}</span>
-            <span>${formatChannelExtraValue(raw)}</span>
-          </div>
+          <div class="settings-row__desc">${field}: ${formatChannelExtraValue(raw)}</div>
         `,
       )}
     </div>
@@ -93,12 +90,12 @@ function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
   if (!normalized) {
-    return html` <div class="callout danger">${t("channels.config.schemaUnavailable")}</div> `;
+    return html`<div class="settings-row__desc">${t("channels.config.schemaUnavailable")}</div>`;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
   if (!node) {
     return html`
-      <div class="callout danger">${t("channels.config.channelSchemaUnavailable")}</div>
+      <div class="settings-row__desc">${t("channels.config.channelSchemaUnavailable")}</div>
     `;
   }
   const configValue = props.configValue ?? {};
@@ -124,9 +121,9 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
   return html`
-    <div style="margin-top: 16px;">
+    <div class="settings-row settings-row--stacked">
       ${props.configSchemaLoading
-        ? html` <div class="muted">${t("channels.config.loadingSchema")}</div> `
+        ? html`<div class="settings-row__desc">${t("channels.config.loadingSchema")}</div>`
         : renderChannelConfigForm({
             channelId,
             configValue: props.configForm,
@@ -135,7 +132,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
             disabled,
             onPatch: props.onConfigPatch,
           })}
-      <div class="row" style="margin-top: 12px;">
+      <div class="settings-row__control">
         <button
           class="btn primary"
           ?disabled=${disabled || !props.configFormDirty}

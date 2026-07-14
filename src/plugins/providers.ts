@@ -37,7 +37,7 @@ type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegis
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
-export type ProviderRefOwnership =
+type ProviderRefOwnership =
   | { status: "unowned" }
   | { status: "owned"; pluginIds: string[] }
   | { status: "ambiguous"; pluginIds: string[] };
@@ -423,18 +423,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
       }),
   });
 }
-
-export const testing = {
-  resolveActivatableProviderOwnerPluginIds,
-  resolveEnabledProviderPluginIds,
-  resolveExternalAuthProfileCompatFallbackPluginIds,
-  resolveExternalAuthProfileProviderPluginIds,
-  resolveDiscoveredProviderPluginIds,
-  resolveDiscoverableProviderOwnerPluginIds,
-  resolveBundledProviderCompatPluginIds,
-  withBundledProviderVitestCompat,
-} as const;
-
 type ModelSupportMatchKind = "pattern" | "prefix";
 
 function resolveManifestRegistry(params: {
@@ -853,7 +841,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   return sortUniqueStrings([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
 
-export type UsageHookProviderPluginContract = {
+type UsageHookProviderPluginContract = {
   pluginId: string;
   providerIds: string[];
 };
@@ -900,4 +888,3 @@ export function resolveUsageHookProviderPluginContracts(params: {
     return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
   });
 }
-export { testing as __testing };

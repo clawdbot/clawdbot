@@ -57,6 +57,17 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it("accepts the backend expected-session binding", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "resume",
+        sessionKey: "agent:main:main",
+        expectedExistingSessionId: "session-1",
+        idempotencyKey: "recovery-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts generated music attachments on internal completion events", () => {
     const params = makeAgentParamsWithInternalEvent(musicCompletionEvent);
 

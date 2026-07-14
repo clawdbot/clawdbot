@@ -1995,7 +1995,7 @@ export function hasExactCommandDurableExecApproval(params: {
   );
 }
 
-export type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
+type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
 
 /** Callers pass whether their final, post-gate authorization depends on a durable grant. */
 export function resolveDurableExecApprovalRequirement(params: {
@@ -2338,22 +2338,6 @@ function applyRecordedAllowlistMetadata(params: {
       }
     : null;
 }
-
-export async function recordAllowlistMatchesUseLocked(params: {
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): Promise<void> {
-  if (params.matches.length === 0 && !params.authorization) {
-    return;
-  }
-  await updateExecApprovals({
-    update: (file) => applyRecordedAllowlistUse({ ...params, file }),
-  });
-}
-
 export async function commitExecAuthorizationLocked(params: {
   agentId: string | undefined;
   matches: readonly ExecAllowlistEntry[];
@@ -2755,20 +2739,6 @@ function applyAllowAlwaysDecision(params: {
   }
   return changed ? next : null;
 }
-
-export async function persistAllowAlwaysDecisionLocked(params: {
-  agentId: string | undefined;
-  decision: AllowAlwaysPersistenceDecision;
-}): Promise<void> {
-  const decision = params.decision;
-  if (decision.kind === "one-shot") {
-    return;
-  }
-  await updateExecApprovals({
-    update: (file) => applyAllowAlwaysDecision({ file, agentId: params.agentId, decision }),
-  });
-}
-
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
   const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;

@@ -7,7 +7,6 @@ import {
   listDevicePairing,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { resetNodePairingSshVerifyStateForTests } from "./node-pairing-ssh-verify.js";
 import type {
   NodeIdentityProbeParams,
   NodeIdentityProbeResult,
@@ -51,8 +50,8 @@ type PairingRequiredDetails = {
 
 describe("gateway ssh-verified node pairing auto-approve", () => {
   beforeEach(() => {
+    // Each case uses a distinct identityName, matching the host+device cooldown key.
     probeMock.mockReset();
-    resetNodePairingSshVerifyStateForTests();
   });
 
   test("approves device pairing and the first capability surface on a key match", async () => {

@@ -2,7 +2,6 @@
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { lookupCachedContextWindow, providerContextTokenCacheKey } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
@@ -122,7 +121,7 @@ async function importResolveContextTokensForModel() {
 
 describe("lookupContextTokens", () => {
   beforeAll(async () => {
-    contextModule = await import("./context.js");
+    contextModule = await importFreshContextModule();
   });
 
   beforeEach(() => {
@@ -381,7 +380,10 @@ describe("lookupContextTokens", () => {
     await contextModule.ensureContextWindowCacheLoaded();
 
     expect(
-      lookupCachedContextWindow(providerContextTokenCacheKey("fresh-provider", "fresh-model")),
+      contextModule.lookupContextTokens("fresh-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
     ).toBe(123_456);
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).not.toBe(legacyLoadPromise);
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBe(

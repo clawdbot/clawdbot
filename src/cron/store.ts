@@ -29,18 +29,17 @@ import type {
 } from "./store/types.js";
 export type {
   CronConfigJobRuntimeEntry,
-  CronQuarantineFile,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
 
-function resolveDefaultCronDir(): string {
-  return path.join(resolveConfigDir(), "cron");
+function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveConfigDir(env), "cron");
 }
 
-function resolveDefaultCronStorePath(): string {
-  return path.join(resolveDefaultCronDir(), "jobs.json");
+function resolveDefaultCronStorePath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveDefaultCronDir(env), "jobs.json");
 }
 
 /** Resolves the sidecar quarantine path used for invalid cron config rows. */
@@ -52,15 +51,15 @@ export function resolveCronQuarantinePath(storePath: string): string {
 }
 
 /** Resolves the cron jobs store path, expanding home-relative user input. */
-export function resolveCronJobsStorePath(storePath?: string) {
+export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
     if (raw.startsWith("~")) {
-      return path.resolve(expandHomePrefix(raw));
+      return path.resolve(expandHomePrefix(raw, { env }));
     }
     return path.resolve(raw);
   }
-  return resolveDefaultCronStorePath();
+  return resolveDefaultCronStorePath(env);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */

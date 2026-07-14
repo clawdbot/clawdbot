@@ -305,15 +305,16 @@ import type { ElevatedLevel } from "../thinking.js";
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let cliBackendsTesting: typeof import("../../agents/cli-backends.js").testing;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
-let resolveModelSelectionFromDirective: typeof import("./directive-handling.model.js").resolveModelSelectionFromDirective;
+let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
 let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
 
 beforeAll(async () => {
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
-  ({ maybeHandleModelDirectiveInfo, resolveModelSelectionFromDirective } =
-    await import("./directive-handling.model.js"));
+  ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
+  ({ resolveModelSelectionFromDirective } =
+    await import("./directive-handling.model-selection.js"));
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
   ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
 });

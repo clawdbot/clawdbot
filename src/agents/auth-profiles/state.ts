@@ -3,7 +3,6 @@
  * This state tracks order, last-good profile, and cooldown/failure metadata
  * separately from secret-bearing credentials.
  */
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,7 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { readPersistedAuthProfileStateRaw, writePersistedAuthProfileStateRaw } from "./sqlite.js";
+import { readPersistedAuthProfileStateRaw } from "./sqlite.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
@@ -211,17 +210,4 @@ export function buildPersistedAuthProfileState(
     ...(state.lastGood ? { lastGood: state.lastGood } : {}),
     ...(state.usageStats ? { usageStats: state.usageStats } : {}),
   };
-}
-
-/** Saves auth profile runtime state when it differs from the persisted payload. */
-export function savePersistedAuthProfileState(
-  store: AuthProfileState,
-  agentDir?: string,
-): AuthProfileStateStore | null {
-  const payload = buildPersistedAuthProfileState(store);
-  const existingRaw = readPersistedAuthProfileStateRaw(agentDir);
-  if (!payload || !isDeepStrictEqual(existingRaw, payload)) {
-    writePersistedAuthProfileStateRaw(payload, agentDir);
-  }
-  return payload;
 }

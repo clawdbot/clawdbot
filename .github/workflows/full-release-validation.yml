@@ -65,7 +65,7 @@ on:
           - npm-telegram
           - performance
       reuse_evidence:
-        description: Reuse the newest prior green full validation only for the exact same target SHA and inputs
+        description: Reuse matching green product validation for the same target or a changelog-only Release SHA
         required: false
         default: true
         type: boolean
@@ -256,6 +256,7 @@ jobs:
       evidence_root_run_id: ${{ steps.find.outputs.evidence_root_run_id }}
       evidence_run_url: ${{ steps.find.outputs.evidence_run_url }}
       evidence_sha: ${{ steps.find.outputs.evidence_sha }}
+      evidence_policy: ${{ steps.find.outputs.evidence_policy }}
       evidence_manifest: ${{ steps.find.outputs.evidence_manifest }}
       changed_paths: ${{ steps.find.outputs.changed_paths }}
     steps:
@@ -342,7 +343,7 @@ jobs:
             if [[ "$REUSE" == "true" ]]; then
               echo "- Reusing evidence: ${EVIDENCE_RUN_URL}"
               echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
-              echo "- Exact-target reuse changed paths: \`${changed_paths_summary}\`"
+              echo "- Reused validation changed paths: \`${changed_paths_summary}\`"
             else
               echo "- No reusable evidence: ${REUSE_REASON:-unknown}"
             fi
@@ -379,7 +380,7 @@ jobs:
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -524,14 +525,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -714,14 +715,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -752,7 +753,7 @@ jobs:
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -763,6 +764,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -965,14 +967,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -1031,8 +1033,10 @@ jobs:
             child_rerun_group=all
           fi
 
+          release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
+
           args=(
-            -f ref="$TARGET_REF"
+            -f ref="$release_checks_target_ref"
             -f expected_sha="$TARGET_SHA"
             -f provider="$PROVIDER"
             -f mode="$MODE"
@@ -1210,14 +1214,14 @@ jobs:
               break
             fi
             poll_count=$((poll_count + 1))
-            if (( poll_count % 2 == 0 )); then
+            if (( poll_count % 5 == 0 )); then
               fail_fast_failed_jobs
             fi
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
               gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
-            sleep 30
+            sleep 60
           done
           trap - EXIT INT TERM
 
@@ -1380,7 +1384,7 @@ jobs:
               echo "Still waiting on openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
               gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
-            sleep 30
+            sleep 60
           done
           trap - EXIT INT TERM
 
@@ -1430,6 +1434,7 @@ jobs:
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
           EVIDENCE_SHA: ${{ needs.evidence_reuse.outputs.evidence_sha }}
+          EVIDENCE_POLICY: ${{ needs.evidence_reuse.outputs.evidence_policy }}
           EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
@@ -1709,12 +1714,25 @@ jobs:
               fi
             done < <(jq -r '[.childRuns.normalCi // "", .childRuns.pluginPrerelease // "", .childRuns.releaseChecks // "", .childRuns.npmTelegram // "", (.childRuns.productPerformance.runId // "")] | map(select(. != "")) | .[]' <<< "$EVIDENCE_MANIFEST")
             if [[ "$failed" == "0" ]]; then
+              emit_reused_child_dispatch() {
+                local workflow="$1"
+                local run_id="$2"
+                if [[ -n "${run_id// }" ]]; then
+                  echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                fi
+              }
+              emit_reused_child_dispatch "ci.yml" "$(jq -r '.childRuns.normalCi // ""' <<< "$EVIDENCE_MANIFEST")"
+              emit_reused_child_dispatch "plugin-prerelease.yml" "$(jq -r '.childRuns.pluginPrerelease // ""' <<< "$EVIDENCE_MANIFEST")"
+              emit_reused_child_dispatch "openclaw-release-checks.yml" "$(jq -r '.childRuns.releaseChecks // ""' <<< "$EVIDENCE_MANIFEST")"
+              emit_reused_child_dispatch "npm-telegram-beta-e2e.yml" "$(jq -r '.childRuns.npmTelegram // ""' <<< "$EVIDENCE_MANIFEST")"
+              emit_reused_child_dispatch "openclaw-performance.yml" "$(jq -r '.childRuns.productPerformance.runId // ""' <<< "$EVIDENCE_MANIFEST")"
               {
                 echo "### Reused validation evidence"
                 echo
                 echo "- Evidence run: ${EVIDENCE_RUN_URL}"
                 echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
-                echo "- Target SHA: \`${TARGET_SHA}\` (exact-target evidence reuse)"
+                echo "- Target SHA: \`${TARGET_SHA}\`"
+                echo "- Reuse policy: \`${EVIDENCE_POLICY}\`"
               } >> "$GITHUB_STEP_SUMMARY"
             fi
           elif [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
@@ -1804,19 +1822,16 @@ jobs:
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
+          EVIDENCE_POLICY: ${{ needs.evidence_reuse.outputs.evidence_policy }}
         run: |
           set -euo pipefail
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && "$EVIDENCE_REUSE" != "true" ]]; then
             echo "Release checks were skipped by rerun group; skipping automatic release evidence update."
             exit 0
           fi
-          # In reuse mode the child runs live on the chain-root validation run
-          # (the evidence consumer scrapes dispatch logs from the given run),
-          # so durable evidence must reference that run id, not this wrapper.
           notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions."
           if [[ "$EVIDENCE_REUSE" == "true" && -n "${EVIDENCE_ROOT_RUN_ID// }" ]]; then
-            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID} for the exact same target SHA and inputs."
-            GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"
+            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green product evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID} under policy ${EVIDENCE_POLICY}."
           fi
           if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
             echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is not configured; skipping automatic release evidence update."
@@ -1898,6 +1913,7 @@ jobs:
           EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_SHA: ${{ needs.evidence_reuse.outputs.evidence_sha }}
+          EVIDENCE_POLICY: ${{ needs.evidence_reuse.outputs.evidence_policy }}
           EVIDENCE_CHANGED_PATHS: ${{ needs.evidence_reuse.outputs.changed_paths }}
           EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
           PROVIDER: ${{ inputs.provider }}
@@ -1927,6 +1943,7 @@ jobs:
               --arg evidenceRunId "$EVIDENCE_RUN_ID" \
               --arg evidenceRootRunId "$EVIDENCE_ROOT_RUN_ID" \
               --arg evidenceSha "$EVIDENCE_SHA" \
+              --arg evidencePolicy "$EVIDENCE_POLICY" \
               --argjson evidenceChangedPaths "$EVIDENCE_CHANGED_PATHS" \
               '. + {
                 version: 3,
@@ -1939,7 +1956,7 @@ jobs:
                 targetRef: $targetRef,
                 targetSha: $targetSha,
                 evidenceReuse: {
-                  policy: "exact-target-full-validation-v1",
+                  policy: $evidencePolicy,
                   runId: $evidenceRootRunId,
                   selectedRunId: $evidenceRunId,
                   evidenceSha: $evidenceSha,

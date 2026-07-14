@@ -9,6 +9,8 @@ import {
 } from "../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
+  cancelSessionWorkAdmissionHandoff,
+  consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
   hasOnlySessionLifecycleMutationKindActive,
@@ -37,6 +39,75 @@ it("counts one multi-identity admission once", async () => {
     admission.release();
   }
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+});
+
+it("atomically hands admitted work across an interrupted RPC boundary", async () => {
+  const scope = "store-rpc-handoff";
+  const identities = ["agent:main:main", "session-rpc-handoff"];
+  const admission = await beginSessionWorkAdmission({
+    scope,
+    identities,
+    assertAllowed: () => {},
+  });
+  const handoffId = admission.createHandoff();
+  const mutationStarted = createDeferred();
+  let mutationRan = false;
+  const mutation = runExclusiveSessionLifecycleMutation({
+    scope,
+    identities,
+    prepare: async () => {
+      mutationStarted.resolve();
+      expect(await interruptSessionWorkAdmissions({ scope, identities, timeoutMs: 1_000 })).toBe(
+        true,
+      );
+    },
+    run: async () => {
+      mutationRan = true;
+    },
+  });
+  await mutationStarted.promise;
+  let interrupted = false;
+  const adopted = consumeSessionWorkAdmissionHandoff({
+    handoffId,
+    scope,
+    identities,
+    onInterrupt: () => {
+      interrupted = true;
+    },
+  });
+
+  try {
+    expect(adopted).toBe(admission);
+    expect(interrupted).toBe(true);
+    expect(cancelSessionWorkAdmissionHandoff(handoffId)).toBe(false);
+    expect(mutationRan).toBe(false);
+  } finally {
+    adopted?.release();
+    admission.release();
+    await mutation;
+  }
+  expect(mutationRan).toBe(true);
+});
+
+it("keeps an admission handoff bound to its original identities", async () => {
+  const admission = await beginSessionWorkAdmission({
+    scope: "store-bound-handoff",
+    identities: ["agent:main:main", "session-bound-handoff"],
+    assertAllowed: () => {},
+  });
+  const handoffId = admission.createHandoff();
+
+  expect(
+    consumeSessionWorkAdmissionHandoff({
+      handoffId,
+      scope: "store-bound-handoff",
+      identities: ["agent:main:other", "session-bound-handoff"],
+    }),
+  ).toBeUndefined();
+  expect(cancelSessionWorkAdmissionHandoff(handoffId)).toBe(true);
+  expect(isSessionWorkAdmissionActive("store-bound-handoff", ["session-bound-handoff"])).toBe(
+    false,
+  );
 });
 
 it("counts one multi-identity lifecycle mutation once across module instances", async () => {

@@ -25,7 +25,6 @@ const {
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
-  resolveMessagesResponseUsageDefault,
   resolveEffectiveResponseUsage,
 } = await import("./thinking.js");
 
@@ -844,33 +843,6 @@ describe("normalizeReasoningLevel", () => {
   it("accepts stream", () => {
     expect(normalizeReasoningLevel("stream")).toBe("stream");
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
-  });
-});
-
-describe("resolveMessagesResponseUsageDefault", () => {
-  it("returns undefined when unset (preserves off-by-default behavior)", () => {
-    expect(resolveMessagesResponseUsageDefault(undefined)).toBeUndefined();
-    expect(resolveMessagesResponseUsageDefault(undefined, "discord")).toBeUndefined();
-  });
-
-  it("returns a bare string default for any channel", () => {
-    expect(resolveMessagesResponseUsageDefault("full")).toBe("full");
-    expect(resolveMessagesResponseUsageDefault("full", "telegram")).toBe("full");
-  });
-
-  it("resolves the channel entry from a map", () => {
-    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
-    expect(resolveMessagesResponseUsageDefault(cfg, "discord")).toBe("full");
-    expect(resolveMessagesResponseUsageDefault(cfg, "telegram")).toBe("tokens");
-  });
-
-  it("falls back to default for an unmapped channel", () => {
-    const cfg = { default: "tokens", discord: "full" } as const;
-    expect(resolveMessagesResponseUsageDefault(cfg, "whatsapp")).toBe("tokens");
-  });
-
-  it("returns undefined for a map with neither the channel nor a default", () => {
-    expect(resolveMessagesResponseUsageDefault({ discord: "full" }, "telegram")).toBeUndefined();
   });
 });
 

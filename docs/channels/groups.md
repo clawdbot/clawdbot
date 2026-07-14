@@ -349,7 +349,12 @@ Replying to a bot message counts as an implicit mention when the channel exposes
 
 ## Scope configured mention patterns
 
-Configured `mentionPatterns` are regex fallback triggers. Use them when the platform does not expose a native bot mention, or when plain text such as `openclaw:` should count as a mention. Native platform mentions are separate: when Discord, Slack, Telegram, Matrix, or another channel can prove the message explicitly mentioned the bot, that native mention still triggers even where configured regex patterns are denied.
+Configured `mentionPatterns` are regex fallback triggers. Use them when the
+platform does not expose a native bot mention, or when you want plain text such
+as `openclaw:` to count as a mention. Native platform mentions are separate:
+when Discord, Slack, Telegram, Matrix, Signal, or another channel can prove the message
+explicitly mentioned the bot, that native mention still triggers even if
+configured regex patterns are denied.
 
 By default, configured mention patterns apply everywhere the channel passes provider and conversation facts into mention detection. To keep broad patterns from waking the agent in every group, scope them per channel with `channels.<channel>.mentionPatterns`.
 

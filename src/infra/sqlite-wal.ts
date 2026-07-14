@@ -9,8 +9,8 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
-export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -60,7 +60,7 @@ function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): nu
 
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
-export function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
   if (row?.page_count === 0) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL;");

@@ -17,6 +17,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
+import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -69,7 +70,7 @@ function recordMcpLoopbackToolCallResult(params: {
 }
 
 function buildPreparedCliRunContext(params: {
-  output: "jsonl" | "text";
+  output: "json" | "jsonl" | "text";
   provider?: string;
   runId?: string;
   beforeExecution?: () => Promise<void>;
@@ -402,6 +403,186 @@ describe("executePreparedCliRun supervisor output capture", () => {
       name: "FailoverError",
       message: "Credit balance is too low",
     });
+  });
+
+  it("surfaces Claude max-turn results with run and session recovery context", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-session-max-turns",
+      num_turns: 2,
+      stop_reason: "tool_use",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "claude-cli",
+          runId: "run-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. " +
+        "Claude session: claude-session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+      sessionId: "session-1",
+      reason: "unknown",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (1)",
+    });
+  });
+
+  it("surfaces Claude max-turn results from JSON output", async () => {
+    const stdout = JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-json-max-turns",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (2)"],
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "json",
+          provider: "claude-cli",
+          runId: "run-json-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (2)",
+    });
+  });
+
+  it.each([
+    ["no-output-timeout", true],
+    ["overall-timeout", false],
+  ] as const)(
+    "keeps a terminal max-turn result ahead of a later %s",
+    async (reason, noOutputTimedOut) => {
+      const stdout = `${JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: `claude-${reason}`,
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      })}\n`;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(stdout);
+        return createManagedRun({
+          reason,
+          exitCode: null,
+          exitSignal: "SIGTERM",
+          durationMs: 1_000,
+          stdout: input.captureOutput === false ? "" : stdout,
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut,
+        });
+      });
+
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toMatchObject({
+        name: "FailoverError",
+        code: "cli_max_turns",
+        rawError: "Reached maximum number of turns (1)",
+      });
+    },
+  );
+
+  it("preserves max-turn failure through fork successor persistence errors", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const persistenceError = new Error("fork successor persistence failed");
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-max-turns",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+
+    let failure: unknown;
+    try {
+      await executePreparedCliRun(context, "fork-source");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
   });
 
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {

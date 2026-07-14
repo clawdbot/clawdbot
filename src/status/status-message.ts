@@ -142,7 +142,7 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-export type StatusArgs = {
+type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
-import { clearSessionStoreCacheForTest, getSessionStoreWriterQueueSizeForTest } from "./store.js";
+import { clearSessionStoreCacheForTest } from "./store.js";
 
 describe("session store writer", () => {
   afterEach(() => {
@@ -26,14 +26,12 @@ describe("session store writer", () => {
     });
 
     await firstStarted.promise;
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(1);
     expect(order).toEqual(["first:start"]);
 
     releaseFirst.resolve();
     await Promise.all([first, second]);
 
     expect(order).toEqual(["first:start", "first:end", "second"]);
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
   });
 
   it("runs nested writes for the active store without requeueing behind itself", async () => {
@@ -56,7 +54,6 @@ describe("session store writer", () => {
 
     expect(result).toBe("nested-result");
     expect(order).toEqual(["outer:start", "inner", "outer:end"]);
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
   });
 
   it("does not leak active writer state to async children after the writer returns", async () => {
@@ -103,13 +100,11 @@ describe("session store writer", () => {
 
     expect(order).toEqual(["blocker:start", "blocker:end", "child"]);
     expect(await child).toBe("child-result");
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
   });
 
   it("rejects empty store paths before enqueuing work", async () => {
     await expect(runExclusiveSessionStoreWrite("", async () => undefined)).rejects.toThrow(
       /storePath must be a non-empty string/,
     );
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
   });
 });

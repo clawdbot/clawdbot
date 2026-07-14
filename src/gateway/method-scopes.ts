@@ -20,15 +20,7 @@ import {
   type OperatorScope,
 } from "./operator-scopes.js";
 
-export {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  READ_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-  type OperatorScope,
-};
+export { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, READ_SCOPE, WRITE_SCOPE, type OperatorScope };
 
 /** Default scopes granted to CLI/operator clients when no narrower local policy is known. */
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [

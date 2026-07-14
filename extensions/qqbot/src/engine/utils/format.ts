@@ -2,14 +2,13 @@
  * General formatting and string utilities.
  * 通用格式化与字符串工具。
  *
- * Pure utility functions with zero external dependencies.
- * Replaces `openclaw/plugin-sdk/error-runtime` and `text-runtime`
- * helpers for use inside engine/.
+ * Pure utility functions, with duration presentation from the plugin-local dependency.
  *
  * NOTE: The framework `formatErrorMessage` also applies `redactSensitiveText()`
  * for token masking. We intentionally omit that here — the framework's log
  * pipeline handles redaction at a higher level.
  */
+import prettyMilliseconds from "pretty-ms";
 
 /**
  * Format any error object into a readable string.
@@ -60,11 +59,14 @@ export function formatErrorMessage(err: unknown): string {
 
 /** Format a millisecond duration into a human-readable string (e.g. "5m 30s"). */
 export function formatDuration(durationMs: number): string {
-  const seconds = Math.round(durationMs / 1000);
-  if (seconds < 60) {
-    return `${seconds}s`;
+  if (durationMs <= 0) {
+    return "0s";
   }
-  const minutes = Math.floor(seconds / 60);
-  const remainSeconds = seconds % 60;
-  return remainSeconds > 0 ? `${minutes}m ${remainSeconds}s` : `${minutes}m`;
+  const roundedMs =
+    durationMs < 1000 ? Math.round(durationMs) : Math.round(durationMs / 1000) * 1000;
+  return prettyMilliseconds(roundedMs, {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }

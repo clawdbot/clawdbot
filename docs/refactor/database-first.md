@@ -132,7 +132,7 @@ without exceptions outside doctor/import/export/debug boundaries.
   longer accepts transcript locators or JSONL transcript paths.
 - PI embedded runner: `clean`. Embedded PI runs, prepared workers, compaction,
   and retry loops use SQLite session scope and reject stale transcript handles.
-- Cron: `clean` for runtime. Runtime uses `cron_jobs` and `cron_run_logs`;
+- Cron: `clean` for runtime. Runtime uses `cron_jobs` and cron-owned `task_runs`;
   runtime tests use SQLite `storeKey` naming, and file-era cron paths remain in
   doctor legacy migration tests only.
 - Task registry: `clean`. Task and Task Flow runtime rows live in
@@ -200,8 +200,8 @@ without exceptions outside doctor/import/export/debug boundaries.
 No follow-up product decisions are blocking this plan. The implementation should
 proceed with these assumptions:
 
-- Use `node:sqlite` directly and require the Node 22+ runtime for this storage
-  path.
+- Use `node:sqlite` directly and require a WAL-reset-safe Node runtime
+  (22.22.3+, 24.15+, or 25.9+) for this storage path.
 - Keep exactly one normal configuration file. Do not move config, plugin
   manifests, or Git workspaces into SQLite in this refactor.
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
@@ -283,9 +283,9 @@ No additional product questions are blocking implementation.
 
 The branch already has a real shared SQLite base:
 
-- The runtime floor is now Node 22+: `package.json`, the CLI runtime guard,
-  installer defaults, macOS runtime locator, CI, and public install docs all
-  agree. The old Node 22 compatibility lane is removed.
+- The runtime floor now requires a WAL-reset-safe Node build: 22.22.3+,
+  24.15+, or 25.9+. `package.json`, the CLI runtime guard, installer defaults,
+  macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
   the generated schema module derived from
@@ -309,7 +309,7 @@ The branch already has a real shared SQLite base:
   `auth_profile_stores`, `auth_profile_state`,
   `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
-  `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
+  `sandbox_registry_entries`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `model_capability_cache`,
   `workspace_setup_state`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
@@ -536,11 +536,14 @@ The branch already has a real shared SQLite base:
 - Matrix named-account credential upgrade no longer happens during runtime
   reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
   rename when a single/default Matrix account can be resolved.
-- Core pairing and cron runtime modules no longer export legacy JSON path
-  builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
-  `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
-  migration only. Legacy cron job-shape normalization and cron run-log import
-  live under `src/commands/doctor/legacy/cron*.ts`.
+- Core pairing and cron runtime modules no longer use legacy JSON path builders.
+  The deprecated pairing-path SDK helper remains migration-only compatibility;
+  doctor state migration owns its file reads and imports. Doctor-owned legacy
+  modules construct `pending.json`, `paired.json`, `bootstrap.json`, and
+  `cron/jobs.json` source paths for import tests and migration only. Legacy cron
+  job-shape normalization and JSONL history import live under
+  `src/commands/doctor/cron/`; legacy SQLite history finalization runs during
+  state database open.
 - `src/commands/doctor/legacy/runtime-state.ts` imports legacy JSON state
   files, including node host config, into SQLite from doctor. New legacy file
   importers stay under `src/commands/doctor/legacy/`.
@@ -955,7 +958,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the same state-database transaction.
 - Cron runtime callers now use a stable SQLite cron store key. Legacy
   `cron.store` paths are doctor import inputs only; production gateway, task
-  maintenance, status, run-log, and Telegram target writeback paths use
+  maintenance, status, run-history, and Telegram target writeback paths use
   `resolveCronStoreKey` and no longer path-normalize the key. Cron status now
   reports `storeKey` rather than the old file-shaped `storePath` field.
 - Cron runtime load and scheduling no longer normalize legacy persisted job
@@ -1093,9 +1096,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   `commitments.json` and removes it after a successful import.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
-  payload, delivery, failure-alert, session, status, and runtime-state columns plus typed
-  `cron_run_logs` metadata for status, diagnostics summary, delivery status/error,
-  session/run, model, and token totals. `job_json` is only a replay/debug copy; `state_json` keeps nested
+  payload, delivery, failure-alert, session, status, and runtime-state columns plus
+  cron-owned `task_runs` detail for diagnostics, delivery, session/run, model,
+  and token totals. `job_json` is only a replay/debug copy; `state_json` keeps nested
   runtime diagnostics that do not yet have hot query fields, while runtime
   rehydrates hot state fields from typed columns. Doctor imports
   legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files and removes
@@ -1217,8 +1220,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   atomic acquire/release boundary. The retired file-lock directory option is
   gone; tests use the SQLite row identity directly.
 - The old unreferenced cron usage-report helper that scanned `cron/runs/*.jsonl`
-  files was deleted. Cron run history reports should read the typed
-  `cron_run_logs` SQLite rows.
+  files was deleted. Cron run history reports read cron-owned `task_runs` rows.
 - Main-session restart recovery now discovers candidate agents through the
   SQLite `agent_databases` registry instead of scanning `agents/*/sessions`
   directories.
@@ -1383,8 +1385,8 @@ create` validates the written archive by default; `--no-verify` is the
   SQLite `command_log_entries` table instead of appending
   `logs/commands.log`.
 - Channel pairing allowlists now expose only SQLite-backed read/write helpers at
-  runtime and in the plugin SDK. The old `*-allowFrom.json` path resolver and
-  file reader live only under doctor legacy import code.
+  runtime. The deprecated plugin SDK path resolver remains for migration
+  compatibility; file readers live only in doctor state migration code.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
@@ -1475,7 +1477,6 @@ voicewake_routing_routes(config_key, position, trigger, target_mode, target_agen
 update_check_state(state_key, last_checked_at, last_notified_version, last_notified_tag, last_available_version, last_available_tag, auto_install_id, auto_first_seen_version, auto_first_seen_tag, auto_first_seen_at, auto_last_attempt_version, auto_last_attempt_at, auto_last_success_version, auto_last_success_at, updated_at_ms)
 config_health_entries(config_path, last_known_good_json, last_promoted_good_json, last_observed_suspicious_signature, updated_at_ms)
 sandbox_registry_entries(registry_kind, container_name, session_key, backend_id, runtime_label, image, created_at_ms, last_used_at_ms, config_label_kind, config_hash, cdp_port, no_vnc_port, entry_json, updated_at)
-cron_run_logs(store_key, job_id, seq, ts, status, error, summary, diagnostics_summary, delivery_status, delivery_error, delivered, session_id, session_key, run_id, run_at_ms, duration_ms, next_run_at_ms, model, provider, total_tokens, entry_json, created_at)
 cron_jobs(store_key, job_id, name, description, enabled, delete_after_run, created_at_ms, agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind, payload_message, payload_model, payload_fallbacks_json, payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content, payload_external_content_source_json, payload_light_context, payload_tools_allow_json, delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id, delivery_best_effort, failure_delivery_mode, failure_delivery_channel, failure_delivery_to, failure_delivery_account_id, failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error, last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
 delivery_queue_entries(queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at)
 commitments(id, agent_id, session_key, channel, account_id, recipient_id, thread_id, sender_id, kind, sensitivity, source, status, reason, suggested_text, dedupe_key, confidence, due_earliest_ms, due_latest_ms, due_timezone, source_message_id, source_run_id, created_at_ms, updated_at_ms, attempts, last_attempt_at_ms, sent_at_ms, dismissed_at_ms, snoozed_until_ms, expired_at_ms, record_json)

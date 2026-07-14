@@ -67,9 +67,9 @@ export type CrestodianChatEngineOptions = {
   readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
-export type CrestodianChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
+type CrestodianChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
-export type CrestodianChatReply = {
+type CrestodianChatReply = {
   text: string;
   action: CrestodianChatReplyAction;
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */

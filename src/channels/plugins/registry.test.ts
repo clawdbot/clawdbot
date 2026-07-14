@@ -108,4 +108,43 @@ describe("listChannelPlugins", () => {
     expect(getChannelPlugin("beta")?.meta.label).toBe("beta");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["beta"]);
   });
+
+  it("builds the loaded channel view once per registry version", () => {
+    const registry = createEmptyPluginRegistry();
+    let buildCount = 0;
+    registry.channels = new Proxy(
+      [
+        {
+          pluginId: "zeta",
+          plugin: { id: "zeta", meta: { label: "zeta" } } as never,
+          source: "test",
+        },
+        {
+          pluginId: "alpha",
+          plugin: { id: "alpha", meta: { label: "alpha" } } as never,
+          source: "test",
+        },
+      ],
+      {
+        get(target, property, receiver) {
+          if (property === Symbol.iterator) {
+            buildCount += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
+    expect(resolveChannelPluginRegistration("zeta")?.plugin.meta.label).toBe("zeta");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
+    expect(buildCount).toBe(1);
+
+    setActivePluginRegistry(registry);
+
+    expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
+    expect(buildCount).toBe(2);
+  });
 });

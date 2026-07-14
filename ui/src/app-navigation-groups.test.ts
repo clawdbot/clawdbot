@@ -2,12 +2,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_PINNED_ROUTES,
-  SETTINGS_NAVIGATION_ROUTES,
+  SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   isSettingsNavigationRoute,
   normalizeSidebarPinnedRoutes,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
+
+const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
 
 describe("sidebar pinned routes", () => {
   it("keeps operational destinations visible by default", () => {
@@ -18,40 +20,49 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes(["overview", "usage"])).toEqual(["usage"]);
   });
 
-  it("keeps managed worktrees in settings, not the customizable sidebar", () => {
+  it("keeps settings-only routes out of customizable pins", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("worktrees");
-    expect(SETTINGS_NAVIGATION_ROUTES).toContain("worktrees");
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("activity");
+    expect(settingsRoutes).toContain("activity");
+    expect(normalizeSidebarPinnedRoutes(["activity", "usage"])).toEqual(["usage"]);
   });
 
-  it("moves activity into system settings and drops stale pinned entries", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("activity");
-    expect(SETTINGS_NAVIGATION_ROUTES).toContain("activity");
-    expect(normalizeSidebarPinnedRoutes(["activity", "usage"])).toEqual(["usage"]);
+  it("moves session management into settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("sessions");
+    expect(settingsRoutes).toContain("sessions");
+    expect(normalizeSidebarPinnedRoutes(["sessions", "usage"])).toEqual(["usage"]);
+  });
+
+  it("moves devices into system settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
+    expect(settingsRoutes).toContain("nodes");
+    expect(normalizeSidebarPinnedRoutes(["nodes", "usage"])).toEqual(["usage"]);
   });
 
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
-    expect(SETTINGS_NAVIGATION_ROUTES).toContain("channels");
-    expect(SETTINGS_NAVIGATION_ROUTES.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(
-      true,
+    expect(settingsRoutes).toEqual(
+      expect.arrayContaining(["worktrees", "activity", "channels", "config"]),
     );
+    expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
+    expect(normalizeSidebarPinnedRoutes(["activity", "worktrees", "usage"])).toEqual(["usage"]);
   });
 
-  it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(
-      normalizeSidebarPinnedRoutes(["usage", "sessions", "usage", "worktrees", "instances", 7]),
-    ).toEqual(["usage", "sessions"]);
-    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
-  });
-
-  it("keeps the plugin manager in the customizable workspace routes", () => {
+  it("keeps the plugin manager in customizable workspace routes", () => {
     expect(normalizeSidebarPinnedRoutes(["plugins", "usage", "plugins"])).toEqual([
       "plugins",
       "usage",
     ]);
     expect(sidebarMoreRoutes(["usage"])).toContain("plugins");
-    expect(SETTINGS_NAVIGATION_ROUTES).not.toContain("plugins");
+    expect(settingsRoutes).not.toContain("plugins");
+  });
+
+  it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
+    expect(
+      normalizeSidebarPinnedRoutes(["usage", "tasks", "usage", "worktrees", "instances", 7]),
+    ).toEqual(["usage", "tasks"]);
+    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
   it("falls back to null for non-list values so callers use defaults", () => {
@@ -61,9 +72,9 @@ describe("sidebar pinned routes", () => {
   });
 
   it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["sessions", "usage"] as const;
+    const pinned = ["tasks", "usage"] as const;
     const more = sidebarMoreRoutes(pinned);
-    expect(more).not.toContain("sessions");
+    expect(more).not.toContain("tasks");
     expect(more).not.toContain("usage");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });

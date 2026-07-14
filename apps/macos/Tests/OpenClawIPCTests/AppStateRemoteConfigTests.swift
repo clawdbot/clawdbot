@@ -52,6 +52,30 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `config fingerprint ignores writer bookkeeping metadata`() {
+        let base: [String: Any] = [
+            "gateway": ["mode": "local"],
+        ]
+        let touched: [String: Any] = [
+            "gateway": ["mode": "local"],
+            "meta": [
+                "lastTouchedAt": "2026-07-13T09:12:53Z",
+                "lastTouchedVersion": "2026.7.2",
+            ],
+        ]
+        let changed: [String: Any] = [
+            "gateway": ["mode": "remote"],
+            "meta": [
+                "lastTouchedAt": "2026-07-13T09:13:25Z",
+                "lastTouchedVersion": "2026.7.2",
+            ],
+        ]
+
+        #expect(AppState._testConfigFingerprint(base) == AppState._testConfigFingerprint(touched))
+        #expect(AppState._testConfigFingerprint(base) != AppState._testConfigFingerprint(changed))
+    }
+
+    @Test
     func `route edit during config read fails the source snapshot closed`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(

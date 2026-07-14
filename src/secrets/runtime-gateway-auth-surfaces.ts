@@ -12,10 +12,10 @@ export const GATEWAY_AUTH_SURFACE_PATHS = [
   "gateway.remote.password",
 ] as const;
 
-export type GatewayAuthSurfacePath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
+type GatewayAuthSurfacePath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
 
 /** Active/inactive decision for one gateway credential SecretRef surface. */
-export type GatewayAuthSurfaceState = {
+type GatewayAuthSurfaceState = {
   path: GatewayAuthSurfacePath;
   active: boolean;
   reason: string;
@@ -23,7 +23,7 @@ export type GatewayAuthSurfaceState = {
 };
 
 /** Complete state map keyed by every known gateway credential surface path. */
-export type GatewayAuthSurfaceStateMap = Record<GatewayAuthSurfacePath, GatewayAuthSurfaceState>;
+type GatewayAuthSurfaceStateMap = Record<GatewayAuthSurfacePath, GatewayAuthSurfaceState>;
 
 function formatAuthMode(mode: string | undefined): string {
   return mode ?? "unset";

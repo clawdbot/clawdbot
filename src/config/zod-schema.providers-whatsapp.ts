@@ -8,7 +8,7 @@ import {
   ChannelHeartbeatVisibilitySchema,
 } from "./zod-schema.channels.js";
 import {
-  BlockStreamingCoalesceSchema,
+  ChannelDeliveryStreamingConfigSchema,
   ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
@@ -94,9 +94,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
     ackReaction: WhatsAppAckReactionSchema,
@@ -164,7 +162,7 @@ const WhatsAppAccountObjectSchema = z
   })
   .strict();
 
-export const WhatsAppAccountSchema = z.preprocess(
+const WhatsAppAccountSchema = z.preprocess(
   stripDeprecatedWhatsAppNoopKeys,
   WhatsAppAccountObjectSchema,
 );

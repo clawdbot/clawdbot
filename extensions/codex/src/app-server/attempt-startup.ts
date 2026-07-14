@@ -99,7 +99,7 @@ export function isCodexContextRestartSelectionChangedError(
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
 /** Resources and bindings returned after a Codex attempt thread starts. */
-export type StartCodexAttemptThreadResult = {
+type StartCodexAttemptThreadResult = {
   client: CodexAppServerClient;
   turnRouter: CodexAppServerTurnRouter;
   turnRoute: CodexThreadRouteReservation;

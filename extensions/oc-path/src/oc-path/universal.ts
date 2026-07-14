@@ -63,9 +63,9 @@ export type OcMatch =
   | { readonly kind: "node"; readonly descriptor: NodeDescriptor; readonly line: number }
   | { readonly kind: "insertion-point"; readonly container: ContainerKind; readonly line: number };
 
-export type LeafType = "string" | "number" | "boolean" | "null";
+type LeafType = "string" | "number" | "boolean" | "null";
 
-export type NodeDescriptor =
+type NodeDescriptor =
   | "md-block"
   | "md-item"
   | "jsonc-object"
@@ -74,7 +74,7 @@ export type NodeDescriptor =
   | "yaml-map"
   | "yaml-seq";
 
-export type ContainerKind =
+type ContainerKind =
   | "md-section" // append item to a section
   | "md-file" // append a section to the file
   | "md-frontmatter" // add a frontmatter key
@@ -84,7 +84,7 @@ export type ContainerKind =
   | "yaml-map"
   | "yaml-seq";
 
-export type SetResult =
+type SetResult =
   | { readonly ok: true; readonly ast: OcAst }
   | {
       readonly ok: false;
@@ -108,7 +108,7 @@ type SetOcPathOptions = {
  * Insertion marker on the deepest path segment: `+`, `+<key>`, or
  * `+<index>`. Returns parent path + marker; null for plain paths.
  */
-export interface InsertionInfo {
+interface InsertionInfo {
   readonly parentPath: OcPath;
   readonly marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number };
 }

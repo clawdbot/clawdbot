@@ -4,17 +4,14 @@ import {
   GoogleGenAI,
   type HttpOptions,
   ResourceScope,
-  ThinkingLevel as VertexThinkingLevel,
 } from "@google/genai";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import type { GoogleThinkingLevel } from "./google-shared.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   createGoogleAssistantOutput,
-  getDisabledGoogleThinkingConfig,
   type GoogleProviderOptions,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
@@ -27,14 +24,6 @@ interface GoogleVertexOptions extends GoogleProviderOptions {
 
 const API_VERSION = "v1";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
-
-const THINKING_LEVEL_MAP: Record<GoogleThinkingLevel, VertexThinkingLevel> = {
-  THINKING_LEVEL_UNSPECIFIED: VertexThinkingLevel.THINKING_LEVEL_UNSPECIFIED,
-  MINIMAL: VertexThinkingLevel.MINIMAL,
-  LOW: VertexThinkingLevel.LOW,
-  MEDIUM: VertexThinkingLevel.MEDIUM,
-  HIGH: VertexThinkingLevel.HIGH,
-};
 
 // Counter for generating unique tool call IDs
 let toolCallCounter = 0;
@@ -187,13 +176,5 @@ function buildParams(
   context: Context,
   options: GoogleVertexOptions = {},
 ): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options, {
-    mapThinkingLevel: mapVertexThinkingLevel,
-    getDisabledThinkingConfig: (modelLocal) =>
-      getDisabledGoogleThinkingConfig(modelLocal, { mapThinkingLevel: mapVertexThinkingLevel }),
-  });
-}
-
-function mapVertexThinkingLevel(level: GoogleThinkingLevel): VertexThinkingLevel {
-  return THINKING_LEVEL_MAP[level];
+  return buildGoogleGenerateContentParams(model, context, options);
 }

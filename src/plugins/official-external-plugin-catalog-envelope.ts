@@ -8,29 +8,21 @@ import {
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES = 16;
 
-export type OfficialExternalPluginCatalogEnvelopeSignature = {
+type OfficialExternalPluginCatalogEnvelopeSignature = {
   keyId?: string;
   algorithm?: string;
   signature?: string;
 };
-
-export type OfficialExternalPluginCatalogSignedEnvelope = {
-  schemaVersion?: number;
-  payloadType?: string;
-  payload?: string;
-  signatures?: readonly OfficialExternalPluginCatalogEnvelopeSignature[];
-};
-
-export type OfficialExternalPluginCatalogTrustedSigningKey = {
+type OfficialExternalPluginCatalogTrustedSigningKey = {
   keyId: string;
   publicKey: string;
 };
 
-export type OfficialExternalPluginCatalogEnvelopeVerificationResult =
+type OfficialExternalPluginCatalogEnvelopeVerificationResult =
   | {
       ok: true;
       feed: OfficialExternalPluginCatalogFeed;
@@ -49,14 +41,7 @@ export type OfficialExternalPluginCatalogEnvelopeVerificationResult =
         | "invalid-signature";
       message: string;
     };
-
-export function createOfficialExternalPluginCatalogEnvelopePayload(
-  feed: OfficialExternalPluginCatalogFeed,
-): string {
-  return Buffer.from(JSON.stringify(feed), "utf8").toString("base64url");
-}
-
-export function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
+function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
   payloadBytes: Buffer;
 }): Buffer {

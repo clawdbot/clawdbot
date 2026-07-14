@@ -29,13 +29,13 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             senderId: qa-command-operator
             senderName: QA Command Operator
             text:
               expr: "transport.id === 'telegram' ? '/commands@openclaw' : '/commands'"
         - waitForOutbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             sinceIndex: { ref: startIndex }
             timeoutMs: 60000
         - call: sleep

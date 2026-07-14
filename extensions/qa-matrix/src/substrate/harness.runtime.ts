@@ -367,4 +367,3 @@ export const testing = {
   resolveMatrixQaHarnessImage,
   waitForReachableMatrixBaseUrl,
 };
-export { testing as __testing };

@@ -24,7 +24,7 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import { requestHeartbeat } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -38,7 +38,6 @@ describe("runHeartbeatOnce commitments", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     setHeartbeatsEnabled(true);
     vi.useRealTimers();
     vi.unstubAllEnvs();

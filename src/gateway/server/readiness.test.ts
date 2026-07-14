@@ -1,8 +1,9 @@
 // Readiness checker tests cover startup grace, channel health, and stale socket decisions.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "../server-channels.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { ChannelManager } from "../server-channels.js";
 import { createReadinessChecker } from "./readiness.js";
 
 /**

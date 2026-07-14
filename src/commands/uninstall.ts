@@ -3,8 +3,8 @@
 
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
-  stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
@@ -24,7 +24,7 @@ import {
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
-export type UninstallOptions = {
+type UninstallOptions = {
   service?: boolean;
   state?: boolean;
   workspace?: boolean;
@@ -36,13 +36,7 @@ export type UninstallOptions = {
 };
 
 const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
-  multiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  multiselect(styleSelectParams(params));
 
 function buildScopeSelection(opts: UninstallOptions): {
   scopes: Set<UninstallScope>;

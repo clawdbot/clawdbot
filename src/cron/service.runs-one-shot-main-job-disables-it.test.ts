@@ -12,7 +12,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import type { CronEvent, CronServiceDeps } from "./service.js";
+import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -20,6 +20,7 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "./service.test-harness.js";
+import type { CronServiceDeps } from "./service/state.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });

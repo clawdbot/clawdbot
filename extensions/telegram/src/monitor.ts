@@ -29,8 +29,6 @@ import type {
   TelegramUpdateOffsetRotationInfo,
 } from "./update-offset-store.js";
 
-export type { MonitorTelegramOpts } from "./monitor.types.js";
-
 function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {

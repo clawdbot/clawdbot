@@ -22,6 +22,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/matrix/subagent-hooks-api.ts",
   "extensions/memory-core/src/dreaming.ts",
   "extensions/memory-lancedb/index.ts",
+  "extensions/onepassword/index.ts",
   "extensions/thread-ownership/index.ts",
   "extensions/workboard/index.ts",
 ] as const;
@@ -35,6 +36,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
+  "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
   "extensions/workboard/index.ts": ["subagent_ended"],
 } as const satisfies Record<
@@ -55,6 +57,12 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
+  "extensions/onepassword/index.ts": [
+    "resolveLivePluginConfigObject(",
+    "resolveEffectiveEnableState(",
+    '"onepassword"',
+    "api.runtime.config?.current",
+  ],
   "extensions/thread-ownership/index.ts": [
     "resolveLivePluginConfigObject(",
     '"thread-ownership"',

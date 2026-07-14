@@ -2,7 +2,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
@@ -170,7 +169,7 @@ describe("optional media tool factory planning", () => {
       workflow: { "1": { inputs: {} } },
       promptNodeId: "1",
     });
-    setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     legacyComfyToolNames = (
       await createOpenClawToolsForTest({
         config,
@@ -181,7 +180,7 @@ describe("optional media tool factory planning", () => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
-    setBundledPluginsDirOverrideForTest(undefined);
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
@@ -193,7 +192,6 @@ describe("optional media tool factory planning", () => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
-    setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
   });
 
@@ -238,7 +236,7 @@ describe("optional media tool factory planning", () => {
   it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
     // Workspace snapshots are process-local facts and must not leak to unrelated runs.
     const config: OpenClawConfig = {};
-    setBundledPluginsDirOverrideForTest("/nonexistent/bundled/plugins");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     installSnapshot(
       config,
       [

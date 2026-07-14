@@ -34,6 +34,11 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
+type CliTerminalFailure = {
+  reason: "max_turns";
+  limit?: number;
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
@@ -41,6 +46,7 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   errorText?: string;
+  terminalFailure?: CliTerminalFailure;
   diagnostics?: {
     process?: CliProcessDiagnostics;
   };
@@ -53,6 +59,36 @@ export type CliOutput = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   yielded?: true;
 };
+
+function normalizeCliContextValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, " ");
+  return normalized ? normalized.slice(0, 200) : undefined;
+}
+
+export function formatCliOutputError(
+  output: CliOutput,
+  attribution: { runId?: string; sessionId?: string } = {},
+): string {
+  if (output.terminalFailure?.reason !== "max_turns") {
+    return output.errorText || "CLI failed.";
+  }
+
+  const runId = normalizeCliContextValue(attribution.runId);
+  const sessionId = normalizeCliContextValue(attribution.sessionId);
+  const cliSessionId = normalizeCliContextValue(output.sessionId);
+  const context = [
+    runId ? `OpenClaw run: ${runId}.` : undefined,
+    sessionId ? `OpenClaw session: ${sessionId}.` : undefined,
+    cliSessionId ? `Claude session: ${cliSessionId}.` : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  const limit = output.terminalFailure.limit;
+  return [
+    `Claude CLI stopped after reaching the maximum number of turns${limit ? ` (limit: ${limit})` : ""}.`,
+    ...context,
+    "Tool actions may already have run; verify their effects before retrying.",
+    "Retry with a higher --max-turns value or a narrower task.",
+  ].join(" ");
+}
 
 export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_MIN_TURN_RAW_CHARS = 1_024;
@@ -119,6 +155,16 @@ function isGeminiStreamJsonDialect(params: {
   return (
     params.backend.jsonlDialect === "gemini-stream-json" || isGeminiCliProvider(params.providerId)
   );
+}
+
+function isClaudeStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  if (params.backend.jsonlDialect) {
+    return params.backend.jsonlDialect === "claude-stream-json";
+  }
+  return isClaudeCliProvider(params.providerId);
 }
 
 function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: string }): boolean {
@@ -379,6 +425,57 @@ function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
   return "";
 }
 
+function readClaudeMaxTurnsFailure(
+  parsed: Record<string, unknown>,
+): CliTerminalFailure | undefined {
+  const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
+  const terminalReason =
+    typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
+  if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
+    return undefined;
+  }
+  const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
+  for (const error of errors) {
+    if (typeof error !== "string") {
+      continue;
+    }
+    const match = error.match(/maximum number of turns\s*\((\d+)\)/i);
+    if (match) {
+      const limit = Number.parseInt(match[1] ?? "", 10);
+      if (Number.isSafeInteger(limit) && limit > 0) {
+        return {
+          reason: "max_turns",
+          limit,
+        };
+      }
+    }
+  }
+  return { reason: "max_turns" };
+}
+
+function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(parsed.errors)) {
+    return undefined;
+  }
+  for (const error of parsed.errors) {
+    if (typeof error === "string" && error.trim()) {
+      return error.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveCliTerminalErrorText(
+  parsed: Record<string, unknown>,
+  terminalFailure: CliTerminalFailure | undefined,
+): string {
+  const explicitErrorText = collectExplicitCliErrorText(parsed);
+  return (
+    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    (terminalFailure ? "Reached maximum number of turns." : "")
+  );
+}
+
 function pickCliSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
@@ -481,6 +578,21 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
+    const terminalFailure = isClaudeStreamJsonDialect({
+      backend,
+      providerId: providerId ?? "",
+    })
+      ? readClaudeMaxTurnsFailure(parsed)
+      : undefined;
+    if (terminalFailure) {
+      return {
+        text: "",
+        sessionId,
+        usage,
+        errorText: resolveCliTerminalErrorText(parsed, terminalFailure),
+        terminalFailure,
+      };
+    }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
     const shouldClassifyError =
       parsed.is_error === true ||
@@ -531,13 +643,17 @@ function parseClaudeCliJsonlResult(params: {
     return null;
   }
   if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
-    const errorText = collectExplicitCliErrorText(params.parsed);
+    const terminalFailure = isClaudeStreamJsonDialect(params)
+      ? readClaudeMaxTurnsFailure(params.parsed)
+      : undefined;
+    const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
     if (errorText) {
       return {
         text: "",
         sessionId: params.sessionId,
         usage: params.usage,
         errorText,
+        ...(terminalFailure ? { terminalFailure } : {}),
       };
     }
     if (typeof params.parsed.result !== "string") {
@@ -1178,12 +1294,28 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      // The terminal result can be empty after Claude already streamed text.
-      // Keep that delivered text; a genuinely empty turn still remains empty.
-      output =
-        result.text || result.errorText
-          ? result
-          : { ...result, text: assistantText.trim() || texts.join("\n").trim() };
+      if (result.errorText) {
+        output = result;
+        return;
+      }
+      // Empty terminal result can follow already-streamed text; keep that text.
+      const nextText = (result.text || assistantText.trim() || texts.join("\n").trim()).trim();
+      const previousText = output?.text?.trim() ?? "";
+      // Claude Code may emit an interim result while background agents run, then
+      // a second result after task-notification. Preserve earlier result text
+      // when the later envelope does not already include it.
+      let text = nextText;
+      if (
+        previousText &&
+        nextText &&
+        previousText !== nextText &&
+        !nextText.startsWith(previousText)
+      ) {
+        text = `${previousText}\n${nextText}`;
+      } else if (!nextText) {
+        text = previousText;
+      }
+      output = { ...result, text };
       return;
     }
 

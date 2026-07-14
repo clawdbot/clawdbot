@@ -329,4 +329,3 @@ export const testing = {
     getState().bindingsByAccountConversation.clear();
   },
 };
-export { testing as __testing };

@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements codex plugin.fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { compare as compareSemver, parse as parseSemver } from "semver";
 import { resolveCodexAuthProfile, type QaAuthProfileSnapshot } from "./auth-profile.fixture.js";
 
 export const CODEX_PLUGIN_CURRENT_VERSION = "2026.5.21";
@@ -43,12 +44,6 @@ type CodexPluginPackageJson = {
   };
 };
 
-type ComparableVersion = {
-  major: number;
-  minor: number;
-  patch: number;
-};
-
 type CodexPluginInstallGateResult = {
   text: string;
   inputTokens: number;
@@ -81,34 +76,38 @@ function buildPackageJson(version: string): CodexPluginPackageJson {
   };
 }
 
-function parseComparableVersion(value: string | undefined): ComparableVersion | null {
+function parseComparableVersion(value: string | undefined) {
   if (!value || value === CODEX_PLUGIN_HEAD_VERSION) {
     return parseComparableVersion(CODEX_PLUGIN_CURRENT_VERSION);
   }
-  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!match) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(match[1] ?? "0", 10),
-    minor: Number.parseInt(match[2] ?? "0", 10),
-    patch: Number.parseInt(match[3] ?? "0", 10),
-  };
+  return parseSemver(value.trim());
 }
 
-function compareVersions(left: string | undefined, right: string): number {
-  const leftVersion = parseComparableVersion(left);
-  const rightVersion = parseComparableVersion(right);
-  if (!leftVersion || !rightVersion) {
-    return 0;
+type ParsedSemver = NonNullable<ReturnType<typeof parseSemver>>;
+
+function compareCodexPluginVersions(left: ParsedSemver, right: ParsedSemver): number {
+  const sameCore =
+    left.major === right.major && left.minor === right.minor && left.patch === right.patch;
+  const leftCorrection =
+    left.prerelease.length === 1 && typeof left.prerelease[0] === "number"
+      ? left.prerelease[0]
+      : null;
+  const rightCorrection =
+    right.prerelease.length === 1 && typeof right.prerelease[0] === "number"
+      ? right.prerelease[0]
+      : null;
+  if (sameCore && (leftCorrection !== null || rightCorrection !== null)) {
+    // OpenClaw numeric suffixes are correction releases after stable, unlike SemVer prereleases.
+    const leftRank = leftCorrection !== null ? 2 : left.prerelease.length === 0 ? 1 : 0;
+    const rightRank = rightCorrection !== null ? 2 : right.prerelease.length === 0 ? 1 : 0;
+    if (leftRank !== rightRank) {
+      return leftRank < rightRank ? -1 : 1;
+    }
+    if (leftCorrection !== null && rightCorrection !== null) {
+      return Math.sign(leftCorrection - rightCorrection);
+    }
   }
-  if (leftVersion.major !== rightVersion.major) {
-    return leftVersion.major - rightVersion.major;
-  }
-  if (leftVersion.minor !== rightVersion.minor) {
-    return leftVersion.minor - rightVersion.minor;
-  }
-  return leftVersion.patch - rightVersion.patch;
+  return compareSemver(left, right);
 }
 
 function formatPinnedOldRemediation(pluginVersion: string, hostVersion: string) {
@@ -219,7 +218,10 @@ export function evaluateCodexPluginLifecycle(params: {
     };
   }
 
-  const versionDelta = compareVersions(params.plugin.version, params.hostVersion);
+  const pluginVersion = parseComparableVersion(params.plugin.version);
+  const hostVersion = parseComparableVersion(params.hostVersion);
+  const versionDelta =
+    pluginVersion && hostVersion ? compareCodexPluginVersions(pluginVersion, hostVersion) : 0;
   if (versionDelta < 0 && params.plugin.version) {
     return {
       status: "blocked",

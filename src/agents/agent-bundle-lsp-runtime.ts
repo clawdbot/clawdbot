@@ -179,47 +179,95 @@ function encodeLspMessage(body: unknown): string {
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
 }
 
-function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
+const LSP_HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "ascii");
+const MAX_LSP_HEADER_BYTES = 8 * 1024;
+const MAX_LSP_BODY_BYTES = 64 * 1024 * 1024;
+
+class LspFramingError extends Error {
+  override readonly name = "LspFramingError";
+}
+
+type LspParseResult =
+  | { readonly ok: true; readonly messages: unknown[]; readonly remaining: Buffer }
+  | { readonly ok: false; readonly messages: unknown[]; readonly error: LspFramingError };
+
+function framingError(messages: unknown[], detail: string): LspParseResult {
+  return {
+    ok: false,
+    messages,
+    error: new LspFramingError(`LSP framing error: ${detail}`),
+  };
+}
+
+function parseContentLength(header: string): number | LspFramingError {
+  const values: string[] = [];
+  for (const line of header.split("\r\n")) {
+    const separator = line.indexOf(":");
+    if (separator === -1) {
+      return new LspFramingError("LSP framing error: header line must contain a colon");
+    }
+    if (line.slice(0, separator).trim().toLowerCase() === "content-length") {
+      values.push(line.slice(separator + 1).trim());
+    }
+  }
+  if (values.length !== 1) {
+    return new LspFramingError(
+      `LSP framing error: expected exactly one Content-Length header, received ${values.length}`,
+    );
+  }
+  const value = values[0];
+  if (value === undefined || !/^[0-9]+$/.test(value)) {
+    return new LspFramingError("LSP framing error: Content-Length must be decimal digits");
+  }
+  const length = Number(value);
+  if (!Number.isSafeInteger(length) || length <= 0) {
+    return new LspFramingError("LSP framing error: Content-Length must be a positive safe integer");
+  }
+  if (length > MAX_LSP_BODY_BYTES) {
+    return new LspFramingError(
+      `LSP framing error: Content-Length exceeds ${MAX_LSP_BODY_BYTES} bytes`,
+    );
+  }
+  return length;
+}
+
+function parseLspMessages(buffer: Buffer): LspParseResult {
   const messages: unknown[] = [];
   let remaining = buffer;
-  const headerSeparator = Buffer.from("\r\n\r\n", "ascii");
 
   while (true) {
-    const headerEnd = remaining.indexOf(headerSeparator);
+    const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
     if (headerEnd === -1) {
-      break;
+      const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
+      return remaining.length > maxIncompleteHeaderBytes
+        ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
+        : { ok: true, messages, remaining };
+    }
+    if (headerEnd > MAX_LSP_HEADER_BYTES) {
+      return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
     }
 
-    const header = remaining.subarray(0, headerEnd).toString("ascii");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      remaining = remaining.subarray(headerEnd + headerSeparator.length);
-      continue;
+    const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
+    if (contentLength instanceof LspFramingError) {
+      return { ok: false, messages, error: contentLength };
     }
-
-    const contentLengthText = match.at(1);
-    if (contentLengthText === undefined) {
-      remaining = remaining.subarray(headerEnd + headerSeparator.length);
-      continue;
-    }
-    const contentLength = Number.parseInt(contentLengthText, 10);
-    const bodyStart = headerEnd + headerSeparator.length;
+    const bodyStart = headerEnd + LSP_HEADER_SEPARATOR.length;
     const bodyEnd = bodyStart + contentLength;
-
     if (remaining.length < bodyEnd) {
-      break;
+      return { ok: true, messages, remaining };
     }
 
+    const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
     try {
-      const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
       messages.push(JSON.parse(body));
-    } catch {
-      // skip malformed
+    } catch (error) {
+      return framingError(
+        messages,
+        `body is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     remaining = remaining.subarray(bodyEnd);
   }
-
-  return { messages, remaining };
 }
 
 function lspAbortError(signal?: AbortSignal): Error {
@@ -276,10 +324,14 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     session.buffer,
     typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
   ]);
-  const { messages, remaining } = parseLspMessages(session.buffer);
-  session.buffer = remaining.length === 0 ? Buffer.alloc(0) : Buffer.from(remaining);
+  const parsed = parseLspMessages(session.buffer);
+  session.buffer = parsed.ok
+    ? parsed.remaining.length === 0
+      ? Buffer.alloc(0)
+      : Buffer.from(parsed.remaining)
+    : Buffer.alloc(0);
 
-  for (const msg of messages) {
+  for (const msg of parsed.messages) {
     if (typeof msg !== "object" || msg === null) {
       continue;
     }
@@ -299,6 +351,10 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
+  }
+  if (!parsed.ok) {
+    failLspSession(session, parsed.error);
+    terminateLspProcessTree(session);
   }
 }
 

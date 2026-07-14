@@ -2,12 +2,14 @@
 import type http2 from "node:http2";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./net/proxy/active-proxy-state.js";
+
+type HttpConnectTunnelParams = Parameters<
+  typeof import("./net/http-connect-tunnel.js").openHttpConnectTunnel
+>[0];
 
 const { connectSpy, tunnelSpy, fakeRequest, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
   class FakeEmitter {
@@ -117,7 +119,6 @@ describe("connectApnsHttp2Session", () => {
     fakeSession.close.mockClear();
     fakeSession.destroy.mockClear();
     fakeSession.request.mockClear();
-    resetActiveManagedProxyStateForTests();
   });
   it("uses direct http2.connect when managed proxy is inactive", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");

@@ -76,10 +76,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  normalizeDeliveryChannelRoute,
-  normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.shared.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -101,42 +98,24 @@ import {
   type ReplySessionEntryHandle,
 } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import {
+  ReplySessionInitConflictError,
+  runWithSessionInitConflictRetry,
+} from "./session-init-conflict-retry.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import {
+  stripThreadFromSessionRoute,
+  stripThreadIdFromDeliveryContext,
+  stripThreadIdFromOrigin,
+} from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
-
-function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
-  const normalized = normalizeDeliveryChannelRoute(route);
-  if (!normalized?.thread) {
-    return normalized;
-  }
-  const { thread: _drop, ...withoutThread } = normalized;
-  return Object.keys(withoutThread).length > 0 ? withoutThread : undefined;
-}
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
   "new" | "reset" | "idle" | "daily" | "unknown"
 >;
-
-function stripThreadIdFromDeliveryContext(
-  context: SessionEntry["deliveryContext"],
-): SessionEntry["deliveryContext"] {
-  if (!context || context.threadId == null || context.threadId === "") {
-    return context;
-  }
-  const { threadId: _threadId, ...rest } = context;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
-  if (!origin || origin.threadId == null || origin.threadId === "") {
-    return origin;
-  }
-  const { threadId: _threadId, ...rest } = origin;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
@@ -198,12 +177,12 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-export type InitSessionStateParams = {
-  abortSignal?: AbortSignal;
+type InitSessionStateParams = {
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
   expectedExistingSessionId?: string;
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -322,7 +301,7 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
-export type ReplySessionPreprocessingState = {
+type ReplySessionPreprocessingState = {
   sessionEntry?: SessionEntry;
   sessionKey: string;
   storePath: string;
@@ -361,7 +340,10 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await runWithSessionInitConflictRetry(
+    async () => await initSessionStateAttempt(params, false),
+    { signal: params.signal },
+  );
 }
 
 async function initSessionStateAttempt(
@@ -628,6 +610,8 @@ async function initSessionStateAttemptLocked(
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
+  const pinExpectedExistingSession =
+    params.pinExpectedExistingSession === true && expectedExistingSessionId !== undefined;
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -690,7 +674,8 @@ async function initSessionStateAttemptLocked(
   const freshEntry =
     (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
+    (((pinExpectedExistingSession && canReuseExistingEntry) ||
+      (reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
@@ -990,7 +975,7 @@ async function initSessionStateAttemptLocked(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  if (params.abortSignal?.aborted === true) {
+  if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
   }
   if (isNewSession) {
@@ -1052,7 +1037,7 @@ async function initSessionStateAttemptLocked(
         warning,
       }),
     prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
-      if (params.abortSignal?.aborted === true) {
+      if (params.signal?.aborted === true) {
         throw new Error("reply session initialization aborted");
       }
       return await prepareReplySessionParentFork({
@@ -1077,7 +1062,9 @@ async function initSessionStateAttemptLocked(
     if (!staleSnapshotRetried) {
       return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    // Propagate a typed conflict so initSessionState can retry with backoff
+    // outside the store writer lane instead of surfacing this to the caller.
+    throw new ReplySessionInitConflictError(sessionKey);
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;

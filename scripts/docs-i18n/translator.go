@@ -189,6 +189,7 @@ func isRetryableTranslateError(err error) bool {
 		return false
 	}
 	return strings.Contains(message, "placeholder missing") ||
+		strings.Contains(message, "placeholder duplicated") ||
 		strings.Contains(message, "rate limit") ||
 		strings.Contains(message, "429") ||
 		strings.Contains(message, "500") ||

@@ -101,6 +101,94 @@ describe("agentLoop EventStream failures", () => {
 
     expectTerminalFailure(events, result);
   });
+
+  it("persists and replays interruption guidance after Agent aborts a rejected run", async () => {
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const agent = new Agent({
+      initialState: { model },
+      convertToLlm: (messages) =>
+        messages.filter(
+          (message): message is Message =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
+      streamFn: async (_model, _context, options) => {
+        markStarted();
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("provider aborted")), {
+            once: true,
+          });
+        });
+        throw new Error("unreachable");
+      },
+    });
+
+    const interrupted = agent.prompt("perform side effect");
+    await started;
+    agent.abort();
+    await interrupted;
+
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "custom",
+      customType: "openclaw:turn-aborted",
+    });
+
+    let replayedMessages: Message[] = [];
+    let transformedMessages: AgentMessage[] = [];
+    agent.transformContext = async (messages) => {
+      transformedMessages = messages;
+      return messages;
+    };
+    agent.streamFn = async (_model, context) => {
+      replayedMessages = context.messages;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "continued safely" }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: 2,
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    await agent.prompt("continue");
+
+    expect(transformedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "custom",
+          customType: "openclaw:turn-aborted",
+        }),
+      ]),
+    );
+    expect(replayedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("may have partially executed"),
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
 });
 
 describe("agentLoop continuation guards", () => {
@@ -1807,8 +1895,15 @@ describe("agentLoop tool termination", () => {
       "assistant",
       "toolResult",
       "assistant",
+      "custom",
     ]);
-    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.at(-1)).toMatchObject({
+      role: "custom",
+      customType: "openclaw:turn-aborted",
+      display: false,
+      content: expect.stringContaining("may have partially executed"),
+    });
     expect(events.map((event) => event.type)).toEqual([
       "agent_start",
       "turn_start",
@@ -1825,9 +1920,61 @@ describe("agentLoop tool termination", () => {
       "message_start",
       "message_end",
       "turn_end",
+      "message_start",
+      "message_end",
       "agent_end",
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+
+  it("skips interrupted-turn guidance when the abort reason marks a turn handoff", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-yield", name: "yield_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const yieldTool: AgentTool = {
+      name: "yield_tool",
+      label: "yield_tool",
+      description: "Yield the active run as a clean handoff",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort({ code: "sessions_yield", turnHandoff: true });
+        return {
+          content: [{ type: "text", text: "yielded" }],
+          details: { yielded: true },
+        };
+      },
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "yield during tool", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [yieldTool],
+      },
+      config,
+      () => {},
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.some((message) => message.role === "custom")).toBe(false);
   });
 
   it("does not start prepared parallel tools after the run aborts mid-batch", async () => {
@@ -1955,8 +2102,13 @@ describe("agentLoop tool termination", () => {
       "assistant",
       "toolResult",
       "assistant",
+      "custom",
     ]);
-    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(messages.at(-1)).toMatchObject({
+      role: "custom",
+      customType: "openclaw:turn-aborted",
+    });
     expect(events.map((event) => event.type)).toEqual([
       "agent_start",
       "turn_start",
@@ -1973,6 +2125,8 @@ describe("agentLoop tool termination", () => {
       "message_start",
       "message_end",
       "turn_end",
+      "message_start",
+      "message_end",
       "agent_end",
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });

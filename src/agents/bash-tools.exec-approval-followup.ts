@@ -84,7 +84,7 @@ function formatUnknownError(error: unknown): string {
 }
 
 /** Builds the prompt used to resume an agent after an approved async exec completes. */
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);

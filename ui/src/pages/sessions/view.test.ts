@@ -704,7 +704,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const badge = container.querySelector(".data-table-badge--cron");
+    const badge = container.querySelector(".session-kind--cron");
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
@@ -749,7 +749,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    const badges = Array.from(container.querySelectorAll(".session-status-badge"));
+    const badges = Array.from(container.querySelectorAll(".settings-status"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
       "Live",
       "Idle",
@@ -757,17 +757,16 @@ describe("sessions view", () => {
       "Done",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
-      ["session-status-badge", "session-status-badge--live"],
-      ["session-status-badge", "session-status-badge--idle"],
-      ["session-status-badge", "session-status-badge--failed"],
-      ["session-status-badge", "session-status-badge--done"],
+      ["settings-status", "settings-status--ok"],
+      ["settings-status"],
+      ["settings-status", "settings-status--danger"],
+      ["settings-status", "settings-status--ok"],
     ]);
-    expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
-      "Status: Live",
-      "Status: Idle",
-      "Status: Failed",
-      "Status: Done",
-    ]);
+    expect(
+      badges.map(
+        (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
+      ),
+    ).toEqual(["Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
   it("renders session goals in the status cell and search index", async () => {
@@ -801,13 +800,17 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const chip = container.querySelector(".session-goal-chip");
-    expect(chip?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Pursuing goal (12k/50k) Ship the web goal indicator",
-    );
-    expect(chip?.getAttribute("aria-label")).toBe(
+    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
+    const goal = statuses[1];
+    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
+    // The wrapper span exposes the objective to keyboard/screen-reader users.
+    const wrapper = goal?.parentElement;
+    expect(wrapper?.getAttribute("tabindex")).toBe("0");
+    expect(wrapper?.getAttribute("aria-label")).toBe(
       "Pursuing goal (12k/50k): Ship the web goal indicator",
     );
+    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
+    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
@@ -1063,7 +1066,7 @@ describe("sessions view", () => {
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
         (badge) => badge.textContent?.replace(/\s+/g, " ").trim(),
       ),
-    ).toEqual(["Live", "Goal blocked (24k used) Finish the compaction details", "direct"]);
+    ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);
 
     const stats = readSessionDetailStats(details ?? container);
     expect(stats.get("Status")).toBe("running");

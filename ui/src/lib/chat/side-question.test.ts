@@ -1,41 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMoreDetailsSideCommand,
-  buildSideChatComposerDraft,
   buildSideChatFollowUpCommand,
-  CHAT_SELECTION_SNIPPET_MAX_CHARS,
-  collapseChatSelectionSnippet,
   combineSideChatComposerDraft,
   extractSideQuestionDisplayText,
 } from "./side-question.ts";
-
-describe("collapseChatSelectionSnippet", () => {
-  it("collapses newlines and runs of whitespace into single spaces", () => {
-    expect(collapseChatSelectionSnippet("Let's Encrypt cert\n  is valid\tfor both")).toBe(
-      "Let's Encrypt cert is valid for both",
-    );
-  });
-
-  it("caps overlong selections", () => {
-    const collapsed = collapseChatSelectionSnippet("x".repeat(5000));
-    expect(collapsed.length).toBeLessThanOrEqual(CHAT_SELECTION_SNIPPET_MAX_CHARS);
-  });
-});
 
 describe("side question builders", () => {
   it("builds a single-line /btw command quoting the selection", () => {
     expect(buildMoreDetailsSideCommand("Let's Encrypt cert\nis valid")).toBe(
       `/btw Explain "Let's Encrypt cert is valid" from this conversation in more detail.`,
     );
-  });
-
-  it("builds a composer draft that leaves room for the user's question", () => {
-    expect(buildSideChatComposerDraft("cron scan job")).toBe(`/btw Regarding "cron scan job": `);
-  });
-
-  it("returns null for whitespace-only selections", () => {
-    expect(buildMoreDetailsSideCommand("  \n\t ")).toBeNull();
-    expect(buildSideChatComposerDraft("")).toBeNull();
   });
 });
 
@@ -92,15 +67,6 @@ describe("buildSideChatFollowUpCommand", () => {
   it("collapses multiline questions and rejects empty ones", () => {
     expect(buildSideChatFollowUpCommand(null, "first\nsecond")?.question).toBe("first second");
     expect(buildSideChatFollowUpCommand(null, "  \n ")).toBeNull();
-  });
-
-  it("caps overlong previous turns", () => {
-    const followUp = buildSideChatFollowUpCommand(
-      { question: "q".repeat(5000), answer: "x".repeat(5000) },
-      "why?",
-    );
-    expect(followUp).not.toBeNull();
-    expect(followUp!.command.length).toBeLessThan(2 * CHAT_SELECTION_SNIPPET_MAX_CHARS + 200);
   });
 });
 

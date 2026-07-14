@@ -15,14 +15,14 @@ import { isRecord, toFiniteNumber, widgetProps } from "./types.ts";
 
 const DEFAULT_LIMIT = 6;
 
-export type SessionsRowModel = {
+type SessionsRowModel = {
   key: string;
   label: string;
   active: boolean;
   updatedAt: number | null;
 };
 
-export type SessionsModel = {
+type SessionsModel = {
   rows: SessionsRowModel[];
   total: number;
 };
@@ -32,7 +32,7 @@ function rowLabel(row: Record<string, unknown>, key: string): string {
   return typeof display === "string" && display.trim() ? display : key;
 }
 
-export function mapSessions(widget: WorkspaceWidget, value: unknown): SessionsModel {
+function mapSessions(widget: WorkspaceWidget, value: unknown): SessionsModel {
   const raw = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.sessions)

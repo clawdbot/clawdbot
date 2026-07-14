@@ -1,6 +1,6 @@
 // Control UI tests cover history merge behavior.
 import { describe, expect, it } from "vitest";
-import { preserveOptimisticTailMessages } from "./chat-history.ts";
+import { preserveOptimisticTailMessages } from "./history-merge.ts";
 
 describe("preserveOptimisticTailMessages", () => {
   it("keeps optimistic tail messages while history is stale", () => {

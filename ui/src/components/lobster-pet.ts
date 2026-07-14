@@ -21,7 +21,7 @@ import {
   type LobsterFamiliarity,
 } from "./lobster-dex.ts";
 
-export type LobsterPetAct =
+type LobsterPetAct =
   | "wave"
   | "snip"
   | "hop"
@@ -37,11 +37,11 @@ export type LobsterPetAct =
   | "droop"
   | "sweep";
 
-export type LobsterPetMode = "idle" | "busy" | "offline";
+type LobsterPetMode = "idle" | "busy" | "offline";
 
-export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
-export type LobsterPetPaletteId =
+type LobsterPetPaletteId =
   | "crimson"
   | "coral"
   | "teal"
@@ -55,28 +55,21 @@ export type LobsterPetPaletteId =
   | "split"
   | "retro";
 
-export type LobsterPetPalette = {
+type LobsterPetPalette = {
   id: LobsterPetPaletteId;
   shell: string;
   claw: string;
 };
 
-export type LobsterPetAccessory =
-  | "none"
-  | "crown"
-  | "sprout"
-  | "patch"
-  | "santa"
-  | "pumpkin"
-  | "party";
+type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch" | "santa" | "pumpkin" | "party";
 
-export type LobsterPetAntennae = "perky" | "droopy";
+type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
+type LobsterPetBuild = "round" | "squat" | "slender";
 
-export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
-export type LobsterPetLook = {
+type LobsterPetLook = {
   palette: LobsterPetPalette;
   scale: number;
   accessory: LobsterPetAccessory;
@@ -99,7 +92,7 @@ type ActProfile = {
 
 // Act windows mirror the CSS animation durations in lobster-pet.css so jsdom
 // tests and browsers clear acts on the same clock without animationend.
-export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
+const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   wave: 1400,
   snip: 1000,
   hop: 750,
@@ -162,7 +155,7 @@ const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
 
 // Busy and offline override the personality: the pet is a status indicator
 // first. Busy scurries (no naps mid-run); offline paces and peeks.
-export const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
+const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
   busy: {
     delayMs: [2200, 4500],
     acts: [
@@ -306,12 +299,11 @@ const LEAVE_MS = 350;
 // One full ledge crossing for pass-through visitors.
 const PASSER_CROSS_MS = 11_000;
 
-export type LobsterPetAnchor = "ledge" | "bar";
+type LobsterPetAnchor = "ledge" | "bar";
 
-// The bar anchor stands the pet inside the footer bar's free stretch between
-// the status dot (left) and the settings icons (right).
+// The historical bar visit keeps its compact left-to-center roaming and scale
+// cap, while CSS places it on the same ledge as regular visits.
 const BAR_ZONE = [18, 50] as const;
-// Inside the ~30px bar the sprite must stay small regardless of rolled size.
 const BAR_MAX_SCALE = 1.7;
 
 // Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
@@ -362,7 +354,7 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   retro: "OG",
 };
 
-export function lobsterPetName(look: LobsterPetLook, seed: number): string {
+function lobsterPetName(look: LobsterPetLook, seed: number): string {
   return (
     RARE_NAMES[look.palette.id] ??
     expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "lobster pet name catalog entry")
@@ -372,22 +364,22 @@ export function lobsterPetName(look: LobsterPetLook, seed: number): string {
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
 // load sheds its shell during the first idle act and sizes up one tier; a
 // twin load brings a mini copycat along on every visit.
-export function isLobsterMoltLoad(seed: number): boolean {
+function isLobsterMoltLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x301d) >>> 0)() < 0.12;
 }
 
-export function isLobsterTwinLoad(seed: number): boolean {
+function isLobsterTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
 }
 
 // On a logo load the pet's first scheduled visit skips the ledge entirely:
 // it climbs up top and fills in for the brand logo until the stay ends.
 // Offline summons still report to the ledge - status duty outranks cosplay.
-export function isLobsterLogoLoad(seed: number): boolean {
+function isLobsterLogoLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
-export type LobsterLogoVisitPhase = "in" | "leaving" | "out";
+type LobsterLogoVisitPhase = "in" | "leaving" | "out";
 
 export type LobsterLogoVisitDetail = {
   phase: LobsterLogoVisitPhase;
@@ -399,9 +391,9 @@ export type LobsterLogoVisitDetail = {
 // sidebar owns the brand slot, so the swap renders there, not here.
 export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
 
-export type LobsterPasserKind = "stranger" | "crab";
+type LobsterPasserKind = "stranger" | "crab";
 
-export type LobsterPasserPlan = {
+type LobsterPasserPlan = {
   kind: LobsterPasserKind;
   atMs: number;
   direction: 1 | -1;
@@ -410,7 +402,7 @@ export type LobsterPasserPlan = {
 // Once per load, someone else might just... walk through. Strangers are
 // other lobsters that never stop; the crab is not a lobster and refuses to
 // discuss it. Neither counts for the Lobsterdex.
-export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
+function planLobsterPasser(seed: number): LobsterPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
   const roll = rng();
   if (roll >= 0.095) {
@@ -423,7 +415,7 @@ export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
 }
 
 // A stranger wears a different palette than the resident pet.
-export function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
+function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
   for (let offset = 1; offset <= 24; offset++) {
     const look = createLobsterPetLook((seed + offset * 7919) >>> 0);
     if (look.palette.id !== own) {
@@ -456,7 +448,7 @@ function detectLobsterMovingDay(version: string): boolean {
 }
 
 // Late-night visitors are always sleepy, whatever their daytime personality.
-export function isLobsterNightTime(now: Date = new Date()): boolean {
+function isLobsterNightTime(now: Date = new Date()): boolean {
   const hour = now.getHours();
   return hour >= 22 || hour < 6;
 }
@@ -555,7 +547,7 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   };
 }
 
-export type LobsterRunOutcome = "ok" | "error" | "aborted";
+type LobsterRunOutcome = "ok" | "error" | "aborted";
 
 // The most recently active session with a terminal status decides how the
 // pet reacts when the busy state clears: failures earn sympathy, not cheers.
@@ -772,7 +764,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
 // and the Lobsterdex refuses to acknowledge it.
-export function renderCrabSvg() {
+function renderCrabSvg() {
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -904,7 +896,7 @@ export function renderLobsterSvg(
   `;
 }
 
-export class LobsterPet extends LitElement {
+class LobsterPet extends LitElement {
   override createRenderRoot() {
     return this;
   }
@@ -1488,8 +1480,8 @@ export class LobsterPet extends LitElement {
     }, PASSER_CROSS_MS / 2);
   }
 
-  // Each arrival re-rolls where the pet shows up: the ledge above the footer
-  // divider or the free stretch inside the footer bar.
+  // Each arrival re-rolls either the standard side zone or compact bar zone.
+  // Both visit profiles render above the footer divider.
   private rollPerch() {
     this.anchor = this.visitRng() < 0.6 ? "ledge" : "bar";
     this.setAttribute("data-spot", this.anchor);
@@ -1645,7 +1637,6 @@ export class LobsterPet extends LitElement {
     ].join(";");
   }
 
-  // The bar anchor stands inside the ~30px footer bar, so cap the sprite.
   private anchoredScale(scale: number): number {
     return this.anchor === "bar" ? Math.min(scale, BAR_MAX_SCALE) : scale;
   }

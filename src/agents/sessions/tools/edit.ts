@@ -68,8 +68,6 @@ const editSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
-
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;
   oldText?: unknown;

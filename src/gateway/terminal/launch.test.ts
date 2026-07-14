@@ -1,142 +1,36 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  buildTerminalEnv,
-  createTerminalLaunchPolicy,
-  resolveTerminalLaunch,
-  resolveTerminalShell,
-} from "./launch.js";
+import { buildTerminalEnv, createTerminalLaunchPolicy } from "./launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("resolveTerminalShell", () => {
-  it("prefers an explicitly configured shell", () => {
-    const resolved = resolveTerminalShell({
-      configuredShell: "/usr/bin/fish",
-      platform: "linux",
-      env: { SHELL: "/bin/zsh" },
-    });
-    expect(resolved).toEqual({ shell: "/usr/bin/fish", args: [] });
-  });
-
-  it("uses the unix login shell as a login shell", () => {
-    const resolved = resolveTerminalShell({ platform: "linux", env: { SHELL: "/bin/zsh" } });
-    expect(resolved).toEqual({ shell: "/bin/zsh", args: ["-l"] });
-  });
-
-  it("falls back to bash when no login shell is set", () => {
-    const resolved = resolveTerminalShell({ platform: "linux", env: {} });
-    expect(resolved).toEqual({ shell: "/bin/bash", args: ["-l"] });
-  });
-
-  it("uses ComSpec on windows", () => {
-    const resolved = resolveTerminalShell({
-      platform: "win32",
-      env: { ComSpec: "C:/Windows/System32/cmd.exe" },
-    });
-    expect(resolved).toEqual({ shell: "C:/Windows/System32/cmd.exe", args: [] });
-  });
-});
-
-describe("resolveTerminalLaunch", () => {
-  it("blocks when the terminal is disabled", () => {
-    const result = resolveTerminalLaunch({ config: {} as OpenClawConfig, enabled: false });
-    expect(result).toEqual({ ok: false, block: { kind: "disabled" } });
-  });
-
-  it("returns a host plan starting in the agent workspace", () => {
-    const workspace = tempDirs.make("term-ws-");
-    const config = {
-      agents: { defaults: { workspace } },
-    } as unknown as OpenClawConfig;
-    const result = resolveTerminalLaunch({
-      config,
-      enabled: true,
-      env: { SHELL: "/bin/zsh" },
-      platform: "linux",
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.plan.cwd).toBe(workspace);
-      expect(result.plan.shell).toBe("/bin/zsh");
-      expect(result.plan.args).toEqual(["-l"]);
-      expect(result.plan.agentId).toBeTruthy();
-    }
-  });
-
-  it("fails closed for a fully sandboxed (mode: all) agent", () => {
-    const config = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-    } as unknown as OpenClawConfig;
-    const result = resolveTerminalLaunch({ config, enabled: true });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.block.kind).toBe("sandboxed");
-      if (result.block.kind === "sandboxed") {
-        expect(result.block.mode).toBe("all");
-      }
-    }
-  });
-
-  it("allows a host terminal under non-main sandbox mode (main session runs on host)", () => {
-    const workspace = tempDirs.make("term-ws-nm-");
-    const config = {
-      agents: { defaults: { workspace, sandbox: { mode: "non-main" } } },
-    } as unknown as OpenClawConfig;
-    const result = resolveTerminalLaunch({
-      config,
-      enabled: true,
-      env: { SHELL: "/bin/zsh" },
-      platform: "linux",
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.plan.cwd).toBe(workspace);
-    }
-  });
-
-  it("fails closed for an unknown explicit agent id", () => {
-    // Every configured agent is fully sandboxed; an unknown id must not fall
-    // through to the (unsandboxed) global defaults and a host-home shell.
-    const config = {
-      agents: {
-        list: [{ id: "locked", sandbox: { mode: "all" } }],
-      },
-    } as unknown as OpenClawConfig;
-    const result = resolveTerminalLaunch({
-      config,
-      enabled: true,
-      agentId: "ghost",
-      env: { SHELL: "/bin/zsh" },
-      platform: "linux",
-    });
-    expect(result).toEqual({ ok: false, block: { kind: "unknown-agent", agentId: "ghost" } });
-  });
-
-  it("accepts an explicit id that names a configured agent", () => {
-    const workspace = tempDirs.make("term-ws-id-");
-    const config = {
-      agents: {
-        defaults: { workspace },
-        list: [{ id: "Ops" }],
-      },
-    } as unknown as OpenClawConfig;
-    const result = resolveTerminalLaunch({
-      config,
-      enabled: true,
-      agentId: "ops",
-      env: { SHELL: "/bin/zsh" },
-      platform: "linux",
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.plan.agentId).toBe("ops");
-    }
-  });
-});
-
 describe("createTerminalLaunchPolicy", () => {
+  it("fails closed when disabled, fully sandboxed, or given an unknown agent", () => {
+    expect(createTerminalLaunchPolicy({}).resolve()).toEqual({
+      ok: false,
+      block: { kind: "disabled" },
+    });
+
+    const sandboxed = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    });
+    expect(sandboxed.resolve()).toMatchObject({
+      ok: false,
+      block: { kind: "sandboxed", mode: "all" },
+    });
+
+    const configured = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true } },
+      agents: { list: [{ id: "locked", sandbox: { mode: "all" } }] },
+    });
+    expect(configured.resolve("ghost")).toEqual({
+      ok: false,
+      block: { kind: "unknown-agent", agentId: "ghost" },
+    });
+  });
+
   it("applies restart-bound revocations without granting access early", () => {
     const enabled = {
       gateway: { terminal: { enabled: true } },
@@ -283,6 +177,122 @@ describe("createTerminalLaunchPolicy", () => {
     );
     restartPolicy.prepareConfig(baseConfig, { restartPending: true });
     expect(restartPolicy.resolve().ok).toBe(false);
+    restartPolicy.acceptConfig({ retireRejectedRestart: false });
+    restartPolicy.commitConfig();
+    expect(restartPolicy.resolve().ok).toBe(true);
+  });
+
+  it("releases a rejected restart restriction after an accepted revert", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: true });
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(true);
+  });
+
+  it("commits a newer hot candidate after a rejected restart is retired", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "off" } } },
+      },
+      { restartPending: false },
+    );
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: true });
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+  });
+
+  it("retires failed hot candidates without clearing committed restart restrictions", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "off" } } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: false });
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+
+    const skippedPolicy = createTerminalLaunchPolicy({
+      ...baseConfig,
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    });
+    skippedPolicy.prepareConfig(baseConfig, { restartPending: false });
+    skippedPolicy.acceptConfig({ retireRejectedRestart: false });
+    skippedPolicy.commitConfig();
+    expect(skippedPolicy.resolve().ok).toBe(false);
+
+    const pendingPolicy = createTerminalLaunchPolicy(baseConfig);
+    pendingPolicy.prepareConfig(baseConfig, { restartPending: true });
+    pendingPolicy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    expect(pendingPolicy.resolve().ok).toBe(false);
+    pendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    pendingPolicy.commitConfig();
+    expect(pendingPolicy.resolve().ok).toBe(true);
+
+    const appliedPendingPolicy = createTerminalLaunchPolicy(baseConfig);
+    appliedPendingPolicy.prepareConfig(baseConfig, { restartPending: true });
+    appliedPendingPolicy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    appliedPendingPolicy.commitConfig();
+    appliedPendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    appliedPendingPolicy.commitConfig();
+    expect(appliedPendingPolicy.resolve().ok).toBe(false);
+    appliedPendingPolicy.prepareConfig(baseConfig, { restartPending: false });
+    appliedPendingPolicy.commitConfig();
+    appliedPendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    appliedPendingPolicy.commitConfig();
+    expect(appliedPendingPolicy.resolve().ok).toBe(true);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.acceptConfig({ retireRejectedRestart: false });
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(false);
   });
 
   it("does not promote a terminal setting previously ignored by reload mode", () => {

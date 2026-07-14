@@ -5,11 +5,11 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
+import { evaluateMattermostMentionGate } from "./monitor-gating.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
-  evaluateMattermostMentionGate,
   formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
@@ -20,9 +20,12 @@ import {
   resolveMattermostThreadSessionContext,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
-  type MattermostMentionGateInput,
-  type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
+
+type MattermostMentionGateInput = Parameters<typeof evaluateMattermostMentionGate>[0];
+type MattermostRequireMentionResolverInput = Parameters<
+  MattermostMentionGateInput["resolveRequireMention"]
+>[0];
 
 function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
   const root = params.cfg.channels?.mattermost;

@@ -7,7 +7,7 @@ const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
   "migrate.test.ts",
 ].join("-");
 
-export const PLUGIN_COMPAT_RECORDS = [
+const PLUGIN_COMPAT_RECORDS = [
   {
     code: "legacy-before-agent-start",
     status: "deprecated",
@@ -1130,7 +1130,7 @@ export const PLUGIN_COMPAT_RECORDS = [
 ] as const satisfies readonly PluginCompatRecord[];
 
 export type PluginCompatCode = (typeof PLUGIN_COMPAT_RECORDS)[number]["code"];
-export type KnownPluginCompatRecord = PluginCompatRecord<PluginCompatCode>;
+type KnownPluginCompatRecord = PluginCompatRecord<PluginCompatCode>;
 
 const pluginCompatRecordByCode = new Map<PluginCompatCode, KnownPluginCompatRecord>(
   PLUGIN_COMPAT_RECORDS.map((record) => [record.code, record]),
@@ -1146,14 +1146,4 @@ export function getPluginCompatRecord(code: PluginCompatCode): KnownPluginCompat
     throw new Error(`Unknown plugin compatibility code: ${code}`);
   }
   return record;
-}
-
-export function isPluginCompatCode(code: string): code is PluginCompatCode {
-  return pluginCompatRecordByCode.has(code as PluginCompatCode);
-}
-
-export function listDeprecatedPluginCompatRecords(): readonly KnownPluginCompatRecord[] {
-  return PLUGIN_COMPAT_RECORDS.filter((record) =>
-    (["deprecated", "removal-pending"] as readonly string[]).includes(record.status),
-  );
 }

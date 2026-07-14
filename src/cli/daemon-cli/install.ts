@@ -122,7 +122,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
     return;
   }
   let wrapperPath: string | undefined;

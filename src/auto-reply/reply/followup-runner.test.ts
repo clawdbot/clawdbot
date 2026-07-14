@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -40,7 +41,7 @@ let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessio
 let loadSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
 let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
-let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
@@ -508,7 +509,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     await import("../../config/sessions/store.js"));
   ({ loadSessionEntry, replaceSessionEntrySync } =
     await import("../../config/sessions/session-accessor.js"));
-  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  ({ clearFollowupQueue } = await import("./queue/state.js"));
+  ({ enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({
@@ -559,6 +561,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -619,6 +622,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -1341,7 +1345,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const active = createReplyOperationForTest({
       sessionKey: "main",
       sessionId: "pre-compact-session",
@@ -1396,7 +1399,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
       "post-compact-session",
     );
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("routes preflight compaction failures before starting queued followup runs", async () => {
@@ -4921,7 +4923,6 @@ describe("createFollowupRunner compaction", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const sessionEntry: SessionEntry = {
       sessionId: "old-session",
       updatedAt: Date.now(),
@@ -4977,14 +4978,12 @@ describe("createFollowupRunner compaction", () => {
 
     expect(observedRunId).toBeDefined();
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
     let releasePreflight: (() => void) | undefined;
     runPreflightCompactionIfNeededMock.mockImplementationOnce(
@@ -5052,7 +5051,6 @@ describe("createFollowupRunner compaction", () => {
       expect(observedLifecycleGeneration).toBe(initialGeneration);
       expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
     } finally {
-      realAgentEvents.resetAgentRunContextForTest();
     }
   });
 });
@@ -5778,6 +5776,41 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
+  it("routes a terminal failure after only a message-tool progress delivery", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
   it("routes a terminal failure when an empty result exhausts model fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: {
@@ -6423,6 +6456,45 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onObservedReplyDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes retry diagnostics when message-tool evidence contains only progress", async () => {
+    const queued = baseQueuedRun("discord");
+    const onObservedReplyDelivery = vi.fn(async () => {});
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTexts: ["Still working…"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { onObservedReplyDelivery },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+    expect(onObservedReplyDelivery).not.toHaveBeenCalled();
   });
 
   it("routes retry diagnostics when message-tool sends to a non-source target", async () => {

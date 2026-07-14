@@ -82,12 +82,6 @@ const TRAILING_DASH_PATTERN = /-+$/;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
-export {
-  createCodexCliNodeConversationBindingData,
-  readCodexConversationBindingData,
-  resolveCodexDefaultWorkspaceDir,
-} from "./conversation-binding-data.js";
-
 type CodexConversationRunOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
@@ -181,7 +175,7 @@ function getGlobalState(): CodexConversationGlobalState {
   return globalState[CODEX_CONVERSATION_GLOBAL_STATE];
 }
 
-export async function startCodexConversationThread(
+async function startCodexConversationThread(
   params: CodexConversationStartParams,
 ): Promise<CodexAppServerConversationBindingData> {
   const workspaceDir =
@@ -253,7 +247,7 @@ export async function startCodexConversationThread(
   });
 }
 
-export async function handleCodexConversationInboundClaim(
+async function handleCodexConversationInboundClaim(
   event: PluginHookInboundClaimEvent,
   ctx: PluginHookInboundClaimContext,
   options: CodexConversationRunOptions,
@@ -343,7 +337,7 @@ export async function handleCodexConversationInboundClaim(
   }
 }
 
-export async function handleCodexConversationBindingResolved(
+async function handleCodexConversationBindingResolved(
   event: PluginConversationBindingResolvedEvent,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<void> {
@@ -1241,3 +1235,9 @@ function conversationBindingIdentity(
 ): CodexAppServerBindingIdentity {
   return { kind: "conversation", bindingId: data.bindingId };
 }
+
+export const codexConversationBindingRuntime = {
+  startThread: startCodexConversationThread,
+  handleInboundClaim: handleCodexConversationInboundClaim,
+  handleBindingResolved: handleCodexConversationBindingResolved,
+};

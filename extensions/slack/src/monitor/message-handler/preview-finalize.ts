@@ -195,11 +195,3 @@ export async function finalizeSlackPreviewEdit(params: {
     throw err;
   }
 }
-
-export const testing = {
-  buildExpectedSlackEditText,
-  blocksMatch,
-  didSlackPreviewEditApplyAfterError,
-  readSlackMessageAfterEditError,
-};
-export { testing as __testing };

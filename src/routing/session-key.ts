@@ -1,3 +1,4 @@
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 // Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,7 +14,6 @@ import {
 import { normalizeAccountId } from "./account-id.js";
 
 export {
-  getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -21,23 +21,17 @@ export {
   parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
-  type ParsedSessionDeliveryRoute,
 } from "../sessions/session-key-utils.js";
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
+export { isValidAgentId, normalizeAgentId };
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
-export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
-
-// Pre-compiled regex
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
+type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
@@ -176,34 +170,9 @@ export function scopeLegacySessionKeyToAgent(params: {
   });
 }
 
-export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  // Keep it path-safe + shell-friendly.
-  if (VALID_ID_RE.test(trimmed)) {
-    return normalized;
-  }
-  // Best-effort fallback: collapse invalid characters to "-"
-  return (
-    normalized
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
 export function normalizeOptionalAgentId(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed ? normalizeAgentId(trimmed) : undefined;
-}
-
-export function isValidAgentId(value: string | undefined | null): boolean {
-  const trimmed = (value ?? "").trim();
-  return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
 }
 
 export function sanitizeAgentId(value: string | undefined | null): string {

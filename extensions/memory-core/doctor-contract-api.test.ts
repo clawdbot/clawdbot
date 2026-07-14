@@ -19,14 +19,14 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { testing as dreamingTesting } from "./src/dreaming-phases.js";
-import {
-  configureMemoryCoreDreamingState,
-  resetMemoryCoreDreamingStateForTests,
-} from "./src/dreaming-state.js";
+import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
-import { testing as shortTermTesting } from "./src/short-term-promotion.js";
+import {
+  dreamingTestState as dreamingTesting,
+  resetMemoryCoreDreamingStateForTests,
+  shortTermTestState as shortTermTesting,
+} from "./src/test-helpers.js";
 
 function requireStateMigration(index: number) {
   return expectDefined(stateMigrations[index], `Memory Core state migration ${index}`);

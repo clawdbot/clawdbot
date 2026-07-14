@@ -36,22 +36,13 @@ import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
+  pluginToolDescriptorCacheState,
   readCachedPluginToolDescriptors,
-  resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
-
-export function resetPluginToolDescriptorCache(): void {
-  resetCachedPluginToolDescriptors();
-  cachedDescriptorRuntimeRegistries = new WeakMap();
-}
-
-export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -62,7 +53,7 @@ export type PluginToolMcpMeta = {
 };
 
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-export type PluginToolMeta = {
+type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
@@ -763,9 +754,9 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
-        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+        retainedRegistry: pluginToolDescriptorCacheState.runtimeRegistries.get(params.descriptor),
         onRetainRegistry: (retainedRegistry) => {
-          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
+          pluginToolDescriptorCacheState.runtimeRegistries.set(params.descriptor, retainedRegistry);
         },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);

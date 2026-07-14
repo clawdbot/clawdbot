@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { compare as compareSemver, parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -30,7 +31,6 @@ import {
 import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Minimum supported Codex app-server version exported for callers/tests. */
-export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
@@ -179,7 +179,7 @@ type CodexServerRequestHandler = (
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
-export type CodexServerNotificationHandler = (
+type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
@@ -879,7 +879,7 @@ function timeoutServerRequestResponse(
 }
 
 /** Raised when the initialize handshake detects an unsupported app-server version. */
-export class CodexAppServerVersionError extends Error {
+class CodexAppServerVersionError extends Error {
   readonly detectedVersion?: string;
 
   constructor(detectedVersion: string | undefined) {
@@ -932,7 +932,7 @@ function readNonEmptyInitializeString(value: string | undefined): string | undef
 }
 
 /** Extracts the Codex version from the app-server initialize user-agent field. */
-export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
   // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
   // version in the leading product field is stable.
@@ -943,42 +943,27 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
 }
 
 /** Compares stable Codex app-server versions for protocol floor checks. */
-export function compareCodexAppServerVersions(left: string, right: string): number {
-  const leftVersion = parseVersionForComparison(left);
-  const rightVersion = parseVersionForComparison(right);
-  const leftParts = leftVersion.parts;
-  const rightParts = rightVersion.parts;
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const leftPart = leftParts[index] ?? 0;
-    const rightPart = rightParts[index] ?? 0;
-    if (leftPart !== rightPart) {
-      return leftPart < rightPart ? -1 : 1;
-    }
+function compareCodexAppServerVersions(left: string, right: string): number {
+  const leftVersion = parseSemver(left);
+  const rightVersion = parseSemver(right);
+  if (!leftVersion || !rightVersion) {
+    // Invalid detected versions fail below a valid protocol floor instead of bypassing it.
+    return leftVersion ? 1 : rightVersion ? -1 : 0;
   }
-  if (leftVersion.unstableSuffix && !rightVersion.unstableSuffix) {
+  const precedence = compareSemver(leftVersion, rightVersion);
+  if (precedence !== 0) {
+    return precedence;
+  }
+  // Build metadata has no SemVer precedence, but custom Codex builds must not satisfy a stable floor.
+  const leftUnstable = leftVersion.prerelease.length > 0 || leftVersion.build.length > 0;
+  const rightUnstable = rightVersion.prerelease.length > 0 || rightVersion.build.length > 0;
+  if (leftUnstable && !rightUnstable) {
     return -1;
   }
-  if (!leftVersion.unstableSuffix && rightVersion.unstableSuffix) {
+  if (!leftUnstable && rightUnstable) {
     return 1;
   }
   return 0;
-}
-
-function parseVersionForComparison(version: string): { parts: number[]; unstableSuffix: boolean } {
-  // Same-version prerelease or build-suffixed versions do not satisfy a stable
-  // protocol floor because important app-server contract changes can land
-  // between alpha cuts and custom builds.
-  const hasBuildMetadata = version.includes("+");
-  const [withoutBuild = version] = version.split("+", 1);
-  const prereleaseIndex = withoutBuild.indexOf("-");
-  const numeric = prereleaseIndex >= 0 ? withoutBuild.slice(0, prereleaseIndex) : withoutBuild;
-  return {
-    parts: numeric
-      .split(".")
-      .map((part) => Number.parseInt(part, 10))
-      .map((part) => (Number.isFinite(part) ? part : 0)),
-    unstableSuffix: prereleaseIndex >= 0 || hasBuildMetadata,
-  };
 }
 
 function redactCodexAppServerLinePreview(value: string): string {
@@ -1060,12 +1045,3 @@ function formatExitValue(value: unknown): string {
   }
   return "unknown";
 }
-
-/** Test-only access to transport close helpers and parser redaction internals. */
-export const testing = {
-  closeCodexAppServerTransport,
-  closeCodexAppServerTransportAndWait,
-  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
-  redactCodexAppServerLinePreview,
-} as const;
-export { testing as __testing };

@@ -48,7 +48,43 @@ export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTa
   };
 }
 
-export class RealtimeTalkAudioLevelMeter {
+export class RealtimeTalkPcmInputPump {
+  private source: MediaStreamAudioSourceNode | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private sink: GainNode | null = null;
+
+  start(
+    media: MediaStream,
+    context: AudioContext,
+    onSamples: (samples: Float32Array) => void,
+  ): void {
+    this.stop();
+    this.source = context.createMediaStreamSource(media);
+    this.processor = context.createScriptProcessor(4096, 1, 1);
+    this.sink = context.createGain();
+    this.sink.gain.value = 0;
+    this.processor.onaudioprocess = (event) => onSamples(event.inputBuffer.getChannelData(0));
+    this.source.connect(this.processor);
+    // Keep the processor in the rendered graph without turning capture into a
+    // local microphone monitor that can feed speakers back into barge-in.
+    this.processor.connect(this.sink);
+    this.sink.connect(context.destination);
+  }
+
+  stop(): void {
+    if (this.processor) {
+      this.processor.onaudioprocess = null;
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    this.sink?.disconnect();
+    this.sink = null;
+    this.source?.disconnect();
+    this.source = null;
+  }
+}
+
+class RealtimeTalkAudioLevelMeter {
   private level = 0;
   private noiseFloor = 0.01;
 

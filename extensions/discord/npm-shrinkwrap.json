@@ -11,6 +11,7 @@
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.49",
         "libopus-wasm": "0.2.0",
+        "p-map": "7.0.5",
         "typebox": "1.3.3",
         "undici": "8.5.0",
         "ws": "8.21.0"
@@ -358,6 +359,18 @@
       "license": "MIT",
       "engines": {
         "node": ">=20"
+      }
+    },
+    "node_modules/p-map": {
+      "version": "7.0.5",
+      "resolved": "https://registry.npmjs.org/p-map/-/p-map-7.0.5.tgz",
+      "integrity": "sha512-e8vJF4XdVkzqqSHguEMz41mQO1wKwxKm5ENrUJQUu9kLDCtn83cxbyHZcszr4QC5zEA7WffRRC4gsTecC7J9oA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/prism-media": {

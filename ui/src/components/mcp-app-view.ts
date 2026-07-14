@@ -12,13 +12,18 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { I18nController, t } from "../i18n/index.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import {
+  buildMcpAppHostCapabilities,
+  resolveMcpAppSandboxUrl,
+  type McpAppHostSandboxCsp,
+} from "./mcp-app-security.ts";
 
 type McpAppViewPayload = {
   sandboxUrl: string;
   sandboxPort: number;
   sandboxOrigin?: string;
   html: string;
-  csp?: HostSandboxCsp;
+  csp?: McpAppHostSandboxCsp;
   toolInput: unknown;
   toolResult: unknown;
 };
@@ -26,8 +31,24 @@ type McpAppViewPayload = {
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
-type HostCapabilities = ConstructorParameters<typeof AppBridge>[2];
-type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"]>;
+type ScheduleFrame = (callback: FrameRequestCallback) => number;
+type ScheduleFallback = (callback: () => void, delayMs: number) => number;
+
+async function waitForMcpAppHandlerRegistration(
+  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
+  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
+): Promise<void> {
+  await Promise.race([
+    new Promise<void>((resolve) => {
+      scheduleFrame(() => {
+        scheduleFrame(() => resolve());
+      });
+    }),
+    new Promise<void>((resolve) => {
+      scheduleFallback(resolve, 1_000);
+    }),
+  ]);
+}
 
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
@@ -49,63 +70,6 @@ function hostContext(element: Element | undefined, height: number): HostContext 
     },
     safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
   };
-}
-
-export function buildMcpAppHostCapabilities(csp?: HostSandboxCsp): HostCapabilities {
-  return {
-    openLinks: {},
-    serverResources: {},
-    serverTools: {},
-    sandbox: { csp: csp ?? {} },
-  };
-}
-
-export function resolveMcpAppSandboxUrl(
-  value: string,
-  sandboxPort: number,
-  sandboxOrigin: string | undefined,
-  gatewayUrl: string,
-  hostOrigin = window.location.origin,
-): string {
-  if (!Number.isInteger(sandboxPort) || sandboxPort < 1 || sandboxPort > 65535) {
-    throw new Error("MCP App sandbox port is invalid");
-  }
-  const gateway = new URL(gatewayUrl || hostOrigin, hostOrigin);
-  if (gateway.protocol === "ws:") {
-    gateway.protocol = "http:";
-  } else if (gateway.protocol === "wss:") {
-    gateway.protocol = "https:";
-  }
-  if (gateway.protocol !== "http:" && gateway.protocol !== "https:") {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  const activeGatewayOrigin = gateway.origin;
-  const base = sandboxOrigin ? new URL(sandboxOrigin) : new URL(activeGatewayOrigin);
-  if (sandboxOrigin) {
-    if (
-      base.origin !== sandboxOrigin.replace(/\/$/u, "") ||
-      base.username !== "" ||
-      base.password !== ""
-    ) {
-      throw new Error("MCP App sandbox URL is invalid");
-    }
-  } else {
-    base.port = String(sandboxPort);
-  }
-  base.pathname = "/";
-  base.search = "";
-  base.hash = "";
-  const resolved = new URL(value, base);
-  if (
-    (base.protocol !== "http:" && base.protocol !== "https:") ||
-    base.origin === new URL(hostOrigin).origin ||
-    base.origin === activeGatewayOrigin ||
-    resolved.origin !== base.origin ||
-    resolved.pathname !== "/mcp-app-sandbox"
-  ) {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  return resolved.href;
 }
 
 class OpenClawAppBridge extends AppBridge {
@@ -224,7 +188,9 @@ export class McpAppView extends LitElement {
       }
       const iframe = document.createElement("iframe");
       iframe.title = this.title || t("mcpApp.title");
-      iframe.referrerPolicy = "no-referrer";
+      // The isolated proxy binds its parent before accepting messages. Only the
+      // Control UI origin is disclosed; path/query data remains suppressed.
+      iframe.referrerPolicy = "origin";
       iframe.style.height = `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.
@@ -254,6 +220,7 @@ export class McpAppView extends LitElement {
         payload.sandboxPort,
         payload.sandboxOrigin,
         this.context?.gateway.connection.gatewayUrl ?? "",
+        window.location.origin,
       );
       await proxyReady;
       if (!iframe.contentWindow || generation !== this.setupGeneration) {
@@ -315,6 +282,10 @@ export class McpAppView extends LitElement {
           window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
         }),
       ]);
+      await waitForMcpAppHandlerRegistration();
+      if (generation !== this.setupGeneration) {
+        return;
+      }
       await bridge.sendToolInput({
         arguments:
           payload.toolInput &&
@@ -341,10 +312,6 @@ export class McpAppView extends LitElement {
         ? html`<div class="error">${t("mcpApp.unavailable", { error: this.error })}</div>`
         : nothing}`;
   }
-}
-
-if (!customElements.get("mcp-app-view")) {
-  customElements.define("mcp-app-view", McpAppView);
 }
 
 declare global {

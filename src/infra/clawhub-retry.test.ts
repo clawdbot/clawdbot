@@ -171,4 +171,17 @@ describe("retryClawHubRead", () => {
     expect(await optedInResult.response.text()).toBe("ok");
     expect(optedInAttempts).toBe(2);
   });
+
+  it("returns the final retryable response for caller-owned HTTP handling", async () => {
+    const disposeRetry = vi.fn(async ({ response }: { response: Response }) => {
+      await response.body?.cancel();
+    });
+    const result = await retryClawHubRead(
+      async () => ({ response: new Response("unavailable", { status: 503 }) }),
+      { disposeRetry, sleep: async () => {} },
+    );
+
+    expect(result.response.status).toBe(503);
+    expect(disposeRetry).toHaveBeenCalledTimes(3);
+  });
 });

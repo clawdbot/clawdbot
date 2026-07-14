@@ -2,7 +2,7 @@
 // hand-rolled pointer drag/drop + resize, empty states. Pure render fns — the
 // controller owns lifecycle and `lib/workspace` owns data logic.
 
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
@@ -62,9 +62,10 @@ import type {
 } from "../../lib/workspace/types.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
 
-export type WorkspaceProps = {
+type WorkspaceProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -233,19 +234,19 @@ function getViewState(host: object): WorkspaceViewState {
 }
 
 /** Advance the data-refresh counter so the next render re-resolves bindings. */
-export function bumpWorkspaceDataVersion(host: object): void {
+function bumpWorkspaceDataVersion(host: object): void {
   getViewState(host).dataVersion += 1;
 }
 
 /** The workspace tab slug requested via the `?ws=` deep-link query param. */
-export function requestedWorkspaceSlug(search: string): string | null {
+function requestedWorkspaceSlug(search: string): string | null {
   const params = new URLSearchParams(search);
   const ws = params.get("ws")?.trim();
   return ws ? ws : null;
 }
 
 /** Deep-link to a workspace tab: update `?ws=` and drive the router via popstate. */
-export function navigateToWorkspaceTab(slug: string): void {
+function navigateToWorkspaceTab(slug: string): void {
   const url = new URL(window.location.href);
   const ref = pluginTabRefFromSearch(url.search);
   url.searchParams.set("plugin", ref.pluginId);
@@ -985,6 +986,3 @@ function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
     </div>
   `;
 }
-
-// Re-exported for tests that render the view into a detached container.
-export { render };

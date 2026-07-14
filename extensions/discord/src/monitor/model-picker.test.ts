@@ -19,12 +19,14 @@ import {
   loadDiscordModelPickerData,
   parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
+} from "./model-picker.state.js";
+import { createModelsProviderData } from "./model-picker.test-utils.js";
+import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
   toDiscordModelPickerMessagePayload,
-} from "./model-picker.js";
-import { createModelsProviderData } from "./model-picker.test-utils.js";
+} from "./model-picker.view.js";
 
 const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
 

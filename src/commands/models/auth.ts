@@ -13,10 +13,8 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../../packages/terminal-core/src/prompt-style.js";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -130,15 +128,7 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
     }),
   );
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  guardCancel(
-    await clackSelect({
-      ...params,
-      message: stylePromptMessage(params.message),
-      options: params.options.map((opt) =>
-        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-      ),
-    }),
-  );
+  guardCancel(await clackSelect(styleSelectParams(params)));
 
 async function readPipedStdin(): Promise<string> {
   process.stdin.setEncoding("utf8");

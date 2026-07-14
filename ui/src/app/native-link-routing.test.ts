@@ -2,10 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import "../components/github-link-hovercard.ts";
+import "../components/github-link-hovercard-registration.ts";
 import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.ts";
 import "../components/modal-dialog.ts";
-import { startNativeLinkRouting, type NativeLinkRouting } from "./native-link-routing.ts";
+import { startNativeLinkRouting } from "./native-link-routing.ts";
+
+type NativeLinkRouting = ReturnType<typeof startNativeLinkRouting>;
 
 type NativeMessage = { type: string; url: string; target: string };
 

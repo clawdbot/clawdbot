@@ -1,7 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
@@ -20,6 +20,23 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
     payload,
     state: {},
   };
+}
+
+function isProcessRunning(pid: number): boolean {
+  const result = spawnSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
+  if (result.error) {
+    throw result.error;
+  }
+  const state = result.stdout.trim();
+  if (result.status === 0) {
+    return !state.startsWith("Z");
+  }
+  if (result.status === 1 && state === "" && result.stderr.trim() === "") {
+    return false;
+  }
+  throw new Error(
+    `ps failed with status ${result.status ?? "unknown"}: ${result.stderr.trim() || "no output"}`,
+  );
 }
 
 describe("runCronCommandJob", () => {
@@ -121,26 +138,29 @@ describe("runCronCommandJob", () => {
 
   it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
-    const markerPath = path.join(tempDir, "survived");
-    const childScript = [
-      `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "alive"), 350)`,
-      "setInterval(() => {}, 1000)",
-    ].join(";");
-    const shellCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)}`;
+    const childPidPath = path.join(tempDir, "child.pid");
+    const childScript = "setInterval(() => {}, 1000)";
+    const shellCommand = [
+      `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)} &`,
+      "child_pid=$!",
+      `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
+      'wait "$child_pid"',
+    ].join("\n");
 
     const result = await runCronCommandJob({
       job: makeCommandJob({
         kind: "command",
         argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.05,
+        timeoutSeconds: 0.2,
       }),
     });
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command timed out");
 
-    await delay(700);
-    await expect(fs.access(markerPath)).rejects.toThrow();
+    const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
+    expect(Number.isSafeInteger(childPid)).toBe(true);
+    await expect.poll(() => isProcessRunning(childPid)).toBe(false);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

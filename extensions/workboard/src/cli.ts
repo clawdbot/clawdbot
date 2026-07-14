@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
@@ -19,6 +20,26 @@ type GatewayOptions = JsonOptions & {
   expectFinal?: boolean;
   board?: string;
 };
+
+type DispatchOptions = GatewayOptions & {
+  maxStarts?: number;
+};
+
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parsePositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -91,15 +112,20 @@ async function callWorkboardGateway(
 
 function isGatewayUnavailableError(error: unknown): boolean {
   const message = formatErrorMessage(error).toLowerCase();
-  return [
-    "econnrefused",
-    "econnreset",
-    "ehostunreach",
-    "enotfound",
-    "gateway not connected",
-    "gateway unavailable",
-    "unknown method: workboard.cards.dispatch",
-  ].some((marker) => message.includes(marker));
+  if (
+    [
+      "econnrefused",
+      "econnreset",
+      "ehostunreach",
+      "enotfound",
+      "gateway not connected",
+      "gateway unavailable",
+    ].some((marker) => message.includes(marker))
+  ) {
+    return true;
+  }
+  const unknownMethod = message.match(/unknown method:\s*([a-z0-9._-]+)/)?.[1];
+  return unknownMethod === "workboard.cards.dispatch";
 }
 
 function hasExplicitGatewayTarget(options: GatewayOptions): boolean {
@@ -216,11 +242,21 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       .command("dispatch")
       .description("Promote ready cards and start worker runs through the Gateway")
       .option("--board <id>", "Dispatch a single board")
+      .option(
+        "--max-starts <count>",
+        "Maximum new worker runs to start in this pass (default 3)",
+        (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
+      )
       .option("--json", "Print JSON", false),
-  ).action(async (options: GatewayOptions) => {
+  ).action(async (options: DispatchOptions) => {
     try {
-      const result = await callWorkboardGateway("workboard.cards.dispatch", options, {
+      const method =
+        options.maxStarts === undefined
+          ? "workboard.cards.dispatch"
+          : "workboard.cards.dispatchWithOptions";
+      const result = await callWorkboardGateway(method, options, {
         boardId: options.board,
+        ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
       });
       if (options.json) {
         writeJson(result);

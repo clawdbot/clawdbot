@@ -3,7 +3,7 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.j
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue/types.js";
 
-export const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
+const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 const STRANDED_REPLY_DELIVERY_FAILURE_TEXT =
   "I generated a reply but could not deliver it to this chat. Please try again.";
 

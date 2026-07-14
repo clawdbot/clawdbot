@@ -9,7 +9,10 @@ import {
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
-import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -169,10 +172,10 @@ function resolveWhatsAppDurableReplyToId(params: {
 }
 
 function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
-  if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
-    return undefined;
-  }
-  return !cfg.channels.whatsapp.blockStreaming;
+  // The monitor snapshot pins the account-resolved streaming object onto the
+  // root channel entry, so this root-level read is already account-scoped.
+  const enabled = resolveChannelStreamingBlockEnabled(cfg.channels?.whatsapp);
+  return typeof enabled === "boolean" ? !enabled : undefined;
 }
 
 function resolveWhatsAppDeliverablePayload(

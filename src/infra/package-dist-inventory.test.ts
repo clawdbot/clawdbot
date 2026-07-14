@@ -3,15 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import {
+  isLegacyPluginDependencyInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  writePackageDistInventory,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  assertNoLegacyPluginDependencyStagingDebris,
-  collectLegacyPluginDependencyStagingDebrisPaths,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   collectPackageDistInventory,
-  isLegacyPluginDependencyInstallStagePath,
   readPackageDistInventoryIfPresent,
-  writePackageDistInventory,
 } from "./package-dist-inventory.js";
 
 describe("package dist inventory", () => {
@@ -379,47 +379,6 @@ describe("package dist inventory", () => {
     });
   });
 
-  it("reports runtime-created install staging dirs during installed dist verification", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
-      const realFile = path.join(packageRoot, "dist", "real-AbC123.js");
-      await fs.mkdir(path.dirname(realFile), { recursive: true });
-      await fs.writeFile(realFile, "export {};\n", "utf8");
-      await writePackageDistInventory(packageRoot);
-
-      const bareStageFile = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "brave",
-        ".openclaw-install-stage",
-        "node_modules",
-        "typebox",
-        "build",
-        "compile",
-        "code.mjs",
-      );
-      const suffixedStageFile = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "browser",
-        ".openclaw-install-stage-AbC123",
-        "node_modules",
-        "playwright-core",
-        "package.json",
-      );
-      await fs.mkdir(path.dirname(bareStageFile), { recursive: true });
-      await fs.writeFile(bareStageFile, "// staged\n", "utf8");
-      await fs.mkdir(path.dirname(suffixedStageFile), { recursive: true });
-      await fs.writeFile(suffixedStageFile, "{}", "utf8");
-
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
-        "dist/extensions/brave/.openclaw-install-stage",
-        "dist/extensions/browser/.openclaw-install-stage-AbC123",
-      ]);
-    });
-  });
-
   it("matches install-stage paths case-insensitively across path segments", () => {
     expect(
       isLegacyPluginDependencyInstallStagePath(
@@ -446,101 +405,39 @@ describe("package dist inventory", () => {
     ).toBe(false);
   });
 
-  it("rejects pre-populated install-stage debris at publish time", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-stage-publish-" }, async (packageRoot) => {
-      const seededStagePackageJson = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "evil",
-        ".openclaw-install-stage",
-        "package.json",
-      );
-      const suffixedSeed = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "browser",
-        ".openclaw-install-stage-AbC123",
-        "node_modules",
-        "playwright-core",
-        "package.json",
-      );
-      await fs.mkdir(path.dirname(seededStagePackageJson), { recursive: true });
-      await fs.writeFile(seededStagePackageJson, "{}", "utf8");
-      await fs.mkdir(path.dirname(suffixedSeed), { recursive: true });
-      await fs.writeFile(suffixedSeed, "{}", "utf8");
+  it("rejects pre-populated install-stage debris before writing an inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
+      for (const relativePath of [
+        "dist/extensions/brave/.openclaw-install-stage/package.json",
+        "dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+      ]) {
+        const filePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, "{}", "utf8");
+      }
 
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
-        "dist/extensions/browser/.openclaw-install-stage-AbC123",
-        "dist/extensions/evil/.openclaw-install-stage",
-      ]);
-      await expect(assertNoLegacyPluginDependencyStagingDebris(packageRoot)).rejects.toThrow(
-        /unexpected legacy plugin dependency staging debris/,
-      );
       await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-        /unexpected legacy plugin dependency staging debris/,
+        /unexpected legacy plugin dependency staging debris/u,
       );
     });
   });
 
-  it("rejects mixed-case install-stage debris on case-sensitive release builders", async () => {
-    await withTempDir(
-      { prefix: "openclaw-dist-inventory-stage-extensions-case-" },
-      async (packageRoot) => {
-        const mixedCaseStage = path.join(
-          packageRoot,
-          "dist",
-          "Extensions",
-          "evil",
-          ".OpenClaw-Install-Stage",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
-        await fs.writeFile(mixedCaseStage, "{}", "utf8");
-
-        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-          ["dist/Extensions/evil/.OpenClaw-Install-Stage"],
-        );
-        await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected legacy plugin dependency staging debris/,
-        );
-      },
-    );
-
-    await withTempDir(
-      { prefix: "openclaw-dist-inventory-stage-root-case-" },
-      async (packageRoot) => {
-        const mixedCaseStage = path.join(
-          packageRoot,
-          "Dist",
-          "Extensions",
-          "browser",
-          ".OPENCLAW-INSTALL-STAGE-AbC123",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
-        await fs.writeFile(mixedCaseStage, "{}", "utf8");
-
-        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-          ["Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123"],
-        );
-        await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected legacy plugin dependency staging debris/,
-        );
-      },
-    );
-  });
-
-  it("treats a missing dist/extensions tree as no staging debris", async () => {
-    await withTempDir({ prefix: "openclaw-dist-inventory-no-extensions-" }, async (packageRoot) => {
-      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
-        [],
+  it("rejects mixed-case install-stage debris on case-sensitive builders", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-case-" }, async (packageRoot) => {
+      const stagedFile = path.join(
+        packageRoot,
+        "Dist",
+        "Extensions",
+        "browser",
+        ".OPENCLAW-INSTALL-STAGE-AbC123",
+        "package.json",
       );
-      await expect(
-        assertNoLegacyPluginDependencyStagingDebris(packageRoot),
-      ).resolves.toBeUndefined();
+      await fs.mkdir(path.dirname(stagedFile), { recursive: true });
+      await fs.writeFile(stagedFile, "{}", "utf8");
+
+      await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
+        /unexpected legacy plugin dependency staging debris/u,
+      );
     });
   });
 

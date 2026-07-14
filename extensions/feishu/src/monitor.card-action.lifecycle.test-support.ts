@@ -2,7 +2,7 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./lifecycle.test-support.js";
-import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
+import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   getFeishuLifecycleTestMocks,
@@ -145,7 +145,8 @@ describe("Feishu card-action lifecycle", () => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
     lastRuntime = createRuntimeEnv();
-    resetProcessedFeishuCardActionTokensForTests();
+    processedCardActions.clear();
+    resolvedCardActionChatTypes.clear();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
@@ -182,7 +183,8 @@ describe("Feishu card-action lifecycle", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetProcessedFeishuCardActionTokensForTests();
+    processedCardActions.clear();
+    resolvedCardActionChatTypes.clear();
     restoreFeishuLifecycleStateDir(originalStateDir);
   });
 

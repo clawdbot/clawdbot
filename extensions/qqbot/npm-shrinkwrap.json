@@ -10,6 +10,8 @@
       "dependencies": {
         "@tencent-connect/qqbot-connector": "1.1.0",
         "mpg123-decoder": "1.0.3",
+        "p-map": "7.0.5",
+        "pretty-ms": "9.3.0",
         "silk-wasm": "3.7.1",
         "ws": "8.21.0",
         "zod": "4.4.3"
@@ -62,6 +64,45 @@
       "funding": {
         "type": "individual",
         "url": "https://github.com/sponsors/eshaz"
+      }
+    },
+    "node_modules/p-map": {
+      "version": "7.0.5",
+      "resolved": "https://registry.npmjs.org/p-map/-/p-map-7.0.5.tgz",
+      "integrity": "sha512-e8vJF4XdVkzqqSHguEMz41mQO1wKwxKm5ENrUJQUu9kLDCtn83cxbyHZcszr4QC5zEA7WffRRC4gsTecC7J9oA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/parse-ms": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/parse-ms/-/parse-ms-4.0.0.tgz",
+      "integrity": "sha512-TXfryirbmq34y8QBwgqCVLi+8oA3oWx2eAnSn62ITyEhEYaWRlVZ2DvMM9eZbMs/RfxPu/PK/aBLyGj4IrqMHw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/pretty-ms": {
+      "version": "9.3.0",
+      "resolved": "https://registry.npmjs.org/pretty-ms/-/pretty-ms-9.3.0.tgz",
+      "integrity": "sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==",
+      "license": "MIT",
+      "dependencies": {
+        "parse-ms": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/qrcode-terminal": {

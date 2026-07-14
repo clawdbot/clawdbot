@@ -2,7 +2,6 @@
 export {
   formatEmbeddedAgentQueueFailureSummary,
   isEmbeddedAgentRunActive,
-  queueEmbeddedAgentMessage,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,

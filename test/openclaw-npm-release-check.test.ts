@@ -4,6 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../scripts/lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
@@ -23,10 +27,6 @@ import {
   runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
 } from "../scripts/openclaw-npm-release-check.ts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
   "npm-shrinkwrap.json",

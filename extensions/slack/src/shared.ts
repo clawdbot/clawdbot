@@ -23,7 +23,7 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
+export { SLACK_CHANNEL } from "./setup-shared.js";
 
 export { isSlackPluginAccountConfigured };
 

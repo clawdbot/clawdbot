@@ -4,7 +4,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
+  DetachedTaskCompleteParams,
   DetachedTaskCreateParams,
+  DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
@@ -12,10 +14,13 @@ import {
   assertTaskCancellationReadyById,
   cancelTaskById,
   createTaskRecord,
+  findTaskByRunId as findTaskByRunIdInRegistry,
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
+  listTaskRecordsUnsorted as listTaskRecordsUnsortedInRegistry,
   listTasksForFlowId,
+  markTaskTerminalById as markTaskTerminalByIdInRegistry,
   markTaskRunningByRunId,
   finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
   recordTaskProgressByRunId,
@@ -42,8 +47,6 @@ import type {
   TaskRecord,
   TaskRegistrySummary,
   TaskRuntime,
-  TaskStatus,
-  TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
@@ -129,6 +132,14 @@ export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): T
   });
 }
 
+export function findTaskByRunId(runId: string): TaskRecord | undefined {
+  return findTaskByRunIdInRegistry(runId);
+}
+
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  return listTaskRecordsUnsortedInRegistry();
+}
+
 type RunTaskInFlowParams = {
   flowId: string;
   runtime: TaskRuntime;
@@ -171,17 +182,7 @@ export function recordTaskRunProgressByRunId(params: {
   return recordTaskProgressByRunId(params);
 }
 
-export function completeTaskRunByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  endedAt: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  suppressDelivery?: boolean;
-}) {
+export function completeTaskRunByRunId(params: DetachedTaskCompleteParams) {
   return finalizeTaskRunByRunId({
     ...params,
     status: "succeeded",
@@ -192,18 +193,13 @@ export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
   return finalizeTaskRunByRunIdInRegistry(params);
 }
 
-export function failTaskRunByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  suppressDelivery?: boolean;
-}) {
+export function finalizeTaskRunById(
+  params: Parameters<typeof markTaskTerminalByIdInRegistry>[0],
+): TaskRecord | null {
+  return markTaskTerminalByIdInRegistry(params);
+}
+
+export function failTaskRunByRunId(params: DetachedTaskFailParams) {
   return finalizeTaskRunByRunId({
     ...params,
     status: params.status ?? "failed",

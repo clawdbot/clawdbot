@@ -94,7 +94,7 @@ import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
-export type CodexAppServerThreadLifecycle = {
+type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
   rotatedContextEngineBinding?: boolean;
   activeTurnIds?: string[];
@@ -134,11 +134,11 @@ class CodexAdoptedThreadActiveError extends Error {
   }
 }
 
-export type CodexThreadFinalConfigPatchDecision =
+type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };
 
-export type CodexThreadFinalConfigPatchResult = {
+type CodexThreadFinalConfigPatchResult = {
   configPatch?: JsonObject;
   nativeHookRelayGeneration?: string;
 };
@@ -149,7 +149,7 @@ export type CodexContextEngineThreadBootstrapProjection = {
   fingerprint?: string;
 };
 
-export type CodexPluginThreadConfigProvider = {
+type CodexPluginThreadConfigProvider = {
   enabled: boolean;
   inputFingerprint?: string;
   enabledPluginConfigKeys?: readonly string[];
@@ -160,13 +160,13 @@ export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
 
 // Stream structured patch snapshots so large generated edits keep the turn active.
-export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
+const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
 };
 
-export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
+const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode": false,
   "features.code_mode_only": false,
 };
@@ -240,26 +240,26 @@ const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
   "sessionFlags",
 ]);
 
-export type CodexThreadLifecycleTimingSpan = {
+type CodexThreadLifecycleTimingSpan = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
-export type CodexThreadLifecycleTimingSummary = {
+type CodexThreadLifecycleTimingSummary = {
   totalMs: number;
   spans: CodexThreadLifecycleTimingSpan[];
 };
 
-export type CodexThreadLifecycleTimingLogger = {
+type CodexThreadLifecycleTimingLogger = {
   isEnabled?: (level: "trace") => boolean;
   trace: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
-export type CodexThreadLifecycleTimingAction = "started" | "resumed" | "forked" | "rotated";
+type CodexThreadLifecycleTimingAction = "started" | "resumed" | "forked" | "rotated";
 
-export type CodexThreadLifecycleTimingOptions = {
+type CodexThreadLifecycleTimingOptions = {
   enabled?: boolean;
   now?: () => number;
   log?: CodexThreadLifecycleTimingLogger;
@@ -270,7 +270,7 @@ export type CodexThreadLifecycleTimingOptions = {
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS = 1_000;
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS = 500;
 
-export function shouldWarnCodexThreadLifecycleTimingSummary(
+function shouldWarnCodexThreadLifecycleTimingSummary(
   summary: CodexThreadLifecycleTimingSummary,
   options: CodexThreadLifecycleTimingOptions = {},
 ): boolean {
@@ -282,7 +282,7 @@ export function shouldWarnCodexThreadLifecycleTimingSummary(
   );
 }
 
-export function formatCodexThreadLifecycleTimingSummary(params: {
+function formatCodexThreadLifecycleTimingSummary(params: {
   runId: string;
   sessionId: string;
   sessionKey?: string;
@@ -1944,7 +1944,7 @@ async function archiveSupervisionArtifact(
   }
 }
 
-export function shouldRotateCodexAppServerBindingForRuntime(params: {
+function shouldRotateCodexAppServerBindingForRuntime(params: {
   connectionClass: CodexAppServerRuntimeOptions["connectionClass"];
   current?: string;
   binding?: string;
@@ -2513,7 +2513,7 @@ function buildCodexRuntimeThreadConfigForRun(
   );
 }
 
-export function buildCodexRingZeroThreadConfigPatch(
+function buildCodexRingZeroThreadConfigPatch(
   params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
   hostCrestodianActive = isHostScopedAgentToolActive("crestodian"),
   inheritedMcpServerNames: readonly string[] = [],
@@ -2533,7 +2533,7 @@ export function buildCodexRingZeroThreadConfigPatch(
   };
 }
 
-export async function readCodexInheritedMcpServerNames(
+async function readCodexInheritedMcpServerNames(
   client: Pick<CodexAppServerClient, "request">,
   cwd: string,
   signal?: AbortSignal,
@@ -2576,7 +2576,7 @@ export async function readCodexInheritedMcpServerNames(
   return Object.keys(configuredServers).toSorted();
 }
 
-export async function assertCodexRingZeroHasNoManagedHooks(
+async function assertCodexRingZeroHasNoManagedHooks(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -2625,7 +2625,7 @@ export async function assertCodexRingZeroHasNoManagedHooks(
   }
 }
 
-export async function attestCodexRingZeroThreadHasNoMcpServers(
+async function attestCodexRingZeroThreadHasNoMcpServers(
   client: Pick<CodexAppServerClient, "request">,
   threadId: string,
   signal?: AbortSignal,
@@ -3101,7 +3101,7 @@ function buildVisibleReplyInstruction(
     ? flattenCodexDynamicToolFunctions(dynamicTools).some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
+    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. Do not repeat that visible content in your final answer.";
   }
   if (messageToolAvailable) {
     return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";

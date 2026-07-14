@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { coerce as coerceSemver } from "semver";
 
 const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "image-generation-core",
@@ -25,41 +26,7 @@ function assertSafeQaBundledPluginId(pluginId: string) {
 }
 
 function parseStableSemverFloor(value: string | undefined) {
-  if (!value) {
-    return null;
-  }
-  const match = value.trim().match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(match[1] ?? "", 10),
-    minor: Number.parseInt(match[2] ?? "", 10),
-    patch: Number.parseInt(match[3] ?? "", 10),
-    label: `${match[1]}.${match[2]}.${match[3]}`,
-  };
-}
-
-function compareSemverFloors(
-  left: ReturnType<typeof parseStableSemverFloor>,
-  right: ReturnType<typeof parseStableSemverFloor>,
-) {
-  if (!left && !right) {
-    return 0;
-  }
-  if (!left) {
-    return -1;
-  }
-  if (!right) {
-    return 1;
-  }
-  if (left.major !== right.major) {
-    return left.major - right.major;
-  }
-  if (left.minor !== right.minor) {
-    return left.minor - right.minor;
-  }
-  return left.patch - right.patch;
+  return value ? coerceSemver(value) : null;
 }
 
 function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
@@ -392,12 +359,12 @@ export async function resolveQaRuntimeHostVersion(params: {
       };
     };
     const candidate = parseStableSemverFloor(packageJson.openclaw?.install?.minHostVersion);
-    if (compareSemverFloors(candidate, selected) > 0) {
+    if (candidate && (!selected || candidate.compare(selected) > 0)) {
       selected = candidate;
     }
   }
 
-  return selected?.label;
+  return selected?.version;
 }
 
 export async function createQaBundledPluginsDir(params: {

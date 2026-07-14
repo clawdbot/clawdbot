@@ -317,20 +317,3 @@ export async function sweepTrackedBrowserTabs(params: {
     onWarn: params.onWarn,
   });
 }
-
-/** Clears tracked tab state for tests. */
-export function resetTrackedSessionBrowserTabsForTests(): void {
-  trackedTabsBySession.clear();
-}
-
-/** Counts tracked tabs for one session or all sessions in tests. */
-export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
-  if (typeof sessionKey === "string" && sessionKey.trim()) {
-    return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;
-  }
-  let count = 0;
-  for (const tracked of trackedTabsBySession.values()) {
-    count += tracked.size;
-  }
-  return count;
-}

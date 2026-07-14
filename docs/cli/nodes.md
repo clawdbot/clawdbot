@@ -44,8 +44,8 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `approve` scope requirements follow the pending request's declared commands:
   - commandless request: `operator.pairing`
-  - non-exec node commands: `operator.pairing` + `operator.write`
-  - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
+  - ordinary node commands: `operator.pairing` + `operator.write`
+  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
 - `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke

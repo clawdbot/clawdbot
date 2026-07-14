@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -19,15 +20,6 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
-
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
@@ -862,25 +854,6 @@ async function buildProducerContext(params: {
   };
 }
 
-function createConcurrencyLimit(limit: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
-    if (active >= limit) {
-      await new Promise<void>((resolve) => {
-        queue.push(resolve);
-      });
-    }
-    active += 1;
-    try {
-      return await task();
-    } finally {
-      active -= 1;
-      queue.shift()?.();
-    }
-  };
-}
-
 export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
@@ -909,7 +882,7 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
+  const limitArtifactView = pLimit(ARTIFACT_VIEW_CONCURRENCY);
   const entries = await Promise.all(
     summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
       counts[entry.result.status] += 1;

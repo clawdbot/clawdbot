@@ -6,12 +6,25 @@ import {
   normalizeClaudeBackendConfig,
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
+  resolveClaudeCliAutoCompactEnv,
   resolveClaudePermissionMode,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+
+describe("resolveClaudeCliAutoCompactEnv", () => {
+  it("maps the effective OpenClaw context budget into Claude Code compaction", () => {
+    expect(resolveClaudeCliAutoCompactEnv(100_000.9)).toEqual({
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+    });
+  });
+
+  it.each([undefined, 0, 0.5, Number.NaN])("rejects an invalid context budget: %s", (budget) => {
+    expect(resolveClaudeCliAutoCompactEnv(budget)).toBeUndefined();
+  });
+});
 
 function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
@@ -533,6 +546,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(backend.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_BEDROCK");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
@@ -542,6 +556,21 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+  });
+
+  it("passes the effective context budget to Claude Code's native compactor", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        contextTokenBudget: 100_000,
+      }),
+    ).toEqual({
+      env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" },
+    });
   });
 
   it("disables native background Bash and Monitor tools in args and resumeArgs", () => {

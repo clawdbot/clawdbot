@@ -36,18 +36,18 @@ type BundledPluginTabView = {
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   "workspaces/workspaces": async () => {
-    const [view, controller] = await Promise.all([
+    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
       import("./workspace-view.ts"),
       import("./workspace-controller.ts"),
     ]);
-    return { render: view.renderWorkspace, stop: controller.stopWorkspace };
+    return { render: renderWorkspace, stop: stopWorkspace };
   },
   "logbook/logbook": async () => {
-    const [view, controller] = await Promise.all([
+    const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
       import("./logbook-controller.ts"),
     ]);
-    return { render: view.renderLogbook, stop: controller.stopLogbookPolling };
+    return { render: renderLogbook, stop: stopLogbookPolling };
   },
 };
 

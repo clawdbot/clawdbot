@@ -35,7 +35,7 @@ type StaleSessionSnapshotPathFinding = {
   expectedPath: string;
 };
 
-export type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
+type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 

@@ -66,7 +66,7 @@ export type ApnsAuthConfig = {
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 /** Normalized APNs push result returned to gateway push/nodes methods. */
-export type ApnsPushResult = {
+type ApnsPushResult = {
   ok: boolean;
   status: number;
   apnsId?: string;
@@ -589,10 +589,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
 }
 
 /** Returns true for APNs responses that mean the direct device token is no longer usable. */
-export function shouldInvalidateApnsRegistration(result: {
-  status: number;
-  reason?: string;
-}): boolean {
+function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
   if (result.status === 410) {
     return true;
   }

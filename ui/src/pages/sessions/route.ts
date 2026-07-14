@@ -20,6 +20,7 @@ async function loadSessionsRoute(
   const gatewaySnapshot = gateway.snapshot;
   const options = routeOptions(location);
   const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
+  const scopeAgentId = checkpointAgentId ?? context.agentSelection.state.scopeId;
   const [sessions] = await Promise.all([
     context.sessions
       .list({
@@ -29,7 +30,7 @@ async function loadSessionsRoute(
         includeGlobal: true,
         includeUnknown: Boolean(options.expandedSessionKey),
         showArchived: options.showArchived,
-        ...(checkpointAgentId ? { agentId: checkpointAgentId } : {}),
+        ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
       })
       .then(
         (result) => ({ result, error: null }),
@@ -48,10 +49,11 @@ async function loadSessionsRoute(
 
 export const page = definePage({
   id: "sessions",
-  path: "/sessions",
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+  path: "/settings/sessions",
+  aliases: ["/sessions"],
+  loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
-    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;
+    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
   },
   loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
   component: () =>

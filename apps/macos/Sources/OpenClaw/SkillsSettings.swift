@@ -1,4 +1,5 @@
 import Observation
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
@@ -6,6 +7,8 @@ struct SkillsSettings: View {
     @Bindable var state: AppState
     @State private var model = SkillsSettingsModel()
     @State private var envEditor: EnvEditorState?
+    @State private var section: SkillsSection = .installed
+    @State private var searchText = ""
     @State private var filter: SkillsFilter = .all
     @State private var didScheduleInitialRefresh = false
 
@@ -19,12 +22,19 @@ struct SkillsSettings: View {
             VStack(alignment: .leading, spacing: 20) {
                 SettingsPageHeader(
                     title: "Skills",
-                    subtitle: "Optional capabilities that become available when their requirements are met.")
+                    subtitle: "Manage installed capabilities or discover verified releases on ClawHub.")
 
-                self.skillsSummaryPanel
-                self.controlsCard
-                self.statusBanner
-                self.skillsList
+                self.sectionPicker
+                if self.section == .installed {
+                    self.skillsSummaryPanel
+                    self.controlsCard
+                    self.statusBanner
+                    self.skillsList
+                } else {
+                    ClawHubSkillsBrowser(installedSkills: self.model.skills) { skills in
+                        self.model.acceptInstalledSkills(skills)
+                    }
+                }
                 Spacer(minLength: 8)
             }
             .settingsDetailContent()
@@ -48,10 +58,20 @@ struct SkillsSettings: View {
         }
     }
 
+    private var sectionPicker: some View {
+        Picker("Skills section", selection: self.$section) {
+            ForEach(SkillsSection.allCases) { section in
+                Text(section.title).tag(section)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+    }
+
     private var skillsSummaryPanel: some View {
         let total = self.model.skills.count
-        let ready = self.model.skills.count(where: { !$0.disabled && $0.eligible })
-        let needsSetup = self.model.skills.count(where: { !$0.disabled && !$0.eligible })
+        let ready = self.model.skills.count(where: SkillManagementContract.ready)
+        let needsSetup = self.model.skills.count(where: SkillManagementContract.needsSetup)
 
         return HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -107,6 +127,10 @@ struct SkillsSettings: View {
                 }
                 .buttonStyle(.bordered)
                 .help("Refresh")
+
+                TextField("Search installed skills", text: self.$searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
 
                 self.headerFilter
             }
@@ -191,17 +215,39 @@ struct SkillsSettings: View {
     }
 
     private var filteredSkills: [SkillStatus] {
-        self.model.skills.filter { skill in
-            switch self.filter {
+        let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return self.model.skills.filter { skill in
+            let matchesQuery = query.isEmpty
+                || skill.name.localizedCaseInsensitiveContains(query)
+                || skill.skillKey.localizedCaseInsensitiveContains(query)
+                || skill.description.localizedCaseInsensitiveContains(query)
+            let matchesFilter = switch self.filter {
             case .all:
                 true
             case .ready:
-                !skill.disabled && skill.eligible
+                SkillManagementContract.ready(skill)
             case .needsSetup:
-                !skill.disabled && !skill.eligible
+                SkillManagementContract.needsSetup(skill)
             case .disabled:
                 skill.disabled
             }
+            return matchesQuery && matchesFilter
+        }
+    }
+}
+
+private enum SkillsSection: String, CaseIterable, Identifiable {
+    case installed
+    case browse
+
+    var id: String {
+        self.rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .installed: "Installed"
+        case .browse: "Browse"
         }
     }
 }
@@ -333,14 +379,14 @@ private struct SkillRow: View {
         if self.skill.disabled {
             return "Disabled"
         }
-        return self.requirementsMet && self.skill.eligible ? "Ready" : "Needs setup"
+        return self.requirementsMet && SkillManagementContract.ready(self.skill) ? "Ready" : "Needs setup"
     }
 
     private var statusColor: Color {
         if self.skill.disabled {
             return .secondary
         }
-        return self.requirementsMet && self.skill.eligible ? .green : .orange
+        return self.requirementsMet && SkillManagementContract.ready(self.skill) ? .green : .orange
     }
 
     private var sourceLabel: String {
@@ -675,6 +721,12 @@ final class SkillsSettingsModel {
             self.error = error.localizedDescription
         }
         self.isLoading = false
+    }
+
+    func acceptInstalledSkills(_ skills: [SkillStatus]) {
+        self.skills = skills.sorted { $0.name < $1.name }
+        self.hasLoaded = true
+        self.error = nil
     }
 
     fileprivate func install(skill: SkillStatus, option: SkillInstallOption, target: InstallTarget) async {

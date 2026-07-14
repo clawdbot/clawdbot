@@ -294,13 +294,13 @@ Notes:
 
 Mattermost streams thinking, tool activity, and partial reply text into a **draft preview post** that finalizes in place when the final answer is safe to send. In `partial` mode the preview updates on the same post id instead of spamming the channel with per-chunk messages. In `block` mode the preview rotates between completed text and tool-activity blocks, so earlier blocks stay visible as their own posts instead of being overwritten by the next one. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
 
-Preview streaming is **on by default** in `partial` mode. Configure via `channels.mattermost.streaming` (a mode string, boolean, or an object like `{ mode: "progress" }`):
+Preview streaming is **on by default** in `partial` mode. Configure via `channels.mattermost.streaming.mode` (legacy scalar/boolean `streaming` values are migrated by `openclaw doctor --fix`):
 
 ```json5
 {
   channels: {
     mattermost: {
-      streaming: "partial", // off | partial | block | progress
+      streaming: { mode: "partial" }, // off | partial | block | progress
     },
   },
 }
@@ -311,7 +311,7 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
     - `partial` (default): one preview post that is edited as the reply grows, then finalized with the complete answer.
     - `block` rotates the preview between completed text and tool-activity blocks, so each block stays visible as its own post instead of being overwritten in place. Parallel and consecutive tool updates share the current tool-activity post.
     - `progress` shows a status preview while generating and only posts the final answer at completion.
-    - `off` disables preview streaming. With `blockStreaming: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
+    - `off` disables preview streaming. With `streaming.block.enabled: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">

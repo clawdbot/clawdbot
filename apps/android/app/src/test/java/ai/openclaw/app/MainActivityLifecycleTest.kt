@@ -3,10 +3,13 @@ package ai.openclaw.app
 import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -146,5 +149,33 @@ class MainActivityLifecycleTest {
 
     assertEquals(0, attachCount)
     assertEquals(0, serviceCount)
+  }
+
+  @Test
+  fun recreatedRuntimeUiStarterCannotRestartSuppressedServiceUntilExplicitResume() {
+    val app = RuntimeEnvironment.getApplication()
+    val appShadow = shadowOf(app)
+    NodeForegroundService.resume(app, startNow = false)
+
+    try {
+      NodeForegroundService.stop(app)
+      assertEquals("ai.openclaw.app.action.STOP", appShadow.nextStartedService.action)
+
+      repeat(2) {
+        MainActivityRuntimeUiStarter().onRuntimeInitialized(
+          ready = true,
+          startRuntimeUi = true,
+          attachRuntimeUi = {},
+          startNodeService = { NodeForegroundService.start(app) },
+        )
+      }
+
+      assertNull(appShadow.nextStartedService)
+
+      NodeForegroundService.resume(app, startNow = true)
+      assertEquals("ai.openclaw.app.action.RESUME", appShadow.nextStartedService.action)
+    } finally {
+      NodeForegroundService.resume(app, startNow = false)
+    }
   }
 }

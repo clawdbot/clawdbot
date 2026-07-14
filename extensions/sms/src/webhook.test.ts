@@ -5,11 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { computeTwilioSignature, parseTwilioFormBody } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import {
-  createSmsWebhookHandler,
-  createSmsWebhookReplayGuard,
-  resetSmsWebhookReplayGuardsForTest,
-} from "./webhook.js";
+import { createSmsWebhookHandler, testing } from "./webhook.js";
+
+const { createSmsWebhookReplayGuard, resetSmsWebhookReplayGuardsForTest } = testing;
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -36,16 +34,35 @@ function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSms
   };
 }
 
+function createSignedBody(params?: {
+  account?: ResolvedSmsAccount;
+  body?: string;
+  messageSid?: string;
+}): { body: string; signature: string } {
+  const account = params?.account ?? createAccount();
+  const body =
+    params?.body ??
+    `AccountSid=${encodeURIComponent(account.accountSid)}&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${encodeURIComponent(params?.messageSid ?? "SM123")}`;
+  return {
+    body,
+    signature: computeTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form: parseTwilioFormBody(body),
+    }),
+  };
+}
+
 function createRequest(
   body: string,
   signature: string,
-  remoteAddress = "127.0.0.1",
+  options?: { headers?: Record<string, string>; remoteAddress?: string },
 ): IncomingMessage {
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
-  req.headers = { "x-twilio-signature": signature };
+  req.headers = { "x-twilio-signature": signature, ...options?.headers };
   Object.defineProperty(req, "socket", {
-    value: { remoteAddress },
+    value: { remoteAddress: options?.remoteAddress ?? "127.0.0.1" },
   });
   return req;
 }
@@ -240,5 +257,131 @@ describe("createSmsWebhookHandler", () => {
 
     expect(res.statusCode).toBe(403);
     expect(dispatchSmsInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not let unsigned proxy traffic consume the same client's signed webhook rate limit", async () => {
+    const account = createAccount();
+    const handler = createSmsWebhookHandler({
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    const unsignedBody =
+      "AccountSid=AC123&From=%2B15550000000&To=%2B15557654321&Body=bad&MessageSid=SM-bad";
+    for (let i = 0; i < 300; i += 1) {
+      const rejected = createResponse();
+      await handler(
+        createRequest(unsignedBody, "not-a-valid-signature", {
+          headers: { "x-forwarded-for": "203.0.113.10" },
+        }),
+        rejected,
+      );
+      expect(rejected.statusCode).toBe(403);
+    }
+    const throttled = createResponse();
+    await handler(
+      createRequest(unsignedBody, "not-a-valid-signature", {
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }),
+      throttled,
+    );
+    expect(throttled.statusCode).toBe(429);
+
+    const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
+    const accepted = createResponse();
+    await handler(
+      createRequest(valid.body, valid.signature, {
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }),
+      accepted,
+    );
+
+    expect(accepted.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes signed webhook rate limits to one SMS account and route", async () => {
+    const supportAccount = createAccount({
+      accountId: "support",
+      accountSid: "AC-support",
+      webhookPath: "/webhooks/sms/support",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
+    });
+    const defaultAccount = createAccount();
+    const supportHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: supportAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    const defaultHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: defaultAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const valid = createSignedBody({
+        account: supportAccount,
+        messageSid: `SM-support-${i}`,
+      });
+      const res = createResponse();
+      await supportHandler(createRequest(valid.body, valid.signature), res);
+      expect(res.statusCode).toBe(200);
+    }
+    const rateLimited = createSignedBody({
+      account: supportAccount,
+      messageSid: "SM-support-rate-limited",
+    });
+    const rateLimitedRes = createResponse();
+    await supportHandler(createRequest(rateLimited.body, rateLimited.signature), rateLimitedRes);
+    expect(rateLimitedRes.statusCode).toBe(429);
+
+    const defaultValid = createSignedBody({
+      account: defaultAccount,
+      messageSid: "SM-default-after-support-limit",
+    });
+    const defaultRes = createResponse();
+    await defaultHandler(createRequest(defaultValid.body, defaultValid.signature), defaultRes);
+
+    expect(defaultRes.statusCode).toBe(200);
+  });
+
+  it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {
+    const account = createAccount({ dangerouslyDisableSignatureValidation: true });
+    const handler = createSmsWebhookHandler({
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const valid = createSignedBody({
+        account,
+        messageSid: `SM-disabled-${i}`,
+      });
+      const res = createResponse();
+      await handler(
+        createRequest(valid.body, "unused-signature", {
+          headers: { "x-forwarded-for": "203.0.113.20" },
+        }),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+    }
+
+    const overBudget = createSignedBody({
+      account,
+      messageSid: "SM-disabled-over-budget",
+    });
+    const overBudgetRes = createResponse();
+    await handler(
+      createRequest(overBudget.body, "unused-signature", {
+        headers: { "x-forwarded-for": "203.0.113.20" },
+      }),
+      overBudgetRes,
+    );
+
+    expect(overBudgetRes.statusCode).toBe(429);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
   });
 });

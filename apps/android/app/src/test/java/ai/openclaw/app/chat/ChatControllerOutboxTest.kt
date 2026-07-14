@@ -299,6 +299,9 @@ class ChatControllerOutboxTest {
     var sendFailureBeforeDispatch: Throwable? = null
     var sendFailureAfterDispatch: Throwable? = null
     var sendGate: CompletableDeferred<Unit>? = null
+    var settingsPatchStarted: CompletableDeferred<Unit>? = null
+    var settingsPatchGate: CompletableDeferred<Unit>? = null
+    val settingsPatchFailures = mutableListOf<Throwable?>()
     var sendResponse: (idempotencyKey: String) -> String = { key -> """{"runId":"$key","status":"started"}""" }
     val sentIdempotencyKeys = mutableListOf<String>()
     val sentMessages = mutableListOf<String>()
@@ -367,6 +370,14 @@ class ChatControllerOutboxTest {
           """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
         "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+        "sessions.patch" -> {
+          settingsPatchStarted?.complete(Unit)
+          settingsPatchGate?.await()
+          if (settingsPatchFailures.isNotEmpty()) {
+            settingsPatchFailures.removeAt(0)?.let { throw it }
+          }
+          "{}"
+        }
         else -> "{}"
       }
     }
@@ -433,6 +444,66 @@ class ChatControllerOutboxTest {
       assertEquals(queuedIds, gateway.sentIdempotencyKeys)
       assertEquals(listOf("main", "main", "main"), gateway.sentSessionKeys)
       assertEquals(listOf("high", "off", "off"), gateway.sentThinkingLevels)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun reconnectFlushWaitsForPendingSessionSettings() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "queued", thinkingLevel = "high", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      chat.setSessionModel("main", "openai/gpt-5.6-sol")
+      gateway.settingsPatchStarted?.await()
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
+
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+      assertEquals(listOf("queued"), gateway.sentMessages)
+    }
+
+  @Test
+  fun reconnectFlushResumesAfterNewerPendingSessionSettingSucceeds() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "queued", thinkingLevel = "high", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      gateway.settingsPatchFailures += IllegalStateException("first patch rejected")
+      gateway.settingsPatchFailures += null
+      chat.setSessionModel("main", "anthropic/claude-fable-5")
+      gateway.settingsPatchStarted?.await()
+      chat.setSessionModel("main", "openai/gpt-5.6-sol")
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("queued"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
 

@@ -12,6 +12,8 @@ import {
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -669,6 +671,239 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   ).resolves.toEqual([
     expect.objectContaining({ id: created.payload?.sessionId, type: "session" }),
   ]);
+});
+
+test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+  ];
+  const resolveCreateSession = vi.fn(() => ({
+    model: "anthropic/claude-opus-4-8",
+    agentRuntime: "claude-cli",
+  }));
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq<{
+      entry?: {
+        providerOverride?: string;
+        modelOverride?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+        pluginOwnerId?: string;
+      };
+      key?: string;
+    }>("sessions.create", { agentId: "main", catalogId: "claude" });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.entry).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-8",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+    });
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
+
+    const patched = await directSessionReq("sessions.patch", {
+      key: created.payload?.key,
+      agentId: "main",
+      model: "anthropic/claude-opus-4-8",
+    });
+    expect(patched.ok).toBe(false);
+    expect(patched.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Model selection is locked for this session.",
+    });
+
+    const deleted = await directSessionReq("sessions.delete", {
+      key: created.payload?.key,
+      agentId: "main",
+      deleteTranscript: false,
+    });
+    expect(deleted.ok).toBe(true);
+    expect(
+      loadSessionEntry({
+        agentId: "main",
+        sessionKey: created.payload?.key ?? "",
+        storePath,
+      }),
+    ).toBeUndefined();
+  } finally {
+    testState.agentConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create rejects a caller-supplied key for a catalog target", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession: () => ({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      }),
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      key: "main",
+      agentId: "main",
+      catalogId: "claude",
+    });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create catalogId cannot include key",
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
+      providerOverride: "openai",
+      modelOverride: "gpt-existing",
+    });
+  } finally {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create authorizes a catalog target for the requested agent", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = {
+    list: [{ id: "main", default: true }, { id: "research" }],
+  };
+  const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
+    agentId === "research"
+      ? undefined
+      : {
+          model: "anthropic/claude-opus-4-8",
+          agentRuntime: "claude-cli",
+        },
+  );
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      agentId: "research",
+      catalogId: "claude",
+    });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "session catalog claude cannot create sessions",
+    });
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
+  } finally {
+    testState.agentsConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create bypasses main-session reset for a catalog target", async () => {
+  await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
+  testState.sessionConfig = { dmScope: "main" };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+  ];
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent-catalog"),
+    },
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession: () => ({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      }),
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: {
+        parentSessionKey?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        agentRuntimeOverride?: string;
+        modelSelectionLocked?: boolean;
+      };
+    }>("sessions.create", {
+      agentId: "main",
+      catalogId: "claude",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      parentSessionKey: "agent:main:main",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-8",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+    });
+  } finally {
+    testState.agentConfig = undefined;
+    testState.sessionConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
 });
 
 test("sessions.create inherits explicit selection without runtime model identity", async () => {

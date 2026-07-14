@@ -202,13 +202,3 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
   };
 }
-
-/** Clears all pending work state for tests. */
-export function resetNodePendingWorkForTests() {
-  stateByNodeId.clear();
-}
-
-/** Returns the number of node queues retained in memory for tests. */
-export function getNodePendingWorkStateCountForTests(): number {
-  return stateByNodeId.size;
-}

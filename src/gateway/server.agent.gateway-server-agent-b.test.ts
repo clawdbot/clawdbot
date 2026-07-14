@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { WebSocket } from "ws";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {

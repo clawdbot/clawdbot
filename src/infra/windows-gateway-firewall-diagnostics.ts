@@ -2,8 +2,8 @@
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
-export const DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
-export const QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
+const DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
+const QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTPUT_BYTES = 2 * 1024 * 1024;
 const WINDOWS_MANAGED_FIREWALL_POLICY_SOURCE_TYPES = [
   "GroupPolicy",
@@ -271,7 +271,7 @@ foreach ($rule in $policy.Rules) {
 `.trim();
 }
 
-export type WindowsGatewayFirewallDiagnosticCode =
+type WindowsGatewayFirewallDiagnosticCode =
   | "windows_firewall_not_applicable"
   | "windows_firewall_unrestricted"
   | "windows_firewall_rule_present"
@@ -291,7 +291,7 @@ export type WindowsGatewayFirewallDiagnostic = {
   details: string[];
 };
 
-export type WindowsGatewayFirewallCommandResult = {
+type WindowsGatewayFirewallCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
@@ -299,12 +299,12 @@ export type WindowsGatewayFirewallCommandResult = {
   stderrTruncatedBytes?: number;
 };
 
-export type WindowsGatewayFirewallCommandRunner = (
+type WindowsGatewayFirewallCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<WindowsGatewayFirewallCommandResult>;
 
-export type InspectWindowsGatewayFirewallParams = {
+type InspectWindowsGatewayFirewallParams = {
   bind: string | undefined;
   port: number;
   mode?: "quick" | "full";
@@ -575,7 +575,7 @@ function formatRuleNames(rules: FirewallRule[]): string {
     .join(", ");
 }
 
-export function classifyWindowsGatewayFirewallState(
+function classifyWindowsGatewayFirewallState(
   state: ClassifiedFirewallState,
 ): WindowsGatewayFirewallDiagnostic {
   const activeProfiles = findProfileSettings(state.activeProfiles, state.activeProfileNames);
@@ -788,7 +788,7 @@ function shouldProbeManagedActiveRules(diagnostic: WindowsGatewayFirewallDiagnos
   );
 }
 
-export function parseWindowsGatewayFirewallState(params: {
+function parseWindowsGatewayFirewallState(params: {
   stateJson: string;
   rulesJson: string;
   netshOutput?: string | null;

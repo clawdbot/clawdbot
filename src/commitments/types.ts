@@ -17,7 +17,7 @@ export type CommitmentScope = {
   senderId?: string;
 };
 
-export type CommitmentDueWindow = {
+type CommitmentDueWindow = {
   earliestMs: number;
   latestMs: number;
   timezone: string;

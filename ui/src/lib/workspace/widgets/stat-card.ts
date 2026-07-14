@@ -9,7 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import type { WorkspaceWidget } from "../types.ts";
 import { isRecord, toFiniteNumber, widgetProps } from "./types.ts";
 
-export type StatCardModel = {
+type StatCardModel = {
   /** The display string for the primary value, or null when unavailable. */
   display: string | null;
   /** Inner label; null when it would merely repeat the widget title. */
@@ -57,7 +57,7 @@ function formatStatValue(value: unknown, format: unknown): string | null {
   return JSON.stringify(value);
 }
 
-export function mapStatCard(widget: WorkspaceWidget, value: unknown): StatCardModel {
+function mapStatCard(widget: WorkspaceWidget, value: unknown): StatCardModel {
   const props = widgetProps(widget);
   const metric = typeof props.metric === "string" ? props.metric : null;
   const selected = metric ? selectMetric(value, metric) : value;

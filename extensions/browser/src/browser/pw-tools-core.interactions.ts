@@ -789,7 +789,7 @@ export async function clickViaPlaywright(
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
-export async function clickCoordsViaPlaywright(
+async function clickCoordsViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   cacheChatMessages,
   readChatMessagesFromCache,
-  resolveChatMessageCacheKey,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
@@ -16,17 +15,17 @@ function createHost() {
 describe("session message cache", () => {
   it("canonicalizes main aliases without crossing agent scopes", () => {
     const host = createHost();
+    const cache: ChatMessageCache = new Map();
 
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "home" })).toBe("agent:ops:main");
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "agent:ops:home" })).toBe(
-      "agent:ops:main",
-    );
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "agent:ops:main" })).toBe(
-      "agent:ops:main",
-    );
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "agent:main:home" })).toBe(
-      "agent:main:main",
-    );
+    cacheChatMessages(cache, host, { sessionKey: "home" }, ["ops"]);
+
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:home" })).toEqual([
+      "ops",
+    ]);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:main" })).toEqual([
+      "ops",
+    ]);
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:main:home" })).toEqual([]);
   });
 
   it("uses explicit event agent identity for global cache targets", () => {
@@ -34,11 +33,15 @@ describe("session message cache", () => {
       assistantAgentId: "work",
       agentsList: { defaultId: "main", mainKey: "main" },
     };
+    const cache: ChatMessageCache = new Map();
 
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "global" })).toBe("agent:work:main");
-    expect(resolveChatMessageCacheKey(host, { sessionKey: "global", agentId: "main" })).toBe(
-      "agent:main:main",
-    );
+    cacheChatMessages(cache, host, { sessionKey: "global" }, ["work"]);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "main" }, ["main"]);
+
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: "global" })).toEqual(["work"]);
+    expect(
+      readChatMessagesFromCache(cache, host, { sessionKey: "global", agentId: "main" }),
+    ).toEqual(["main"]);
   });
 
   it("keeps only the 20 most recently used sessions and 100 latest messages", () => {

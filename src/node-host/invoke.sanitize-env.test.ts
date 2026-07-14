@@ -1,9 +1,9 @@
 /** Tests environment sanitization for node-host command execution. */
 import { describe, expect, it } from "vitest";
-import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
 import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
-import { buildNodeEventParams, buildNodeInvokeResultParams } from "./runner.js";
+import { buildNodeEventParams } from "./invoke.js";
+import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
@@ -63,12 +63,6 @@ describe("node-host sanitizeEnv", () => {
 });
 
 describe("node-host output decoding", () => {
-  it("parses code pages from chcp output text", () => {
-    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
-    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
-    expect(parseWindowsCodePage("no code page")).toBeNull();
-  });
-
   it("decodes GBK output on Windows when code page is known", () => {
     let supportsGbk = true;
     try {

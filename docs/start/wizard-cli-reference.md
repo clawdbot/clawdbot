@@ -91,7 +91,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">

@@ -2,6 +2,7 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
   collectDiffPayloadLanguageHints,
@@ -33,15 +34,6 @@ export class DiffRenderInputError extends Error {
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function escapeJsonScript(value: unknown): string {

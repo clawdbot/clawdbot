@@ -1,24 +1,31 @@
 // Control UI view renders config form screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
-import { icons as sharedIcons } from "../components/icons.ts";
+import { icons } from "../components/icons.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../lib/string-coerce.ts";
+  hasConfigSearchCriteria as hasSearchCriteria,
+  matchesNodeSearch,
+  matchesNodeSelf,
+  resolveConfigFieldMeta as resolveFieldMeta,
+  type ConfigSearchCriteria,
+} from "./config-form.search.ts";
 import {
   defaultValue,
   hasSensitiveConfigData,
   hintForPath,
-  humanize,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsToggle,
+  renderSettingsToggleRow,
+} from "./settings-ui.ts";
 
 const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
 
@@ -59,81 +66,6 @@ function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean
   return leftComparable !== null && leftComparable === rightComparable;
 }
 
-// SVG Icons as template literals
-const icons = {
-  chevronDown: html`
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <polyline points="6 9 12 15 18 9"></polyline>
-    </svg>
-  `,
-  plus: html`
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <line x1="12" y1="5" x2="12" y2="19"></line>
-      <line x1="5" y1="12" x2="19" y2="12"></line>
-    </svg>
-  `,
-  minus: html`
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <line x1="5" y1="12" x2="19" y2="12"></line>
-    </svg>
-  `,
-  trash: html`
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <polyline points="3 6 5 6 21 6"></polyline>
-      <path
-        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-      ></path>
-    </svg>
-  `,
-  edit: html`
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-    </svg>
-  `,
-};
-
-type FieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
-
 function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -162,11 +94,6 @@ type SensitiveRenderState = {
   isRedacted: boolean;
   isRevealed: boolean;
   canReveal: boolean;
-};
-
-type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
 };
 
 function getSensitiveRenderState(params: SensitiveRenderParams): SensitiveRenderState {
@@ -208,216 +135,10 @@ function renderSensitiveToggleButton(params: {
         ?disabled=${params.disabled || !state.canReveal}
         @click=${() => params.onToggleSensitivePath?.(params.path)}
       >
-        ${state.isRevealed ? sharedIcons.eye : sharedIcons.eyeOff}
+        ${state.isRevealed ? icons.eye : icons.eyeOff}
       </button>
     </openclaw-tooltip>
   `;
-}
-
-function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
-  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
-}
-
-export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
-  const tags: string[] = [];
-  const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(token);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
-    }
-    return leading;
-  });
-  return {
-    text: normalizeLowercaseStringOrEmpty(stripped),
-    tags,
-  };
-}
-
-function normalizeTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const tag = value.trim();
-    if (!tag) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(tag);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    tags.push(tag);
-  }
-  return tags;
-}
-
-function resolveFieldMeta(
-  path: Array<string | number>,
-  schema: JsonSchema,
-  hints: ConfigUiHints,
-): FieldMeta {
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
-  const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
-  const hintTags = normalizeTags(hint?.tags);
-  return {
-    label,
-    help,
-    tags: hintTags.length > 0 ? hintTags : schemaTags,
-  };
-}
-
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
-  if (!text) {
-    return true;
-  }
-  for (const candidate of candidates) {
-    if (normalizeOptionalLowercaseString(candidate)?.includes(text)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
-  if (filterTags.length === 0) {
-    return true;
-  }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
-  return filterTags.every((tag) => normalized.has(tag));
-}
-
-function matchesNodeSelf(params: {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  if (!matchesTags(criteria.tags, tags)) {
-    return false;
-  }
-
-  if (!criteria.text) {
-    return true;
-  }
-
-  const pathLabel = path
-    .filter((segment): segment is string => typeof segment === "string")
-    .join(".");
-  const enumText =
-    schema.enum && schema.enum.length > 0
-      ? schema.enum.map((value) => String(value)).join(" ")
-      : "";
-
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
-}
-
-export function matchesNodeSearch(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, value, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  if (matchesNodeSelf({ schema, path, hints, criteria })) {
-    return true;
-  }
-
-  const type = schemaType(schema);
-  if (type === "object") {
-    const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
-    const props = schema.properties ?? {};
-    for (const [propKey, node] of Object.entries(props)) {
-      if (
-        matchesNodeSearch({
-          schema: node,
-          value: obj[propKey],
-          path: [...path, propKey],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-    const additional = schema.additionalProperties;
-    if (additional && typeof additional === "object") {
-      const reserved = new Set(Object.keys(props));
-      for (const [entryKey, entryValue] of Object.entries(obj)) {
-        if (reserved.has(entryKey)) {
-          continue;
-        }
-        if (
-          matchesNodeSearch({
-            schema: additional,
-            value: entryValue,
-            path: [...path, entryKey],
-            hints,
-            criteria,
-          })
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    if (!itemsSchema) {
-      return false;
-    }
-    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-    if (arr.length === 0) {
-      return false;
-    }
-    for (let idx = 0; idx < arr.length; idx += 1) {
-      if (
-        matchesNodeSearch({
-          schema: itemsSchema,
-          value: arr[idx],
-          path: [...path, idx],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
@@ -426,6 +147,80 @@ function renderTags(tags: string[]): TemplateResult | typeof nothing {
   }
   return html`
     <div class="cfg-tags">${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}</div>
+  `;
+}
+
+type FieldRowParams = {
+  label: unknown;
+  help?: unknown;
+  tags: string[];
+  showLabel: boolean;
+  control: TemplateResult | typeof nothing;
+  stacked?: boolean;
+  error?: unknown;
+};
+
+/** One settings-row: title/help/tags left, exactly one control cluster right. */
+function renderFieldRow(params: FieldRowParams): TemplateResult {
+  const hasText =
+    params.showLabel || Boolean(params.help) || params.tags.length > 0 || Boolean(params.error);
+  // Control-only rows (array/map item values) stack so the control gets full width.
+  const stacked = params.stacked || !hasText;
+  const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
+  return html`
+    <div class=${className}>
+      ${hasText
+        ? html`
+            <div class="settings-row__text">
+              ${params.showLabel
+                ? html`<span class="settings-row__title">${params.label}</span>`
+                : nothing}
+              ${params.help
+                ? html`<span class="settings-row__desc">${params.help}</span>`
+                : nothing}
+              ${renderTags(params.tags)}
+              ${params.error
+                ? html`<span class="cfg-field__error">${params.error}</span>`
+                : nothing}
+            </div>
+          `
+        : nothing}
+      ${params.control !== nothing
+        ? html`<div class="settings-row__control">${params.control}</div>`
+        : nothing}
+    </div>
+  `;
+}
+
+function renderSegmentedControl(params: {
+  options: unknown[];
+  resolvedValue: unknown;
+  disabled: boolean;
+  onSelect: (value: unknown) => void;
+}): TemplateResult {
+  return html`
+    <div class="settings-segmented" role="group">
+      ${params.options.map(
+        (option) => html`
+          <button
+            type="button"
+            class="settings-segmented__btn ${matchesComparablePrimitiveValue(
+              option,
+              params.resolvedValue,
+            )
+              ? "settings-segmented__btn--active"
+              : ""}"
+            aria-pressed=${matchesComparablePrimitiveValue(option, params.resolvedValue)
+              ? "true"
+              : "false"}
+            ?disabled=${params.disabled}
+            @click=${() => params.onSelect(option)}
+          >
+            ${formatUnknownText(option)}
+          </button>
+        `,
+      )}
+    </div>
   `;
 }
 
@@ -452,10 +247,13 @@ export function renderNode(params: {
   const criteria = params.searchCriteria;
 
   if (unsupported.has(key)) {
-    return html`<div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">${t("configForm.unsupportedNode")}</div>
-    </div>`;
+    return renderFieldRow({
+      label,
+      tags: [],
+      showLabel: true,
+      control: nothing,
+      error: t("configForm.unsupportedNode"),
+    });
   }
   if (
     criteria &&
@@ -493,28 +291,18 @@ export function renderNode(params: {
     if (allLiterals && literals.length > 0 && literals.length <= 5) {
       // Use segmented control for small sets
       const resolvedValue = value ?? schema.default;
-      return html`
-        <div class="cfg-field">
-          ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-          ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-          <div class="cfg-segmented">
-            ${literals.map(
-              (lit) => html`
-                <button
-                  type="button"
-                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(lit, resolvedValue)
-                    ? "active"
-                    : ""}"
-                  ?disabled=${disabled}
-                  @click=${() => onPatch(path, lit)}
-                >
-                  ${formatUnknownText(lit)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-      `;
+      return renderFieldRow({
+        label,
+        help,
+        tags,
+        showLabel,
+        control: renderSegmentedControl({
+          options: literals,
+          resolvedValue,
+          disabled,
+          onSelect: (literal) => onPatch(path, literal),
+        }),
+      });
     }
 
     if (allLiterals && literals.length > 5) {
@@ -568,28 +356,18 @@ export function renderNode(params: {
     const options = schema.enum;
     if (options.length <= 5) {
       const resolvedValue = value ?? schema.default;
-      return html`
-        <div class="cfg-field">
-          ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-          ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-          <div class="cfg-segmented">
-            ${options.map(
-              (opt) => html`
-                <button
-                  type="button"
-                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(opt, resolvedValue)
-                    ? "active"
-                    : ""}"
-                  ?disabled=${disabled}
-                  @click=${() => onPatch(path, opt)}
-                >
-                  ${formatUnknownText(opt)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-      `;
+      return renderFieldRow({
+        label,
+        help,
+        tags,
+        showLabel,
+        control: renderSegmentedControl({
+          options,
+          resolvedValue,
+          disabled,
+          onSelect: (option) => onPatch(path, option),
+        }),
+      });
     }
     return renderSelect({ ...params, options, value: value ?? schema.default });
   }
@@ -612,24 +390,32 @@ export function renderNode(params: {
         : typeof schema.default === "boolean"
           ? schema.default
           : false;
-    return html`
-      <label class="cfg-toggle-row ${disabled ? "disabled" : ""}">
-        <div class="cfg-toggle-row__content">
-          <span class="cfg-toggle-row__label">${label}</span>
-          ${help ? html`<span class="cfg-toggle-row__help">${help}</span>` : nothing}
-          ${renderTags(tags)}
-        </div>
-        <div class="cfg-toggle">
-          <input
-            type="checkbox"
-            .checked=${displayValue}
-            ?disabled=${disabled}
-            @change=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).checked)}
-          />
-          <span class="cfg-toggle__track"></span>
-        </div>
-      </label>
-    `;
+    const onChange = (checked: boolean) => onPatch(path, checked);
+    if (!showLabel) {
+      // Control-only contexts (array items, map values) have no visible title,
+      // so the switch keeps its accessible name from the field label.
+      return renderFieldRow({
+        label,
+        help,
+        tags,
+        showLabel,
+        control: renderSettingsToggle({
+          checked: displayValue,
+          disabled,
+          ariaLabel: label,
+          onChange,
+        }),
+      });
+    }
+    const description =
+      help || tags.length > 0 ? html`${help ?? nothing}${renderTags(tags)}` : undefined;
+    return renderSettingsToggleRow({
+      title: label,
+      description,
+      checked: displayValue,
+      disabled,
+      onChange,
+    });
   }
 
   // Number/Integer
@@ -643,12 +429,13 @@ export function renderNode(params: {
   }
 
   // Fallback
-  return html`
-    <div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">${t("configForm.unsupportedType", { type: String(type) })}</div>
-    </div>
-  `;
+  return renderFieldRow({
+    label,
+    tags: [],
+    showLabel: true,
+    control: nothing,
+    error: t("configForm.unsupportedType", { type: String(type) }),
+  });
 }
 
 function renderTextInput(params: {
@@ -699,77 +486,70 @@ function renderTextInput(params: {
       : (value ?? "");
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
 
-  return html`
-    <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-      <div class="cfg-input-wrap">
-        <input
-          type=${effectiveInputType}
-          class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
-          placeholder=${placeholder}
-          .value=${formatUnknownText(displayValue)}
-          ?disabled=${disabled}
-          ?readonly=${effectiveRedacted}
-          @click=${() => {
-            if (
-              sensitiveState.isRedacted &&
-              !isStructuredSecretRef &&
-              params.onToggleSensitivePath
-            ) {
-              params.onToggleSensitivePath(path);
-            }
-          }}
-          @input=${(e: Event) => {
-            if (effectiveRedacted) {
-              return;
-            }
-            const raw = (e.target as HTMLInputElement).value;
-            if (inputType === "number") {
-              if (raw.trim() === "") {
-                onPatch(path, undefined);
-                return;
-              }
-              const parsed = Number(raw);
-              onPatch(path, Number.isNaN(parsed) ? raw : parsed);
-              return;
-            }
-            onPatch(path, raw);
-          }}
-          @change=${(e: Event) => {
-            if (inputType === "number" || effectiveRedacted) {
-              return;
-            }
-            const raw = (e.target as HTMLInputElement).value;
-            onPatch(path, raw.trim());
-          }}
-        />
-        ${isStructuredSecretRef
-          ? nothing
-          : renderSensitiveToggleButton({
-              path,
-              state: sensitiveState,
-              disabled,
-              onToggleSensitivePath: params.onToggleSensitivePath,
-            })}
-        ${schema.default !== undefined
-          ? html`
-              <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
-                <button
-                  type="button"
-                  class="cfg-input__reset"
-                  aria-label=${t("configForm.resetToDefault")}
-                  ?disabled=${disabled || effectiveRedacted}
-                  @click=${() => onPatch(path, schema.default)}
-                >
-                  ↺
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
-      </div>
-    </div>
+  const control = html`
+    <input
+      type=${effectiveInputType}
+      class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
+      placeholder=${placeholder}
+      .value=${formatUnknownText(displayValue)}
+      ?disabled=${disabled}
+      ?readonly=${effectiveRedacted}
+      @click=${() => {
+        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+          params.onToggleSensitivePath(path);
+        }
+      }}
+      @input=${(e: Event) => {
+        if (effectiveRedacted) {
+          return;
+        }
+        const raw = (e.target as HTMLInputElement).value;
+        if (inputType === "number") {
+          if (raw.trim() === "") {
+            onPatch(path, undefined);
+            return;
+          }
+          const parsed = Number(raw);
+          onPatch(path, Number.isNaN(parsed) ? raw : parsed);
+          return;
+        }
+        onPatch(path, raw);
+      }}
+      @change=${(e: Event) => {
+        if (inputType === "number" || effectiveRedacted) {
+          return;
+        }
+        const raw = (e.target as HTMLInputElement).value;
+        onPatch(path, raw.trim());
+      }}
+    />
+    ${isStructuredSecretRef
+      ? nothing
+      : renderSensitiveToggleButton({
+          path,
+          state: sensitiveState,
+          disabled,
+          onToggleSensitivePath: params.onToggleSensitivePath,
+        })}
+    ${schema.default !== undefined
+      ? html`
+          <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
+            <button
+              type="button"
+              class="btn btn--icon"
+              style="width:28px;height:28px;padding:0;"
+              aria-label=${t("configForm.resetToDefault")}
+              ?disabled=${disabled || effectiveRedacted}
+              @click=${() => onPatch(path, schema.default)}
+            >
+              ↺
+            </button>
+          </openclaw-tooltip>
+        `
+      : nothing}
   `;
+
+  return renderFieldRow({ label, help, tags, showLabel, control });
 }
 
 function renderNumberInput(params: {
@@ -786,43 +566,51 @@ function renderNumberInput(params: {
   const showLabel = params.showLabel ?? true;
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const displayValue = value ?? schema.default ?? "";
-  const numValue = typeof displayValue === "number" ? displayValue : 0;
 
-  return html`
-    <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-      <div class="cfg-number">
-        <button
-          type="button"
-          class="cfg-number__btn"
-          ?disabled=${disabled}
-          @click=${() => onPatch(path, numValue - 1)}
-        >
-          −
-        </button>
-        <input
-          type="number"
-          class="cfg-number__input"
-          .value=${formatUnknownText(displayValue)}
-          ?disabled=${disabled}
-          @input=${(e: Event) => {
-            const raw = (e.target as HTMLInputElement).value;
-            const parsed = raw === "" ? undefined : Number(raw);
-            onPatch(path, parsed);
-          }}
-        />
-        <button
-          type="button"
-          class="cfg-number__btn"
-          ?disabled=${disabled}
-          @click=${() => onPatch(path, numValue + 1)}
-        >
-          +
-        </button>
-      </div>
-    </div>
+  // Touch devices and some browsers hide native number spinners; keep explicit
+  // one-step adjust buttons so single-step edits stay possible without typing.
+  const step = (delta: number) => {
+    if (disabled) {
+      return;
+    }
+    const current = Number(displayValue);
+    const base = Number.isFinite(current) ? current : 0;
+    onPatch(path, base + delta);
+  };
+  const control = html`
+    <button
+      type="button"
+      class="btn btn--sm btn--icon"
+      aria-label=${`${label}: -1`}
+      ?disabled=${disabled}
+      @click=${() => step(-1)}
+    >
+      −
+    </button>
+    <input
+      type="number"
+      class="settings-input"
+      aria-label=${label}
+      .value=${formatUnknownText(displayValue)}
+      ?disabled=${disabled}
+      @input=${(e: Event) => {
+        const raw = (e.target as HTMLInputElement).value;
+        const parsed = raw === "" ? undefined : Number(raw);
+        onPatch(path, parsed);
+      }}
+    />
+    <button
+      type="button"
+      class="btn btn--sm btn--icon"
+      aria-label=${`${label}: +1`}
+      ?disabled=${disabled}
+      @click=${() => step(1)}
+    >
+      +
+    </button>
   `;
+
+  return renderFieldRow({ label, help, tags, showLabel, control });
 }
 
 function renderSelect(params: {
@@ -845,28 +633,75 @@ function renderSelect(params: {
   );
   const unset = "__unset__";
 
+  const control = html`
+    <select
+      class="settings-select"
+      ?disabled=${disabled}
+      .value=${currentIndex >= 0 ? String(currentIndex) : unset}
+      @change=${(e: Event) => {
+        const val = (e.target as HTMLSelectElement).value;
+        onPatch(path, val === unset ? undefined : options[Number(val)]);
+      }}
+    >
+      <option value=${unset} ?selected=${currentIndex < 0}>${t("configForm.select")}</option>
+      ${options.map(
+        (opt, idx) =>
+          html` <option value=${String(idx)} ?selected=${idx === currentIndex}>
+            ${String(opt)}
+          </option>`,
+      )}
+    </select>
+  `;
+
+  return renderFieldRow({ label, help, tags, showLabel, control });
+}
+
+function renderJsonTextareaControl(params: {
+  path: Array<string | number>;
+  fallback: string;
+  rows: number;
+  sensitiveState: SensitiveRenderState;
+  disabled: boolean;
+  onToggleSensitivePath?: (path: Array<string | number>) => void;
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}): TemplateResult {
+  const { path, fallback, sensitiveState, disabled, onPatch } = params;
   return html`
-    <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-      <select
-        class="cfg-select"
-        ?disabled=${disabled}
-        .value=${currentIndex >= 0 ? String(currentIndex) : unset}
-        @change=${(e: Event) => {
-          const val = (e.target as HTMLSelectElement).value;
-          onPatch(path, val === unset ? undefined : options[Number(val)]);
-        }}
-      >
-        <option value=${unset} ?selected=${currentIndex < 0}>${t("configForm.select")}</option>
-        ${options.map(
-          (opt, idx) =>
-            html` <option value=${String(idx)} ?selected=${idx === currentIndex}>
-              ${String(opt)}
-            </option>`,
-        )}
-      </select>
-    </div>
+    <textarea
+      class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
+      placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : t("configForm.jsonValue")}
+      rows=${params.rows}
+      .value=${sensitiveState.isRedacted ? "" : fallback}
+      ?disabled=${disabled}
+      ?readonly=${sensitiveState.isRedacted}
+      @click=${() => {
+        if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
+          params.onToggleSensitivePath(path);
+        }
+      }}
+      @change=${(e: Event) => {
+        if (sensitiveState.isRedacted) {
+          return;
+        }
+        const target = e.target as HTMLTextAreaElement;
+        const raw = target.value.trim();
+        if (!raw) {
+          onPatch(path, undefined);
+          return;
+        }
+        try {
+          onPatch(path, JSON.parse(raw));
+        } catch {
+          target.value = fallback;
+        }
+      }}
+    ></textarea>
+    ${renderSensitiveToggleButton({
+      path,
+      state: sensitiveState,
+      disabled,
+      onToggleSensitivePath: params.onToggleSensitivePath,
+    })}
   `;
 }
 
@@ -893,53 +728,23 @@ function renderJsonTextarea(params: {
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   });
-  const displayValue = sensitiveState.isRedacted ? "" : fallback;
 
-  return html`
-    <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
-      <div class="cfg-input-wrap">
-        <textarea
-          class="cfg-textarea${sensitiveState.isRedacted ? " cfg-textarea--redacted" : ""}"
-          placeholder=${sensitiveState.isRedacted
-            ? REDACTED_PLACEHOLDER
-            : t("configForm.jsonValue")}
-          rows="3"
-          .value=${displayValue}
-          ?disabled=${disabled}
-          ?readonly=${sensitiveState.isRedacted}
-          @click=${() => {
-            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
-              params.onToggleSensitivePath(path);
-            }
-          }}
-          @change=${(e: Event) => {
-            if (sensitiveState.isRedacted) {
-              return;
-            }
-            const target = e.target as HTMLTextAreaElement;
-            const raw = target.value.trim();
-            if (!raw) {
-              onPatch(path, undefined);
-              return;
-            }
-            try {
-              onPatch(path, JSON.parse(raw));
-            } catch {
-              target.value = fallback;
-            }
-          }}
-        ></textarea>
-        ${renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
-      </div>
-    </div>
-  `;
+  return renderFieldRow({
+    label,
+    help,
+    tags,
+    showLabel,
+    stacked: true,
+    control: renderJsonTextareaControl({
+      path,
+      fallback,
+      rows: 3,
+      sensitiveState,
+      disabled,
+      onToggleSensitivePath: params.onToggleSensitivePath,
+      onPatch,
+    }),
+  });
 }
 
 function renderObject(params: {
@@ -1037,27 +842,24 @@ function renderObject(params: {
       : nothing}
   `;
 
-  // For top-level, don't wrap in collapsible
-  if (path.length === 1) {
-    return html` <div class="cfg-fields">${fields}</div> `;
+  // Top-level objects and label-less contexts emit rows directly into the
+  // surrounding settings-group so row dividers stay sibling-driven.
+  if (path.length === 1 || !showLabel) {
+    return html`${fields}`;
   }
 
-  if (!showLabel) {
-    return html` <div class="cfg-fields cfg-fields--inline">${fields}</div> `;
-  }
-
-  // Nested objects get collapsible treatment
+  // Nested objects get collapsible treatment as an indented sub-block.
   return html`
-    <details class="cfg-object" ?open=${path.length <= 2}>
-      <summary class="cfg-object__header">
-        <span class="cfg-object__title-wrap">
-          <span class="cfg-object__title">${label}</span>
+    <details class="cfg-object cfg-block" ?open=${path.length <= 2}>
+      <summary class="settings-row cfg-object__summary">
+        <div class="settings-row__text">
+          <span class="settings-row__title">${label}</span>
+          ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
           ${renderTags(tags)}
-        </span>
-        <span class="cfg-object__chevron">${icons.chevronDown}</span>
+        </div>
+        <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
       </summary>
-      ${help ? html`<div class="cfg-object__help">${help}</div>` : nothing}
-      <div class="cfg-object__content">${fields}</div>
+      <div class="settings-subrows">${fields}</div>
     </details>
   `;
 }
@@ -1101,55 +903,60 @@ function renderArray(params: {
 
   const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
   if (!itemsSchema) {
-    return html`
-      <div class="cfg-field cfg-field--error">
-        <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">${t("configForm.unsupportedArray")}</div>
-      </div>
-    `;
+    return renderFieldRow({
+      label,
+      tags: [],
+      showLabel: true,
+      control: nothing,
+      error: t("configForm.unsupportedArray"),
+    });
   }
 
   const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
 
   return html`
-    <div class="cfg-array">
-      <div class="cfg-array__header">
-        <div class="cfg-array__title">
-          ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
+    <div class="cfg-block cfg-array">
+      <div class="settings-row">
+        <div class="settings-row__text">
+          ${showLabel ? html`<span class="settings-row__title">${label}</span>` : nothing}
+          ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
           ${renderTags(tags)}
         </div>
-        <span class="cfg-array__count"
-          >${t(arr.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount", {
-            count: String(arr.length),
-          })}</span
-        >
-        <button
-          type="button"
-          class="cfg-array__add"
-          ?disabled=${disabled}
-          @click=${() => {
-            const next = [...arr, defaultValue(itemsSchema)];
-            onPatch(path, next);
-          }}
-        >
-          <span class="cfg-array__add-icon">${icons.plus}</span>
-          ${t("configForm.add")}
-        </button>
+        <div class="settings-row__control">
+          <span class="settings-row__value"
+            >${t(arr.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount", {
+              count: String(arr.length),
+            })}</span
+          >
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${disabled}
+            @click=${() => {
+              const next = [...arr, defaultValue(itemsSchema)];
+              onPatch(path, next);
+            }}
+          >
+            ${t("configForm.add")}
+          </button>
+        </div>
       </div>
-      ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
       ${arr.length === 0
-        ? html` <div class="cfg-array__empty">${t("configForm.noItems")}</div> `
+        ? renderSettingsEmpty(t("configForm.noItems"))
         : html`
-            <div class="cfg-array__items">
+            <div class="settings-subrows">
               ${arr.map(
                 (item, idx) => html`
-                  <div class="cfg-array__item">
-                    <div class="cfg-array__item-header">
-                      <span class="cfg-array__item-index">#${idx + 1}</span>
+                  <div class="settings-row">
+                    <div class="settings-row__text">
+                      <span class="settings-row__title">#${idx + 1}</span>
+                    </div>
+                    <div class="settings-row__control">
                       <openclaw-tooltip .content=${t("configForm.removeItem")}>
                         <button
                           type="button"
-                          class="cfg-array__item-remove"
+                          class="btn btn--icon"
+                          style="width:28px;height:28px;padding:0;"
                           aria-label=${t("configForm.removeItem")}
                           ?disabled=${disabled}
                           @click=${() => {
@@ -1162,24 +969,22 @@ function renderArray(params: {
                         </button>
                       </openclaw-tooltip>
                     </div>
-                    <div class="cfg-array__item-content">
-                      ${renderNode({
-                        schema: itemsSchema,
-                        value: item,
-                        path: [...path, idx],
-                        hints,
-                        rawAvailable,
-                        unsupported,
-                        disabled,
-                        searchCriteria: childSearchCriteria,
-                        showLabel: false,
-                        revealSensitive,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath,
-                        onPatch,
-                      })}
-                    </div>
                   </div>
+                  ${renderNode({
+                    schema: itemsSchema,
+                    value: item,
+                    path: [...path, idx],
+                    hints,
+                    rawAvailable,
+                    unsupported,
+                    disabled,
+                    searchCriteria: childSearchCriteria,
+                    showLabel: false,
+                    revealSensitive,
+                    isSensitivePathRevealed,
+                    onToggleSensitivePath,
+                    onPatch,
+                  })}
                 `,
               )}
             </div>
@@ -1234,34 +1039,37 @@ function renderMapField(params: {
       : entries;
 
   return html`
-    <div class="cfg-map">
-      <div class="cfg-map__header">
-        <span class="cfg-map__label">${t("configForm.customEntries")}</span>
-        <button
-          type="button"
-          class="cfg-map__add"
-          ?disabled=${disabled}
-          @click=${() => {
-            const next = { ...value };
-            let index = 1;
-            let key = `custom-${index}`;
-            while (key in next) {
-              index += 1;
-              key = `custom-${index}`;
-            }
-            next[key] = anySchema ? {} : defaultValue(schema);
-            onPatch(path, next);
-          }}
-        >
-          <span class="cfg-map__add-icon">${icons.plus}</span>
-          ${t("configForm.addEntry")}
-        </button>
+    <div class="cfg-block cfg-map">
+      <div class="settings-row">
+        <div class="settings-row__text">
+          <span class="settings-row__title">${t("configForm.customEntries")}</span>
+        </div>
+        <div class="settings-row__control">
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${disabled}
+            @click=${() => {
+              const next = { ...value };
+              let index = 1;
+              let key = `custom-${index}`;
+              while (key in next) {
+                index += 1;
+                key = `custom-${index}`;
+              }
+              next[key] = anySchema ? {} : defaultValue(schema);
+              onPatch(path, next);
+            }}
+          >
+            ${t("configForm.addEntry")}
+          </button>
+        </div>
       </div>
 
       ${visibleEntries.length === 0
-        ? html` <div class="cfg-map__empty">${t("configForm.noCustomEntries")}</div> `
+        ? renderSettingsEmpty(t("configForm.noCustomEntries"))
         : html`
-            <div class="cfg-map__items">
+            <div class="settings-subrows">
               ${visibleEntries.map(([key, entryValue]) => {
                 const valuePath = [...path, key];
                 const fallback = jsonValue(entryValue);
@@ -1273,34 +1081,36 @@ function renderMapField(params: {
                   isSensitivePathRevealed,
                 });
                 return html`
-                  <div class="cfg-map__item">
-                    <div class="cfg-map__item-header">
-                      <div class="cfg-map__item-key">
-                        <input
-                          type="text"
-                          class="cfg-input cfg-input--sm"
-                          placeholder=${t("configForm.key")}
-                          .value=${key}
-                          ?disabled=${disabled}
-                          @change=${(e: Event) => {
-                            const nextKey = (e.target as HTMLInputElement).value.trim();
-                            if (!nextKey || nextKey === key) {
-                              return;
-                            }
-                            const next = { ...value };
-                            if (nextKey in next) {
-                              return;
-                            }
-                            next[nextKey] = next[key];
-                            delete next[key];
-                            onPatch(path, next);
-                          }}
-                        />
-                      </div>
+                  <div class="settings-row">
+                    <div class="settings-row__text">
+                      <input
+                        type="text"
+                        class="settings-input"
+                        placeholder=${t("configForm.key")}
+                        aria-label=${t("configForm.key")}
+                        .value=${key}
+                        ?disabled=${disabled}
+                        @change=${(e: Event) => {
+                          const nextKey = (e.target as HTMLInputElement).value.trim();
+                          if (!nextKey || nextKey === key) {
+                            return;
+                          }
+                          const next = { ...value };
+                          if (nextKey in next) {
+                            return;
+                          }
+                          next[nextKey] = next[key];
+                          delete next[key];
+                          onPatch(path, next);
+                        }}
+                      />
+                    </div>
+                    <div class="settings-row__control">
                       <openclaw-tooltip .content=${t("configForm.removeEntry")}>
                         <button
                           type="button"
-                          class="cfg-map__item-remove"
+                          class="btn btn--icon"
+                          style="width:28px;height:28px;padding:0;"
                           aria-label=${t("configForm.removeEntry")}
                           ?disabled=${disabled}
                           @click=${() => {
@@ -1313,68 +1123,38 @@ function renderMapField(params: {
                         </button>
                       </openclaw-tooltip>
                     </div>
-                    <div class="cfg-map__item-value">
-                      ${anySchema
-                        ? html`
-                            <div class="cfg-input-wrap">
-                              <textarea
-                                class="cfg-textarea cfg-textarea--sm${sensitiveState.isRedacted
-                                  ? " cfg-textarea--redacted"
-                                  : ""}"
-                                placeholder=${sensitiveState.isRedacted
-                                  ? REDACTED_PLACEHOLDER
-                                  : t("configForm.jsonValue")}
-                                rows="2"
-                                .value=${sensitiveState.isRedacted ? "" : fallback}
-                                ?disabled=${disabled}
-                                ?readonly=${sensitiveState.isRedacted}
-                                @click=${() => {
-                                  if (sensitiveState.isRedacted && onToggleSensitivePath) {
-                                    onToggleSensitivePath(valuePath);
-                                  }
-                                }}
-                                @change=${(e: Event) => {
-                                  if (sensitiveState.isRedacted) {
-                                    return;
-                                  }
-                                  const target = e.target as HTMLTextAreaElement;
-                                  const raw = target.value.trim();
-                                  if (!raw) {
-                                    onPatch(valuePath, undefined);
-                                    return;
-                                  }
-                                  try {
-                                    onPatch(valuePath, JSON.parse(raw));
-                                  } catch {
-                                    target.value = fallback;
-                                  }
-                                }}
-                              ></textarea>
-                              ${renderSensitiveToggleButton({
-                                path: valuePath,
-                                state: sensitiveState,
-                                disabled,
-                                onToggleSensitivePath,
-                              })}
-                            </div>
-                          `
-                        : renderNode({
-                            schema,
-                            value: entryValue,
-                            path: valuePath,
-                            hints,
-                            rawAvailable,
-                            unsupported,
-                            disabled,
-                            searchCriteria,
-                            showLabel: false,
-                            revealSensitive,
-                            isSensitivePathRevealed,
-                            onToggleSensitivePath,
-                            onPatch,
-                          })}
-                    </div>
                   </div>
+                  ${anySchema
+                    ? renderFieldRow({
+                        label: key,
+                        tags: [],
+                        showLabel: false,
+                        stacked: true,
+                        control: renderJsonTextareaControl({
+                          path: valuePath,
+                          fallback,
+                          rows: 2,
+                          sensitiveState,
+                          disabled,
+                          onToggleSensitivePath,
+                          onPatch,
+                        }),
+                      })
+                    : renderNode({
+                        schema,
+                        value: entryValue,
+                        path: valuePath,
+                        hints,
+                        rawAvailable,
+                        unsupported,
+                        disabled,
+                        searchCriteria,
+                        showLabel: false,
+                        revealSensitive,
+                        isSensitivePathRevealed,
+                        onToggleSensitivePath,
+                        onPatch,
+                      })}
                 `;
               })}
             </div>

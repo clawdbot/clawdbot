@@ -2,6 +2,8 @@
 import path from "node:path";
 import {
   createMigrationItem,
+  createMigrationManualItem,
+  markMigrationItemConflict,
   MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
@@ -12,8 +14,12 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildAuthItems } from "./auth.js";
 import { buildConfigItems } from "./config.js";
-import { exists, parseHermesConfig, readText } from "./helpers.js";
-import { createHermesModelItem } from "./items.js";
+import { exists, parseEnv, parseHermesConfig, readText } from "./helpers.js";
+import {
+  createHermesModelItem,
+  findHermesModelProviderDependency,
+  HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+} from "./items.js";
 import { resolveCurrentModelRef, resolveHermesModelRef } from "./model.js";
 import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
@@ -54,12 +60,28 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     );
   }
   const targets = resolveTargets(ctx);
-  const config = parseHermesConfig(await readText(source.configPath));
-  const modelRef = resolveHermesModelRef(config);
+  let config: Record<string, unknown>;
+  try {
+    config = parseHermesConfig(await readText(source.configPath));
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse Hermes config at ${source.configPath}: ${reason}`, {
+      cause: err,
+    });
+  }
+  const env = parseEnv(await readText(source.envPath));
+  const modelRef = resolveHermesModelRef(config, env);
+  const runtimeEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
   const items: MigrationItem[] = [];
 
+  let modelItemIndex: number | undefined;
   if (modelRef) {
     const currentModel = resolveCurrentModelRef(ctx);
+    modelItemIndex = items.length;
     items.push(
       createHermesModelItem({
         model: modelRef,
@@ -67,15 +89,36 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
         overwrite: ctx.overwrite,
       }),
     );
+    if (modelRef.startsWith("qwen-oauth/")) {
+      items.push(
+        createMigrationManualItem({
+          id: "manual:auth-reauthenticate:qwen-oauth",
+          source: source.configPath ?? source.root,
+          message: "Hermes Qwen OAuth uses the external Qwen CLI credential store.",
+          recommendation: "Authenticate qwen-oauth in OpenClaw after migration.",
+        }),
+      );
+    }
   }
-  items.push(
-    ...buildConfigItems({
-      ctx,
-      config,
-      modelRef,
-      hasMemoryFiles: Boolean(source.memoryPath || source.userPath),
-    }),
-  );
+  const configItems = buildConfigItems({
+    ctx,
+    config,
+    env,
+    runtimeEnv,
+    modelRef,
+    hasMemoryFiles: Boolean(source.memoryPath || source.userPath),
+  });
+  if (modelRef && modelItemIndex !== undefined) {
+    const modelItem = items[modelItemIndex];
+    const dependency = findHermesModelProviderDependency(configItems, modelRef);
+    if (modelItem?.status === "planned" && dependency?.status === "conflict") {
+      items[modelItemIndex] = markMigrationItemConflict(
+        modelItem,
+        HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+      );
+    }
+  }
+  items.push(...configItems);
 
   await addFileItem({
     items,
@@ -117,7 +160,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
   items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
   items.push(...(await buildAuthItems({ ctx, source, targets })));
-  items.push(...(await buildSecretItems({ ctx, source, targets })));
+  items.push(...(await buildSecretItems({ config, ctx, source, targets })));
   for (const archivePath of source.archivePaths) {
     items.push(
       createMigrationItem({
@@ -136,6 +179,13 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     ...(!ctx.includeSecrets && items.some((item) => item.kind === "secret" || item.kind === "auth")
       ? [
           "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+        ]
+      : []),
+    ...(items.some(
+      (item) => item.kind === "auth" && item.details?.sourceKind === "hermes-auth-json",
+    )
+      ? [
+          "Hermes and OpenClaw must not keep using the same imported OpenAI OAuth refresh grant after migration; reauthenticate one side before running both.",
         ]
       : []),
     ...(items.some((item) => item.status === "conflict")

@@ -12,7 +12,7 @@ import { PluginLruCache } from "./plugin-cache-primitives.js";
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
 
-export type LoaderModuleResolveParams = {
+type LoaderModuleResolveParams = {
   modulePath?: string;
   argv1?: string;
   cwd?: string;
@@ -92,7 +92,7 @@ function resolvePluginLoaderJitiNativeModules(): string[] {
   }
 }
 
-export function normalizeJitiAliasTargetPath(targetPath: string): string {
+function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
 }
 
@@ -125,7 +125,7 @@ function resolveJitiCacheModulePath(params: LoaderModuleResolveParams = {}): str
   return resolveLoaderModulePath(params);
 }
 
-export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {}): string {
+function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {}): string {
   const modulePath = resolveJitiCacheModulePath(params);
   const packageRoot =
     resolveLoaderPackageRoot({ ...params, modulePath }) ?? path.dirname(modulePath);
@@ -149,7 +149,7 @@ export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolvePar
   );
 }
 
-export function resolvePluginLoaderJitiFsCacheOption(
+function resolvePluginLoaderJitiFsCacheOption(
   params: LoaderModuleResolveParams = {},
 ): false | string {
   return shouldUseJitiFsCache() ? resolvePluginLoaderJitiFsCacheDir(params) : false;
@@ -384,7 +384,7 @@ function resolveLoaderPluginSdkPackageRoot(
   );
 }
 
-export function resolvePluginSdkAliasCandidateOrder(params: {
+function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
@@ -400,7 +400,7 @@ export function resolvePluginSdkAliasCandidateOrder(params: {
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
-export function listPluginSdkAliasCandidates(params: {
+function listPluginSdkAliasCandidates(params: {
   srcFile: string;
   distFile: string;
   modulePath: string;
@@ -442,7 +442,7 @@ export function listPluginSdkAliasCandidates(params: {
   return candidates;
 }
 
-export function resolvePluginSdkAliasFile(params: {
+function resolvePluginSdkAliasFile(params: {
   srcFile: string;
   distFile: string;
   modulePath?: string;
@@ -769,60 +769,11 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     distFile: "read-byte-stream-with-limit.mjs",
   },
   {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
+    packageName: "@openclaw/retry",
+    packageDir: "retry",
     subpath: "",
     srcFile: "index.ts",
     distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "boolean-coercion",
-    srcFile: "boolean-coercion.ts",
-    distFile: "boolean-coercion.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "error-coercion",
-    srcFile: "error-coercion.ts",
-    distFile: "error-coercion.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "number-coercion",
-    srcFile: "number-coercion.ts",
-    distFile: "number-coercion.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "record-coerce",
-    srcFile: "record-coerce.ts",
-    distFile: "record-coerce.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "string-coerce",
-    srcFile: "string-coerce.ts",
-    distFile: "string-coerce.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "string-normalization",
-    srcFile: "string-normalization.ts",
-    distFile: "string-normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "utf16-slice",
-    srcFile: "utf16-slice.ts",
-    distFile: "utf16-slice.mjs",
   },
   {
     packageName: "@openclaw/terminal-core",
@@ -1053,6 +1004,7 @@ const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
   "normalization-core",
+  "retry",
   "terminal-core",
 ]);
 
@@ -1372,11 +1324,13 @@ function resolveWorkspacePackageAliasMap(params: {
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...listWorkspacePackageExportAliasEntries({
-      packageRoot,
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
-    }),
+    ...["normalization-core", "acp-core"].flatMap((packageDir) =>
+      listWorkspacePackageExportAliasEntries({
+        packageRoot,
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
+      }),
+    ),
   ];
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
@@ -1573,7 +1527,7 @@ function listPrivateLocalOnlyPluginSdkSubpaths(params: {
   );
 }
 
-export function listPluginSdkExportedSubpaths(
+function listPluginSdkExportedSubpaths(
   params: {
     modulePath?: string;
     argv1?: string;
@@ -1617,7 +1571,7 @@ export function listPluginSdkExportedSubpaths(
   return subpaths;
 }
 
-export function resolvePluginSdkScopedAliasMap(
+function resolvePluginSdkScopedAliasMap(
   params: {
     modulePath?: string;
     argv1?: string;
@@ -1700,7 +1654,7 @@ export function resolvePluginSdkScopedAliasMap(
   return aliasMap;
 }
 
-export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
+function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
   try {
     const modulePath = resolveLoaderModulePath(params);
     const packageRoot =
@@ -1973,12 +1927,6 @@ export function buildPluginLoaderAliasMap(
   return result;
 }
 
-export function resolvePluginRuntimeModulePath(
-  params: LoaderModuleResolveParams = {},
-): string | null {
-  return resolvePluginRuntimeModulePathWithDiagnostics(params).resolvedPath;
-}
-
 export function resolvePluginRuntimeModulePathWithDiagnostics(
   params: LoaderModuleResolveParams = {},
 ): PluginRuntimeModuleResolution {
@@ -2153,22 +2101,4 @@ export function resolvePluginLoaderModuleConfig(params: {
   };
   pluginLoaderModuleConfigCache.set(configCacheKey, result);
   return result;
-}
-
-export function isBundledPluginExtensionPath(params: {
-  modulePath: string;
-  openClawPackageRoot: string;
-  bundledPluginsDir?: string;
-}): boolean {
-  const normalizedModulePath = path.resolve(params.modulePath);
-  const roots = [
-    params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : null,
-    path.join(params.openClawPackageRoot, "extensions"),
-    path.join(params.openClawPackageRoot, "dist", "extensions"),
-    path.join(params.openClawPackageRoot, "dist-runtime", "extensions"),
-  ].filter((root): root is string => typeof root === "string");
-  return roots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
-  );
 }

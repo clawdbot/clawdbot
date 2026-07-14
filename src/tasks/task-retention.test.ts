@@ -18,6 +18,7 @@ describe("task retention", () => {
   it("stamps cleanupAfter from terminal task timing", () => {
     expect(
       resolveTaskCleanupAfter({
+        runtime: "subagent",
         status: "lost",
         createdAt: 1,
         lastEventAt: 2,
@@ -29,6 +30,7 @@ describe("task retention", () => {
   it("clamps old lost cleanupAfter values to the shorter retention window", () => {
     expect(
       resolveEffectiveTaskCleanupAfter({
+        runtime: "subagent",
         status: "lost",
         createdAt: 1,
         endedAt: 10,
@@ -40,11 +42,35 @@ describe("task retention", () => {
   it("preserves explicit cleanupAfter for non-lost terminal tasks", () => {
     expect(
       resolveEffectiveTaskCleanupAfter({
+        runtime: "subagent",
         status: "failed",
         createdAt: 1,
         endedAt: 10,
         cleanupAfter: 99,
       }),
     ).toBe(99);
+  });
+
+  it("does not stamp or honor cleanupAfter for terminal cron history", () => {
+    const task = {
+      runtime: "cron" as const,
+      status: "failed" as const,
+      createdAt: 1,
+      endedAt: 10,
+      cleanupAfter: 99,
+    };
+    expect(resolveTaskCleanupAfter(task)).toBeUndefined();
+    expect(resolveEffectiveTaskCleanupAfter(task)).toBeUndefined();
+  });
+
+  it("keeps lost cron tasks on the 24-hour window", () => {
+    expect(
+      resolveTaskCleanupAfter({
+        runtime: "cron",
+        status: "lost",
+        createdAt: 1,
+        endedAt: 10,
+      }),
+    ).toBe(10 + LOST_TASK_RETENTION_MS);
   });
 });

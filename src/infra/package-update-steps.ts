@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
@@ -33,7 +34,7 @@ const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
  * Captures one package-manager or filesystem step from the global update flow.
  * Callers surface these records directly in update diagnostics.
  */
-export type PackageUpdateStepResult = {
+type PackageUpdateStepResult = {
   name: string;
   command: string;
   cwd: string;
@@ -72,10 +73,6 @@ type NpmBinShimBackup = {
 };
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
-
-function formatError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
@@ -372,7 +369,7 @@ async function prepareStagedNpmInstall(
         durationMs: Date.now() - startedAt,
         exitCode: 1,
         stdoutTail: null,
-        stderrTail: formatError(err),
+        stderrTail: formatErrorMessage(err),
       },
     };
   }
@@ -552,7 +549,7 @@ async function swapStagedNpmInstall(params: {
       durationMs: Date.now() - startedAt,
       exitCode: 1,
       stdoutTail: null,
-      stderrTail: formatError(err),
+      stderrTail: formatErrorMessage(err),
     };
   }
 }

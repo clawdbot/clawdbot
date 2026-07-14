@@ -55,7 +55,7 @@ export type MantisSlackDesktopSmokeOptions = {
 
 export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisSlackDesktopSmokeResult = {
+type MantisSlackDesktopSmokeResult = {
   approvalCheckpointScreenshotPaths?: string[];
   outputDir: string;
   reportPath: string;

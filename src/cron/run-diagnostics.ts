@@ -1,10 +1,18 @@
 /** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import {
+  formatUnknownError,
+  isRecord,
+  normalizeCronRunDiagnostics as normalizeCronRunDiagnosticsValue,
+  normalizeExitCode,
+  normalizeToolName,
+  tailText,
+} from "./run-diagnostics-normalize.js";
 import type {
   CronRunDiagnostic,
   CronRunDiagnostics,
@@ -12,8 +20,6 @@ import type {
   CronRunDiagnosticSource,
 } from "./types.js";
 
-const MAX_ENTRIES = 10;
-const MAX_ENTRY_CHARS = 1_000;
 const MAX_SUMMARY_CHARS = 2_000;
 const EXEC_DIAGNOSTIC_TAIL_CHARS = 2_000;
 const WEB_SEARCH_TOOL_NAME = "web_search";
@@ -29,80 +35,6 @@ export function toolsAllowRequestsWebSearch(toolsAllow?: string[]): boolean {
     explicitAllow.length > 0 &&
     isToolAllowedByPolicyName(WEB_SEARCH_TOOL_NAME, { allow: explicitAllow })
   );
-}
-
-function normalizeSeverity(value: unknown): CronRunDiagnosticSeverity {
-  return value === "info" || value === "warn" || value === "error" ? value : "error";
-}
-
-function normalizeSource(value: unknown): CronRunDiagnosticSource {
-  switch (value) {
-    case "cron-preflight":
-    case "cron-setup":
-    case "model-preflight":
-    case "agent-run":
-    case "tool":
-    case "exec":
-    case "delivery":
-      return value;
-    default:
-      return "agent-run";
-  }
-}
-
-function normalizeTimestamp(value: unknown, nowMs: () => number): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : nowMs();
-}
-
-function formatUnknownError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message || error.name;
-  }
-  return String(error);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-function normalizeToolName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return normalizeOptionalString(value);
-}
-
-function normalizeExitCode(value: unknown): number | null | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return value === null ? null : undefined;
-}
-
-function tailText(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  // Exec output often ends with the actionable failure; keep the tail when
-  // bounding diagnostic text for run logs and control surfaces.
-  return sliceUtf16Safe(value, -maxChars);
-}
-
-function normalizeDiagnosticMessage(value: unknown): { message?: string; truncated?: boolean } {
-  if (typeof value !== "string") {
-    return {};
-  }
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return {};
-  }
-  const redacted = redactSensitiveText(normalized, { mode: "tools" });
-  if (redacted.length <= MAX_ENTRY_CHARS) {
-    return { message: redacted };
-  }
-  return { message: `${truncateUtf16Safe(redacted, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
 }
 
 function trimSummary(value: string | undefined): string | undefined {
@@ -131,52 +63,10 @@ export function normalizeCronRunDiagnostics(
   value: unknown,
   opts?: { nowMs?: () => number },
 ): CronRunDiagnostics | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as { summary?: unknown; entries?: unknown };
-  const nowMs = opts?.nowMs ?? Date.now;
-  const entriesRaw = Array.isArray(record.entries) ? record.entries : [];
-  const entries: CronRunDiagnostic[] = [];
-  for (const item of entriesRaw) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Partial<CronRunDiagnostic>;
-    const normalized = normalizeDiagnosticMessage(entry.message);
-    if (!normalized.message) {
-      continue;
-    }
-    entries.push({
-      ts: normalizeTimestamp(entry.ts, nowMs),
-      source: normalizeSource(entry.source),
-      severity: normalizeSeverity(entry.severity),
-      message: normalized.message,
-      ...(typeof entry.toolName === "string" && entry.toolName.trim()
-        ? { toolName: entry.toolName.trim() }
-        : {}),
-      ...(typeof entry.exitCode === "number" && Number.isFinite(entry.exitCode)
-        ? { exitCode: entry.exitCode }
-        : entry.exitCode === null
-          ? { exitCode: null }
-          : {}),
-      ...(entry.truncated === true || normalized.truncated ? { truncated: true } : {}),
-    });
-    if (entries.length > MAX_ENTRIES) {
-      // Keep the latest diagnostics because late tool/exec failures usually
-      // explain the final cron result better than setup noise.
-      entries.shift();
-    }
-  }
-  const summary = trimSummary(
-    typeof record.summary === "string"
-      ? redactSensitiveText(record.summary, { mode: "tools" })
-      : undefined,
-  );
-  if (entries.length === 0 && !summary) {
-    return undefined;
-  }
-  return { ...(summary ? { summary } : {}), entries };
+  return normalizeCronRunDiagnosticsValue(value, {
+    ...opts,
+    redactText: (text) => redactSensitiveText(text, { mode: "tools" }),
+  });
 }
 
 /** Merges cron diagnostics while choosing the highest-severity latest summary. */

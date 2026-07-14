@@ -1,7 +1,7 @@
 // Sandbox user fallback tests cover docker.user resolution from explicit config
 // or workspace ownership.
 import { describe, expect, it } from "vitest";
-import { resolveSandboxDockerUser } from "./context.js";
+import { resolveSandboxDockerUser } from "./docker-user.js";
 import type { SandboxDockerConfig } from "./types.js";
 
 const baseDocker: SandboxDockerConfig = {

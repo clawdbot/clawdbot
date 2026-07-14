@@ -2,7 +2,10 @@
 
 ## Unreleased
 
+- Allows iPhone nodes and Apple Watch features relayed through a paired iPhone to connect to Gateway protocol v3 or v4, while direct Watch and operator-only Apple clients remain on v4.
+- Adds Installed and Browse skill management with readiness filters, enable/disable controls, exact-version ClawHub review, and Gateway-enforced risk acknowledgement. (#105741)
 - Routes iPhone and Apple Watch exec approvals through durable Gateway records, preserves safety warnings, shows the first recorded decision across surfaces, reconciles uncertain replies, and remains compatible with shipped Gateway v4 approval RPCs.
+- Improves Gateway onboarding diagnostics, permission registration refreshes, Talk session switching, agent overview refresh ordering, and Apple Watch acknowledgment, activation, and cold-start event handling.
 
 ## 2026.7.1 - 2026-07-08
 

@@ -21,7 +21,7 @@ export type SlackFormattingDisabledMessage = {
   mrkdwn: false;
 };
 
-export type SlackNativeDataDeliveryPlan = {
+type SlackNativeDataDeliveryPlan = {
   accessibilityText: string;
   fallbackMessages: SlackFormattingDisabledMessage[];
   skipOriginalBlocks: boolean;

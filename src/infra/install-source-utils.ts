@@ -24,7 +24,7 @@ export type NpmSpecResolution = {
 };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
-export type NpmResolutionFields = {
+type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
   resolvedSpec?: string;

@@ -11,14 +11,10 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderFactory,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -89,22 +85,21 @@ export type PluginDoctorStateMigration = {
     | { changes: string[]; warnings: string[]; notices?: string[] };
 };
 
-export type PluginDoctorStateMigrationEntry = {
+type PluginDoctorStateMigrationEntry = {
   pluginId: string;
   migration: PluginDoctorStateMigration;
 };
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
-
 function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+    cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    ...(moduleLoaderFactoryForTest ? { createLoader: moduleLoaderFactoryForTest } : {}),
+    ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
+      ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
+      : {}),
   })(modulePath) as PluginDoctorContractModule;
 }
 
@@ -437,18 +432,6 @@ function resolvePluginDoctorContracts(params?: {
 
   return entries;
 }
-
-export function clearPluginDoctorContractRegistryCache(): void {
-  moduleLoaders.clear();
-}
-
-export function setPluginDoctorContractRegistryModuleLoaderFactoryForTest(
-  factory: PluginModuleLoaderFactory | undefined,
-): void {
-  moduleLoaderFactoryForTest = factory;
-  moduleLoaders.clear();
-}
-
 export function listPluginDoctorLegacyConfigRules(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

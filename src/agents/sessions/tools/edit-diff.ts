@@ -555,120 +555,41 @@ export function generateDiffString(
   newContent: string,
   contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
-  const parts = Diff.diffLines(oldContent, newContent);
-  const output: string[] = [];
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const maxLineNum = Math.max(oldLines.length, newLines.length);
+  const hunks = Diff.structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+    context: contextLines,
+  }).hunks;
+  const oldLineCount = oldContent.split("\n").length;
+  const newLineCount = newContent.split("\n").length;
+  const lastNewLine = newContent === "" ? 0 : newLineCount - Number(newContent.endsWith("\n"));
+  const maxLineNum = Math.max(oldLineCount, newLineCount);
   const lineNumWidth = String(maxLineNum).length;
-
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  let lastWasChange = false;
+  const ellipsis = ` ${"".padStart(lineNumWidth, " ")} ...`;
+  const output: string[] = [];
   let firstChangedLine: number | undefined;
 
-  for (const [i, part] of parts.entries()) {
-    const raw = part.value.split("\n");
-    if (raw[raw.length - 1] === "") {
-      raw.pop();
+  for (const [hunkIndex, hunk] of hunks.entries()) {
+    if (hunkIndex > 0 || hunk.newStart > 1) {
+      output.push(ellipsis);
     }
 
-    if (part.added || part.removed) {
-      // Capture the first changed line (in the new file)
-      if (firstChangedLine === undefined) {
+    let oldLineNum = hunk.oldStart;
+    let newLineNum = hunk.newStart;
+    for (const line of hunk.lines) {
+      const prefix = line[0];
+      if (prefix === "\\") {
+        continue;
+      }
+      if (firstChangedLine === undefined && prefix !== " ") {
         firstChangedLine = newLineNum;
       }
+      const lineNum = prefix === "-" ? oldLineNum : newLineNum;
+      output.push(`${prefix}${String(lineNum).padStart(lineNumWidth, " ")} ${line.slice(1)}`);
+      oldLineNum += prefix === "+" ? 0 : 1;
+      newLineNum += prefix === "-" ? 0 : 1;
+    }
 
-      // Show the change
-      for (const line of raw) {
-        if (part.added) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(`+${lineNum} ${line}`);
-          newLineNum++;
-        } else {
-          // removed
-          const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-          output.push(`-${lineNum} ${line}`);
-          oldLineNum++;
-        }
-      }
-      lastWasChange = true;
-    } else {
-      // Context lines - only show a few before/after changes
-      const nextPart = parts.at(i + 1);
-      const nextPartIsChange = Boolean(nextPart?.added || nextPart?.removed);
-      const hasLeadingChange = lastWasChange;
-      const hasTrailingChange = nextPartIsChange;
-
-      if (hasLeadingChange && hasTrailingChange) {
-        if (raw.length <= contextLines * 2) {
-          for (const line of raw) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        } else {
-          const leadingLines = raw.slice(0, contextLines);
-          const trailingLines = raw.slice(raw.length - contextLines);
-          const skippedLines = raw.length - leadingLines.length - trailingLines.length;
-
-          for (const line of leadingLines) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-
-          for (const line of trailingLines) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        }
-      } else if (hasLeadingChange) {
-        const shownLines = raw.slice(0, contextLines);
-        const skippedLines = raw.length - shownLines.length;
-
-        for (const line of shownLines) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-      } else if (hasTrailingChange) {
-        const skippedLines = Math.max(0, raw.length - contextLines);
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-
-        for (const line of raw.slice(skippedLines)) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-      } else {
-        // Skip these context lines entirely
-        oldLineNum += raw.length;
-        newLineNum += raw.length;
-      }
-
-      lastWasChange = false;
+    if (hunkIndex === hunks.length - 1 && hunk.newStart + hunk.newLines <= lastNewLine) {
+      output.push(ellipsis);
     }
   }
 

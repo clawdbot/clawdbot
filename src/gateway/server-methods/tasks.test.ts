@@ -12,11 +12,13 @@ import {
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
+} from "../../tasks/runtime-internal.js";
+import {
   reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/runtime-internal.js";
+} from "../../tasks/task-registry.js";
 import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -51,6 +53,7 @@ beforeEach(async () => {
   cancelSessionMock.mockReset();
   killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),

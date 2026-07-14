@@ -6,7 +6,6 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import {
@@ -20,7 +19,6 @@ import {
 } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
-  buildCodexRingZeroThreadConfigPatch,
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
   buildTurnStartParams,
@@ -29,67 +27,16 @@ import {
   areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-  formatCodexThreadLifecycleTimingSummary,
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
-  shouldWarnCodexThreadLifecycleTimingSummary,
   startOrResumeThread as startOrResumeThreadImpl,
-  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
 
-describe("Codex ring-zero thread config", () => {
-  it("disables configurable native tool sources only for the active exact Crestodian scope", () => {
-    expect(
-      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian"] }, true, [
-        "zeta",
-        "arbitrary.server",
-        "zeta",
-      ]),
-    ).toMatchObject({
-      "features.apps": false,
-      "features.current_time_reminder": false,
-      "features.deferred_executor": false,
-      "features.enable_fanout": false,
-      "features.goals": false,
-      "features.hooks": false,
-      "features.image_generation": false,
-      "features.memories": false,
-      "features.multi_agent": false,
-      "features.multi_agent_v2": false,
-      "features.plugins": false,
-      "features.standalone_web_search": false,
-      "features.token_budget": false,
-      "orchestrator.mcp.enabled": false,
-      "orchestrator.skills.enabled": false,
-      "tools.experimental_request_user_input.enabled": false,
-      hooks: {
-        PreToolUse: [],
-        PermissionRequest: [],
-        PostToolUse: [],
-        PreCompact: [],
-        PostCompact: [],
-        SessionStart: [],
-        UserPromptSubmit: [],
-        SubagentStart: [],
-        SubagentStop: [],
-        Stop: [],
-      },
-      project_doc_max_bytes: 0,
-      notify: [],
-      web_search: "disabled",
-      mcp_servers: {
-        "arbitrary.server": { enabled: false },
-        zeta: { enabled: false },
-      },
-    });
-    expect(
-      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian"] }, false),
-    ).toBeUndefined();
-    expect(
-      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian", "read"] }, true),
-    ).toBeUndefined();
-  });
+type CodexThreadLifecycleTimingLogger = NonNullable<
+  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
+>;
 
+describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["crestodian"];
@@ -235,7 +182,7 @@ function createNetworkProxyAppServerOptions() {
     ...createAppServerOptions(),
     networkProxy: {
       profileName: "mock-proxy",
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: "test-network-proxy",
       configPatch,
     },
   } as const;
@@ -530,6 +477,25 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).toContain("For progress, set `final=false`.");
+    expect(instructions).toContain("set `final=true`");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -2744,49 +2710,6 @@ describe("Codex app-server thread lifecycle timing", () => {
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
-  });
-
-  it("formats stage summaries with run, session, action, and elapsed timing", () => {
-    const message = formatCodexThreadLifecycleTimingSummary({
-      runId: "run-a",
-      sessionId: "session-a",
-      sessionKey: "agent:main:session-a",
-      action: "started",
-      summary: {
-        totalMs: 12,
-        spans: [
-          { name: "read-binding", durationMs: 4, elapsedMs: 4 },
-          { name: "thread-start-request", durationMs: 8, elapsedMs: 12 },
-        ],
-      },
-    });
-
-    expect(message).toBe(
-      "[trace:codex-app-server] thread lifecycle: runId=run-a sessionId=session-a " +
-        "sessionKey=agent:main:session-a action=started totalMs=12 " +
-        "stages=read-binding:4ms@4ms,thread-start-request:8ms@12ms",
-    );
-  });
-
-  it("warns when the total or a single stage crosses the lifecycle threshold", () => {
-    expect(
-      shouldWarnCodexThreadLifecycleTimingSummary(
-        {
-          totalMs: 9,
-          spans: [{ name: "thread-start-request", durationMs: 10, elapsedMs: 10 }],
-        },
-        { totalThresholdMs: 50, stageThresholdMs: 10 },
-      ),
-    ).toBe(true);
-    expect(
-      shouldWarnCodexThreadLifecycleTimingSummary(
-        {
-          totalMs: 50,
-          spans: [{ name: "thread-start-request", durationMs: 1, elapsedMs: 1 }],
-        },
-        { totalThresholdMs: 50, stageThresholdMs: 10 },
-      ),
-    ).toBe(true);
   });
 
   it("emits a trace stage summary when starting a new thread with trace enabled", async () => {

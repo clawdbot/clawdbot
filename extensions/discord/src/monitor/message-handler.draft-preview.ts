@@ -326,7 +326,7 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalReplyDelivered) {
           await draftStream?.discardPending();
         }
-        if (!finalReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+        if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
       } catch (err) {

@@ -4201,6 +4201,7 @@ describe("active-memory plugin", () => {
   });
 
   it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -4219,6 +4220,10 @@ describe("active-memory plugin", () => {
     };
     const verboseSummary =
       "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
+    let markDelayScheduled: (() => void) | undefined;
+    const delayScheduled = new Promise<void>((resolve) => {
+      markDelayScheduled = resolve;
+    });
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         {
@@ -4259,6 +4264,7 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
+      markDelayScheduled?.();
       await new Promise((resolve) => {
         setTimeout(resolve, 550);
       });
@@ -4281,10 +4287,13 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await requireHook("before_prompt_build")(
+    const resultPromise = requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? unavailable then summary", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
+    await delayScheduled;
+    await vi.advanceTimersByTimeAsync(550);
+    const result = await resultPromise;
 
     expect(requirePrependContext(result)).toContain(
       "This memory says the user usually orders tonkotsu ramen",

@@ -10,7 +10,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  normalizeOptionalString,
+  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
@@ -97,12 +97,6 @@ function selectTranscriptIndexView(
   view: ReadSessionTranscriptIndexOptions["view"],
 ): SessionTranscriptIndex {
   return view === "all" ? { ...index, entries: index.allEntries } : index;
-}
-
-/** Clears transcript index caches and in-flight builds between tests. */
-export function clearSessionTranscriptIndexCache(): void {
-  transcriptIndexCache.clear();
-  transcriptIndexBuilds.clear();
 }
 
 function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscriptRecord {
@@ -264,9 +258,11 @@ async function buildSessionTranscriptIndex(
     if (!isIndexableTranscriptRecord(parsed)) {
       return;
     }
-    const id = normalizeOptionalString(parsed.id);
+    const id = readNonBlankStringPreservingWhitespace(parsed.id);
     const parentId =
-      parsed.parentId === null ? null : (normalizeOptionalString(parsed.parentId) ?? undefined);
+      parsed.parentId === null
+        ? null
+        : (readNonBlankStringPreservingWhitespace(parsed.parentId) ?? undefined);
     const treeEntry = parseSessionTranscriptTreeEntry(parsed);
     const rawEntry: IndexedRawEntry = {
       ...(id ? { id } : {}),

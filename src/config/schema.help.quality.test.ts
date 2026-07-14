@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
+import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -143,9 +143,6 @@ const TARGET_KEYS = [
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
-  "cron.runLog",
-  "cron.runLog.maxBytes",
-  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -188,7 +185,6 @@ const TARGET_KEYS = [
   "session.maintenance.pruneAfter",
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
-  "session.maintenance.rotateBytes",
   "session.maintenance.resetArchiveRetention",
   "session.maintenance.maxDiskBytes",
   "session.maintenance.highWaterBytes",
@@ -204,6 +200,9 @@ const TARGET_KEYS = [
   "approvals.exec.targets[].accountId",
   "approvals.exec.targets[].threadId",
   "nodeHost",
+  "nodeHost.agentRuns",
+  "nodeHost.agentRuns.claude",
+  "nodeHost.agentRuns.claude.enabled",
   "nodeHost.browserProxy",
   "nodeHost.browserProxy.enabled",
   "nodeHost.browserProxy.allowProfiles",
@@ -517,7 +516,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  ...MEDIA_AUDIO_FIELD_KEYS,
+  ...Object.keys(MEDIA_AUDIO_FIELD_HELP),
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
@@ -840,13 +839,6 @@ describe("config help copy quality", () => {
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
 
-    const rotate = expectDefined(
-      FIELD_HELP["session.maintenance.rotateBytes"],
-      'FIELD_HELP["session.maintenance.rotateBytes"] test invariant',
-    );
-    expect(/deprecated/i.test(rotate)).toBe(true);
-    expect(rotate.includes("doctor --fix")).toBe(true);
-
     const deprecated = expectDefined(
       FIELD_HELP["session.maintenance.pruneDays"],
       'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
@@ -872,26 +864,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["session.maintenance.highWaterBytes"] test invariant',
     );
     expect(highWater.includes("80%")).toBe(true);
-  });
-
-  it("documents cron run-log retention controls", () => {
-    const runLog = expectDefined(
-      FIELD_HELP["cron.runLog"],
-      'FIELD_HELP["cron.runLog"] test invariant',
-    );
-    expect(runLog.includes("SQLite")).toBe(true);
-
-    const maxBytes = expectDefined(
-      FIELD_HELP["cron.runLog.maxBytes"],
-      'FIELD_HELP["cron.runLog.maxBytes"] test invariant',
-    );
-    expect(maxBytes.includes("2mb")).toBe(true);
-
-    const keepLines = expectDefined(
-      FIELD_HELP["cron.runLog.keepLines"],
-      'FIELD_HELP["cron.runLog.keepLines"] test invariant',
-    );
-    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

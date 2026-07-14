@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
@@ -301,6 +301,8 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "messageId").type).toBe("string");
+    expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
     expect(schemaProp("sessions_search", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");

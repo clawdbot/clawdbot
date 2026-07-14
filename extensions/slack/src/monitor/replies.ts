@@ -276,14 +276,14 @@ export async function deliverReplies(params: {
   return latestResult;
 }
 
-export type SlackRespondFn = (payload: {
+type SlackRespondFn = (payload: {
   text: string;
   blocks?: (Block | KnownBlock)[];
   mrkdwn?: false;
   response_type?: "ephemeral" | "in_channel";
 }) => Promise<unknown>;
 
-export type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
+type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
 /**
  * Compute effective threadTs for a Slack reply based on replyToMode.

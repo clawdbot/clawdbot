@@ -93,7 +93,8 @@ var localeRules = map[string]string{
 - Write standard Iranian Persian in a neutral technical tone. Use Persian ی and ک rather than Arabic ي and ك, and use standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
 	"ru": `Locale rules:
-- Write standard Russian in a neutral technical style. Prefer established Russian technical terminology and avoid unnecessary English outside protected terms.`,
+- Write standard Russian in a neutral technical style. Prefer established Russian technical terminology and avoid unnecessary English outside protected terms.
+- Translate the generic noun “plugin” as “плагин”; inflect it for Russian case and number, and capitalize it when normal Russian syntax requires. Never force English “Plugin” into ordinary prose. Preserve it only inside protected code or identifiers, or when a higher-precedence literal label rule applies.`,
 	"tr": `Locale rules:
 - Write standard Turkish in a concise, neutral technical tone. Preserve Turkish dotted and dotless I correctly and avoid unnecessary English outside protected terms.`,
 	"uk": `Locale rules:

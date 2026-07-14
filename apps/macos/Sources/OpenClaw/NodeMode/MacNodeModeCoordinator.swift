@@ -58,6 +58,7 @@ final class MacNodeModeCoordinator: NSObject {
         let config: GatewayConnection.Config
         let options: GatewayConnectOptions
         let sessionBox: WebSocketSessionBox?
+        let fallbackMainSessionKey: String
     }
 
     static let shared = MacNodeModeCoordinator()
@@ -105,6 +106,7 @@ final class MacNodeModeCoordinator: NSObject {
     private let session: GatewayNodeSession
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let presenceReporter: MacNodePresenceReporter
+    private let notificationCenter: NotificationCenter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
@@ -135,6 +137,7 @@ final class MacNodeModeCoordinator: NSObject {
         runtime: MacNodeRuntime,
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
+        notificationCenter: NotificationCenter = .default,
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
@@ -145,6 +148,7 @@ final class MacNodeModeCoordinator: NSObject {
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
+        self.notificationCenter = notificationCenter
         self.routeInvalidationHook = routeInvalidationHook
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
@@ -154,32 +158,32 @@ final class MacNodeModeCoordinator: NSObject {
         super.init()
 
         guard observeNotifications else { return }
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: UserDefaults.didChangeNotification,
             object: UserDefaults.standard)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: NSApplication.didBecomeActiveNotification,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: .openclawPermissionsChanged,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostWorkerFailed),
             name: .openclawNodeHostWorkerFailed,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawConfigDidChange,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCLIInstalled,
@@ -187,7 +191,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        self.notificationCenter.removeObserver(self)
         self.refreshContinuation.finish()
     }
 
@@ -561,6 +565,9 @@ final class MacNodeModeCoordinator: NSObject {
             url: config.url,
             connectionMode: AppStateStore.shared.connectionMode)
 
+        // Resolve compatibility fallback before node admission. Operator recovery
+        // here cannot block the node lifecycle callback or its successor cleanup.
+        let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
         let currentConfig = try await GatewayEndpointStore.shared.requireConfig()
         guard Self.endpointAttemptCanConnect(
             capturedGeneration: endpointGeneration,
@@ -585,7 +592,8 @@ final class MacNodeModeCoordinator: NSObject {
                 MacNodeClaudeSessionCatalogContract.listCommand),
             config: config,
             options: options,
-            sessionBox: sessionBox)
+            sessionBox: sessionBox,
+            fallbackMainSessionKey: fallbackMainSessionKey)
     }
 
     private func connect(_ attempt: ConnectionAttempt) async throws {
@@ -610,11 +618,15 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
-                let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
-                await self.runtime.updateMainSessionKey(mainSessionKey)
+                // The node hello owns this route's session defaults. Reusing the operator
+                // connection here can trigger remote-tunnel recovery while the node connects.
+                let snapshotMainSessionKey = await self.session.waitForCurrentMainSessionKey(
+                    ifCurrentRoute: installedRoute)
+                let mainSessionKey = snapshotMainSessionKey ?? attempt.fallbackMainSessionKey
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
+                await self.runtime.updateMainSessionKey(mainSessionKey)
                 await self.presenceReporter.start { [weak self] event, payload in
                     guard let self else { return false }
                     return await self.session.sendEvent(

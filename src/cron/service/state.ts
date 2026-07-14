@@ -194,7 +194,7 @@ export type CronServiceDeps = {
 };
 
 /** Cron deps after optional defaults have been made concrete. */
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
 };
 
@@ -296,7 +296,7 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-export type CronDeclarativeAddResult = CronJob & {
+type CronDeclarativeAddResult = CronJob & {
   created: boolean;
   updated?: boolean;
   job: CronJob;

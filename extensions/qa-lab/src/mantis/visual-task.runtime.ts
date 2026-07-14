@@ -58,7 +58,7 @@ export type MantisVisualDriverOptions = {
   visionTimeoutMs?: number;
 };
 
-export type MantisVisualTaskResult = {
+type MantisVisualTaskResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;

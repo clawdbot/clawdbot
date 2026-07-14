@@ -3,12 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-support.js";
-import {
-  BROWSER_PROXY_MAX_FILE_BYTES,
-  BROWSER_PROXY_MAX_FILES,
-  BROWSER_PROXY_MAX_TOTAL_FILE_BYTES,
-} from "../browser-proxy-envelope.js";
+import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./proxy-files.js";
+
+const BROWSER_PROXY_MAX_FILES = 256;
+const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 
 describe("persistBrowserProxyFiles", () => {
   let tempHome: TempHomeEnv;

@@ -67,7 +67,7 @@ type StreamEvent =
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
-export type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
+type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
 
 export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
   if (typeof model !== "string") {

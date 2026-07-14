@@ -22,17 +22,30 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void> {
+async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      await readFile(pathToCheck, "utf8");
-      return;
-    } catch {
-      await sleep(25);
-    }
+      const value = (await readFile(pathToCheck, "utf8")).trim();
+      const pid = Number(value);
+      if (/^[1-9]\d*$/u.test(value) && Number.isSafeInteger(pid)) {
+        return pid;
+      }
+    } catch {}
+    await sleep(25);
   }
-  throw new Error(`Timed out waiting for ${pathToCheck}`);
+  throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessRunning(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`Timed out waiting for process ${pid} to exit`);
 }
 
 describe("Matrix QA CLI runtime", () => {
@@ -235,15 +248,9 @@ describe("Matrix QA CLI runtime", () => {
           env: process.env,
           timeoutMs: 250,
         }),
-      ).rejects.toThrow(/stdout:\nwaiting for verification/);
-      await expect(
-        runMatrixQaOpenClawCli({
-          args: ["matrix", "verify", "self"],
-          cwd: root,
-          env: process.env,
-          timeoutMs: 250,
-        }),
-      ).rejects.toThrow(/stderr:\nmatrix sdk still syncing/);
+      ).rejects.toThrow(
+        /stderr:\nmatrix sdk still syncing[\s\S]*stdout:\nwaiting for verification/u,
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -312,12 +319,12 @@ describe("Matrix QA CLI runtime", () => {
         env: process.env,
         timeoutMs: 500,
       });
-      await sleep(850);
+      childPid = await waitForPidFile(pidPath, 2_000);
+      await waitForProcessExit(childPid, 2_000);
 
       await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
       await expect(session.wait()).rejects.toThrow(/late wait timeout marker/u);
 
-      childPid = Number(await readFile(pidPath, "utf8"));
       expect(isProcessRunning(childPid)).toBe(false);
     } finally {
       if (childPid && isProcessRunning(childPid)) {
@@ -409,12 +416,11 @@ describe("Matrix QA CLI runtime", () => {
         env: process.env,
         timeoutMs: 500,
       });
-      await waitForFile(grandchildPidPath, 2_000);
+      grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
 
       await expect(run).rejects.toThrow(/timed out after 500ms/u);
 
-      childPid = Number(await readFile(childPidPath, "utf8"));
-      grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+      childPid = await waitForPidFile(childPidPath, 2_000);
       expect(isProcessRunning(childPid)).toBe(false);
       expect(isProcessRunning(grandchildPid)).toBe(false);
     } finally {
@@ -460,14 +466,17 @@ describe("Matrix QA CLI runtime", () => {
         env: process.env,
         timeoutMs: 10_000,
       });
-      await waitForFile(grandchildPidPath, 2_000);
-      await sleep(300);
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
 
+      const sessionExit = session.wait().catch(() => undefined);
       session.kill();
-      await sleep(500);
 
-      childPid = Number(await readFile(childPidPath, "utf8"));
-      grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+      await Promise.all([
+        waitForProcessExit(childPid, 2_000),
+        waitForProcessExit(grandchildPid, 2_000),
+      ]);
+      await sessionExit;
       expect(isProcessRunning(childPid)).toBe(false);
       expect(isProcessRunning(grandchildPid)).toBe(false);
     } finally {

@@ -17,7 +17,6 @@ import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
@@ -102,7 +101,8 @@ import {
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
   writePackageDistInventoryForCandidate,
-} from "../../scripts/openclaw-cross-os-release-checks.ts";
+} from "../../scripts/lib/cross-os-release-checks/index.ts";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -296,7 +296,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("records packaged-fresh phase timings for release-check summaries", () => {
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");
     const freshLaneSource = source.slice(
       source.indexOf("async function runFreshLane"),
       source.indexOf("async function runUpgradeLane"),
@@ -690,7 +690,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("keeps the Windows packaged-upgrade fallback install out of npm lifecycle scripts", () => {
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");
     const fallbackInstallSource = source.slice(
       source.indexOf('runTimedLanePhase(lane, "update-fallback-install"'),
       source.indexOf('runTimedLanePhase(lane, "update-status"'),
@@ -713,7 +713,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const source = [
+      "scripts/lib/cross-os-release-checks/agent.ts",
+      "scripts/lib/cross-os-release-checks/config.ts",
+      "scripts/lib/cross-os-release-checks/installed.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
+    ]
+      .map((filePath) => readFileSync(filePath, "utf8"))
+      .join("\n");
     const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
     expect(CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE).toBe("minimal");
@@ -741,7 +748,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(nonces.outboundNonce).toMatch(/^native-cross-os-outbound-[0-9a-f-]{36}$/u);
     expect(nonces.inboundNonce).toMatch(/^native-cross-os-inbound-[0-9a-f-]{36}$/u);
 
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const source = [
+      "scripts/lib/cross-os-release-checks/agent.ts",
+      "scripts/lib/cross-os-release-checks/network-smokes.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
+    ]
+      .map((filePath) => readFileSync(filePath, "utf8"))
+      .join("\n");
     expect(source).not.toContain("Math.random()");
     expect(source).not.toContain("cross-os-release-check-${params.label}-${Date.now()}");
     expect(source).not.toContain("native-cross-os-outbound-${Date.now()}");
@@ -865,11 +878,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("keeps matrix resolution independent of package dependency imports", () => {
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
-    const topLevelImports = source.slice(0, source.indexOf("const SCRIPT_PATH"));
+    const configSource = readFileSync("scripts/lib/cross-os-release-checks/config.ts", "utf8");
+    const installSource = readFileSync("scripts/lib/cross-os-release-checks/install.ts", "utf8");
+    const topLevelImports = configSource.slice(0, configSource.indexOf("export type CrossOsSuite"));
 
     expect(topLevelImports).not.toContain("package-dist-inventory");
-    expect(source).toMatch(
+    expect(installSource).toMatch(
       /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
     );
   });
@@ -1096,7 +1110,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("does not preload static release artifacts before serving them", () => {
-    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const source = readFileSync("scripts/lib/cross-os-release-checks/process.ts", "utf8");
     const serverSource = source.slice(
       source.indexOf("export async function startStaticFileServer"),
       source.indexOf("export function resolveStaticFileContentType"),
@@ -1183,7 +1197,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(installedScript).toContain(
       'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js"',
     );
-    expect(readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8")).toContain(
+    expect(readFileSync("scripts/lib/cross-os-release-checks/install.ts", "utf8")).toContain(
       "OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href",
     );
   });
@@ -1506,7 +1520,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-"));
     const childPidPath = join(dir, "child.pid");
     const scriptUrl = pathToFileURL(
-      resolvePath("scripts/openclaw-cross-os-release-checks.ts"),
+      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
     ).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
@@ -1571,7 +1585,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const childPidPath = join(dir, "child.pid");
     const logPath = join(dir, "signal.log");
     const scriptUrl = pathToFileURL(
-      resolvePath("scripts/openclaw-cross-os-release-checks.ts"),
+      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
     ).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;

@@ -6,7 +6,12 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import {
+  IDLE_GC_MS,
+  ManagedWorktreeService,
+  resolveWorktreeCleanupLimits,
+  SNAPSHOT_RETENTION_MS,
+} from "./service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -143,6 +148,9 @@ describe("ManagedWorktreeService", () => {
       baseRef: remoteRef,
     });
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
+    expect(
+      await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+    ).toBe("origin/remote-only");
   });
 
   it("lists local branches without a remote", async () => {
@@ -170,6 +178,100 @@ describe("ManagedWorktreeService", () => {
     expect(created.baseRef).toBe("base-branch");
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
   });
+
+  it("normalizes dashed refs and revision expressions before creating branches", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "history.txt"), "second\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "second commit");
+    const secondCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.appendFile(path.join(repo, "history.txt"), "third\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "third commit");
+    const thirdCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
+    await git(repo, "reset", "--hard", initialCommit);
+
+    const fromRef = await service.create({
+      repoRoot: repo,
+      name: "dashed-ref",
+      baseRef: "--force",
+    });
+    const fromExpression = await service.create({
+      repoRoot: repo,
+      name: "dashed-expression",
+      baseRef: "--force~1",
+    });
+
+    expect(fromRef.baseRef).toBe("--force");
+    expect(await git(fromRef.path, "rev-parse", "HEAD")).toBe(thirdCommit);
+    expect(fromExpression.baseRef).toBe("--force~1");
+    expect(await git(fromExpression.path, "rev-parse", "HEAD")).toBe(secondCommit);
+  });
+
+  it("preserves Git's bare-dash previous-checkout shorthand", async () => {
+    await git(repo, "checkout", "-b", "previous");
+    await fs.writeFile(path.join(repo, "previous.txt"), "previous\n");
+    await git(repo, "add", "previous.txt");
+    await git(repo, "commit", "-m", "previous checkout commit");
+    const previousCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "previous-checkout",
+      baseRef: "-",
+    });
+
+    expect(created.baseRef).toBe("-");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(previousCommit);
+  });
+
+  it("rejects ambiguous dashed refs instead of choosing by ref precedence", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "tag.txt"), "tag\n");
+    await git(repo, "add", "tag.txt");
+    await git(repo, "commit", "-m", "tag candidate");
+    const tagCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "reset", "--hard", initialCommit);
+    await fs.writeFile(path.join(repo, "branch.txt"), "branch\n");
+    await git(repo, "add", "branch.txt");
+    await git(repo, "commit", "-m", "branch candidate");
+    const branchCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--ambiguous", tagCommit);
+    await git(repo, "update-ref", "refs/heads/--ambiguous", branchCommit);
+    await git(repo, "config", "core.warnAmbiguousRefs", "false");
+
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "ambiguous-ref",
+        baseRef: "--ambiguous",
+      }),
+    ).rejects.toThrow(/git rev-parse --symbolic-full-name --verify failed/);
+
+    expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
+    expect(await service.list()).toEqual([]);
+  });
+
+  it.each(["--lock", "--orphan"])(
+    "rejects absent dashed base %s without creating worktree state",
+    async (baseRef) => {
+      const before = await git(repo, "worktree", "list", "--porcelain");
+      const name = baseRef.slice(2);
+
+      await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
+        /git rev-parse --symbolic-full-name --verify failed/,
+      );
+
+      expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
+      expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+      expect(await service.list()).toEqual([]);
+      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
     await service.create({
@@ -580,6 +682,180 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.stat(foreign)).toBeTruthy();
     await git(repo, "worktree", "remove", "--force", foreign);
+  });
+
+  it("evicts the least recently active run-owned worktrees over the count limit", async () => {
+    const manual = await service.create({ repoRoot: repo, name: "manual-kept" });
+    const oldest = await service.create({
+      repoRoot: repo,
+      name: "count-oldest",
+      ownerKind: "session",
+      ownerId: "agent:main:oldest",
+    });
+    now += 1;
+    const middle = await service.create({
+      repoRoot: repo,
+      name: "count-middle",
+      ownerKind: "workboard",
+      ownerId: "card-middle",
+    });
+    now += 1;
+    const newest = await service.create({
+      repoRoot: repo,
+      name: "count-newest",
+      ownerKind: "session",
+      ownerId: "agent:main:newest",
+    });
+
+    const result = await service.gc({ limits: { maxCount: 2 } });
+
+    expect(result.removed).toEqual([oldest.id, middle.id]);
+    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
+    await expect(fs.stat(oldest.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("skips active owners during count-limit eviction", async () => {
+    const activeOldest = await service.create({
+      repoRoot: repo,
+      name: "limit-active",
+      ownerKind: "session",
+      ownerId: "agent:main:active",
+    });
+    now += 1;
+    const idle = await service.create({
+      repoRoot: repo,
+      name: "limit-idle",
+      ownerKind: "session",
+      ownerId: "agent:main:idle",
+    });
+    const isOwnerActive = vi.fn(
+      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
+    );
+
+    const result = await service.gc({ limits: { maxCount: 1 }, isOwnerActive });
+
+    expect(result.removed).toEqual([idle.id]);
+    expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();
+  });
+
+  it("evicts oldest worktrees until total size fits the size limit", async () => {
+    const oldest = await service.create({
+      repoRoot: repo,
+      name: "size-oldest",
+      ownerKind: "session",
+      ownerId: "agent:main:size-old",
+    });
+    await fs.writeFile(path.join(oldest.path, "blob.bin"), Buffer.alloc(10_000));
+    now += 1;
+    const newest = await service.create({
+      repoRoot: repo,
+      name: "size-newest",
+      ownerKind: "session",
+      ownerId: "agent:main:size-new",
+    });
+
+    const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
+
+    expect(result.removed).toEqual([oldest.id]);
+    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
+  });
+
+  it("keeps unmeasurable worktrees out of size accounting instead of counting zero", async () => {
+    if (process.getuid?.() === 0) {
+      return; // chmod-based EACCES cannot be simulated as root
+    }
+    const unreadable = await service.create({
+      repoRoot: repo,
+      name: "size-unreadable",
+      ownerKind: "session",
+      ownerId: "agent:main:size-unreadable",
+    });
+    await fs.writeFile(path.join(unreadable.path, "blob.bin"), Buffer.alloc(10_000));
+    const locked = path.join(unreadable.path, "locked");
+    await fs.mkdir(locked);
+    await fs.chmod(locked, 0o000);
+    try {
+      const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
+      // The failed measurement excludes the record from the size total, so the
+      // limit pass does not evict against a bogus zero-byte reading.
+      expect(result.removed).toEqual([]);
+      expect(getRegistryWorktree(env, unreadable.id)?.removedAt).toBeUndefined();
+    } finally {
+      await fs.chmod(locked, 0o755);
+    }
+  });
+
+  it("counts a competing removal instead of evicting an extra worktree", async () => {
+    const oldest = await service.create({
+      repoRoot: repo,
+      name: "race-oldest",
+      ownerKind: "session",
+      ownerId: "agent:main:race-old",
+    });
+    now += 1;
+    const middle = await service.create({
+      repoRoot: repo,
+      name: "race-middle",
+      ownerKind: "session",
+      ownerId: "agent:main:race-mid",
+    });
+    now += 1;
+    const newest = await service.create({
+      repoRoot: repo,
+      name: "race-newest",
+      ownerKind: "session",
+      ownerId: "agent:main:race-new",
+    });
+    const realRemove = service.remove.bind(service);
+    const removeSpy = vi
+      .spyOn(service, "remove")
+      .mockImplementationOnce(async (params: Parameters<typeof realRemove>[0]) => {
+        // Simulate a concurrent cleanup winning the removal claim first.
+        await realRemove({ ...params, reason: "concurrent-gc" });
+        throw new Error("removal already claimed");
+      });
+
+    const result = await service.gc({ limits: { maxCount: 2 } });
+
+    // The stale-count correction stops the pass at two live worktrees instead
+    // of evicting middle as well.
+    expect(result.removed).toEqual([]);
+    expect(getRegistryWorktree(env, oldest.id)?.removedAt).toBeDefined();
+    expect(getRegistryWorktree(env, middle.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
+    removeSpy.mockRestore();
+  });
+
+  it("leaves everything in place when limits are not exceeded", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "under-limit",
+      ownerKind: "session",
+      ownerId: "agent:main:under",
+    });
+
+    const result = await service.gc({
+      limits: { maxCount: 5, maxTotalSizeBytes: 1024 ** 3 },
+    });
+
+    expect(result.removed).toEqual([]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+  });
+
+  it("maps cleanup config onto limits with 0 and unset disabling each bound", () => {
+    expect(resolveWorktreeCleanupLimits(undefined)).toEqual({});
+    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 0, maxTotalSizeGb: 0 } })).toEqual(
+      {},
+    );
+    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 25, maxTotalSizeGb: 50 } })).toEqual(
+      { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
+    );
+    expect(resolveWorktreeCleanupLimits({ cleanup: { maxTotalSizeGb: 0.5 } })).toEqual({
+      maxTotalSizeBytes: 512 * 1024 ** 2,
+    });
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

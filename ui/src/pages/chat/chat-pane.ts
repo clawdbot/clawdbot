@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
 import type {
@@ -6,7 +7,6 @@ import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogContinueResult,
-  SessionsCatalogListResult,
   SessionsCatalogReadResult,
   TaskSuggestion,
   TaskSuggestionEvent,
@@ -34,7 +34,7 @@ import {
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
-} from "../../components/command-palette.ts";
+} from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -43,7 +43,9 @@ import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  announceCatalogSessionContinued,
   buildCatalogSessionKey,
+  lookupCatalogSession,
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
@@ -58,12 +60,16 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
   loadChatHistory,
+  loadOlderChatHistoryPage,
+  resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
+  type ChatHistoryPagination,
 } from "./chat-history.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
@@ -79,7 +85,6 @@ import {
   ChatStateController,
   createPageState,
   dismissChatError,
-  handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -147,12 +152,6 @@ type ChatHistoryAnchor = {
 
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 
-function catalogRawRecord(raw: unknown): Record<string, unknown> | null {
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : null;
-}
-
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
   if (!record) {
@@ -180,6 +179,29 @@ function catalogRawResult(raw: unknown): string | null {
   }
 }
 
+function nativeHistoryMessageIdentity(message: unknown): string | null {
+  const record = catalogRawRecord(message);
+  const metadata = catalogRawRecord(record?.["__openclaw"]);
+  const seq = metadata?.seq;
+  const id = metadata?.id ?? record?.messageId;
+  const sourceIdentity =
+    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
+      ? `seq:${seq}`
+      : typeof id === "string" && id.trim()
+        ? `id:${id}`
+        : null;
+  if (!sourceIdentity) {
+    return null;
+  }
+  try {
+    // One transcript record can project to multiple visible siblings. Include
+    // the projection bytes so partial page overlap removes the matching sibling.
+    return `${sourceIdentity}:${JSON.stringify(message)}`;
+  } catch {
+    return sourceIdentity;
+  }
+}
+
 function catalogMessageId(message: unknown): string | null {
   const messageId = catalogRawRecord(message)?.messageId;
   return typeof messageId === "string" && messageId ? messageId : null;
@@ -192,11 +214,8 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 
-const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
-const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
-
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -230,6 +249,11 @@ function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boole
 }
 
 class ChatPane extends OpenClawLightDomElement {
+  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  readonly minutePoll = new PollController(this, 60_000, () => {
+    this.requestUpdate();
+    void this.refreshSessionPullRequests();
+  });
   @consume({ context: applicationContext, subscribe: true })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
@@ -289,10 +313,13 @@ class ChatPane extends OpenClawLightDomElement {
   private historyObserverArmed = false;
   private historyAutoLoadBlocked = false;
   private pendingHistoryAnchor: ChatHistoryAnchor | null = null;
+  private nativePaginationSnapshot: ChatHistoryPagination | null = null;
+  private nativeHistoryExpanded = false;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
   private readonly olderCursorsSeen = new Set<string>();
+  private readonly olderOffsetsSeen = new Set<number>();
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
@@ -777,6 +804,29 @@ class ChatPane extends OpenClawLightDomElement {
     return [...uniqueMessages, ...this.catalogMessages];
   }
 
+  private prependUniqueNativeMessages(messages: unknown[], current: unknown[]): unknown[] {
+    const duplicateCounts = new Map<string, number>();
+    for (const message of current) {
+      const identity = nativeHistoryMessageIdentity(message);
+      if (identity) {
+        duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
+      }
+    }
+    const uniqueMessages = messages.filter((message) => {
+      const identity = nativeHistoryMessageIdentity(message);
+      if (!identity) {
+        return true;
+      }
+      const duplicatesRemaining = duplicateCounts.get(identity) ?? 0;
+      if (duplicatesRemaining === 0) {
+        return true;
+      }
+      duplicateCounts.set(identity, duplicatesRemaining - 1);
+      return false;
+    });
+    return [...uniqueMessages, ...current];
+  }
+
   private async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
     const state = this.state;
     const client = state?.client;
@@ -800,34 +850,12 @@ class ChatPane extends OpenClawLightDomElement {
     }
     try {
       if (!older) {
-        let cursor: string | undefined;
-        const seenCursors = new Set<string>();
-        // A sidebar row can come from any loaded page. Follow that host's cursor
-        // so continuation metadata is not lost when the selected row is past page one.
-        for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
-          const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-            catalogId: key.catalogId,
-            hostIds: [key.hostId],
-            limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
-            ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
-          });
-          if (!isCurrent()) {
-            return false;
-          }
-          const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
-          this.catalogHost = catalog?.hosts.find((host) => host.hostId === key.hostId) ?? null;
-          this.catalogSession =
-            this.catalogHost?.sessions.find((session) => session.threadId === key.threadId) ?? null;
-          if (this.catalogSession) {
-            break;
-          }
-          const nextCursor = this.catalogHost?.nextCursor;
-          if (!nextCursor || seenCursors.has(nextCursor)) {
-            break;
-          }
-          seenCursors.add(nextCursor);
-          cursor = nextCursor;
+        const lookup = await lookupCatalogSession({ client, key, isCurrent });
+        if (!lookup) {
+          return false;
         }
+        this.catalogHost = lookup.host;
+        this.catalogSession = lookup.session;
       }
       const requestedOlderCursor = older ? this.catalogCursor : undefined;
       if (requestedOlderCursor) {
@@ -886,12 +914,19 @@ class ChatPane extends OpenClawLightDomElement {
 
   private hasOlderMessages(): boolean {
     const state = this.state;
-    return Boolean(
-      state &&
-      parseCatalogSessionKey(state.sessionKey) &&
-      this.catalogCursor &&
-      !this.catalogLoading,
-    );
+    if (!state) {
+      return false;
+    }
+    if (parseCatalogSessionKey(state.sessionKey)) {
+      return Boolean(this.catalogCursor && !this.catalogLoading);
+    }
+    const pagination = state.chatHistoryPagination ?? { hasMore: false };
+    if (pagination !== this.nativePaginationSnapshot) {
+      this.nativePaginationSnapshot = pagination;
+      this.olderOffsetsSeen.clear();
+      this.nativeHistoryExpanded = !pagination.hasMore && pagination.completeSnapshot === true;
+    }
+    return pagination.hasMore && !state.chatLoading;
   }
 
   private resetOlderMessagesViewport(): void {
@@ -901,6 +936,9 @@ class ChatPane extends OpenClawLightDomElement {
     this.historyAutoLoadBlocked = false;
     this.pendingHistoryAnchor = null;
     this.olderCursorsSeen.clear();
+    this.olderOffsetsSeen.clear();
+    this.nativePaginationSnapshot = null;
+    this.nativeHistoryExpanded = false;
     this.historyObserver?.disconnect();
     this.historyObserver = null;
   }
@@ -929,7 +967,9 @@ class ChatPane extends OpenClawLightDomElement {
   private syncHistoryObserver(): void {
     this.historyObserver?.disconnect();
     this.historyObserver = null;
-    if (this.catalogLoading) {
+    const catalogSession = Boolean(this.state && parseCatalogSessionKey(this.state.sessionKey));
+    const historyLoading = catalogSession ? this.catalogLoading : this.state?.chatLoading;
+    if (historyLoading) {
       this.historyObserverArmed = false;
       if (this.loadingOlder) {
         this.olderLoadGeneration += 1;
@@ -977,21 +1017,78 @@ class ChatPane extends OpenClawLightDomElement {
       this.historyObserverArmed = true;
       this.syncHistoryObserver();
     }
+    // Preserve the normal at-bottom/new-message bookkeeping while layering
+    // history-sentinel arming onto the same scroll event.
     this.state?.handleChatScroll(event);
   }
 
   private async loadOlderMessages(): Promise<void> {
     const state = this.state;
     const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
-    if (!state || !catalogKey || this.loadingOlder || !this.hasOlderMessages()) {
+    if (!state || this.loadingOlder || !this.hasOlderMessages()) {
       return;
     }
     const generation = ++this.olderLoadGeneration;
     this.historyAutoLoadBlocked = false;
     this.loadingOlder = true;
+    state.requestUpdate();
     let prepended = false;
     try {
-      prepended = await this.loadCatalogSession(catalogKey, true);
+      if (catalogKey) {
+        prepended = await this.loadCatalogSession(catalogKey, true);
+      } else {
+        const pagination = state.chatHistoryPagination;
+        if (!pagination?.hasMore) {
+          return;
+        }
+        const requestedOffset = pagination.nextOffset;
+        const expectedSessionId =
+          typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
+        this.olderOffsetsSeen.add(requestedOffset);
+        const result = await loadOlderChatHistoryPage(state, requestedOffset);
+        if (!result || generation !== this.olderLoadGeneration) {
+          return;
+        }
+        const resultSessionId =
+          typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()
+            ? result.sessionInfo.sessionId.trim()
+            : typeof result.sessionId === "string"
+              ? result.sessionId.trim()
+              : "";
+        if (expectedSessionId && resultSessionId !== expectedSessionId) {
+          // Offset cursors belong to one transcript. A reset can reuse the session
+          // key, so replace the tail instead of mixing two session IDs.
+          await loadChatHistory(state);
+          prepended = true;
+          return;
+        }
+        const nextPagination = resolveChatHistoryPagination(result);
+        const exhausted =
+          !nextPagination.hasMore ||
+          nextPagination.nextOffset <= requestedOffset ||
+          this.olderOffsetsSeen.has(nextPagination.nextOffset);
+        const messages = Array.isArray(result.messages) ? result.messages : [];
+        const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
+        const grew = nextMessages.length > state.chatMessages.length;
+        // Native scroll-back must render the loaded prefix together with the old
+        // viewport; the default tail-only DOM cap would hide every prepended page.
+        this.nativeHistoryExpanded ||= grew;
+        this.pendingHistoryAnchor = grew ? this.currentHistoryAnchor(state.sessionKey) : null;
+        state.chatMessages = nextMessages;
+        const appliedPagination: ChatHistoryPagination = exhausted
+          ? {
+              hasMore: false,
+              ...(nextPagination.totalMessages !== undefined
+                ? { totalMessages: nextPagination.totalMessages }
+                : {}),
+            }
+          : nextPagination;
+        state.chatHistoryPagination = appliedPagination;
+        this.nativePaginationSnapshot = appliedPagination;
+        state.lastError = null;
+        scheduleChatScroll(state, false);
+        prepended = grew || !exhausted;
+      }
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
         state.lastError = error instanceof Error ? error.message : String(error);
@@ -1022,6 +1119,7 @@ class ChatPane extends OpenClawLightDomElement {
         "sessions.catalog.continue",
         key,
       );
+      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       this.switchPaneSession(result.sessionKey);
       state.handleChatDraftChange(draft);
@@ -1253,11 +1351,11 @@ class ChatPane extends OpenClawLightDomElement {
       });
       return;
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
     event.preventDefault();
-    state.setChatMobileControlsOpen(false, { restoreFocus: true });
+    state.setChatViewMenuOpen(false, { restoreFocus: true });
   };
 
   private readonly handleDocumentPointerdown = (event: PointerEvent) => {
@@ -1276,16 +1374,14 @@ class ChatPane extends OpenClawLightDomElement {
     if (changed) {
       state.requestUpdate();
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
-    const wrapper =
-      this.querySelector(".chat-settings-popover-wrapper") ??
-      this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper = this.querySelector(".chat-view-menu-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
-    state.setChatMobileControlsOpen(false);
+    state.setChatViewMenuOpen(false);
   };
 
   override connectedCallback() {
@@ -1330,14 +1426,6 @@ class ChatPane extends OpenClawLightDomElement {
       this.setPaneSessionKey(this.sessionKey);
     }
     chatState.attach(pageState);
-    const mediaDevices = globalThis.navigator?.mediaDevices;
-    if (mediaDevices?.addEventListener) {
-      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
-      mediaDevices.addEventListener("devicechange", handleDeviceChange);
-      chatState.addCleanup(() =>
-        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
-      );
-    }
     chatState.restoreComposer({ preserveCurrent: true });
     chatState.startComposerPersistence();
     if (this.draft !== undefined) {
@@ -1353,13 +1441,6 @@ class ChatPane extends OpenClawLightDomElement {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
-    // PRs open, merge, and finish CI outside any gateway event stream, so the
-    // chip row refreshes on a coarse timer between session/connect refreshes.
-    const pullRequestTimer = window.setInterval(
-      () => void this.refreshSessionPullRequests(),
-      60_000,
-    );
-    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
@@ -1722,16 +1803,14 @@ class ChatPane extends OpenClawLightDomElement {
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
-    const catalogDisabledReason = catalogKey
-      ? this.catalogSession?.canContinue
-        ? null
-        : this.catalogHost?.kind === "node"
+    // Never flash "view-only" while metadata loads; after loading, anything short
+    // of a continuable session (failed lookups too) explains the disabled composer.
+    const catalogDisabledReason =
+      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
+        ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
-      : null;
-    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    );
+        : null;
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -1772,18 +1851,24 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
-      historyPagination: catalogKey
-        ? {
-            loading: this.loadingOlder,
-            // Also surface the button when auto-load is blocked after a failure: a
-            // non-scrollable (short) thread can never emit the scroll event that
-            // re-arms the observer, so the button is the only retry path.
-            manualFallback:
-              this.hasOlderMessages() &&
-              (typeof IntersectionObserver !== "function" || this.historyAutoLoadBlocked),
-            onLoadOlder: () => void this.loadOlderMessages(),
-          }
-        : undefined,
+      renderAllLoadedHistory:
+        !catalogKey &&
+        (this.nativeHistoryExpanded ||
+          (state.chatHistoryPagination?.hasMore === false &&
+            state.chatHistoryPagination.completeSnapshot === true)),
+      historyPagination:
+        catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
+          ? {
+              loading: this.loadingOlder,
+              // Also surface the button when auto-load is blocked after a failure: a
+              // non-scrollable (short) thread can never emit the scroll event that
+              // re-arms the observer, so the button is the only retry path.
+              manualFallback:
+                this.hasOlderMessages() &&
+                (typeof IntersectionObserver !== "function" || this.historyAutoLoadBlocked),
+              onLoadOlder: () => void this.loadOlderMessages(),
+            }
+          : undefined,
       sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
       sideChatPending: catalogKey ? null : state.chatSideResultPending,
       sideChatHidden: catalogKey ? true : state.chatSideChatHidden,
@@ -1818,11 +1903,6 @@ class ChatPane extends OpenClawLightDomElement {
         ? nothing
         : renderChatControls({
             paneId: this.paneId,
-            agentsList: state.agentsList,
-            connected: state.connected,
-            hideCronSessions: state.sessionsHideCron,
-            loading: state.chatLoading,
-            manualRefreshInFlight: state.chatManualRefreshInFlight,
             model: {
               activeRunId: state.chatRunId,
               agentDefaultModel,
@@ -1848,39 +1928,11 @@ class ChatPane extends OpenClawLightDomElement {
                 switchChatThinkingLevel(state, next, targetSessionKey),
             },
             onboarding: state.onboarding,
-            runId: state.chatRunId,
-            sending: state.chatSending,
             settings: state.settings,
-            settingsOpen: state.chatMobileControlsOpen,
-            sessionKey: state.sessionKey,
-            sessionsResult: state.sessionsResult,
-            stream: state.chatStream,
-            realtimeTalkOptions: state.realtimeTalkOptions,
-            realtimeTalkInputDevices: state.realtimeTalkInputDevices,
-            realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
-            realtimeTalkInputLoading: state.realtimeTalkInputLoading,
-            realtimeTalkInputError: state.realtimeTalkInputError,
-            canOpenRealtimeTalkSettings,
-            onRefresh: () => handleChatManualRefresh(state),
-            onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
-            onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
-            onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-            onOpenRealtimeTalkSettings: () => {
-              if (!canOpenRealtimeTalkSettings) {
-                return;
-              }
-              this.context.navigate("communications", { search: "?section=talk" });
-            },
+            viewMenuOpen: state.chatViewMenuOpen,
             onSettingsChange: state.applySettings,
-            onSettingsOpenChange: (open, options) => {
-              state.setChatMobileControlsOpen(open, options);
-              if (open) {
-                void state.refreshRealtimeTalkInputs(false);
-              }
-            },
-            onToggleCronSessions: () => {
-              state.sessionsHideCron = !state.sessionsHideCron;
-              state.requestUpdate?.();
+            onViewMenuOpenChange: (open, options) => {
+              state.setChatViewMenuOpen(open, options);
             },
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
@@ -1926,15 +1978,13 @@ class ChatPane extends OpenClawLightDomElement {
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
-      onChatScroll: catalogKey
-        ? (event) => this.handleTranscriptScroll(event)
-        : state.handleChatScroll,
+      onChatScroll: (event) => this.handleTranscriptScroll(event),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
-      showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+      showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,

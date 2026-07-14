@@ -188,6 +188,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
   ],
   "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  "@openclaw/retry": ["../dist/plugin-sdk/packages/retry/src/index.d.ts"],
   ...buildPackageBoundaryDtsPaths({
     packageName: "@openclaw/acp-core",
     packageDir: "acp-core",

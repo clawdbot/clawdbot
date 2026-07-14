@@ -32,7 +32,6 @@ import {
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
-export { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 
 function isMissingAuthLabel(auth: { label: string; source: string }): boolean {

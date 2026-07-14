@@ -3,25 +3,10 @@
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
 @import "./styles/approval.css";
-@import "./styles/activity.css";
-@import "./styles/about.css";
-@import "./styles/chat.css";
 @import "./styles/config.css";
 @import "./styles/config-quick.css";
-@import "./styles/cron.css";
-@import "./styles/new-session.css";
-@import "./styles/nodes.css";
-@import "./styles/sessions.css";
-@import "./styles/usage.css";
-@import "./styles/model-providers.css";
-@import "./styles/profile.css";
-@import "./styles/logbook.css";
-@import "./styles/dreams.css";
+@import "./styles/settings.css";
 @import "./styles/lobster-pet.css";
-@import "./styles/workspace.css";
-@import "./styles/workboard.css";
-@import "./styles/plugins.css";
-@import "./styles/skill-workshop.css";
 @import "@create-markdown/preview/themes/system.css";
 
 .cm-preview {

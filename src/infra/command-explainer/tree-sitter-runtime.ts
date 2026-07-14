@@ -8,14 +8,11 @@ import * as TreeSitter from "web-tree-sitter";
 const require = createRequire(import.meta.url);
 
 let parserPromise: Promise<TreeSitter.Parser> | null = null;
-let parserLoader: () => Promise<TreeSitter.Parser> = loadParser;
+const parserLoader: () => Promise<TreeSitter.Parser> = loadParser;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
 
-export function resolvePackageFileForCommandExplanation(
-  packageName: string,
-  fileName: string,
-): string {
+function resolvePackageFileForCommandExplanation(packageName: string, fileName: string): string {
   let packageEntry: string;
   try {
     packageEntry = require.resolve(packageName);
@@ -63,7 +60,7 @@ async function loadParser(): Promise<TreeSitter.Parser> {
   return parser;
 }
 
-export function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
+function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
   // Reset the cache on load failure so transient filesystem or WASM init errors
   // do not poison all later command explanations in the process.
   parserPromise ??= parserLoader().catch((error: unknown) => {
@@ -71,16 +68,7 @@ export function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser>
     throw error;
   });
   return parserPromise;
-}
-
-export function setBashParserLoaderForCommandExplanationForTest(
-  loader?: () => Promise<TreeSitter.Parser>,
-): void {
-  parserPromise = null;
-  parserLoader = loader ?? loadParser;
-}
-
-/**
+} /**
  * Low-level parser access for tests and parser diagnostics.
  * Callers own the returned Tree and must call tree.delete().
  * Prefer explainShellCommand for normal command-explainer use.

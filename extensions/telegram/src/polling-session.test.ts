@@ -2336,47 +2336,55 @@ describe("TelegramPollingSession", () => {
   });
 
   it("replays claimed spooled updates after a crash before adoption", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption crash")]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption crash")]);
 
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          const participant = createTelegramSpooledReplayDeferredParticipant(
-            `test-pre-crash:${update.update_id}`,
-          );
-          if (!participant) {
-            throw new Error("expected spooled replay participant");
-          }
-          participants.push(participant);
-          // Never adopt: process dies with claim held.
-        },
+        const { runPromise, stopWorker } = startIsolatedIngressSession({
+          abort,
+          spoolDir: tempDir,
+          drainIntervalMs: 10,
+          handleUpdate: async (update) => {
+            const participant = createTelegramSpooledReplayDeferredParticipant(
+              `test-pre-crash:${update.update_id}`,
+            );
+            if (!participant) {
+              throw new Error("expected spooled replay participant");
+            }
+            participants.push(participant);
+            // Never adopt: process dies with claim held.
+          },
+        });
+
+        await vi.waitFor(() => expect(participants).toHaveLength(1));
+        await vi.waitFor(async () =>
+          expect(
+            (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map((c) => c.updateId),
+          ).toEqual([42]),
+        );
+
+        abort.abort();
+        stopWorker();
+        // Establish the same post-stop boundary as production without burning
+        // the real 15-second graceful-stop ceiling on the abandoned handler.
+        await vi.advanceTimersByTimeAsync(15_000);
+        await runPromise;
+
+        // Stale-claim recovery after crash: row is still claimed → replayable.
+        const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+          spoolDir: tempDir,
+          staleMs: 0,
+        });
+        expect(recovered).toBeGreaterThanOrEqual(1);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
+        expect(await failedUpdateIds(tempDir)).toEqual([]);
       });
-
-      await vi.waitFor(() => expect(participants).toHaveLength(1));
-      await vi.waitFor(async () =>
-        expect(
-          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map((c) => c.updateId),
-        ).toEqual([42]),
-      );
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-
-      // Stale-claim recovery after crash: row is still claimed → replayable.
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-      });
-      expect(recovered).toBeGreaterThanOrEqual(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not replay spooled updates after crash post-adoption (row already tombstoned)", async () => {

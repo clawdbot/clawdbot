@@ -1,6 +1,6 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;

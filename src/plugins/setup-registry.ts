@@ -16,15 +16,11 @@ import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "./plugin-metadata-snapshot.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderFactory,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
+import { pluginSetupRegistryLoaderState } from "./setup-registry-loader-state.js";
 import type {
   CliBackendPlugin,
   OpenClawPluginModule,
@@ -60,7 +56,7 @@ type SetupAutoEnableProbeEntry = {
   probe: PluginSetupAutoEnableProbe;
 };
 
-export type PluginSetupRegistryDiagnosticCode =
+type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-runtime-disabled"
   | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
@@ -97,9 +93,6 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
-
 const MAX_SETUP_REGISTRY_CACHE_ENTRIES = 16;
 let setupRegistrySnapshotIdSeq = 0;
 let setupRegistrySnapshotIds = new WeakMap<object, string>();
@@ -110,29 +103,22 @@ const pluginSetupRegistryCache = new PluginLruCache<PluginSetupRegistry>(
   MAX_SETUP_REGISTRY_CACHE_ENTRIES,
 );
 
-export function clearPluginSetupRegistryCache(): void {
-  moduleLoaders.clear();
+function clearPluginSetupRegistryCache(): void {
+  pluginSetupRegistryLoaderState.moduleLoaders.clear();
   setupRegistrySnapshotIds = new WeakMap();
   setupManifestRegistryCache.clear();
   pluginSetupRegistryCache.clear();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearPluginSetupRegistryCache);
-
-export function setPluginSetupRegistryModuleLoaderFactoryForTest(
-  factory: PluginModuleLoaderFactory | undefined,
-): void {
-  moduleLoaderFactoryForTest = factory;
-  // Cached results were built through the previous factory; drop them too.
-  clearPluginSetupRegistryCache();
-}
-
 function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+    cache: pluginSetupRegistryLoaderState.moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    ...(moduleLoaderFactoryForTest ? { createLoader: moduleLoaderFactoryForTest } : {}),
+    ...(pluginSetupRegistryLoaderState.moduleLoaderFactory
+      ? { createLoader: pluginSetupRegistryLoaderState.moduleLoaderFactory }
+      : {}),
   });
 }
 

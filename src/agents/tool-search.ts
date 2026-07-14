@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -161,13 +162,7 @@ type CodeModeChildMessage =
   | { type: "log"; items?: unknown[] }
   | { type: "bridge"; id?: unknown; method?: unknown; args?: unknown };
 
-type CodeModeBridgeResultMessage = {
-  type: "bridge-result";
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type CodeModeBridgeResultMessage = { type: "bridge-result"; id: string } & Result<unknown, string>;
 
 const TOOL_SEARCH_CODE_MODE_CHILD_SOURCE = String.raw`
 import vm from "node:vm";

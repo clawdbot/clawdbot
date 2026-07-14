@@ -45,7 +45,7 @@ export function createFeishuCommentReplyDispatcher(
       fallbackLimit: 4000,
     },
   );
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu");
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu", params.accountId);
   const typingReaction = createCommentTypingReactionLifecycle({
     cfg: params.cfg,
     fileToken: params.fileToken,

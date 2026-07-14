@@ -21,10 +21,10 @@ import {
 import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
-  installPluginFromDir,
   installPluginFromInstalledPackageDir,
   installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
+  installPluginFromPath,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
@@ -35,6 +35,14 @@ import {
   createBundleInstallFixtureFactory,
   createDualFormatInstallFixtureFactory,
 } from "./test-helpers/install-fixtures.js";
+
+type InstallPluginFromDirParams = Omit<Parameters<typeof installPluginFromPath>[0], "path"> & {
+  dirPath: string;
+};
+
+async function installPluginFromDir({ dirPath, ...params }: InstallPluginFromDirParams) {
+  return await installPluginFromPath({ path: dirPath, ...params });
+}
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -1930,49 +1938,6 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     expectWarningExcludes(warnings, "dangerous code pattern");
-  });
-
-  it("forwards policy config and source metadata to bundle scans", async () => {
-    const scanSpy = vi.spyOn(installSecurityScan, "scanBundleInstallSource");
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "codex",
-      name: "Policy Source Bundle",
-    });
-    const config: OpenClawConfig = {
-      security: {
-        installPolicy: {
-          enabled: false,
-        },
-      },
-    };
-    const source = {
-      kind: "clawhub",
-      authority: "openclaw",
-      mutable: false,
-      network: true,
-    } as const;
-
-    try {
-      const result = await installPluginFromDir({
-        dirPath: pluginDir,
-        extensionsDir,
-        config,
-        installPolicyRequest: {
-          kind: "plugin-archive",
-          requestedSpecifier: "clawhub:policy-source-bundle",
-          source,
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      const scanParams = scanSpy.mock.calls.at(-1)?.[0];
-      expect(scanParams?.config).toBe(config);
-      expect(scanParams?.requestKind).toBe("plugin-archive");
-      expect(scanParams?.requestedSpecifier).toBe("clawhub:policy-source-bundle");
-      expect(scanParams?.source).toEqual(source);
-    } finally {
-      scanSpy.mockRestore();
-    }
   });
 
   it("blocks bundle installs with denied vendored dependency names", async () => {

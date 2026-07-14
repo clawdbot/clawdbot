@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MSTeamsConfig } from "../runtime-api.js";
 import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
@@ -73,12 +74,16 @@ describe("token – secret credentials", () => {
   afterEach(restoreEnv);
 
   it("returns true when appId + appPassword + tenantId are provided in config", () => {
-    const cfg = { appId: "app-id", appPassword: "app-pw", tenantId: "tenant-id" } as any;
+    const cfg = {
+      appId: "app-id",
+      appPassword: "app-pw",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsConfig;
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
   });
 
   it("returns false when appPassword is missing", () => {
-    const cfg = { appId: "app-id", tenantId: "tenant-id" } as any;
+    const cfg = { appId: "app-id", tenantId: "tenant-id" } satisfies MSTeamsConfig;
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
   });
 
@@ -87,7 +92,11 @@ describe("token – secret credentials", () => {
   });
 
   it("resolves secret credentials from config", () => {
-    const cfg = { appId: "app-id", appPassword: "app-pw", tenantId: "tenant-id" } as any;
+    const cfg = {
+      appId: "app-id",
+      appPassword: "app-pw",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "secret",
@@ -111,7 +120,7 @@ describe("token – secret credentials", () => {
   });
 
   it("returns undefined when appPassword is missing", () => {
-    const cfg = { appId: "app-id", tenantId: "tenant-id" } as any;
+    const cfg = { appId: "app-id", tenantId: "tenant-id" } satisfies MSTeamsConfig;
     expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();
   });
 });
@@ -126,12 +135,16 @@ describe("token – federated credentials (certificate)", () => {
       tenantId: "tenant-id",
       authType: "federated",
       certificatePath: "/cert.pem",
-    } as any;
+    } satisfies MSTeamsConfig;
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
   });
 
   it("hasConfigured returns false when neither cert nor MI is provided", () => {
-    const cfg = { appId: "app-id", tenantId: "tenant-id", authType: "federated" } as any;
+    const cfg = {
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+    } satisfies MSTeamsConfig;
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
   });
 
@@ -142,7 +155,7 @@ describe("token – federated credentials (certificate)", () => {
       authType: "federated",
       certificatePath: "/cert.pem",
       certificateThumbprint: "AABBCCDD",
-    } as any;
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "federated",
@@ -185,7 +198,7 @@ describe("token – federated credentials (managed identity)", () => {
       authType: "federated",
       useManagedIdentity: true,
       managedIdentityClientId: "mi-client-id",
-    } as any;
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "federated",
@@ -204,7 +217,7 @@ describe("token – federated credentials (managed identity)", () => {
       tenantId: "tenant-id",
       authType: "federated",
       useManagedIdentity: true,
-    } as any;
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "federated",
@@ -233,7 +246,7 @@ describe("token – federated credentials (managed identity)", () => {
       authType: "federated",
       certificatePath: "/cert.pem",
       useManagedIdentity: false,
-    } as any;
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "federated",
@@ -252,7 +265,11 @@ describe("token – backward compatibility", () => {
   afterEach(restoreEnv);
 
   it("defaults to secret when authType is absent", () => {
-    const cfg = { appId: "app-id", appPassword: "pw", tenantId: "tenant-id" } as any;
+    const cfg = {
+      appId: "app-id",
+      appPassword: "pw",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "secret",
@@ -268,7 +285,7 @@ describe("token – backward compatibility", () => {
       appPassword: "pw",
       tenantId: "tenant-id",
       authType: "secret",
-    } as any;
+    } satisfies MSTeamsConfig;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "secret",

@@ -366,10 +366,6 @@ final class GatewayConnectionController {
         return nil
     }
 
-    func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
-        _ = await self.connectWithDiagnostics(gateway)
-    }
-
     func connectManual(
         host: String,
         port: Int,

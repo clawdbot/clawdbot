@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ensureExtensionRelayToken,
-  extensionRelayTokenMatches,
   readExtensionRelayToken,
   resolveExtensionRelayToken,
 } from "./relay-auth.js";
@@ -59,12 +58,5 @@ describe("extension relay host-local secret", () => {
     } finally {
       fs.rmSync(otherDir, { recursive: true, force: true });
     }
-  });
-
-  it("matches tokens in constant time and rejects mismatches", () => {
-    const token = ensureExtensionRelayToken();
-    expect(extensionRelayTokenMatches(token, token)).toBe(true);
-    expect(extensionRelayTokenMatches(token, `${token}x`)).toBe(false);
-    expect(extensionRelayTokenMatches(token, "short")).toBe(false);
   });
 });

@@ -101,9 +101,25 @@ describe("collectPreparedPrepackErrors", () => {
     expect(
       collectPreparedPrepackErrors(
         ["dist/index.mjs", "dist/control-ui/index.html"],
-        ["dist/control-ui/assets/index-Bu8rSoJV.js"],
+        [
+          "dist/control-ui/assets/index-Bu8rSoJV.js",
+          "dist/control-ui/assets/index-Bu8rSoJV.js.br",
+          "dist/control-ui/assets/index-Bu8rSoJV.js.gz",
+        ],
       ),
     ).toStrictEqual([]);
+  });
+
+  it("rejects a stale Control UI build without precompressed variants", () => {
+    expect(
+      collectPreparedPrepackErrors(
+        ["dist/index.mjs", "dist/control-ui/index.html"],
+        ["dist/control-ui/assets/index-Bu8rSoJV.js"],
+      ),
+    ).toEqual([
+      "missing prepared Control UI .br asset under dist/control-ui/assets/",
+      "missing prepared Control UI .gz asset under dist/control-ui/assets/",
+    ]);
   });
 
   it("reports missing build and control ui artifacts", () => {

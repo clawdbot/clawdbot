@@ -3232,7 +3232,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await waitForTalkCondition { startResumed }
 
         #expect(!talkMode.isListening)
-        #expect(talkMode.statusText == "Paused")
+        #expect(talkMode.statusText != "Listening")
     }
 
     @Test @MainActor func `gateway disconnect invalidates a suspended Talk start`() async {

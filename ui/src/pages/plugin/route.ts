@@ -1,7 +1,7 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 
-export type PluginTabRef = {
+type PluginTabRef = {
   pluginId: string;
   id: string;
 };

@@ -1,5 +1,4 @@
-// Gateway method registry aggregator wires core and plugin RPC descriptors to
-// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
+// Gateway registry wires RPC descriptors to handlers, scopes, and budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -29,6 +28,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -170,6 +170,10 @@ const loadModelsAuthStatusHandlers = lazyHandlerModule(
 const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
+);
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
 );
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
@@ -492,6 +496,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadModelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],
     loadHandlers: loadModelsAuthStatusHandlers,
   }),
@@ -548,6 +556,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",
@@ -683,6 +692,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.put",
       "sessions.groups.rename",
       "sessions.groups.delete",
+      "sessions.dispatch",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -703,9 +713,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.list",
-      "node.pair.approve",
-      "node.pair.reject",
+      ...NODE_PAIR_GATEWAY_METHODS,
       "node.pair.remove",
       "node.rename",
       "node.list",
@@ -716,6 +724,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],

@@ -14,10 +14,9 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
-  readProviderTextResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 
@@ -55,6 +54,8 @@ type ContainerWebSocketMessage = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
+const SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES = 16 * 1024;
+const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
 // Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
 const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -113,12 +114,44 @@ function readContentLength(res: Response): number | undefined {
   return parseMediaContentLength(res.headers?.get("content-length") ?? null) ?? undefined;
 }
 
-async function readCappedResponseBuffer(res: Response, maxResponseBytes: number): Promise<Buffer> {
+function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
+  return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
+}
+
+function signalAttachmentIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
+  return new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`);
+}
+
+async function readSignalRestText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
+  const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: bodyIdleTimeoutMs,
+    onIdleTimeout: signalRestIdleTimeoutError,
+    onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
+}
+
+async function readSignalRestErrorText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
+  return (
+    await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
+      chunkTimeoutMs: bodyIdleTimeoutMs,
+      onIdleTimeout: signalRestIdleTimeoutError,
+    })
+  ).text;
+}
+
+async function readCappedResponseBuffer(
+  res: Response,
+  maxResponseBytes: number,
+  bodyIdleTimeoutMs: number,
+): Promise<Buffer> {
   const contentLength = readContentLength(res);
   if (contentLength !== undefined && contentLength > maxResponseBytes) {
     throw new Error("Signal REST attachment exceeded size limit");
   }
   return await readResponseWithLimit(res, maxResponseBytes, {
+    chunkTimeoutMs: bodyIdleTimeoutMs,
+    onIdleTimeout: signalAttachmentIdleTimeoutError,
     onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
   });
 }
@@ -246,7 +279,9 @@ export async function containerRestRequest<T = unknown>(
     init.body = JSON.stringify(body);
   }
 
-  const res = await fetchWithTimeout(url, init, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const res = await fetchWithTimeout(url, init, timeoutMs);
 
   if (res.status === 204) {
     return undefined as T;
@@ -255,14 +290,14 @@ export async function containerRestRequest<T = unknown>(
   if (!res.ok) {
     // Bound the error body: signal-cli-rest-api is an untrusted external container,
     // and a hostile/buggy response must not let an error path buffer an unbounded body.
-    const errorText = await readResponseTextLimited(res).catch(() => "");
+    const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
     throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
   }
 
   // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
   // malicious/runaway container response cannot OOM the runtime (send/typing/version all
   // funnel through here). Reuse the same bounded reader family as the attachment path.
-  const text = await readProviderTextResponse(res, "Signal REST");
+  const text = await readSignalRestText(res, bodyIdleTimeoutMs);
   if (!text) {
     return undefined as T;
   }
@@ -286,13 +321,19 @@ export async function containerFetchAttachment(
   let res: Response | undefined;
 
   try {
-    res = await fetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
 
     if (!res.ok) {
       return null;
     }
 
-    return await readCappedResponseBuffer(res, normalizeMaxResponseBytes(opts.maxResponseBytes));
+    return await readCappedResponseBuffer(
+      res,
+      normalizeMaxResponseBytes(opts.maxResponseBytes),
+      bodyIdleTimeoutMs,
+    );
   } finally {
     await releaseUnreadResponseBody(res);
   }

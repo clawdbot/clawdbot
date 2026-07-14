@@ -1,13 +1,8 @@
 // QQ Bot Markdown chunking tests cover message-boundary table repair.
 import { describe, expect, it } from "vitest";
-import {
-  chunkQQBotMarkdownText,
-  createQQBotMarkdownChunker,
-  testing,
-  type QQBotBaseMarkdownChunker,
-} from "./markdown-table-chunking.js";
+import { chunkQQBotMarkdownText, createQQBotMarkdownChunker } from "./markdown-table-chunking.js";
 
-const baseChunker: QQBotBaseMarkdownChunker = (text, limit) =>
+const baseChunker = (text: string, limit: number): string[] =>
   text.length <= limit ? [text] : [text.slice(0, limit), text.slice(limit)];
 
 describe("chunkQQBotMarkdownText", () => {
@@ -90,6 +85,16 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunks.at(-1)).toBe(
       ["| Id | Error | Retry |", "|---|---|---|", "| 004 | ok | zero |"].join("\n"),
     );
+  });
+
+  it("keeps escaped pipes inside oversized table cells", () => {
+    const value = "long value ".repeat(12);
+    const text = ["| Label | Value |", "|---|---|", `| a \\| b | ${value} |`].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("Label: a | b");
+    expect(chunks.join("\n")).toContain("Value: long value");
   });
 
   it("buffers a table row fragment across streaming block flushes", () => {
@@ -264,22 +269,29 @@ describe("chunkQQBotMarkdownText", () => {
 });
 
 describe("table-cell splitting", () => {
-  it("treats a backslash-escaped pipe as literal cell content, not a delimiter", () => {
-    // GFM: `\|` inside a cell is a literal "|", so this row has two cells, not
-    // three. Splitting on every "|" previously mis-counted columns, so the
-    // oversized-row fallback rendered the trailing content under the wrong header.
-    expect(testing.splitTableCells("| a \\| b | c |")).toEqual(["a | b", "c"]);
+  it("preserves a literal backslash before an oversized cell delimiter", () => {
+    const text = [
+      "| First | Second |",
+      "|---|---|",
+      `| a \\\\ | ${"long value ".repeat(12)} |`,
+    ].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("First: a \\");
+    expect(chunks.join("\n")).toContain("Second: long value");
   });
 
-  it("leaves ordinary rows unchanged", () => {
-    expect(testing.splitTableCells("| a | b |")).toEqual(["a", "b"]);
-  });
+  it("unescapes pipes when flushing a partial row in an active table", () => {
+    const chunker = createQQBotMarkdownChunker(baseChunker);
+    expect(
+      chunker.chunkText(
+        ["| First | Second |", "|---|---|", "| ready | complete |"].join("\n"),
+        200,
+      ),
+    ).toEqual([["| First | Second |", "|---|---|", "| ready | complete |"].join("\n")]);
 
-  it("unescapes a literal backslash and still splits on the following pipe", () => {
-    expect(testing.splitTableCells("| a \\\\ | b |")).toEqual(["a \\", "b"]);
-  });
-
-  it("handles escaped pipes in partial (unterminated) rows", () => {
-    expect(testing.splitPartialTableCells("| a \\| b")).toEqual(["a | b"]);
+    expect(chunker.chunkText("| a \\| b | c", 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([["First: a | b", "Second: c"].join("\n")]);
   });
 });

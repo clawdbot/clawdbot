@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -478,6 +479,7 @@ describe("web search runtime", () => {
       sourceConfig,
       config: resolvedConfig,
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -654,6 +656,7 @@ describe("web search runtime", () => {
       sourceConfig: {},
       config: {},
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -695,6 +698,7 @@ describe("web search runtime", () => {
       sourceConfig: {},
       config: {},
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -739,6 +743,7 @@ describe("web search runtime", () => {
       sourceConfig: config,
       config: structuredClone(config),
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {

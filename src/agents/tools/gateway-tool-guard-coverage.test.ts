@@ -1,7 +1,7 @@
 // Gateway config mutation guard coverage keeps agent-driven config edits inside
 // the documented low-risk allowlist.
 import { describe, expect, it } from "vitest";
-import { assertGatewayConfigMutationAllowedForTest } from "./gateway-tool.js";
+import { assertGatewayConfigMutationAllowedForTest } from "./gateway-config-guard.js";
 
 function expectBlocked(
   currentConfig: Record<string, unknown>,
@@ -56,6 +56,18 @@ function expectAllowedApply(
 }
 
 describe("gateway config mutation guard coverage", () => {
+  it("explains the injection-boundary contract when refusing protected paths", () => {
+    // The refusal must be self-explanatory: agents were observed misreading a
+    // bare path error as an authorization failure and arguing with the owner.
+    expect(() =>
+      assertGatewayConfigMutationAllowedForTest({
+        action: "config.patch",
+        currentConfig: { agents: { defaults: { promptOverlays: ["a"] } } },
+        raw: JSON.stringify({ agents: { defaults: { promptOverlays: ["b"] } } }),
+      }),
+    ).toThrow(/injection boundary.*cannot widen it.*Agent-tunable paths/s);
+  });
+
   it("blocks global prompt overlay edits via config.patch", () => {
     expectBlocked(
       { agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } } },
@@ -63,8 +75,11 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
-  it("blocks global default model edits via config.patch", () => {
-    expectBlocked(
+  it("allows global default model edits via config.patch", () => {
+    // Capability parity with agents.list[].model: model selection is not a
+    // credential/privilege boundary, and the per-agent spelling was already
+    // allowlisted, so blocking only the defaults shape protected nothing.
+    expectAllowed(
       { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     );

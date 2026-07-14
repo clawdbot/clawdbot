@@ -19,7 +19,7 @@ import {
 } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 
-export type LegacyMainDeliveryRetirement = {
+type LegacyMainDeliveryRetirement = {
   key: string;
   entry: SessionEntry;
 };

@@ -5,7 +5,7 @@
  * maps active scopes to caller-provided text formatters.
  */
 import { createRequire } from "node:module";
-import { decodeHtmlEntityAt } from "./html.js";
+import { decodeHtmlEntities } from "./html.js";
 
 type HighlightJs = {
   getLanguage(name: string): unknown;
@@ -136,8 +136,9 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
     if (!textBuffer) {
       return;
     }
+    const decodedText = decodeHtmlEntities(textBuffer);
     const formatter = getActiveFormatter(scopes, theme);
-    output += formatter ? formatter(textBuffer) : textBuffer;
+    output += formatter ? formatter(decodedText) : decodedText;
     textBuffer = "";
   };
 
@@ -163,15 +164,6 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
       }
       index += SPAN_CLOSE.length;
       continue;
-    }
-
-    if (html[index] === "&") {
-      const decoded = decodeHtmlEntityAt(html, index);
-      if (decoded) {
-        textBuffer += decoded.text;
-        index += decoded.length;
-        continue;
-      }
     }
 
     textBuffer += html[index];

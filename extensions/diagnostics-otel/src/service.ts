@@ -27,24 +27,12 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
-  ATTR_GEN_AI_INPUT_MESSAGES,
-  ATTR_GEN_AI_OUTPUT_MESSAGES,
-  ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
-  ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
-  ATTR_GEN_AI_TOOL_CALL_ID,
-  ATTR_GEN_AI_TOOL_CALL_RESULT,
-  ATTR_GEN_AI_TOOL_DEFINITIONS,
-  GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL,
-} from "@opentelemetry/semantic-conventions/incubating";
-import {
   resetContinuationTracer,
   setContinuationTracer,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -60,6 +48,20 @@ import {
   redactSensitiveText,
 } from "../api.js";
 import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
+import {
+  hasPreloadedOtelSdk,
+  normalizeOtelErrorMessage,
+  normalizeOtelLogString,
+  resolveContentCapturePolicy,
+  type OtelContentCapturePolicy,
+} from "./service-content-normalization.js";
+import {
+  assignOtelModelContentAttributes,
+  assignOtelToolContentAttributes,
+  assignOtelToolIdentityAttributes,
+  type OtelModelCallContent,
+  type OtelToolCallContent,
+} from "./service-genai-content.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
@@ -86,17 +88,13 @@ const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SECURITY_TARGET_NAME_VALUE_RE = /^[A-Za-z0-9@/_.:-]{1,256}$/u;
-const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
-const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
 const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
-const MAX_OTEL_ERROR_MESSAGE_CHARS = 4 * 1024;
 const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
 const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
@@ -152,16 +150,6 @@ const CONTEXT_TOKENS_BUCKETS = [
 const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
 const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;
 
-type OtelContentCapturePolicy = {
-  inputMessages: boolean;
-  outputMessages: boolean;
-  toolInputs: boolean;
-  toolOutputs: boolean;
-  systemPrompt: boolean;
-  toolDefinitions: boolean;
-  logBodies: boolean;
-};
-
 type OtelLogsExporter = "otlp" | "stdout" | "both";
 type OtelHttpAgent = HttpAgent | HttpsAgent;
 type OtelHttpAgentFactory = (protocol: string) => OtelHttpAgent | Promise<OtelHttpAgent>;
@@ -174,18 +162,6 @@ type OtelLogger = OpenClawPluginServiceContext["logger"];
 type BuiltOtelLogRecord = {
   logRecord: LogRecord;
   traceContext?: DiagnosticTraceContext;
-};
-
-type OtelModelCallContent = {
-  inputMessages?: unknown;
-  outputMessages?: unknown;
-  systemPrompt?: string;
-  toolDefinitions?: unknown;
-};
-
-type OtelToolCallContent = {
-  toolInput?: unknown;
-  toolOutput?: unknown;
 };
 
 type MessageDeliveryDiagnosticEvent = Extract<
@@ -214,16 +190,6 @@ type SessionRecoveryDiagnosticEvent = Extract<
 type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
 type TrustedSpanAliasOwner = { kind: "run"; id: string };
-
-const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
-  inputMessages: false,
-  outputMessages: false,
-  toolInputs: false,
-  toolOutputs: false,
-  systemPrompt: false,
-  toolDefinitions: false,
-  logBodies: false,
-};
 
 function normalizeEndpoint(endpoint?: string): string | undefined {
   const trimmed = endpoint?.trim();
@@ -722,552 +688,6 @@ function addUpstreamRequestIdSpanEvent(
   span.addEvent?.("openclaw.provider.request", {
     "openclaw.upstreamRequestIdHash": boundedHash,
   });
-}
-
-function clampOtelLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
-}
-
-function normalizeOtelLogString(value: string, maxChars: number): string {
-  return clampOtelLogText(redactSensitiveText(value), maxChars);
-}
-
-function normalizeOtelErrorMessage(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = normalizeOtelLogString(value.trim(), MAX_OTEL_ERROR_MESSAGE_CHARS);
-  return normalized || undefined;
-}
-
-function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
-  if (value === true) {
-    return {
-      inputMessages: true,
-      outputMessages: true,
-      toolInputs: true,
-      toolOutputs: true,
-      systemPrompt: false,
-      toolDefinitions: true,
-      logBodies: true,
-    };
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return NO_CONTENT_CAPTURE;
-  }
-
-  const config = value as Record<string, unknown>;
-  if (config.enabled !== true) {
-    return NO_CONTENT_CAPTURE;
-  }
-  return {
-    inputMessages: config.inputMessages === true,
-    outputMessages: config.outputMessages === true,
-    toolInputs: config.toolInputs === true,
-    toolOutputs: config.toolOutputs === true,
-    systemPrompt: config.systemPrompt === true,
-    toolDefinitions: config.toolDefinitions === true,
-    logBodies: false,
-  };
-}
-
-function hasPreloadedOtelSdk(): boolean {
-  return process.env[PRELOADED_OTEL_SDK_ENV] === "1";
-}
-
-function normalizeOtelContentValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return normalizeOtelLogString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  }
-  if (Array.isArray(value)) {
-    const items: string[] = [];
-    for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
-      if (typeof item === "string") {
-        items.push(item);
-      }
-    }
-    if (items.length > 0) {
-      return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-    }
-  }
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  if (json) {
-    return json;
-  }
-  return undefined;
-}
-
-const TRUNCATED_JSON_TEXT_SUFFIX = "...(truncated)";
-const JSON_TRUNCATION_STRING_BUDGETS = [8192, 4096, 2048, 1024, 512, 256, 128, 64, 32] as const;
-const JSON_TRUNCATION_ARRAY_ITEM_BUDGETS = [
-  MAX_OTEL_CONTENT_ARRAY_ITEMS,
-  100,
-  50,
-  25,
-  10,
-  5,
-  1,
-] as const;
-const JSON_TRUNCATION_MAX_OBJECT_FIELDS = 64;
-const JSON_TRUNCATION_MAX_DEPTH = 8;
-
-type JsonTruncationOptions = {
-  maxArrayItems: number;
-  maxDepth: number;
-  maxObjectFields: number;
-  maxStringChars: number;
-  seen: WeakSet<object>;
-};
-
-function safeJsonString(value: unknown, maxChars: number): string | undefined {
-  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
-    return undefined;
-  }
-  const exact = stringifyJsonForOtelAttribute(value);
-  if (exact && exact.length <= maxChars) {
-    return exact;
-  }
-  for (const maxArrayItems of JSON_TRUNCATION_ARRAY_ITEM_BUDGETS) {
-    for (const maxStringChars of JSON_TRUNCATION_STRING_BUDGETS) {
-      const candidate = truncateJsonValueForOtelAttribute(value, {
-        maxArrayItems,
-        maxDepth: JSON_TRUNCATION_MAX_DEPTH,
-        maxObjectFields: JSON_TRUNCATION_MAX_OBJECT_FIELDS,
-        maxStringChars,
-        seen: new WeakSet<object>(),
-      });
-      const json = stringifyJsonForOtelAttribute(candidate);
-      if (json && json.length <= maxChars) {
-        return json;
-      }
-    }
-  }
-  const summary = stringifyJsonForOtelAttribute({
-    truncated: true,
-    reason: exact ? "max_attribute_size" : "unserializable_value",
-    type: describeJsonValue(value),
-  });
-  return summary && summary.length <= maxChars ? summary : undefined;
-}
-
-function stringifyJsonForOtelAttribute(value: unknown): string | undefined {
-  try {
-    const json = JSON.stringify(value);
-    if (!json) {
-      return undefined;
-    }
-    return redactSensitiveText(json);
-  } catch {
-    return undefined;
-  }
-}
-
-function truncateJsonValueForOtelAttribute(
-  value: unknown,
-  options: JsonTruncationOptions,
-): unknown {
-  if (typeof value === "string") {
-    return truncateJsonTextForOtelAttribute(value, options.maxStringChars);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
-    return value;
-  }
-  if (typeof value === "bigint") {
-    return truncateJsonTextForOtelAttribute(String(value), options.maxStringChars);
-  }
-  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
-    return undefined;
-  }
-  if (options.maxDepth <= 0) {
-    return { truncated: true, reason: "max_depth" };
-  }
-  if (Array.isArray(value)) {
-    return truncateJsonArrayForOtelAttribute(value, options);
-  }
-  if (typeof value === "object") {
-    return truncateJsonObjectForOtelAttribute(value as Record<string, unknown>, options);
-  }
-  return undefined;
-}
-
-function truncateJsonArrayForOtelAttribute(
-  value: readonly unknown[],
-  options: JsonTruncationOptions,
-): unknown[] {
-  if (options.seen.has(value)) {
-    return [{ truncated: true, reason: "circular_reference" }];
-  }
-  options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const items = value
-    .slice(0, options.maxArrayItems)
-    .map((item) => truncateJsonValueForOtelAttribute(item, nextOptions));
-  if (value.length > items.length) {
-    items.push({ truncated: true, omittedItems: value.length - items.length });
-  }
-  options.seen.delete(value);
-  return items;
-}
-
-function truncateJsonObjectForOtelAttribute(
-  value: Record<string, unknown>,
-  options: JsonTruncationOptions,
-): Record<string, unknown> {
-  if (options.seen.has(value)) {
-    return { truncated: true, reason: "circular_reference" };
-  }
-  options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const result: Record<string, unknown> = {};
-  const entries = Object.entries(value).filter(
-    ([, field]) => field !== undefined && typeof field !== "function" && typeof field !== "symbol",
-  );
-  for (const [key, field] of entries.slice(0, options.maxObjectFields)) {
-    result[key] = truncateJsonValueForOtelAttribute(field, nextOptions);
-  }
-  if (entries.length > options.maxObjectFields) {
-    result.truncated = true;
-    result.omittedFields = entries.length - options.maxObjectFields;
-  }
-  options.seen.delete(value);
-  return result;
-}
-
-function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {
-  const redacted = redactSensitiveText(value);
-  if (redacted.length <= maxChars) {
-    return redacted;
-  }
-  const suffixBudget = Math.min(TRUNCATED_JSON_TEXT_SUFFIX.length, maxChars);
-  const prefixBudget = Math.max(0, maxChars - suffixBudget);
-  return `${truncateUtf16Safe(redacted, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
-    TRUNCATED_JSON_TEXT_SUFFIX.length - suffixBudget,
-  )}`;
-}
-
-function describeJsonValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return "array";
-  }
-  if (value === null) {
-    return "null";
-  }
-  return typeof value;
-}
-
-function textPart(content: string): Record<string, unknown> {
-  return { type: "text", content };
-}
-
-// Shared text-part reading for gen_ai message normalization: OpenClaw emits
-// {type:"text", text}; some harness shapes carry {type:"text", content}.
-function textPartContent(part: Record<string, unknown>): string | undefined {
-  if (part.type !== "text") {
-    return undefined;
-  }
-  if (typeof part.text === "string") {
-    return part.text;
-  }
-  return typeof part.content === "string" ? part.content : undefined;
-}
-
-// Tool results usually arrive as arrays of text parts. Flatten pure-text arrays
-// into one plain string so the part's `response` renders as readable text in
-// trace viewers; mixed/structured results keep their raw (bounded, redacted) shape.
-function toolCallResponseValue(value: unknown): unknown {
-  if (!Array.isArray(value)) {
-    return value;
-  }
-  const textItems: string[] = [];
-  for (const item of value) {
-    const text =
-      typeof item === "string" ? item : isRecord(item) ? textPartContent(item) : undefined;
-    if (typeof text !== "string") {
-      return value;
-    }
-    textItems.push(text);
-  }
-  const kept = textItems.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS);
-  const joined = kept.filter((text) => text.length > 0).join("\n");
-  if (joined.length === 0) {
-    return value;
-  }
-  const omitted = textItems.length - kept.length;
-  return omitted > 0 ? `${joined}\n...(${omitted} more text parts omitted)` : joined;
-}
-
-function toolCallResponsePart(part: Record<string, unknown>): Record<string, unknown> {
-  return {
-    type: "tool_call_response",
-    ...(typeof part.id === "string" ? { id: part.id } : {}),
-    // Semconv gen_ai.*.messages requires the `response` key on tool_call_response
-    // parts (gen-ai-input-messages.json, since v1.37). Schema-validating viewers
-    // (e.g. Phoenix) silently drop parts keyed `result`, hiding tool output.
-    response: toolCallResponseValue(
-      part.response ?? part.result ?? part.content ?? part.details ?? "",
-    ),
-  };
-}
-
-function contentParts(value: unknown): Record<string, unknown>[] {
-  if (typeof value === "string") {
-    return value.length > 0 ? [textPart(value)] : [];
-  }
-  if (!Array.isArray(value)) {
-    if (value === undefined || value === null) {
-      return [];
-    }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      return [textPart(String(value))];
-    }
-    const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-    return json ? [textPart(json)] : [];
-  }
-  const parts: Record<string, unknown>[] = [];
-  for (const part of value) {
-    if (typeof part === "string") {
-      if (part.length > 0) {
-        parts.push(textPart(part));
-      }
-      continue;
-    }
-    if (!isRecord(part)) {
-      continue;
-    }
-    const text = textPartContent(part);
-    if (text !== undefined) {
-      parts.push(textPart(text));
-    } else if (part.type === "thinking" && typeof part.thinking === "string") {
-      parts.push({ type: "reasoning", content: part.thinking });
-    } else if (part.type === "toolCall" && typeof part.name === "string") {
-      parts.push({
-        type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
-      });
-    } else if (part.type === "tool_call" && typeof part.name === "string") {
-      parts.push({
-        type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
-      });
-    } else if (part.type === "tool_call_response") {
-      parts.push(toolCallResponsePart(part));
-    } else if (part.type === "image") {
-      const data = typeof part.data === "string" ? part.data : undefined;
-      parts.push({
-        type: "blob",
-        modality: "image",
-        ...(typeof part.mimeType === "string" ? { mime_type: part.mimeType } : {}),
-        ...(typeof part.mime_type === "string" ? { mime_type: part.mime_type } : {}),
-        ...(data ? { content: data } : {}),
-      });
-    }
-  }
-  return parts;
-}
-
-function normalizeGenAiMessage(
-  value: unknown,
-  fallbackRole = "user",
-): Record<string, unknown> | undefined {
-  if (typeof value === "string") {
-    return { role: fallbackRole, parts: [textPart(value)] };
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const rawRole = typeof value.role === "string" ? value.role : fallbackRole;
-  const role = rawRole === "toolResult" ? "tool" : rawRole;
-  let parts: Record<string, unknown>[];
-  if (role === "tool") {
-    const explicitParts = contentParts(value.parts);
-    parts =
-      explicitParts.length > 0
-        ? explicitParts
-        : [
-            toolCallResponsePart({
-              id: value.toolCallId,
-              response: value.content ?? value.details ?? "",
-            }),
-          ];
-  } else {
-    parts = contentParts(value.parts ?? value.content);
-  }
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return {
-    role,
-    parts,
-    ...(typeof value.name === "string" ? { name: value.name } : {}),
-    ...(typeof value.finish_reason === "string" ? { finish_reason: value.finish_reason } : {}),
-    ...(typeof value.stopReason === "string" ? { finish_reason: value.stopReason } : {}),
-  };
-}
-
-function normalizeGenAiMessages(value: unknown, fallbackRole: "user" | "assistant") {
-  const source = Array.isArray(value) ? value : value === undefined ? [] : [value];
-  const messages: Record<string, unknown>[] = [];
-  for (const item of source.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
-    const message = normalizeGenAiMessage(item, fallbackRole);
-    if (message) {
-      messages.push(message);
-    }
-  }
-  return messages;
-}
-
-function normalizeGenAiToolDefinition(value: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(value) || typeof value.name !== "string" || value.name.trim().length === 0) {
-    return undefined;
-  }
-  return {
-    type: typeof value.type === "string" ? value.type : "function",
-    name: value.name,
-    ...(typeof value.description === "string" ? { description: value.description } : {}),
-    ...(value.parameters !== undefined ? { parameters: value.parameters } : {}),
-  };
-}
-
-function normalizeGenAiToolDefinitions(value: unknown) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const definitions: Record<string, unknown>[] = [];
-  for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
-    const definition = normalizeGenAiToolDefinition(item);
-    if (definition) {
-      definitions.push(definition);
-    }
-  }
-  return definitions;
-}
-
-function assignJsonAttribute(
-  attributes: Record<string, string | number | boolean>,
-  key: string,
-  value: unknown,
-): void {
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  if (json) {
-    attributes[key] = json;
-  }
-}
-
-function assignGenAiModelContentAttributes(
-  attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
-): void {
-  if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
-    const systemInstructions = [textPart(content.systemPrompt)];
-    assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
-  }
-  if (policy.inputMessages) {
-    const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
-    if (inputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
-      assignJsonAttribute(attributes, "input.value", inputMessages);
-      attributes["input.mime_type"] = "application/json";
-    }
-  }
-  if (policy.toolDefinitions) {
-    const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
-    if (toolDefinitions.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
-    }
-  }
-  if (policy.outputMessages) {
-    const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
-    if (outputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
-      assignJsonAttribute(attributes, "output.value", outputMessages);
-      attributes["output.mime_type"] = "application/json";
-    }
-  }
-}
-
-function assignOtelContentAttribute(
-  attributes: Record<string, string | number | boolean>,
-  key: string,
-  value: unknown,
-): void {
-  const normalized = normalizeOtelContentValue(value);
-  if (normalized) {
-    attributes[key] = normalized;
-  }
-}
-
-function assignOtelToolIdentityAttributes(
-  attributes: Record<string, string | number | boolean>,
-  evt: { toolCallId?: string },
-): void {
-  // Semconv execute_tool identity, span-only by design: metric attrs must stay
-  // low-cardinality, and unlike the dropped openclaw.toolCallId passthrough keys
-  // (DROPPED_OTEL_ATTRIBUTE_KEYS) the semconv id is a deliberate per-span export.
-  attributes["gen_ai.operation.name"] = GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL;
-  const toolCallId = evt.toolCallId?.trim();
-  if (toolCallId) {
-    attributes[ATTR_GEN_AI_TOOL_CALL_ID] = toolCallId;
-  }
-}
-
-function assignOtelModelContentAttributes(
-  attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
-): void {
-  assignGenAiModelContentAttributes(attributes, content, policy);
-  if (policy.inputMessages) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.input_messages",
-      content?.inputMessages,
-    );
-  }
-  if (policy.toolDefinitions) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.tool_definitions",
-      content?.toolDefinitions,
-    );
-  }
-  if (policy.outputMessages) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.output_messages",
-      content?.outputMessages,
-    );
-  }
-  if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
-  }
-}
-
-function assignOtelToolContentAttributes(
-  attributes: Record<string, string | number | boolean>,
-  content: OtelToolCallContent | undefined,
-  policy: OtelContentCapturePolicy,
-): void {
-  // Mirror captured content onto the semconv keys next to the shipped
-  // openclaw.content.* names; normalize once so both copies stay byte-identical.
-  if (policy.toolInputs) {
-    const toolInput = normalizeOtelContentValue(content?.toolInput);
-    if (toolInput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = toolInput;
-      attributes["openclaw.content.tool_input"] = toolInput;
-    }
-  }
-  if (policy.toolOutputs) {
-    const toolOutput = normalizeOtelContentValue(content?.toolOutput);
-    if (toolOutput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_RESULT] = toolOutput;
-      attributes["openclaw.content.tool_output"] = toolOutput;
-    }
-  }
 }
 
 function assignOtelLogAttribute(

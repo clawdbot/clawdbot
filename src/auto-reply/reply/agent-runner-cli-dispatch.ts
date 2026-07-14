@@ -147,12 +147,12 @@ function createAssistantTextBridge(params: {
   });
 }
 
-export type ReasoningTextPayload = {
+type ReasoningTextPayload = {
   text: string;
   isReasoningSnapshot?: boolean;
 };
 
-export type ReasoningProgressPayload = {
+type ReasoningProgressPayload = {
   progressTokens: number;
 };
 

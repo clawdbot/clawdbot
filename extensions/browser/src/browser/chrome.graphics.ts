@@ -17,7 +17,7 @@ import type {
 
 type UnknownRecord = Record<string, unknown>;
 
-export type ChromeGraphicsProbeOptions = {
+type ChromeGraphicsProbeOptions = {
   httpTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;
@@ -165,7 +165,7 @@ function classifyGraphicsAcceleration(params: {
   return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
-export function normalizeChromeGraphicsInfo(
+function normalizeChromeGraphicsInfo(
   value: unknown,
   observedAt = Date.now(),
 ): BrowserGraphicsDiagnostics {

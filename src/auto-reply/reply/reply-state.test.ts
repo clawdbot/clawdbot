@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
-  appendHistoryEntry,
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
@@ -133,19 +132,19 @@ describe("history helpers", () => {
   it("trims history to configured limit", () => {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
 
-    appendHistoryEntry({
+    recordPendingHistoryEntryIfEnabled({
       historyMap,
       historyKey: "group",
       limit: 2,
       entry: { sender: "A", body: "one" },
     });
-    appendHistoryEntry({
+    recordPendingHistoryEntryIfEnabled({
       historyMap,
       historyKey: "group",
       limit: 2,
       entry: { sender: "B", body: "two" },
     });
-    appendHistoryEntry({
+    recordPendingHistoryEntryIfEnabled({
       historyMap,
       historyKey: "group",
       limit: 2,

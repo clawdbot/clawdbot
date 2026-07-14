@@ -7,6 +7,7 @@ import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -14,6 +15,11 @@ import {
   expectOpenClawLiveTranscriptMarker,
   runRealtimeSttLiveTest,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  type RealtimeVoiceBridge,
+  type RealtimeVoiceBridgeEvent,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -97,6 +103,16 @@ const registerXaiPlugin = () =>
     name: "xAI Provider",
   });
 
+function registerXaiRealtimeVoiceProvider() {
+  const captured = createCapturedPluginRegistration({
+    id: "xai",
+    name: "xAI Provider",
+    source: "test",
+  });
+  plugin.register(captured.api);
+  return requireRegisteredProvider(captured.realtimeVoiceProviders, "xai");
+}
+
 function registerXaiToolFactories(): Map<string, OpenClawPluginToolFactory> {
   const factories = new Map<string, OpenClawPluginToolFactory>();
   plugin.register(
@@ -121,6 +137,24 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
       return;
     }
     throw error;
+  }
+}
+
+async function waitForXaiLive(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 45_000,
+  describeState?: () => string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      const state = describeState?.();
+      throw new Error(`xAI live timeout waiting for ${label}${state ? ` (${state})` : ""}`);
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
 }
 
@@ -266,6 +300,38 @@ describeLive("xai plugin live", () => {
       expect(audioFile.fileExtension).toBe(".mp3");
       expect(audioFile.voiceCompatible).toBe(false);
       expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
+
+      const streaming = await speechProvider.streamSynthesize?.({
+        text: "OpenClaw xAI streaming text to speech integration test OK.",
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "altair",
+        },
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+      if (!streaming) {
+        throw new Error("xAI streaming TTS did not return an audio stream");
+      }
+      try {
+        const reader = streaming.audioStream.getReader();
+        let streamedBytes = 0;
+        while (true) {
+          const result = await reader.read();
+          if (result.done) {
+            break;
+          }
+          streamedBytes += result.value.byteLength;
+        }
+        expect(streamedBytes).toBeGreaterThan(512);
+        expect(streaming.outputFormat).toBe("mp3");
+        expect(streaming.fileExtension).toBe(".mp3");
+        expect(streaming.voiceCompatible).toBe(false);
+      } finally {
+        await streaming.release?.();
+      }
 
       const telephony = await speechProvider.synthesizeTelephony?.({
         text: "OpenClaw xAI telephony check OK.",
@@ -414,6 +480,244 @@ describeLive("xai plugin live", () => {
       expect(partials.length + transcripts.length).toBeGreaterThan(0);
     });
   }, 180_000);
+
+  it("runs realtime voice audio, tool, barge-in, and resumed-context flow", async () => {
+    const { speechProviders } = await registerXaiPlugin();
+    const realtimeProvider = registerXaiRealtimeVoiceProvider();
+    const speechProvider = requireRegisteredProvider(speechProviders, "xai");
+    const cfg = createLiveConfig();
+    const marker = "OPENCLAW_XAI_RESUME_42";
+    const input = await speechProvider.synthesizeTelephony?.({
+      text: "Stop counting now.",
+      cfg,
+      providerConfig: {
+        apiKey: XAI_API_KEY,
+        baseUrl: "https://api.x.ai/v1",
+        voiceId: "altair",
+      },
+      timeoutMs: 90_000,
+    });
+    if (!input) {
+      throw new Error("xAI realtime voice live input synthesis did not return audio");
+    }
+    expect(input.outputFormat).toBe("pcm");
+    expect(input.sampleRate).toBe(24_000);
+
+    const clientEvents: string[] = [];
+    const serverEvents: string[] = [];
+    const realtimeEvents: RealtimeVoiceBridgeEvent[] = [];
+    const finalAssistantTranscripts: string[] = [];
+    const finalUserTranscripts: string[] = [];
+    const toolCalls: Array<{ callId: string; name: string }> = [];
+    const clearAudioReasons: Array<string | undefined> = [];
+    const errors: Error[] = [];
+    let outputAudioBytes = 0;
+    let holdPlaybackMarks = false;
+    let holdNextResponseMarks = false;
+    const bridge: RealtimeVoiceBridge = realtimeProvider.createBridge({
+      cfg,
+      providerConfig: {
+        apiKey: XAI_API_KEY,
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-voice-latest",
+        voice: "eve",
+        sessionResumption: true,
+        vadThreshold: 0.1,
+        silenceDurationMs: 1200,
+      },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      instructions:
+        "Reply briefly to spoken input. When a text message asks to call the live probe, call openclaw_live_probe. After a tool result, say its marker exactly.",
+      tools: [
+        {
+          type: "function",
+          name: "openclaw_live_probe",
+          description: "Return the live validation marker.",
+          parameters: {
+            type: "object",
+            properties: { token: { type: "string" } },
+            required: ["token"],
+          },
+        },
+      ],
+      onAudio: (audio) => {
+        outputAudioBytes += audio.byteLength;
+      },
+      onClearAudio: (reason) => {
+        clearAudioReasons.push(reason);
+        if (reason === "barge-in") {
+          holdPlaybackMarks = false;
+        }
+      },
+      onMark: (markName) => {
+        if (!holdPlaybackMarks) {
+          bridge.acknowledgeMark(markName);
+        }
+      },
+      onTranscript: (role, text, isFinal) => {
+        if (role === "assistant" && isFinal) {
+          finalAssistantTranscripts.push(text);
+        }
+        if (role === "user" && isFinal) {
+          finalUserTranscripts.push(text);
+        }
+      },
+      onEvent: (event) => {
+        realtimeEvents.push(event);
+        (event.direction === "client" ? clientEvents : serverEvents).push(event.type);
+        if (
+          event.direction === "server" &&
+          event.type === "response.created" &&
+          holdNextResponseMarks
+        ) {
+          holdPlaybackMarks = true;
+          holdNextResponseMarks = false;
+        }
+      },
+      onToolCall: (event) => toolCalls.push({ callId: event.callId, name: event.name }),
+      onError: (error) => errors.push(error),
+    });
+
+    try {
+      await bridge.connect();
+      const chunkBytes = 24_000 * 2 * 0.1;
+      const audioBytesBeforeBargeIn = outputAudioBytes;
+      const targetEventStart = realtimeEvents.length;
+      bridge.setMediaTimestamp(1000);
+      holdNextResponseMarks = true;
+      bridge.sendUserMessage?.(
+        "Count slowly from one to one hundred without stopping until interrupted.",
+      );
+      await waitForXaiLive(
+        "barge-in target audio",
+        () =>
+          realtimeEvents
+            .slice(targetEventStart)
+            .some((event) => event.direction === "server" && event.type === "response.created") &&
+          outputAudioBytes > audioBytesBeforeBargeIn + 512,
+      );
+      const bargeInClientEventStart = clientEvents.length;
+      const bargeInServerEventStart = serverEvents.length;
+      const bargeInRealtimeEventStart = realtimeEvents.length;
+      const userTranscriptsBeforeBargeIn = finalUserTranscripts.length;
+      bridge.setMediaTimestamp(1250);
+      // Stream the interruption first so xAI's server VAD drives the same
+      // speech-started barge-in path used by real microphone input.
+      for (let offset = 0; offset < input.audioBuffer.length; offset += chunkBytes) {
+        bridge.sendAudio(input.audioBuffer.subarray(offset, offset + chunkBytes));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+      }
+      for (let index = 0; index < 20; index += 1) {
+        bridge.sendAudio(Buffer.alloc(chunkBytes));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+      }
+      await waitForXaiLive(
+        "server-VAD audio barge-in",
+        () => {
+          const serverBargeInEvents = new Set(serverEvents.slice(bargeInServerEventStart));
+          return (
+            serverBargeInEvents.has("input_audio_buffer.speech_started") &&
+            serverBargeInEvents.has("conversation.item.truncated") &&
+            clientEvents.slice(bargeInClientEventStart).includes("conversation.item.truncate") &&
+            clearAudioReasons.includes("barge-in")
+          );
+        },
+        45_000,
+        () =>
+          [
+            `server=${serverEvents.slice(-30).join(",")}`,
+            `client=${clientEvents.slice(-30).join(",")}`,
+            `userFinals=${finalUserTranscripts.length}`,
+            `responseDone=${serverEvents.filter((event) => event === "response.done").length}`,
+            `audioBytes=${outputAudioBytes}`,
+            `errors=${errors.map((error) => error.message).join("|")}`,
+          ].join(" "),
+      );
+      const bargeInClientEvents = clientEvents.slice(bargeInClientEventStart);
+      expect(bargeInClientEvents).not.toContain("response.cancel");
+      expect(bargeInClientEvents).toContain("conversation.item.truncate");
+      await waitForXaiLive(
+        "post-barge-in audio transcription",
+        () => finalUserTranscripts.length > userTranscriptsBeforeBargeIn,
+        45_000,
+        () =>
+          [
+            `server=${serverEvents.slice(-20).join(",")}`,
+            `client=${clientEvents.slice(-20).join(",")}`,
+            `userFinals=${finalUserTranscripts.length}`,
+            `responseDone=${serverEvents.filter((event) => event === "response.done").length}`,
+            `audioBytes=${outputAudioBytes}`,
+            `errors=${errors.map((error) => error.message).join("|")}`,
+          ].join(" "),
+      );
+      await waitForXaiLive(
+        "barge-in completion",
+        () => {
+          const responseEvents = realtimeEvents
+            .slice(bargeInRealtimeEventStart)
+            .filter((event) => event.direction === "server");
+          const postBargeResponseId = responseEvents.find(
+            (event) => event.type === "response.created",
+          )?.responseId;
+          return Boolean(
+            postBargeResponseId &&
+            responseEvents.some(
+              (event) =>
+                event.type === "response.done" &&
+                event.responseId === postBargeResponseId &&
+                event.detail?.includes("status=completed"),
+            ),
+          );
+        },
+        45_000,
+        () =>
+          realtimeEvents
+            .slice(bargeInRealtimeEventStart)
+            .filter((event) => event.direction === "server")
+            .map(
+              (event) =>
+                `${event.type}:${event.responseId ?? "none"}:${event.detail ?? "no-detail"}`,
+            )
+            .join(","),
+      );
+      expect(
+        finalUserTranscripts.slice(userTranscriptsBeforeBargeIn).join(" ").toLowerCase(),
+      ).toMatch(/stop|interrupt/);
+
+      bridge.sendUserMessage?.("Call openclaw_live_probe now with token bluebird.");
+      await waitForXaiLive("realtime tool call", () => toolCalls.length > 0);
+      expect(toolCalls[0]?.name).toBe("openclaw_live_probe");
+      await bridge.submitToolResult(toolCalls[0]?.callId ?? "", { marker });
+      await waitForXaiLive("tool-result audio", () =>
+        finalAssistantTranscripts.some((text) => text.includes(marker)),
+      );
+
+      const reconnectStart = clientEvents.length;
+      const socket = (bridge as unknown as { ws?: { terminate(): void } }).ws;
+      if (!socket) {
+        throw new Error("xAI realtime voice live bridge has no active WebSocket");
+      }
+      socket.terminate();
+      await waitForXaiLive("resumed reconnect", () =>
+        clientEvents.slice(reconnectStart).includes("session.reconnect.ready"),
+      );
+
+      const transcriptStart = finalAssistantTranscripts.length;
+      bridge.sendUserMessage?.(
+        "What exact marker did the live probe return earlier? Reply with only that marker.",
+      );
+      await waitForXaiLive("resumed marker recall", () =>
+        finalAssistantTranscripts.slice(transcriptStart).some((text) => text.includes(marker)),
+      );
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+    }
+  }, 240_000);
 
   it("generates and edits images through the registered image provider", async () => {
     await runXaiLiveCase("image", async () => {

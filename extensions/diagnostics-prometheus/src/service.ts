@@ -1065,4 +1065,3 @@ export const testApi = {
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
-export { testApi as __test__ };

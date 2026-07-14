@@ -295,7 +295,7 @@ function containsLetterOrNumber(value: string): boolean {
   return LETTER_OR_NUMBER_RE.test(value);
 }
 
-export function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
+function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
   const hasLatin = LATIN_RE.test(normalized);
   const hasCjk =

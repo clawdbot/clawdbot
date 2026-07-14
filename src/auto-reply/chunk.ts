@@ -97,8 +97,8 @@ function resolveChunkModeForProvider(
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
     // resolveChannelStreamingChunkMode owns nested-first/flat-fallback
-    // precedence (flat `chunkMode` stays canonical for channels without a
-    // nested streaming schema). Do not re-read flat keys here.
+    // precedence (the flat `chunkMode` fallback serves external SDK plugin
+    // configs during the deprecation window). Do not re-read flat keys here.
     const directMode = resolveChannelStreamingChunkMode(direct);
     if (directMode) {
       return directMode;

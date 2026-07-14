@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { formatBuildChipText } from "./sidebar-build-chip.ts";
+import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
 
 const COMMIT = "e8cbc62f0123456789abcdef0123456789abcdef";
 const BUILT_AT = "2026-07-10T12:00:00.000Z";

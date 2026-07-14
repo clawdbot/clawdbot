@@ -40,6 +40,7 @@ import {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
+  listSqliteSessionEntriesByStatus,
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   forkSqliteSessionEntryFromParentTarget,
@@ -71,6 +72,16 @@ import {
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
+import {
+  cloneOptionalSessionEntry as cloneOptionalEntry,
+  normalizeTargetStoreKeys,
+  resolveFreshestTargetEntry,
+  resolveProjectionExistingEntry,
+} from "./session-entry-selection.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -117,6 +128,10 @@ export type {
   SessionIdentityMutationListener,
   SessionIdentityMutationTarget,
 } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -161,6 +176,7 @@ export type LogicalSessionAccessScope = {
 };
 
 type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;
+type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */
@@ -379,6 +395,10 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
+  /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
+  /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Controls whether the update event includes the last appended message. */
@@ -1106,6 +1126,14 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
   return listSqliteSessionEntries(scope);
 }
 
+/** Lists entries selected by the indexed normalized session status. */
+export function listSessionEntriesByStatus(
+  scope: SessionEntryListScope,
+  statuses: readonly SessionEntryStatus[],
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesByStatus(scope, statuses);
+}
+
 /**
  * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
  * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
@@ -1264,44 +1292,6 @@ export async function canonicalizeSessionEntryAliases(params: {
     canonicalKey: params.target.canonicalKey,
     ...(entry ? { entry: cloneOptionalEntry(entry) } : {}),
   };
-}
-
-// Normalizes caller-supplied alias sets while always preserving the canonical key.
-function normalizeTargetStoreKeys(target: SessionLifecycleStoreTarget): string[] {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
-  };
-  remember(target.canonicalKey);
-  for (const key of target.storeKeys) {
-    remember(key);
-  }
-  return [...keys];
-}
-
-// Selects the row that current JSON-store alias migration would promote.
-function resolveFreshestTargetEntry(
-  store: Record<string, SessionEntry>,
-  targetKeys: readonly string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of targetKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = { key, entry };
-    }
-  }
-  return freshest;
-}
-
-function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
-  return entry ? structuredClone(entry) : undefined;
 }
 
 /**
@@ -1841,24 +1831,6 @@ export async function applySessionPatchProjection<
   return { ...projected, entry: structuredClone(projected.entry) };
 }
 
-function resolveProjectionExistingEntry(
-  entries: readonly { sessionKey: string; entry: SessionEntry }[],
-  target: SessionPatchProjectionTarget,
-): SessionEntry | undefined {
-  const candidateKeys = target.candidateKeys ?? [target.primaryKey];
-  let freshest: SessionEntry | undefined;
-  for (const candidateKey of candidateKeys) {
-    const entry = entries.find((candidate) => candidate.sessionKey === candidateKey)?.entry;
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
-      freshest = entry;
-    }
-  }
-  return freshest ? structuredClone(freshest) : undefined;
-}
-
 /**
  * Applies explicit entry replacements without exposing the backing store shape.
  * The file backend runs selection and replacement under one writer lock; the
@@ -1868,6 +1840,8 @@ export async function applySessionEntryReplacements<T>(params: {
   activeSessionKey?: string;
   /** Limits snapshots and replacement authority to these exact persisted keys. */
   sessionKeys?: readonly string[];
+  /** Limits snapshots and replacement authority to normalized session statuses. */
+  statuses?: readonly SessionEntryStatus[];
   storePath: string;
   update: (
     entries: SessionEntryReplacementSnapshot[],
@@ -2660,6 +2634,9 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
+  if (options.sessionLifecyclePatch) {
+    throw new Error("Cannot patch session lifecycle without an expected session id");
+  }
   const target = await resolveTranscriptTurnTarget(scope);
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
@@ -2797,8 +2774,10 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision: options.expectedLifecycleRevision,
+          expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           messages: options.messages,
+          sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionFile: target.sessionFile,
           touchSessionEntry: options.touchSessionEntry,
         },

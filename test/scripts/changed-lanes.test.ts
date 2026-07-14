@@ -2080,6 +2080,19 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("adds the changed-file LOC ratchet with worktree and staged scopes", () => {
+    const result = detectChangedLanes(["src/runtime.ts"]);
+    const worktreePlan = createChangedCheckPlan(result, { base: "main", head: "feature" });
+    const stagedPlan = createChangedCheckPlan(result, { staged: true });
+
+    expect(
+      worktreePlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
+    ).toMatchObject({ args: ["check:loc", "--base", "main", "--", "src/runtime.ts"] });
+    expect(
+      stagedPlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
+    ).toMatchObject({ args: ["check:loc", "--staged", "--", "src/runtime.ts"] });
+  });
+
   it("keeps the temp creation report out of non-test changed paths", () => {
     const result = detectChangedLanes(["scripts/check-changed.mjs"]);
     const plan = createChangedCheckPlan(result);

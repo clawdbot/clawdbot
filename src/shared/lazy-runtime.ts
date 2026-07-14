@@ -1,7 +1,6 @@
 import { createLazyPromiseLoader } from "./lazy-promise.js";
 
 export { createLazyPromise, createLazyPromiseLoader } from "./lazy-promise.js";
-export type { LazyPromiseLoader } from "./lazy-promise.js";
 
 type LazyRuntimeLoader<T> = (() => Promise<T>) & {
   peek: () => Promise<T> | undefined;

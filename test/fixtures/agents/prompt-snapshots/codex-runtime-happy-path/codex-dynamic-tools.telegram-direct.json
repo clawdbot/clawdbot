@@ -1244,7 +1244,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit/offset/tool messages.",
+        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
         "inputSchema": {
           "properties": {
             "includeTools": {
@@ -1254,9 +1254,17 @@
               "minimum": 1,
               "type": "integer"
             },
+            "messageId": {
+              "minLength": 1,
+              "type": "string"
+            },
             "offset": {
               "minimum": 0,
               "type": "integer"
+            },
+            "sessionId": {
+              "minLength": 1,
+              "type": "string"
             },
             "sessionKey": {
               "type": "string"
@@ -1270,7 +1278,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey for full context.",
+        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
         "inputSchema": {
           "properties": {
             "limit": {

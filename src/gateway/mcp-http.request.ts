@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getHeader } from "./http-utils.js";
 import {
   resolveAttachGrant,
@@ -290,7 +291,7 @@ export async function readMcpHttpBody(
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? MAX_MCP_BODY_BYTES));
-    const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS));
+    const timeoutMs = resolveSafeTimeoutDelayMs(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS);
     const chunks: Buffer[] = [];
     let received = 0;
     let settled = false;

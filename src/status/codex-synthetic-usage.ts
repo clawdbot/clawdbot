@@ -7,8 +7,8 @@ import type {
   UsageSummary,
 } from "../infra/provider-usage.types.js";
 
-export const CODEX_SYNTHETIC_USAGE_PROVIDER = "openai";
-export const CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER = "codex";
+const CODEX_SYNTHETIC_USAGE_PROVIDER = "openai";
+const CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER = "codex";
 
 /** Maps a provider auth label onto the usage credential type buckets. */
 export function resolveUsageCredentialType(

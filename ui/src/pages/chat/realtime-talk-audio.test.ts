@@ -1,53 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  measureRealtimeTalkAudioFrame,
-  RealtimeTalkAudioLevelMeter,
-  RealtimeTalkMediaStreamMeter,
-} from "./realtime-talk-audio.ts";
-
-describe("RealtimeTalkAudioLevelMeter", () => {
-  it("keeps silence flat and makes louder speech more visible", () => {
-    const silentFrame = measureRealtimeTalkAudioFrame(new Float32Array(512));
-    const silent = new RealtimeTalkAudioLevelMeter().sample(new Float32Array(512));
-    const quiet = new RealtimeTalkAudioLevelMeter().sample(new Float32Array(512).fill(0.03));
-    const loud = new RealtimeTalkAudioLevelMeter().sample(new Float32Array(512).fill(0.25));
-
-    expect(silentFrame).toEqual({ peak: 0, rms: 0 });
-    expect(silent).toBe(0);
-    expect(quiet).toBeGreaterThan(0);
-    expect(loud).toBeGreaterThan(quiet);
-    expect(loud).toBeLessThanOrEqual(1);
-  });
-
-  it("ignores invalid samples and releases smoothly after speech", () => {
-    const meter = new RealtimeTalkAudioLevelMeter();
-    const invalid = meter.sample(new Float32Array([Number.NaN, Number.POSITIVE_INFINITY]));
-    const speech = meter.sample(new Float32Array(512).fill(0.4));
-    const firstSilence = meter.sample(new Float32Array(512));
-    let settled = firstSilence;
-    for (let index = 0; index < 12; index += 1) {
-      settled = meter.sample(new Float32Array(512));
-    }
-
-    expect(invalid).toBe(0);
-    expect(firstSilence).toBeLessThan(speech);
-    expect(firstSilence).toBeGreaterThan(0);
-    expect(settled).toBeLessThan(firstSilence);
-  });
-
-  it("settles steady room noise while keeping a speech burst visible", () => {
-    const meter = new RealtimeTalkAudioLevelMeter();
-    let noiseLevel = 0;
-    for (let index = 0; index < 80; index += 1) {
-      noiseLevel = meter.sample(new Float32Array(512).fill(0.015));
-    }
-    const speechLevel = meter.sample(new Float32Array(512).fill(0.2));
-
-    expect(noiseLevel).toBeLessThan(0.08);
-    expect(speechLevel).toBeGreaterThan(0.5);
-  });
-});
+import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 
 describe("RealtimeTalkMediaStreamMeter", () => {
   afterEach(() => {

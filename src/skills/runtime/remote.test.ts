@@ -6,7 +6,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
-import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "./refresh.js";
+import { getSkillsSnapshotVersion } from "./refresh-state.js";
+import { resetSkillsRefreshForTest } from "./refresh.js";
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,

@@ -1,12 +1,9 @@
 // Memory Wiki plugin module implements obsidian behavior.
-import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-
-const execFileAsync = promisify(execFile);
 
 type ObsidianCliProbe = {
   available: boolean;
@@ -21,7 +18,11 @@ type ObsidianCliResult = {
 };
 
 type ObsidianCliDeps = {
-  exec?: typeof execFileAsync;
+  exec?: (
+    command: string,
+    args: string[],
+    options: { encoding: "utf8" },
+  ) => Promise<{ stdout: string; stderr: string }>;
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
@@ -80,13 +81,14 @@ async function runObsidianCli(params: {
   deps?: ObsidianCliDeps;
 }): Promise<ObsidianCliResult> {
   const resolveCommand = params.deps?.resolveCommand ?? resolveCommandOnPath;
-  const exec = params.deps?.exec ?? execFileAsync;
   const probe = await probeObsidianCli({ resolveCommand });
   if (!probe.command) {
     throw new Error("Obsidian CLI is not available on PATH.");
   }
   const argv = [...buildVaultPrefix(params.config), params.subcommand, ...(params.args ?? [])];
-  const { stdout, stderr } = await exec(probe.command, argv, { encoding: "utf8" });
+  const { stdout, stderr } = params.deps?.exec
+    ? await params.deps.exec(probe.command, argv, { encoding: "utf8" })
+    : await runExec(probe.command, argv, { logOutput: false });
   return {
     command: probe.command,
     argv,

@@ -1000,7 +1000,7 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint:
-        "Required for WhatsApp + Telegram. Bun can corrupt memory on reconnect.",
+        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

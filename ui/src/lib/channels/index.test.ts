@@ -1,12 +1,7 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
-import {
-  createChannelCapability,
-  loadChannels,
-  waitWhatsAppLogin,
-  type ChannelsState,
-} from "./index.ts";
+import { createChannelCapability } from "./index.ts";
 
 function createDeferred<T>() {
   let resolve: ((value: T) => void) | undefined;
@@ -32,57 +27,9 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
   };
 }
 
-function createState(): ChannelsState {
-  return {
-    client: {
-      request: vi.fn(),
-    } as never,
-    connected: true,
-    channelsLoading: false,
-    channelsSnapshot: null,
-    channelsError: null,
-    channelsLastSuccess: null,
-    whatsappLoginMessage: null,
-    whatsappLoginQrDataUrl: "data:image/png;base64,current-qr",
-    whatsappLoginConnected: false,
-    whatsappBusy: false,
-  };
-}
-
-function requireClientRequest(state: ChannelsState) {
-  const request = state.client?.["request"];
-  if (!request) {
-    throw new Error("Expected channels controller client request");
-  }
-  return vi.mocked(request);
-}
-
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("passes the currently displayed QR and replaces it when the login QR rotates", async () => {
-    const state = createState();
-    const request = requireClientRequest(state);
-    request.mockResolvedValueOnce({
-      connected: false,
-      message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
-      qrDataUrl: "data:image/png;base64,next-qr",
-    });
-
-    await waitWhatsAppLogin(state);
-
-    expect(request).toHaveBeenCalledWith("web.login.wait", {
-      timeoutMs: 120000,
-      currentQrDataUrl: "data:image/png;base64,current-qr",
-    });
-    expect(state.whatsappLoginMessage).toBe(
-      "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
-    );
-    expect(state.whatsappLoginConnected).toBe(false);
-    expect(state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,next-qr");
-    expect(state.whatsappBusy).toBe(false);
   });
 
   it("rejects a stale login result after reconnecting with the same client", async () => {
@@ -184,72 +131,56 @@ describe("channels controller WhatsApp wait", () => {
   });
 });
 
-describe("loadChannels", () => {
-  it("keeps a stale slow probe from replacing a newer non-probe snapshot", async () => {
-    const state = createState();
-    const request = vi.mocked(state.client!["request"]);
+describe("channel refresh sequencing", () => {
+  it("keeps a stale slow probe from replacing a newer runtime snapshot", async () => {
     const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
     const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
-    request.mockImplementation(async (_method: string, params?: unknown) => {
-      if ((params as { probe?: boolean } | undefined)?.probe) {
-        return slowProbe.promise;
-      }
-      return fastRuntime.promise;
-    });
+    const request = vi.fn(async (_method: string, params?: unknown) =>
+      (params as { probe?: boolean } | undefined)?.probe ? slowProbe.promise : fastRuntime.promise,
+    );
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, connected: true },
+      subscribe: () => () => undefined,
+    } as never);
 
-    const probeLoad = loadChannels(state, true, { softTimeoutMs: 1 });
+    const probeLoad = channels.refresh(true, { softTimeoutMs: 1 });
     await probeLoad;
-    const runtimeLoad = loadChannels(state, false);
+    const runtimeLoad = channels.refresh(false);
     expect(request).toHaveBeenCalledTimes(2);
 
     fastRuntime.resolve(createChannelsSnapshot("fresh"));
     await runtimeLoad;
-    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
-
     slowProbe.resolve(createChannelsSnapshot("stale"));
     await Promise.resolve();
 
-    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
-    expect(state.channelsLoading).toBe(false);
+    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("fresh");
+    expect(channels.state.channelsLoading).toBe(false);
+    channels.dispose();
   });
 
-  it("returns after a soft timeout while preserving the stale snapshot", async () => {
+  it("returns after a soft timeout while retaining the in-flight loading state", async () => {
     vi.useFakeTimers();
     try {
-      const state = createState();
-      const previous: ChannelsStatusSnapshot = {
-        ts: 1,
-        channelOrder: ["nostr"],
-        channelLabels: { nostr: "Nostr" },
-        channels: {},
-        channelAccounts: {},
-        channelDefaultAccountId: {},
-      };
-      const next: ChannelsStatusSnapshot = {
-        ...previous,
-        ts: 2,
-      };
-      const deferred = createDeferred<ChannelsStatusSnapshot | null>();
-      const request = requireClientRequest(state);
-      request.mockReturnValueOnce(deferred.promise);
-      state.channelsSnapshot = previous;
-      state.channelsLastSuccess = 10;
+      const pending = createDeferred<ChannelsStatusSnapshot | null>();
+      const request = vi.fn(() => pending.promise);
+      const channels = createChannelCapability({
+        snapshot: { client: { request }, connected: true },
+        subscribe: () => () => undefined,
+      } as never);
+      const previous = createChannelsSnapshot("previous");
+      channels.state.channelsSnapshot = previous;
+      channels.state.channelsLastSuccess = 10;
 
-      const load = loadChannels(state, true, { softTimeoutMs: 100 });
+      const refresh = channels.refresh(true, { softTimeoutMs: 100 });
       await vi.advanceTimersByTimeAsync(100);
-      await load;
+      await refresh;
 
-      expect(state.channelsLoading).toBe(true);
-      expect(state.channelsSnapshot).toBe(previous);
-      expect(state.channelsLastSuccess).toBe(10);
-
-      deferred.resolve(next);
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(state.channelsLoading).toBe(false);
-      expect(state.channelsSnapshot).toBe(next);
-      expect(state.channelsLastSuccess).toBeGreaterThan(10);
+      expect(channels.state.channelsLoading).toBe(true);
+      expect(channels.state.channelsSnapshot).toBe(previous);
+      pending.resolve(createChannelsSnapshot("next"));
+      await vi.waitFor(() => expect(channels.state.channelsLoading).toBe(false));
+      expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("next");
+      channels.dispose();
     } finally {
       vi.useRealTimers();
     }

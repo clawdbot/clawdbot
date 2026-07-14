@@ -33,9 +33,9 @@ export type MSTeamsSsoStoredToken = {
   updatedAt: string;
 };
 
-export type MSTeamsSsoTokenStore = {
+type MSTeamsSsoTokenStore = {
   get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
-  save(token: MSTeamsSsoStoredToken): Promise<void>;
+  save(value: MSTeamsSsoStoredToken): Promise<void>;
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 

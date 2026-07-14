@@ -21,9 +21,10 @@ import {
   forceFreePort,
   forceFreePortAndWait,
   listPortListeners,
-  type PortProcess,
   parseLsofOutput,
 } from "./ports.js";
+
+type PortProcess = ReturnType<typeof forceFreePort>[number];
 
 describe("gateway --force helpers", () => {
   let originalKill: typeof process.kill;

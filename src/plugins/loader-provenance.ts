@@ -22,7 +22,7 @@ type InstallTrackingRule = {
 };
 
 /** Provenance lookup for trusted plugin load paths and install records. */
-export type PluginProvenanceIndex = {
+type PluginProvenanceIndex = {
   loadPathMatcher: PathMatcher;
   installRules: Map<string, InstallTrackingRule>;
 };

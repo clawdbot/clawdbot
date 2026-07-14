@@ -12,7 +12,7 @@ type CompletionDeliverySessionEntry = {
   origin?: { chatType?: string | null } | null;
 };
 
-export function resolveCompletionChatType(params: {
+function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
   targetRequesterSessionKey?: string | null;
   requesterEntry?: CompletionDeliverySessionEntry;

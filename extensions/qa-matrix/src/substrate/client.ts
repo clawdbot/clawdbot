@@ -926,4 +926,3 @@ export const testing = {
   createMatrixQaRoomObserver,
   resolveNextRegistrationAuth,
 };
-export { testing as __testing };

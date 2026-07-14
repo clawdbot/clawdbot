@@ -51,4 +51,3 @@ export const testing = {
   resolveWhatsAppGroupAccountThreadId,
   resolveWhatsAppLegacyGroupSessionKey,
 };
-export { testing as __testing };

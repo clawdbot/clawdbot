@@ -12,20 +12,16 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { normalizeRestartRecoveryEntryFields } from "./restart-recovery-state.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   cloneSessionStoreSnapshotEntry,
-  cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
-  readSessionStoreSnapshotCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
-  writeSessionStoreSnapshotCache,
-  type SessionStoreSnapshot,
-  type SessionStoreSnapshotEntries,
   type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
@@ -43,7 +39,7 @@ import {
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
-export type LoadSessionStoreOptions = {
+type LoadSessionStoreOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
@@ -51,7 +47,7 @@ export type LoadSessionStoreOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
-export type ReadSessionEntryOptions = {
+type ReadSessionEntryOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
@@ -74,10 +70,6 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -167,10 +159,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
     assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
   }
-  assign(
-    "restartRecoveryDeliveryRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-  );
+  normalizeRestartRecoveryEntryFields(entry, assign);
 
   return next;
 }
@@ -537,32 +526,6 @@ export function loadSessionStore(
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }
 
-export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
-  const currentFileStat = getFileStatSnapshot(storePath);
-  const cacheEnabled = isSessionStoreCacheEnabled();
-  if (cacheEnabled) {
-    const cached = readSessionStoreSnapshotCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
-    }
-  }
-
-  const store = loadSessionStore(storePath, { clone: false });
-  if (!cacheEnabled) {
-    return cloneSessionStoreSnapshot(store);
-  }
-  return writeSessionStoreSnapshotCache({
-    storePath,
-    store,
-    mtimeMs: currentFileStat?.mtimeMs,
-    sizeBytes: currentFileStat?.sizeBytes,
-  });
-}
-
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
@@ -577,8 +540,4 @@ export function readSessionEntry(
     sessionKey,
   });
   return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
-}
-
-export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {
-  return Object.entries(readSessionStoreSnapshot(storePath)) as SessionStoreSnapshotEntries;
 }

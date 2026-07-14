@@ -29,7 +29,7 @@ type SharedToolDisplayConfig = {
   tools?: Record<string, SharedToolDisplaySpec>;
 };
 
-export type ToolDisplay = {
+type ToolDisplay = {
   name: string;
   icon: ChatToolIconName;
   title: string;

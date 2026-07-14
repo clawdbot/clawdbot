@@ -39,6 +39,29 @@ type RunGroupParams = {
   env: Record<string, string | undefined>;
   targets: string[];
 };
+
+function createConcurrentExtensionBatchPlan() {
+  const groups = [
+    ["light", 10, "one", 1],
+    ["heavy", 30, "two", 3],
+    ["middle", 20, "three", 2],
+  ] as const;
+  return {
+    extensionCount: groups.length,
+    extensionIds: groups.map(([, , extensionId]) => extensionId),
+    estimatedCost: 60,
+    hasTests: true,
+    planGroups: groups.map(([config, estimatedCost, extensionId, testFileCount]) => ({
+      config,
+      estimatedCost,
+      extensionIds: [extensionId],
+      roots: [`extensions/${extensionId}`],
+      testFileCount,
+    })),
+    testFileCount: 6,
+  };
+}
+
 function runScriptResult(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -561,48 +584,17 @@ describe("scripts/test-extension.mjs", () => {
         resolvers.push(() => resolve(0));
       });
     });
-    const runPromise = runExtensionBatchPlan(
-      {
-        extensionCount: 3,
-        extensionIds: ["one", "two", "three"],
-        estimatedCost: 60,
-        hasTests: true,
-        planGroups: [
-          {
-            config: "light",
-            estimatedCost: 10,
-            extensionIds: ["one"],
-            roots: ["extensions/one"],
-            testFileCount: 1,
-          },
-          {
-            config: "heavy",
-            estimatedCost: 30,
-            extensionIds: ["two"],
-            roots: ["extensions/two"],
-            testFileCount: 3,
-          },
-          {
-            config: "middle",
-            estimatedCost: 20,
-            extensionIds: ["three"],
-            roots: ["extensions/three"],
-            testFileCount: 2,
-          },
-        ],
-        testFileCount: 6,
-      },
-      {
-        env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-        runGroup: runGroup as NonNullable<
-          NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
-        >,
-        vitestArgs: ["--reporter=dot"],
-      },
-    );
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+      vitestArgs: ["--reporter=dot"],
+    });
 
-    await Promise.resolve();
-    expect(started).toEqual(["heavy", "middle"]);
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
     resolvers.shift()?.();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -629,6 +621,40 @@ describe("scripts/test-extension.mjs", () => {
       },
       targets: ["two"],
     });
+  });
+
+  it("stops admitting extension batch groups after a parallel failure", async () => {
+    const started: string[] = [];
+    let resolveHeavy: ((code: number) => void) | undefined;
+    let resolveMiddle: ((code: number) => void) | undefined;
+    const runGroup = vi.fn((params: RunGroupParams) => {
+      started.push(params.config);
+      return new Promise<number>((resolve) => {
+        if (params.config === "heavy") {
+          resolveHeavy = resolve;
+        } else if (params.config === "middle") {
+          resolveMiddle = resolve;
+        }
+      });
+    });
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+    });
+
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
+    resolveHeavy?.(7);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(started).toEqual(["heavy", "middle"]);
+    resolveMiddle?.(0);
+    await expect(runPromise).resolves.toBe(7);
+    expect(runGroup).toHaveBeenCalledTimes(2);
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {

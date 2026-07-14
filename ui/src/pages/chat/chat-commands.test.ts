@@ -1,16 +1,12 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { refreshSlashCommands, resetChatSlashCommandMetadataForTest } from "./chat-commands.ts";
-
-afterEach(() => {
-  resetChatSlashCommandMetadataForTest();
-});
+import { refreshSlashCommands } from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);

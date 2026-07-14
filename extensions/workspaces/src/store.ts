@@ -33,8 +33,8 @@ import {
   type WorkspaceDoc,
 } from "./schema.js";
 
-export type WorkspaceMutationOptions = { actor: WorkspaceActor };
-export type WorkspaceMutationResult = { doc: WorkspaceDoc; changed: boolean };
+type WorkspaceMutationOptions = { actor: WorkspaceActor };
+type WorkspaceMutationResult = { doc: WorkspaceDoc; changed: boolean };
 
 const MAX_WORKSPACE_BYTES = 256 * 1024;
 const UNDO_RING_SIZE = 20;
@@ -81,7 +81,7 @@ function assertWorkspaceSize(serialized: string): void {
  *   widgets `user`, or an operator could stamp `agent:<id>`, and the AI-provenance
  *   chip would be a lie. Existing entities keep their stamp; new ones get `actor`.
  */
-export function reconcileReplace(
+function reconcileReplace(
   incoming: WorkspaceDoc,
   current: WorkspaceDoc,
   actor: WorkspaceActor,

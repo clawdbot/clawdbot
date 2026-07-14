@@ -1,6 +1,6 @@
 // Standalone runtime registry loader tests cover registry loading outside gateway startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearPluginLoaderCache, testing } from "../loader.js";
+import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
 import {
@@ -43,83 +43,6 @@ beforeEach(() => {
 afterEach(() => {
   clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
-});
-
-describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
-  it("reuses a compatible gateway startup registry for gateway-bindable dispatch load options", () => {
-    const activeRegistry = createRegistryWithPlugin("telegram");
-    activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = { plugins: { allow: ["telegram"] } };
-    const startupLoadOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/ws",
-      onlyPluginIds: ["telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupLoadOptions);
-    setActivePluginRegistry(activeRegistry, cacheKey, "gateway-bindable", "/tmp/ws");
-
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
-      loadOptions: {
-        config,
-        onlyPluginIds: ["telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-        workspaceDir: "/tmp/ws",
-      },
-    });
-
-    expect(result).toBe(activeRegistry);
-    expect(loaderMocks.loadOpenClawPlugins).not.toHaveBeenCalled();
-  });
-
-  it("loads a fresh registry when dispatch config is not startup-compatible", () => {
-    const activeRegistry = createRegistryWithPlugin("telegram");
-    activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = { plugins: { allow: ["telegram"] } };
-    const startupLoadOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/ws",
-      onlyPluginIds: ["telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupLoadOptions);
-    setActivePluginRegistry(activeRegistry, cacheKey, "gateway-bindable", "/tmp/ws");
-    const loadedRegistry = createRegistryWithPlugin("telegram");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
-
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
-      loadOptions: {
-        config: {
-          plugins: {
-            allow: ["telegram"],
-            load: { paths: ["/tmp/changed.js"] },
-          },
-        },
-        onlyPluginIds: ["telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-        workspaceDir: "/tmp/ws",
-      },
-    });
-
-    expect(result).toBe(loadedRegistry);
-    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
-  });
 });
 
 describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {

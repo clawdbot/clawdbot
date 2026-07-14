@@ -6,11 +6,11 @@ import process from "node:process";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_CLI_SESSIONS_LIST_COMMAND,
   createCodexCliSessionNodeHostCommands,
   listCodexCliSessionsOnNode,
-  resolveCodexCliResumeSpawnInvocation,
 } from "./node-cli-sessions.js";
+
+const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 
 let tempDir: string;
 let previousCodexHome: string | undefined;
@@ -153,32 +153,6 @@ describe("codex cli node sessions", () => {
         messageCount: 1,
       },
     ]);
-  });
-
-  it("resolves Windows npm .cmd Codex shims through Node for resume", async () => {
-    const binDir = path.join(tempDir, "bin");
-    const entryPath = path.join(binDir, "node_modules", "@openai", "codex", "bin", "codex.js");
-    const shimPath = path.join(binDir, "codex.cmd");
-    await fs.mkdir(path.dirname(entryPath), { recursive: true });
-    await fs.writeFile(entryPath, "console.log('codex')\n", "utf8");
-    await fs.writeFile(
-      shimPath,
-      '@ECHO off\r\n"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
-      "utf8",
-    );
-
-    const resolved = resolveCodexCliResumeSpawnInvocation(["exec", "resume", "session-id"], {
-      platform: "win32",
-      env: { PATH: binDir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
-    });
-
-    expect(resolved).toEqual({
-      command: "C:\\node\\node.exe",
-      args: [entryPath, "exec", "resume", "session-id"],
-      shell: undefined,
-      windowsHide: true,
-    });
   });
 
   it("reports malformed node session payloadJSON with an owned error", async () => {

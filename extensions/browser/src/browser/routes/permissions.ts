@@ -27,17 +27,6 @@ import {
   toStringOrEmpty,
 } from "./utils.js";
 
-const permissionRouteDeps = {
-  getPwAiModule,
-};
-
-/** Test hook for replacing optional Playwright permission dependencies. */
-export const testing = {
-  setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
-    permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
-  },
-};
-
 type GrantPermissionsBody = {
   origin?: unknown;
   permissions?: unknown;
@@ -79,7 +68,7 @@ async function grantPermissions(params: {
     playwrightRequiredPermissions.every((value): value is string => Boolean(value)) &&
     params.requiredPermissions.length > 0;
   if (canUsePlaywright) {
-    const pw = await permissionRouteDeps.getPwAiModule({ mode: "soft" });
+    const pw = await getPwAiModule({ mode: "soft" });
     if (pw) {
       try {
         const page = await pw.getPageForTargetId({
@@ -222,4 +211,3 @@ export function registerBrowserPermissionRoutes(
     }),
   );
 }
-export { testing as __testing };

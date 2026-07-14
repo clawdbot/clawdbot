@@ -1,6 +1,9 @@
 // Covers device pairing, token, and role lifecycle behavior.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
@@ -25,8 +28,9 @@ import {
   verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
-  type RotateDeviceTokenResult,
 } from "./device-pairing.js";
+
+type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -170,7 +174,7 @@ async function mutatePairedDevice(
 function mutatePendingRequest(
   baseDir: string,
   requestId: string,
-  mutate: (pending: { ts: number; refreshedAtMs?: number }) => void,
+  mutate: (pending: { ts: number; refreshedAtMs?: number; scopes?: string[] }) => void,
 ) {
   const state = loadDevicePairingStoreState(baseDir);
   const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
@@ -1367,6 +1371,35 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator).toBeUndefined();
   });
 
+  test("bootstrap pairing treats missing persisted scopes as an empty grant", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-missing-scopes",
+        publicKey: "bootstrap-public-key-missing-scopes",
+        role: "operator",
+        roles: ["operator"],
+        scopes: [],
+        silent: true,
+      },
+      baseDir,
+    );
+    mutatePendingRequest(baseDir, request.request.requestId, (pending) => {
+      delete pending.scopes;
+    });
+
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("bootstrap-device-missing-scopes", baseDir);
+    expect(paired?.approvedScopes).toStrictEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toStrictEqual([]);
+  });
+
   test("bootstrap approval access metadata initializes paired device last-seen fields", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
@@ -1405,7 +1438,7 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("baseline bootstrap pairing issues bounded operator token when requested by QR handoff", async () => {
+  test("baseline bootstrap pairing issues full operator token when requested by QR handoff", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
       {
@@ -1413,7 +1446,13 @@ describe("device pairing tokens", () => {
         publicKey: "bootstrap-public-key-operator-default",
         role: "node",
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         silent: true,
       },
       baseDir,
@@ -1421,7 +1460,7 @@ describe("device pairing tokens", () => {
 
     const approved = await approveBootstrapDevicePairing(
       request.request.requestId,
-      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       baseDir,
     );
     expectRecordFields(approved, "approved result", { status: "approved" });
@@ -1430,6 +1469,7 @@ describe("device pairing tokens", () => {
     const operatorToken = requireToken(paired?.tokens?.operator?.token);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator?.scopes).toStrictEqual([
+      "operator.admin",
       "operator.approvals",
       "operator.read",
       "operator.talk.secrets",
@@ -1440,7 +1480,13 @@ describe("device pairing tokens", () => {
         deviceId: "bootstrap-device-operator-default",
         token: operatorToken,
         role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
@@ -1452,7 +1498,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.admin"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
     await expect(
       verifyDeviceToken({
         deviceId: "bootstrap-device-operator-default",
@@ -1461,7 +1507,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.pairing"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
   });
 
   test("bootstrap node approval preserves existing operator token scopes", async () => {

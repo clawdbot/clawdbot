@@ -102,6 +102,29 @@ public enum OpenClawChatTransportRouteLeaseResult: Sendable {
     case unavailable(reason: String?)
 }
 
+/// One physical gateway connection captured before a settings mutation waits
+/// behind earlier mutations for the same session.
+public struct OpenClawChatSessionSettingsRouteLease: Sendable {
+    public typealias PatchSessionSettings = @Sendable (
+        _ sessionKey: String,
+        _ agentID: String?,
+        _ patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+
+    private let patchSessionSettingsImpl: PatchSessionSettings
+
+    public init(patchSessionSettings: @escaping PatchSessionSettings) {
+        self.patchSessionSettingsImpl = patchSessionSettings
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.patchSessionSettingsImpl(sessionKey, agentID, patch)
+    }
+}
+
 /// The transport rejected a send before it reached its request channel. This
 /// is the only failure class safe for automatic outbox retry.
 public enum OpenClawChatTransportSendError: Error, Sendable {
@@ -256,6 +279,13 @@ public protocol OpenClawChatTransport: Sendable {
         agentID: String?,
         model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    /// Mutable gateway transports must capture the physical connection here;
+    /// queued settings work must never resolve its route after waiting.
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease?
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
@@ -285,6 +315,16 @@ extension OpenClawChatTransport {
             requestHistory: { sessionKey in
                 try await transport.requestHistory(sessionKey: sessionKey)
             }))
+    }
+
+    public func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        let transport = self
+        return OpenClawChatSessionSettingsRouteLease { sessionKey, agentID, patch in
+            try await transport.patchSessionSettings(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                patch: patch)
+        }
     }
 
     public func sendMessage(
@@ -430,6 +470,40 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel) not supported by this transport"])
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        var result: OpenClawChatModelPatchResult?
+        if let model = patch.model {
+            result = try await self.patchSessionModel(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                model: model)
+        }
+        if let thinkingLevelUpdate = patch.thinkingLevel {
+            guard let thinkingLevel = thinkingLevelUpdate else {
+                throw NSError(
+                    domain: "OpenClawChatTransport",
+                    code: 0,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel=null) not supported by this transport",
+                    ])
+            }
+            try await self.setSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: thinkingLevel)
+            result = OpenClawChatModelPatchResult(
+                key: result?.key ?? sessionKey,
+                modelProvider: result?.modelProvider,
+                model: result?.model,
+                thinkingLevel: thinkingLevel,
+                thinkingLevels: result?.thinkingLevels)
+        }
+        return result
     }
 }
 

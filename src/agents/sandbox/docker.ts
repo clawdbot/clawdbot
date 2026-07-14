@@ -3,13 +3,10 @@
  *
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
-import { spawn } from "node:child_process";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../plugin-sdk/windows-spawn.js";
+import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import {
   sanitizeEnvVars,
   sanitizeExplicitSandboxEnvVars,
@@ -34,152 +31,60 @@ type ExecDockerRawError = Error & {
   stderr: Buffer;
 };
 
-type DockerSpawnRuntime = {
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  execPath: string;
-};
-
-const DEFAULT_DOCKER_SPAWN_RUNTIME: DockerSpawnRuntime = {
-  platform: process.platform,
-  env: process.env,
-  execPath: process.execPath,
-};
-
-export function resolveDockerSpawnInvocation(
-  args: string[],
-  runtime: DockerSpawnRuntime = DEFAULT_DOCKER_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
-  const program = resolveWindowsSpawnProgram({
-    command: "docker",
-    platform: runtime.platform,
-    env: runtime.env,
-    execPath: runtime.execPath,
-    packageName: "docker",
-    allowShellFallback: false,
-  });
-  const resolved = materializeWindowsSpawnProgram(program, args);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
-}
-
-export function execDockerRaw(
+export async function execDockerRaw(
   args: string[],
   opts?: ExecDockerRawOptions,
 ): Promise<ExecDockerRawResult> {
-  return new Promise<ExecDockerRawResult>((resolve, reject) => {
-    const spawnInvocation = resolveDockerSpawnInvocation(args);
-    const child = spawn(spawnInvocation.command, spawnInvocation.args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: spawnInvocation.shell,
-      windowsHide: spawnInvocation.windowsHide,
+  let result;
+  try {
+    result = await spawnCommand(["docker", ...args], {
+      cancelSignal: opts?.signal,
+      encoding: "buffer",
+      input: opts?.input ?? Buffer.alloc(0),
+      maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+      reject: false,
+      stripFinalNewline: false,
     });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let aborted = false;
-    let outputStreamError: Error | undefined;
-
-    const signal = opts?.signal;
-    const handleAbort = () => {
-      if (aborted) {
-        return;
-      }
-      aborted = true;
-      child.kill("SIGTERM");
-    };
-    if (signal) {
-      if (signal.aborted) {
-        handleAbort();
-      } else {
-        signal.addEventListener("abort", handleAbort, { once: true });
-      }
+  } catch (error) {
+    if (opts?.signal?.aborted) {
+      throw createAbortError("Aborted");
     }
-
-    const handleStreamError = (error: Error) => {
-      if (outputStreamError) {
-        return;
-      }
-      // Broken stdio means the command exchange is incomplete, so it cannot
-      // report success even if Docker later exits with code 0.
-      outputStreamError = error;
-      child.kill("SIGTERM");
-    };
-    child.stdout?.on("error", handleStreamError);
-    child.stdout?.on("data", (chunk) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    child.stderr?.on("error", handleStreamError);
-    child.stderr?.on("data", (chunk) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-
-    child.on("error", (error) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
-      }
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        const friendly = Object.assign(
-          new Error(
-            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
-          ),
-          { code: "INVALID_CONFIG", cause: error },
-        );
-        reject(friendly);
-        return;
-      }
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
-      }
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      if (aborted || signal?.aborted) {
-        reject(createAbortError("Aborted"));
-        return;
-      }
-      if (outputStreamError) {
-        reject(outputStreamError);
-        return;
-      }
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !opts?.allowFailure) {
-        const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
-        const error: ExecDockerRawError = Object.assign(
-          new Error(message || `docker ${args.join(" ")} failed`),
-          {
-            code: exitCode,
-            stdout,
-            stderr,
-          },
-        );
-        reject(error);
-        return;
-      }
-      resolve({ stdout, stderr, code: exitCode });
-    });
-
-    const stdin = child.stdin;
-    if (stdin) {
-      stdin.on("error", handleStreamError);
-      if (opts?.input !== undefined) {
-        stdin.end(opts.input);
-      } else {
-        stdin.end();
-      }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw Object.assign(
+        new Error(
+          'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+        ),
+        { code: "INVALID_CONFIG", cause: error },
+      );
     }
-  });
+    throw error;
+  }
+  if (opts?.signal?.aborted || result.isCanceled) {
+    throw createAbortError("Aborted");
+  }
+  if (result.failed && !isPlainCommandExitFailure(result)) {
+    if (result.code === "ENOENT") {
+      throw Object.assign(
+        new Error(
+          'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+        ),
+        { code: "INVALID_CONFIG", cause: result },
+      );
+    }
+    throw toErrorObject(result, "Docker command execution failed");
+  }
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+  if (exitCode !== 0 && !opts?.allowFailure) {
+    const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+    const error: ExecDockerRawError = Object.assign(
+      new Error(message || `docker ${args.join(" ")} failed`),
+      { code: exitCode, stdout, stderr },
+    );
+    throw error;
+  }
+  return { stdout, stderr, code: exitCode };
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -189,7 +94,11 @@ import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_IMAGE,
+  SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+  SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+} from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";

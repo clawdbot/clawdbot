@@ -82,14 +82,9 @@ type AgentSkillMcpBoundaryScope = {
   execAsk: string;
 };
 
-export type {
-  SecurityAuditFinding,
-  SecurityAuditReport,
-  SecurityAuditSeverity,
-  SecurityAuditSummary,
-} from "./audit.types.js";
+export type { SecurityAuditReport } from "./audit.types.js";
 
-export type SecurityAuditOptions = {
+type SecurityAuditOptions = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -125,7 +120,7 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: ProbeGatewayFn;
 };
 
-export type AuditExecutionContext = {
+type AuditExecutionContext = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;

@@ -39,6 +39,14 @@ public actor GatewayChannelActor {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
     }
 
+    nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
+        // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
+        if role == "node", clientMode == "node" {
+            return GATEWAY_MIN_NODE_PROTOCOL_VERSION
+        }
+        return GATEWAY_MIN_PROTOCOL_VERSION
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
     private var activeConnectAttemptID: UUID?
@@ -437,6 +445,7 @@ public actor GatewayChannelActor {
         let clientId = options.clientId
         let clientMode = options.clientMode
         let role = options.role
+        let minProtocol = Self.minimumProtocolVersion(role: role, clientMode: clientMode)
         let deviceIdentityProfile = options.deviceIdentityProfile
         let requestedScopes = options.scopes
         let scopesAreExplicit = options.scopesAreExplicit
@@ -464,7 +473,7 @@ public actor GatewayChannelActor {
             displayName: clientDisplayName,
             platform: platform)
         var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
+            "minProtocol": ProtoAnyCodable(minProtocol),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "client": ProtoAnyCodable(client),
             "caps": ProtoAnyCodable(options.caps),
@@ -769,7 +778,7 @@ extension GatewayChannelActor {
         }
         guard scheme == "ws", let host = self.url.host else { return false }
         // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
-        // for QR pairing. Persist the resulting bounded device token so reconnects do not
+        // for QR pairing. Persist the resulting server-bounded device token so reconnects do not
         // fall back to auth=none after the single-use bootstrap token is cleared.
         return LoopbackHost.isLocalNetworkHost(host)
     }
@@ -781,6 +790,7 @@ extension GatewayChannelActor {
             return []
         case "operator":
             let allowedOperatorScopes: Set = [
+                "operator.admin",
                 "operator.approvals",
                 "operator.read",
                 "operator.talk.secrets",

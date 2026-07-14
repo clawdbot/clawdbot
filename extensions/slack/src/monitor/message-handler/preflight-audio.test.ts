@@ -7,8 +7,8 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMediaResult } from "../media-types.js";
 import {
   discardSlackPreflightMedia,
+  findCaptionlessSlackAudioFile,
   formatSlackAudioTranscriptForAgent,
-  hasCaptionlessSlackAudio,
   resolveSlackPreflightAudioTranscript,
   sendSlackPreflightAudioTranscriptEcho,
 } from "./preflight-audio.js";
@@ -68,15 +68,15 @@ describe("Slack captionless audio preflight", () => {
       ],
     });
 
-    expect(hasCaptionlessSlackAudio(voiceClip)).toBe(true);
-    expect(hasCaptionlessSlackAudio({ ...voiceClip, text: "typed caption" })).toBe(false);
+    expect(findCaptionlessSlackAudioFile(voiceClip)).toEqual(voiceClip.files?.[0]);
+    expect(findCaptionlessSlackAudioFile({ ...voiceClip, text: "typed caption" })).toBeUndefined();
     expect(
-      hasCaptionlessSlackAudio(
+      findCaptionlessSlackAudioFile(
         createSlackMessage({
           files: [{ id: "F2", name: "screen.mp4", mimetype: "video/mp4" }],
         }),
       ),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   it("frames machine transcripts as untrusted input without replacing the file placeholder", () => {

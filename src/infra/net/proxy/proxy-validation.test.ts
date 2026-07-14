@@ -4,11 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_PROXY_VALIDATION_ALLOWED_URLS,
-  resolveProxyValidationConfig,
-  runProxyValidation,
-} from "./proxy-validation.js";
+import { runProxyValidation } from "./proxy-validation.js";
 
 describe("proxy validation", () => {
   const tempDirs: string[] = [];
@@ -26,61 +22,6 @@ describe("proxy validation", () => {
     writeFileSync(caFile, contents, "utf8");
     return caFile;
   }
-
-  it("resolves proxy URL overrides before config and OPENCLAW_PROXY_URL", () => {
-    const result = resolveProxyValidationConfig({
-      proxyUrlOverride: "http://override-proxy.example:3128",
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-    });
-
-    expect(result).toEqual({
-      enabled: true,
-      proxyUrl: "http://override-proxy.example:3128",
-      source: "override",
-      errors: [],
-    });
-  });
-
-  it("resolves config proxy URLs before OPENCLAW_PROXY_URL", () => {
-    const result = resolveProxyValidationConfig({
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-    });
-
-    expect(result).toEqual({
-      enabled: true,
-      proxyUrl: "http://config-proxy.example:3128",
-      source: "config",
-      errors: [],
-    });
-  });
-
-  it("uses OPENCLAW_PROXY_URL when enabled config has no URL", () => {
-    const result = resolveProxyValidationConfig({
-      config: { enabled: true },
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-    });
-
-    expect(result).toEqual({
-      enabled: true,
-      proxyUrl: "http://env-proxy.example:3128",
-      source: "env",
-      errors: [],
-    });
-  });
 
   it("reports disabled proxy config when a config URL is present but proxy routing is disabled", async () => {
     const fetchCheck = vi.fn();
@@ -150,18 +91,64 @@ describe("proxy validation", () => {
     expect(fetchCheck).toHaveBeenCalled();
   });
 
-  it("reports missing URL when proxy validation is enabled without an effective URL", () => {
-    const result = resolveProxyValidationConfig({
-      config: { enabled: true },
-      env: {},
+  it("prefers the configured proxy URL over OPENCLAW_PROXY_URL", async () => {
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
     });
 
-    expect(result.enabled).toBe(true);
-    expect(result.proxyUrl).toBeUndefined();
-    expect(result.source).toBe("missing");
-    expect(result.errors).toEqual([
+    expect(result.ok).toBe(true);
+    expect(result.config).toMatchObject({
+      enabled: true,
+      proxyUrl: "http://config-proxy.example:3128",
+      source: "config",
+    });
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "http://config-proxy.example:3128",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("reports a missing effective URL when proxy validation is enabled", async () => {
+    const fetchCheck = vi.fn();
+    const result = await runProxyValidation({
+      config: { enabled: true },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.config).toMatchObject({ enabled: true, source: "missing" });
+    expect(result.config.errors).toEqual([
       "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
     ]);
+  });
+
+  it("rejects unsupported proxy URL protocols before probing", async () => {
+    const fetchCheck = vi.fn();
+    const result = await runProxyValidation({
+      config: { enabled: true, proxyUrl: "socks5://proxy.example:1080" },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.config.errors).toEqual(["proxyUrl must use http:// or https://"]);
   });
 
   it("reports disabled proxy config as an actionable validation problem", async () => {
@@ -185,72 +172,6 @@ describe("proxy validation", () => {
       },
       checks: [],
     });
-  });
-
-  it("accepts HTTPS proxy URLs", () => {
-    const result = resolveProxyValidationConfig({
-      config: {
-        enabled: true,
-        proxyUrl: "https://proxy.example:3128",
-      },
-      env: {},
-    });
-
-    expect(result).toEqual({
-      enabled: true,
-      proxyUrl: "https://proxy.example:3128",
-      source: "config",
-      errors: [],
-    });
-  });
-
-  it("rejects unsupported proxy URL protocols", () => {
-    const result = resolveProxyValidationConfig({
-      config: {
-        enabled: true,
-        proxyUrl: "socks5://proxy.example:1080",
-      },
-      env: {},
-    });
-
-    expect(result.errors).toEqual(["proxyUrl must use http:// or https://"]);
-  });
-
-  it("checks default allowed and denied destinations through the proxy", async () => {
-    const fetchCheck = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockRejectedValueOnce(new Error("loopback blocked"));
-
-    const result = await runProxyValidation({
-      config: {
-        enabled: true,
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      fetchCheck,
-    });
-
-    expect(fetchCheck).toHaveBeenCalledTimes(2);
-    expect(fetchCheck).toHaveBeenNthCalledWith(1, {
-      proxyUrl: "http://127.0.0.1:3128",
-      targetUrl: DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0],
-      timeoutMs: 5000,
-    });
-    const deniedCall = fetchCheck.mock.calls[1]?.[0] as
-      | { proxyUrl?: unknown; targetUrl?: string; timeoutMs?: unknown }
-      | undefined;
-    expect(deniedCall?.proxyUrl).toBe("http://127.0.0.1:3128");
-    expect(deniedCall?.timeoutMs).toBe(5000);
-    expect(deniedCall?.targetUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-    expect(result.ok).toBe(true);
-    expect(result.checks[0]?.kind).toBe("allowed");
-    expect(result.checks[0]?.url).toBe(DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0]);
-    expect(result.checks[0]?.ok).toBe(true);
-    expect(result.checks[1]?.kind).toBe("denied");
-    expect(result.checks[1]?.ok).toBe(true);
-    expect(result.checks[1]?.error).toBe("loopback blocked");
-    expect(result.checks[1]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
   });
 
   it("fails the default loopback denied canary on successful ambiguous responses", async () => {

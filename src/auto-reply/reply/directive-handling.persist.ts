@@ -41,7 +41,7 @@ import { resolveContextTokens } from "./model-selection.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
-export type PersistedThinkingLevelRemap = {
+type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
   to: ThinkLevel;
   provider: string;

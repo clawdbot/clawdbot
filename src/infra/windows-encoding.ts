@@ -26,7 +26,7 @@ let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
-export function parseWindowsCodePage(raw: string): number | null {
+function parseWindowsCodePage(raw: string): number | null {
   if (!raw) {
     return null;
   }

@@ -19,6 +19,10 @@ describe("Control UI build chunking", () => {
     expect(controlUiManualChunk("/tmp/openclaw-pnpm-node-modules/json5/dist/index.js")).toBe(
       "config-runtime",
     );
+    expect(controlUiManualChunk("/repo/ui/src/components/config-form.shared.ts")).toBe(
+      "control-ui-shared",
+    );
+    expect(controlUiManualChunk("/repo/ui/src/lib/clipboard.ts")).toBe("control-ui-shared");
     expect(controlUiManualChunk("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js")).toBe(
       "gateway-runtime",
     );

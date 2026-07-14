@@ -29,7 +29,7 @@ export function normalizeOptionalString(value: unknown): string | undefined {
  * Stringify then normalize.  Accepts `string | number | boolean | bigint`.
  * Returns `undefined` for objects, arrays, null, and undefined.
  */
-export function normalizeStringifiedOptionalString(value: unknown): string | undefined {
+function normalizeStringifiedOptionalString(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }

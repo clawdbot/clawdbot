@@ -140,7 +140,7 @@ function parseWebpSize(buffer: Buffer): ImageSize | null {
 }
 
 /** Parse image dimensions from raw image bytes. */
-export function parseImageSize(buffer: Buffer): ImageSize | null {
+function parseImageSize(buffer: Buffer): ImageSize | null {
   // Try each supported image format in sequence.
   return (
     parsePngSize(buffer) ?? parseJpegSize(buffer) ?? parseGifSize(buffer) ?? parseWebpSize(buffer)
@@ -160,10 +160,7 @@ const IMAGE_PROBE_SSRF_POLICY: SsrfPolicyConfig = {};
  * Uses {@link readRemoteMediaBuffer} with SSRF guard to block probes against
  * private/reserved/loopback/link-local/metadata destinations.
  */
-export async function getImageSizeFromUrl(
-  url: string,
-  timeoutMs = 5000,
-): Promise<ImageSize | null> {
+async function getImageSizeFromUrl(url: string, timeoutMs = 5000): Promise<ImageSize | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);

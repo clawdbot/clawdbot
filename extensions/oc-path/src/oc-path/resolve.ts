@@ -14,7 +14,7 @@ import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import type { OcPath } from "./oc-path.js";
 import { isOrdinalSeg, isPositionalSeg, parseOrdinalSeg, resolvePositionalSeg } from "./oc-path.js";
 
-export type OcPathMatch =
+type OcPathMatch =
   | { readonly kind: "root"; readonly node: MdAst }
   | { readonly kind: "frontmatter"; readonly node: FrontmatterEntry }
   | { readonly kind: "block"; readonly node: AstBlock }

@@ -164,6 +164,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Subagent details");
   });
 
+  it("keeps promised asynchronous work open in full and minimal prompts", () => {
+    for (const promptMode of ["full", "minimal"] as const) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+      });
+
+      expect(prompt).toContain("## Promised Work");
+      expect(prompt).toContain("Progress such as `running` is not completion.");
+      expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
+    }
+
+    expect(
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode: "none",
+      }),
+    ).not.toContain("## Promised Work");
+  });
+
   it("can omit generic silent-reply guidance for channel-aware prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

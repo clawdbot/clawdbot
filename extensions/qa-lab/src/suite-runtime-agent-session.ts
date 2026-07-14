@@ -332,9 +332,8 @@ export {
   readSessionTranscriptSummary,
   readSkillStatus,
   seedQaSessionTranscript,
-  setSessionStoreLockRetryDelaysMsForTests,
 };
 
-function setSessionStoreLockRetryDelaysMsForTests(delays?: readonly number[]): void {
+export function setSessionStoreLockRetryDelaysMsForTests(delays?: readonly number[]): void {
   sessionStoreLockRetryDelaysMsForTests = delays;
 }

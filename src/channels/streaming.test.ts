@@ -95,9 +95,8 @@ describe("buildChannelProgressDraftLine", () => {
 });
 
 describe("streaming config resolution", () => {
-  // Flat delivery keys stay canonical for channels without a nested streaming
-  // schema and for SDK plugins; mode-family aliases (streamMode, scalar
-  // streaming, nativeStreaming) are doctor-migrated and unread at runtime.
+  // Flat delivery keys remain external SDK compatibility fallbacks. Bundled
+  // schemas are nested-only; mode-family aliases stay doctor-only.
   it("resolves flat delivery keys while ignoring mode-family aliases", () => {
     const legacyEntry = {
       streamMode: "block",
@@ -135,8 +134,8 @@ describe("streaming config resolution", () => {
     expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
   });
 
-  it("keeps scalar streaming support for channels whose schema allows it", () => {
-    // Mattermost's schema accepts a scalar mode string or boolean as canonical.
+  it("keeps the scalar streaming fallback for external SDK plugin configs", () => {
+    // Bundled schemas are nested-only; this compatibility path is deprecated.
     expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
     expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
     expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");

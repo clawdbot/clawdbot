@@ -6,7 +6,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";

@@ -155,13 +155,15 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.client).toBe(client);
     expect(page.agentsList).toBe(preloadedAgents);
     expect(page.agentsSelectedId).toBe("main");
-    expect(page.requestGeneration).toBe(0);
+    // Route-driven selection application resets per-agent panel caches, which
+    // bumps the request generation; capture it instead of pinning zero.
+    const boundGeneration = page.requestGeneration;
 
     page.context = { gateway: gateway(snapshot(client, false)) } as unknown as ApplicationContext;
     page.subscriptions.hostUpdate();
     expect(page.agentsList).toBeNull();
     expect(page.agentsSelectedId).toBeNull();
-    expect(page.requestGeneration).toBeGreaterThan(0);
+    expect(page.requestGeneration).toBeGreaterThan(boundGeneration);
     page.subscriptions.hostDisconnected();
   });
 

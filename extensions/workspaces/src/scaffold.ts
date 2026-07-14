@@ -6,9 +6,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateWidgetManifest } from "./manifest.js";
 
-export type WorkspaceScaffoldOptions = {
+type WorkspaceScaffoldOptions = {
   name: string;
   title?: string;
   stateDir?: string;
@@ -16,7 +17,7 @@ export type WorkspaceScaffoldOptions = {
   createdBy?: string;
 };
 
-export type WorkspaceScaffoldResult = {
+type WorkspaceScaffoldResult = {
   name: string;
   title: string;
   dir: string;
@@ -117,14 +118,6 @@ Control UI through the document-bound workspace message bridge exposed as
 - Re-render on \`workspace:data\` and \`workspace:push\`.
 - Do not fetch gateway data directly; the authenticated parent resolves bindings.
 `;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {

@@ -15,6 +15,29 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts worktree cleanup limits and rejects negative values", () => {
+    expect(
+      validateConfigObject({
+        worktrees: { cleanup: { maxCount: 25, maxTotalSizeGb: 50 } },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateConfigObject({
+        worktrees: { cleanup: { maxCount: 0, maxTotalSizeGb: 0 } },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateConfigObject({
+        worktrees: { cleanup: { maxCount: -1 } },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateConfigObject({
+        worktrees: { cleanup: { maxTotalSizeGb: -0.5 } },
+      }).ok,
+    ).toBe(false);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {

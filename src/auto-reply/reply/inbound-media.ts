@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Minimal inbound media fields used by media/audio detection. */
-export type InboundMediaContext = {
+type InboundMediaContext = {
   Body?: unknown;
   BodyForCommands?: unknown;
   CommandBody?: unknown;

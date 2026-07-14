@@ -10,7 +10,7 @@ const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
-export type AgentEventPayload = {
+type AgentEventPayload = {
   runId: string;
   seq: number;
   stream: string;

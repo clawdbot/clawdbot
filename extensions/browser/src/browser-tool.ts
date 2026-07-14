@@ -103,76 +103,6 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserArmDialog: typeof browserArmDialog;
-      browserArmFileChooser: typeof browserArmFileChooser;
-      browserCloseTab: typeof browserCloseTab;
-      browserDoctor: typeof browserDoctor;
-      browserFocusTab: typeof browserFocusTab;
-      browserImportProfile: typeof browserImportProfile;
-      browserNavigate: typeof browserNavigate;
-      browserOpenTab: typeof browserOpenTab;
-      browserPdfSave: typeof browserPdfSave;
-      browserProfiles: typeof browserProfiles;
-      browserSystemProfiles: typeof browserSystemProfiles;
-      browserScreenshotAction: typeof browserScreenshotAction;
-      browserStart: typeof browserStart;
-      browserStatus: typeof browserStatus;
-      browserStop: typeof browserStop;
-      describeImageFile: typeof describeImageFile;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-      listNodes: typeof listNodes;
-      callGatewayTool: typeof callGatewayTool;
-      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
-      saveMediaBuffer: typeof saveMediaBuffer;
-      stageBrowserScreenshotForSharing: typeof stageBrowserScreenshotForSharing;
-      touchSessionBrowserTab: typeof touchSessionBrowserTab;
-      trackSessionBrowserTab: typeof trackSessionBrowserTab;
-      untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
-    }> | null,
-  ) {
-    browserToolDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolDeps.browserArmDialog = overrides?.browserArmDialog ?? browserArmDialog;
-    browserToolDeps.browserArmFileChooser =
-      overrides?.browserArmFileChooser ?? browserArmFileChooser;
-    browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
-    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
-    browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
-    browserToolDeps.browserImportProfile = overrides?.browserImportProfile ?? browserImportProfile;
-    browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
-    browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
-    browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
-    browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
-    browserToolDeps.browserSystemProfiles =
-      overrides?.browserSystemProfiles ?? browserSystemProfiles;
-    browserToolDeps.browserScreenshotAction =
-      overrides?.browserScreenshotAction ?? browserScreenshotAction;
-    browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
-    browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
-    browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
-    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
-    browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-    browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
-    browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
-    browserToolDeps.normalizeBrowserScreenshot =
-      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
-    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
-    browserToolDeps.stageBrowserScreenshotForSharing =
-      overrides?.stageBrowserScreenshotForSharing ?? stageBrowserScreenshotForSharing;
-    browserToolDeps.touchSessionBrowserTab =
-      overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
-    browserToolDeps.trackSessionBrowserTab =
-      overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
-    browserToolDeps.untrackSessionBrowserTab =
-      overrides?.untrackSessionBrowserTab ?? untrackSessionBrowserTab;
-  },
-};
-
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
   const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
@@ -1163,4 +1093,3 @@ export function createBrowserTool(opts?: {
     },
   };
 }
-export { testing as __testing };

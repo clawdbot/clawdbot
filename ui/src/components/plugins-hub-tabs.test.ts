@@ -3,7 +3,9 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { renderPluginsHubTabs, type PluginsHubTabsProps } from "./plugins-hub-tabs.ts";
+import { renderPluginsHubTabs } from "./plugins-hub-tabs.ts";
+
+type PluginsHubTabsProps = Parameters<typeof renderPluginsHubTabs>[0];
 
 function mount(props: PluginsHubTabsProps): HTMLDivElement {
   const container = document.createElement("div");

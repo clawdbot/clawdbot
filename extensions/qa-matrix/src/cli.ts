@@ -1,5 +1,4 @@
 // Qa Matrix plugin module implements cli behavior.
-import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createLazyCliRuntimeLoader,
@@ -95,7 +94,3 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   });
 
 export const qaRunnerCliRegistrations = [matrixQaCliRegistration] as const;
-
-export function registerMatrixQaCli(qa: Command) {
-  matrixQaCliRegistration.register(qa);
-}

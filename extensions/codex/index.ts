@@ -23,10 +23,7 @@ import {
 } from "./src/app-server/session-binding-store.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
-import {
-  handleCodexConversationBindingResolved,
-  handleCodexConversationInboundClaim,
-} from "./src/conversation-binding.js";
+import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
@@ -40,7 +37,7 @@ import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  registerCodexSessionCatalog,
+  codexSessionCatalogRuntime,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -101,7 +98,7 @@ export default definePluginEntry({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
-    registerCodexSessionCatalog({
+    codexSessionCatalogRuntime.register({
       api,
       bindingStore,
       control: sessionCatalogControl,
@@ -241,7 +238,7 @@ export default definePluginEntry({
       }),
     );
     api.on("inbound_claim", (event, ctx) =>
-      handleCodexConversationInboundClaim(event, ctx, {
+      codexConversationBindingRuntime.handleInboundClaim(event, ctx, {
         bindingStore,
         pluginConfig: resolveCurrentPluginConfig(),
         config: resolveCurrentConfig(),
@@ -250,7 +247,7 @@ export default definePluginEntry({
       }),
     );
     api.onConversationBindingResolved?.((event) =>
-      handleCodexConversationBindingResolved(event, { bindingStore }),
+      codexConversationBindingRuntime.handleBindingResolved(event, { bindingStore }),
     );
     api.on("after_compaction", async (event, ctx) => {
       const previousSessionId = event.previousSessionId?.trim();

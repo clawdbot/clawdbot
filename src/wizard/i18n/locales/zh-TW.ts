@@ -969,7 +969,7 @@ export const zh_TW = {
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
-      daemonRuntimeNodeHint: "WhatsApp + Telegram 需要使用。Bun 重新連線時可能造成記憶體損壞。",
+      daemonRuntimeNodeHint: "OpenClaw 狀態使用 node:sqlite，因此必須使用 Node；Bun 無法執行閘道。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',

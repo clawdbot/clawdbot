@@ -3,7 +3,7 @@ import { listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 
-export type StaleSubagentAllowlistHit = {
+type StaleSubagentAllowlistHit = {
   /** Config path containing the stale allowAgents entry. */
   pathLabel: string;
   /** Original configured agent id. */

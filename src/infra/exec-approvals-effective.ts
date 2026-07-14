@@ -113,7 +113,7 @@ function formatModeSource(params: { sourcePath: string; configPath: string }): s
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
-export type ExecPolicyHostDefaults = Pick<
+type ExecPolicyHostDefaults = Pick<
   Required<ExecApprovalsDefaults>,
   "security" | "ask" | "askFallback"
 >;

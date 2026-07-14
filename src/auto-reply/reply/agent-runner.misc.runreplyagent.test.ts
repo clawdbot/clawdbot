@@ -24,7 +24,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -3644,6 +3644,40 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     await runPrivateFinalCase({
       didDeliverSourceReplyViaMessageTool: true,
     });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("still recovers a private final after only a message-tool progress delivery", async () => {
+    await runPrivateFinalCase({
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "+15550001111",
+          sourceReplyFinal: false,
+        },
+      ],
+    });
+
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recover again after an explicit final message-tool delivery", async () => {
+    await runPrivateFinalCase({
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "+15550001111",
+          sourceReplyFinal: true,
+        },
+      ],
+    });
+
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

@@ -1,7 +1,7 @@
 // Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
-  addExecApproval,
+  enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
   parseExecApprovalRequested,
   parsePluginApprovalRequested,
@@ -282,8 +282,8 @@ describe("refreshPendingApprovalQueue", () => {
     const state = createPromptState(request, []);
 
     const refreshPromise = refreshPendingApprovalQueue(state);
-    state.execApprovalQueue = addExecApproval(
-      state.execApprovalQueue,
+    enqueueExecApprovalPrompt(
+      state,
       createExecApproval({ id: "approval-arrived-during-refresh", createdAtMs: 2000 }),
     );
     resolveExecList([]);
@@ -292,6 +292,7 @@ describe("refreshPendingApprovalQueue", () => {
     expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
       "approval-arrived-during-refresh",
     ]);
+    clearResolvedExecApprovalPrompt(state, "approval-arrived-during-refresh");
   });
 
   it("does not requeue approvals resolved while a refresh is in flight", async () => {
@@ -341,7 +342,7 @@ describe("refreshPendingApprovalQueue", () => {
     const transientApproval = createExecApproval({ id: "approval-transient" });
 
     const refreshPromise = refreshPendingApprovalQueue(state);
-    state.execApprovalQueue = addExecApproval(state.execApprovalQueue, transientApproval);
+    enqueueExecApprovalPrompt(state, transientApproval);
     resolveExecList([transientApproval]);
     clearResolvedExecApprovalPrompt(state, "approval-transient");
     resolvePluginList([]);

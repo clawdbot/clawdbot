@@ -49,7 +49,7 @@ export type WizardProgress = {
   stop: (message?: string) => void;
 };
 
-export type WizardDeviceCodeParams = {
+type WizardDeviceCodeParams = {
   title: string;
   code: string;
   expiresInMinutes?: number;

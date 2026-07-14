@@ -1,11 +1,10 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
@@ -18,9 +17,15 @@ import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
-import { sleep } from "../utils/sleep.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { writeArchiveStreamToFile } from "./backup-create-stream.js";
+import {
+  removeBackupTempArchiveBestEffort,
+  resolveBackupTarAttemptTempPaths,
+  writeTarArchiveWithRetry,
+} from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { formatErrorMessage } from "./errors.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -37,40 +42,6 @@ class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
   override set(_key: BackupLinkCacheKey, _value: string): this {
     return this;
   }
-}
-
-type VolatileFilterPlan = Parameters<typeof isVolatileBackupPath>[1];
-
-const VOLATILE_BACKUP_SYNTHETIC_STAT = {
-  isBlockDevice: () => false,
-  isCharacterDevice: () => false,
-  isDirectory: () => false,
-  isFIFO: () => false,
-  isFile: () => false,
-  isSocket: () => false,
-  isSymbolicLink: () => false,
-} as unknown as Stats;
-
-class BackupVolatileStatCache extends Map<string, Stats> {
-  constructor(private readonly volatilePlan: VolatileFilterPlan) {
-    super();
-  }
-
-  override get(key: string): Stats | undefined {
-    const cached = super.get(key);
-    if (cached) {
-      return cached;
-    }
-    // node-tar checks this cache before lstat and applies the filter to a hit.
-    // A synthetic hit lets known volatile paths disappear without aborting the archive.
-    return isVolatileBackupPath(key, this.volatilePlan)
-      ? VOLATILE_BACKUP_SYNTHETIC_STAT
-      : undefined;
-  }
-}
-
-function createBackupVolatileStatCache(volatilePlan: VolatileFilterPlan): Map<string, Stats> {
-  return new BackupVolatileStatCache(volatilePlan);
 }
 
 export type BackupCreateOptions = {
@@ -144,122 +115,6 @@ export type BackupCreateResult = {
    */
   skippedVolatileCount: number;
 };
-
-const BACKUP_TAR_MAX_ATTEMPTS = 3;
-// Backoff between attempts: wait 10s before attempt 2, 20s before attempt 3.
-const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
-
-function isTarEofRaceError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as NodeJS.ErrnoException).code;
-  if (code === "EOF") {
-    return true;
-  }
-  // Keep this regex narrow: match only the two tar-specific EOF-class error
-  // strings thrown by node-tar's WriteEntry#onread (grow and shrink races,
-  // see node_modules/tar/dist/commonjs/write-entry.js around the
-  // "did not encounter expected EOF" and "encountered unexpected EOF"
-  // Object.assign sites), plus the TAR_BAD_ARCHIVE code surfaced by the
-  // parser on truncated input. A bare /EOF/i alternative also matched
-  // unrelated SSL/OpenSSL strings like "EOF occurred in violation of
-  // protocol" and "unexpected eof while reading", causing pointless retries.
-  const message = (err as Error).message ?? "";
-  return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
-}
-
-type BackupTarRetryLogger = (message: string) => void;
-
-function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
-  return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
-}
-
-function resolveBackupTarAttemptTempPaths(tempArchivePath: string): string[] {
-  return Array.from({ length: BACKUP_TAR_MAX_ATTEMPTS }, (_value, index) =>
-    resolveBackupTarAttemptTempPath(tempArchivePath, index + 1),
-  );
-}
-
-async function removeBackupTempArchiveBestEffort(tempArchivePath: string): Promise<void> {
-  await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
-}
-
-async function writeArchiveStreamToFile(params: {
-  archivePath: string;
-  archiveStream: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
-}): Promise<void> {
-  // Own both stream lifecycles so a tar read error closes the output handle
-  // before retry cleanup touches the partial archive.
-  // Exclusive creation guarantees the 0600 mode belongs to a fresh inode and
-  // refuses a pre-existing temp path instead of following a symlink.
-  await pipeline(
-    params.archiveStream,
-    createWriteStream(params.archivePath, { flags: "wx", mode: 0o600 }),
-  );
-}
-
-async function writeTarArchiveWithRetry(params: {
-  tempArchivePath: string;
-  runTar: (tempArchivePath: string) => Promise<void>;
-  log?: BackupTarRetryLogger;
-  sleepMs?: (ms: number) => Promise<void>;
-}): Promise<string> {
-  const sleepFn = params.sleepMs ?? sleep;
-  let lastErr: unknown;
-  const attemptTempArchivePaths: string[] = [];
-  for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
-    const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
-    attemptTempArchivePaths.push(attemptTempArchivePath);
-    try {
-      await params.runTar(attemptTempArchivePath);
-      for (const staleTempArchivePath of attemptTempArchivePaths.slice(0, -1)) {
-        await removeBackupTempArchiveBestEffort(staleTempArchivePath);
-      }
-      return attemptTempArchivePath;
-    } catch (err) {
-      lastErr = err;
-      if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
-        for (const staleTempArchivePath of attemptTempArchivePaths) {
-          await removeBackupTempArchiveBestEffort(staleTempArchivePath);
-        }
-        break;
-      }
-      try {
-        await fs.rm(attemptTempArchivePath, { force: true });
-      } catch (cleanupErr) {
-        const code = (cleanupErr as NodeJS.ErrnoException).code;
-        if (code && code !== "ENOENT") {
-          params.log?.(
-            `Backup archiver could not remove temp archive ${attemptTempArchivePath} between retries: ${code}. Continuing.`,
-          );
-        }
-      }
-      const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
-      const offendingPath = (err as NodeJS.ErrnoException).path;
-      params.log?.(
-        `Backup archiver hit a live-write race${
-          offendingPath ? ` on ${offendingPath}` : ""
-        } (attempt ${attempt}/${BACKUP_TAR_MAX_ATTEMPTS}); retrying in ${Math.round(backoff / 1000)}s.`,
-      );
-      await sleepFn(backoff);
-    }
-  }
-  const final = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-  const offendingPath = (lastErr as NodeJS.ErrnoException | undefined)?.path;
-  const suffix = offendingPath
-    ? ` (last offending path: ${offendingPath}, after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`
-    : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
-  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
-}
-
-export const testApi = {
-  writeArchiveStreamToFile,
-  writeTarArchiveWithRetry,
-  isTarEofRaceError,
-  createBackupVolatileStatCache,
-};
-export { testApi as __test };
 
 async function resolveOutputPath(params: {
   output?: string;
@@ -508,7 +363,7 @@ function normalizeBackupFilterPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/+$/u, "");
 }
 
-export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
   const normalizedStateDir = normalizeBackupFilterPath(stateDir);
   const extensionsPrefix = `${normalizedStateDir}/extensions/`;
 

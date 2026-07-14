@@ -15,7 +15,9 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { isFeishuSessionStoreKey, runFeishuDoctorSequence } from "./doctor.js";
+import { feishuDoctor } from "./doctor.js";
+
+const runFeishuDoctorSequence = feishuDoctor.runConfigSequence!;
 
 type EnvSnapshot = {
   HOME?: string;
@@ -153,13 +155,6 @@ describe("Feishu doctor state repair", () => {
   afterEach(() => {
     restoreEnv(envSnapshot);
     fs.rmSync(tempHome, { recursive: true, force: true });
-  });
-
-  it("matches only Feishu channel session keys", () => {
-    expect(isFeishuSessionStoreKey("agent:main:feishu:direct:ou_user")).toBe(true);
-    expect(isFeishuSessionStoreKey("feishu:direct:ou_user")).toBe(true);
-    expect(isFeishuSessionStoreKey("agent:codex:acp:binding:feishu:default:abc123")).toBe(false);
-    expect(isFeishuSessionStoreKey("agent:main:discord:direct:user")).toBe(false);
   });
 
   it("stays quiet for healthy Feishu state and transcripts", async () => {

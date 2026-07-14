@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
+type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
 
 export class GatewayDrainingError extends Error {
   constructor() {
@@ -24,6 +24,7 @@ type GatewayWorkAdmissionState = {
   suspendGeneration: number;
   suspendInvalidated?: () => void;
   activeRootWork: Set<GatewayRootWorkAdmission>;
+  rootDrainWaiters?: Set<() => void>;
   currentRootWork: AsyncLocalStorage<GatewayRootWorkAdmission>;
   suspendOpenWaiters: Set<() => void>;
 };
@@ -37,18 +38,19 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     suspendPhase: "accepting",
     suspendGeneration: 0,
     activeRootWork: new Set(),
+    rootDrainWaiters: new Set(),
     currentRootWork: new AsyncLocalStorage(),
     suspendOpenWaiters: new Set(),
   }),
 );
 
-export type GatewayRootWorkAdmissionLease = {
+type GatewayRootWorkAdmissionLease = {
   ownsRoot: boolean;
   release: () => void;
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
-export type GatewaySuspendAdmissionLease = {
+type GatewaySuspendAdmissionLease = {
   commit: () => boolean;
   rollback: () => boolean;
   release: () => boolean;
@@ -83,7 +85,22 @@ function createGatewayRootWorkRelease(admission: GatewayRootWorkAdmission): () =
     }
     admission.released = true;
     GATEWAY_WORK_ADMISSION_STATE.activeRootWork.delete(admission);
+    if (GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size === 0) {
+      resolveRootDrainWaiters();
+    }
   };
+}
+
+function resolveRootDrainWaiters(): void {
+  const rootDrainWaiters = GATEWAY_WORK_ADMISSION_STATE.rootDrainWaiters;
+  if (!rootDrainWaiters) {
+    return;
+  }
+  const waiters = Array.from(rootDrainWaiters);
+  rootDrainWaiters.clear();
+  for (const resolve of waiters) {
+    resolve();
+  }
 }
 
 function invalidateSuspendAdmission(): void {
@@ -227,15 +244,6 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRo
   }
 }
 
-export async function runWithGatewayRootWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  const admission = await beginGatewayRootWorkAdmissionWhenOpen();
-  try {
-    return await admission.run(run);
-  } finally {
-    admission.release();
-  }
-}
-
 export async function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
 ): Promise<T> {
@@ -299,6 +307,40 @@ export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean 
   return Math.max(0, count);
 }
 
+/** Waits for admitted root transactions after restart has closed new admission. */
+export async function waitForActiveGatewayRootWork(
+  timeoutMs?: number,
+): Promise<{ drained: boolean; active: number }> {
+  if (GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size === 0) {
+    return { drained: true, active: 0 };
+  }
+  const timeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(0, Math.floor(timeoutMs))
+      : undefined;
+  if (timeout === 0) {
+    return { drained: false, active: GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size };
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolveDrain = () => {};
+  await new Promise<void>((resolve) => {
+    resolveDrain = () => resolve();
+    const waiters =
+      GATEWAY_WORK_ADMISSION_STATE.rootDrainWaiters ??
+      (GATEWAY_WORK_ADMISSION_STATE.rootDrainWaiters = new Set());
+    waiters.add(resolveDrain);
+    if (timeout !== undefined) {
+      timer = setTimeout(resolve, timeout);
+    }
+  });
+  if (timer) {
+    clearTimeout(timer);
+  }
+  GATEWAY_WORK_ADMISSION_STATE.rootDrainWaiters?.delete(resolveDrain);
+  const active = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;
+  return { drained: active === 0, active };
+}
+
 /** Atomically closes new suspension admission before synchronous inspection. */
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
@@ -348,6 +390,7 @@ export function resetGatewayWorkAdmission(): void {
     admission.released = true;
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
+  resolveRootDrainWaiters();
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;

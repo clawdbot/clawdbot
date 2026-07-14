@@ -8,6 +8,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 
 const note = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
+const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -15,6 +16,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
+  withDoctorSqliteMaintenanceLock,
 }));
 
 import {
@@ -49,6 +54,9 @@ describe("doctor session transcript repair", () => {
   beforeEach(async () => {
     note.mockClear();
     runDoctorSessionSqlite.mockReset();
+    withDoctorSqliteMaintenanceLock
+      .mockReset()
+      .mockImplementation(async (params: { run: () => unknown }) => await params.run());
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
   });
 
@@ -227,6 +235,11 @@ describe("doctor session transcript repair", () => {
       env,
       mode: "import",
     });
+    expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
+      env,
+      operation: "session SQLite import",
+      run: expect.any(Function),
+    });
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Legacy entries: 1"),
       "Session SQLite",
@@ -235,6 +248,38 @@ describe("doctor session transcript repair", () => {
       expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
       "Session SQLite",
     );
+  });
+
+  it("keeps session SQLite dry-run read-only without taking maintenance ownership", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+
+    await noteSessionTranscriptHealth({
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: false,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      env,
+      mode: "dry-run",
+    });
+    expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
   });
 
   it("repairs supported current-version linear transcripts", async () => {

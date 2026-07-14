@@ -204,8 +204,8 @@ import {
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   resetGatewayWorkAdmission,
-  runWithGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import {
   dispatchToolDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,

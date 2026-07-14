@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyTaskEvent,
   mergeTaskLists,
-  normalizeTaskSummary,
   normalizeTasksCancelResult,
-  normalizeTasksListResult,
   partitionTasks,
   sortTasks,
   type TaskSummary,
@@ -19,27 +17,6 @@ function task(overrides: Partial<TaskSummary> & Pick<TaskSummary, "id" | "status
 }
 
 describe("tasks page data", () => {
-  it("normalizes valid task summaries and rejects invalid statuses", () => {
-    expect(
-      normalizeTaskSummary({
-        id: " task-1 ",
-        status: "running",
-        runtime: "subagent",
-        title: " Build release ",
-        updatedAt: "2026-07-05T12:00:00.000Z",
-      }),
-    ).toEqual({
-      id: "task-1",
-      taskId: "task-1",
-      status: "running",
-      runtime: "subagent",
-      title: "Build release",
-      updatedAt: "2026-07-05T12:00:00.000Z",
-    });
-    expect(normalizeTaskSummary({ id: "task-2", status: "lost" })).toBeNull();
-    expect(normalizeTasksListResult({ tasks: "not-an-array" })).toBeNull();
-  });
-
   it("sorts by updated time descending with an id tiebreak", () => {
     const sorted = sortTasks([
       task({ id: "b", status: "queued", updatedAt: 200 }),

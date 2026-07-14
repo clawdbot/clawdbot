@@ -5,7 +5,7 @@ private enum OnboardingVisual {
     static let maxWidth: CGFloat = 430
 }
 
-private struct OnboardingActivationCanvas<Content: View>: View {
+struct OnboardingActivationCanvas<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -31,7 +31,7 @@ private struct OnboardingHeroGlyph: View {
     }
 }
 
-private struct OnboardingHeroHeader: View {
+struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
 
@@ -83,7 +83,7 @@ private enum OnboardingIntroPanelStyle {
     static let stroke = OpenClawBrand.activationNeutralStroke
 }
 
-private struct OnboardingIntroPanel<Content: View>: View {
+struct OnboardingIntroPanel<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -242,20 +242,20 @@ struct OnboardingIntroStep: View {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "OpenClaw",
-                    subtitle: "Securely connect this iPhone to your gateway.")
+                    subtitle: "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
                     .padding(.top, 18)
 
                 OnboardingIntroPanel {
                     VStack(alignment: .leading, spacing: 14) {
                         OnboardingSafetyRow(
-                            symbol: "link",
-                            title: "Connect to your gateway")
+                            symbol: "desktopcomputer",
+                            title: "Your agent runs on your own computer")
                         OnboardingSafetyRow(
-                            symbol: "hand.raised",
-                            title: "Choose device permissions")
+                            symbol: "qrcode.viewfinder",
+                            title: "Pair this iPhone by scanning a setup code")
                         OnboardingSafetyRow(
                             symbol: "message.fill",
-                            title: "Use OpenClaw from your phone")
+                            title: "Chat, talk, and approve actions from anywhere")
                     }
                 }
                 .padding(.top, 44)

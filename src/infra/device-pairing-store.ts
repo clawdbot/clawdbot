@@ -27,15 +27,15 @@ import type {
 } from "./device-pairing.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
-export type DevicePairingStoreState = {
+type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-export type DevicePairingStoreTarget = "pending" | "paired" | "both";
+type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
-export function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
+function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 

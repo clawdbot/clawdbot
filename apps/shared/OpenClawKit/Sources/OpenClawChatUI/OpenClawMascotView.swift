@@ -543,7 +543,10 @@ struct OpenClawMascotCanvas: View {
                     y: 24 - 20 * phase)
                 var text = context.resolve(
                     Text("z")
-                        .font(.system(size: 6 + 4 * phase, weight: .bold, design: .rounded)))
+                        .font(OpenClawChatTypography.display(
+                            size: 6 + 4 * phase,
+                            weight: .bold,
+                            relativeTo: .caption2)))
                 text.shading = .color(self.eyeGlowColor)
                 var zContext = context
                 zContext.opacity = Double(alpha * 0.9)

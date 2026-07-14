@@ -23,11 +23,13 @@ import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   attachCodexMirrorIdentity,
   buildCodexUserPromptMessage,
+  codexTranscriptMirrorRuntime,
   importCodexThreadHistoryToTranscript,
-  mirrorCodexAppServerTranscript,
-  mirrorTranscriptBestEffort,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
+
+const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
+const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 

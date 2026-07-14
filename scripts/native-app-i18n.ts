@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
@@ -1185,31 +1186,6 @@ async function readNativeI18nInventory(): Promise<{
   return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array<R>(values.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(limit, values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(
-          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
-        );
-      }
-    }),
-  );
-  return results;
-}
-
 export async function collectNativeI18nEntries(
   previousEntries?: readonly NativeI18nEntry[],
 ): Promise<NativeI18nEntry[]> {
@@ -1225,14 +1201,17 @@ export async function collectNativeI18nEntries(
       surface,
     })),
   );
-  const sources = await mapWithConcurrency(
+  const sources = await pMap(
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
-    NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),
+    {
+      concurrency: NATIVE_SOURCE_READ_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   const typedSources: Array<{
     repoPath: string;

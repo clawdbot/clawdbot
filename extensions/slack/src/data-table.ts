@@ -7,8 +7,8 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationTableFallbackText } from "./presentation-fallback.js";
 
-export const SLACK_DATA_TABLE_COLUMNS_MAX = 20;
-export const SLACK_DATA_TABLE_ROWS_MAX = 100;
+const SLACK_DATA_TABLE_COLUMNS_MAX = 20;
+const SLACK_DATA_TABLE_ROWS_MAX = 100;
 export const SLACK_DATA_TABLE_CELL_CHARACTERS_MAX = 10_000;
 
 type SlackDataTableRawTextCell = {
@@ -22,9 +22,9 @@ type SlackDataTableRawNumberCell = {
   text: string;
 };
 
-export type SlackDataTableCell = SlackDataTableRawTextCell | SlackDataTableRawNumberCell;
+type SlackDataTableCell = SlackDataTableRawTextCell | SlackDataTableRawNumberCell;
 
-export type SlackDataTableBlock = Block & {
+type SlackDataTableBlock = Block & {
   type: "data_table";
   caption: string;
   rows: SlackDataTableCell[][];
@@ -254,7 +254,7 @@ function resolvePortableTableCellCharacterCount(
 }
 
 /** True when a portable table fits Slack's per-table and per-message contracts. */
-export function canRenderSlackDataTable(
+function canRenderSlackDataTable(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
 ): boolean {

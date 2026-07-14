@@ -69,6 +69,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const ensureOpenClawModelsJson = vi.fn(async () => {});
   const ensureRuntimePluginsLoaded = vi.fn();
+  const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthStateOffMainThread = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
@@ -108,6 +109,7 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     ensureOpenClawModelsJson,
     ensureRuntimePluginsLoaded,
+    ensureContextWindowCacheLoaded,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthStateOffMainThread,
     setAuthProfileFailureHook,
@@ -217,6 +219,10 @@ vi.mock("../agents/runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: hoisted.ensureRuntimePluginsLoaded,
 }));
 
+vi.mock("../agents/context.js", () => ({
+  ensureContextWindowCacheLoaded: hoisted.ensureContextWindowCacheLoaded,
+}));
+
 vi.mock("../agents/model-provider-auth.js", () => ({
   warmCurrentProviderAuthStateOffMainThread: hoisted.warmCurrentProviderAuthStateOffMainThread,
 }));
@@ -249,6 +255,7 @@ vi.mock("./server-tailscale.js", () => ({
 
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
+const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState } = await import("./server-chat-state.js");
@@ -359,6 +366,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.ensureOpenClawModelsJson.mockReset();
     hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
     hoisted.ensureRuntimePluginsLoaded.mockReset();
+    hoisted.ensureContextWindowCacheLoaded.mockReset();
+    hoisted.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockReset();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockResolvedValue(undefined);
@@ -1138,7 +1147,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
       expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(0);
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(3);
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
@@ -1170,7 +1179,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.waitFor(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(3);
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
@@ -1216,6 +1225,41 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("starts agent runtime plugin prewarm in the first post-ready turn", () => {
+    expect(testing.agentRuntimePluginPrewarmStartDelayMs).toBe(0);
+  });
+
+  it("defers context-window cache prewarm to a post-ready sidecar", async () => {
+    vi.useFakeTimers();
+    const cfg = { agents: { defaults: { model: "openai/gpt-5.5" } } } as never;
+    const sidecar = scheduleContextCachePrewarm({
+      cfgAtStart: cfg,
+      log: { warn: vi.fn() },
+    });
+
+    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => {
+      expect(hoisted.ensureContextWindowCacheLoaded).toHaveBeenCalledWith(cfg);
+    });
+    await sidecar.stop();
+  });
+
+  it("cancels context-window cache prewarm when the gateway stops first", async () => {
+    vi.useFakeTimers();
+    const sidecar = scheduleContextCachePrewarm({
+      cfgAtStart: {} as never,
+      log: { warn: vi.fn() },
+    });
+
+    await sidecar.stop();
+    await vi.runAllTimersAsync();
+    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
+  });
+
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {
     vi.useFakeTimers();
     const onPostReadySidecars = vi.fn();
@@ -1259,7 +1303,7 @@ describe("startGatewayPostAttachRuntime", () => {
         | { stop: () => void }[]
         | undefined;
       expect(gmailSidecars).toHaveLength(1);
-      expect(lifetimeSidecars).toHaveLength(2);
+      expect(lifetimeSidecars).toHaveLength(3);
 
       for (const sidecar of gmailSidecars ?? []) {
         sidecar.stop();
@@ -1321,7 +1365,7 @@ describe("startGatewayPostAttachRuntime", () => {
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
     expect(gmailSidecars).toHaveLength(1);
-    expect(lifetimeSidecars).toHaveLength(2);
+    expect(lifetimeSidecars).toHaveLength(3);
 
     await vi.waitFor(() => {
       expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
@@ -1682,12 +1726,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("emits a startup trace span when channel startup is skipped", async () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
+    const prewarmPrimaryModel = vi.fn(async () => {});
 
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: undefined },
       async () => {
         await startGatewaySidecars({
-          cfg: { hooks: { internal: { enabled: false } } } as never,
+          cfg: {
+            hooks: { internal: { enabled: false } },
+            agents: { defaults: { model: "openai/gpt-5.6" } },
+          } as never,
           pluginRegistry: createPostAttachParams().pluginRegistry,
           defaultWorkspaceDir: "/tmp/openclaw-workspace",
           deps: {} as never,
@@ -1700,10 +1748,14 @@ describe("startGatewayPostAttachRuntime", () => {
           },
           logChannels,
           startupTrace: trace.startupTrace,
+          prewarmPrimaryModel,
         });
       },
     );
 
+    await vi.waitFor(() => {
+      expect(prewarmPrimaryModel).toHaveBeenCalledOnce();
+    });
     expect(trace.measures).toContain("sidecars.channels");
     expect(trace.measures).toContain("sidecars.channel-skip");
     expect(logChannels.info).toHaveBeenCalledWith(
@@ -1808,7 +1860,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 1],
+        ["postReadySidecarCount", 2],
       ],
     });
   });
@@ -2121,15 +2173,25 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
   });
 
-  it("starts the worker environment sidecar before releasing startup-gated methods", async () => {
+  it("reconciles worker placement before starting channels and sidecars", async () => {
     let finishReconcile: (() => void) | undefined;
     const reconcileReady = new Promise<void>((resolve) => {
       finishReconcile = resolve;
     });
+    const startupOrder: string[] = [];
     const workerSidecar = { stop: vi.fn() };
     const startWorkerEnvironmentRuntime = vi.fn(async () => {
+      startupOrder.push("worker-reconcile");
       await reconcileReady;
+      startupOrder.push("worker-ready");
       return workerSidecar;
+    });
+    const startGatewaySidecarsValue = vi.fn(async () => {
+      startupOrder.push("gateway-sidecars");
+      return {
+        pluginServices: null,
+        postReadySidecars: [],
+      };
     });
     const onGatewayLifetimeSidecars = vi.fn();
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
@@ -2143,23 +2205,45 @@ describe("startGatewayPostAttachRuntime", () => {
         onGatewayLifetimeSidecars,
       },
       createPostAttachRuntimeDeps({
-        startGatewaySidecars: vi.fn(async () => ({
-          pluginServices: null,
-          postReadySidecars: [],
-        })),
+        startGatewaySidecars: startGatewaySidecarsValue,
       }),
     );
 
     await vi.waitFor(() => {
       expect(startWorkerEnvironmentRuntime).toHaveBeenCalledTimes(1);
     });
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+    expect(startupOrder).toEqual(["worker-reconcile"]);
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
 
     finishReconcile?.();
     await vi.waitFor(() => {
-      expect([...unavailableGatewayMethods]).toEqual([]);
+      expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
     });
+    expect(startupOrder).toEqual(["worker-reconcile", "worker-ready", "gateway-sidecars"]);
+    expect([...unavailableGatewayMethods]).toEqual([]);
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(expect.arrayContaining([workerSidecar]));
+  });
+
+  it("stops worker placement runtime when channel and sidecar startup fails", async () => {
+    const workerSidecar = { stop: vi.fn(async () => {}) };
+    const startupError = new Error("sidecar startup failed");
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        {
+          ...createPostAttachParams(),
+          startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
+        },
+        createPostAttachRuntimeDeps({
+          startGatewaySidecars: vi.fn(async () => {
+            throw startupError;
+          }),
+        }),
+      ),
+    ).rejects.toBe(startupError);
+
+    expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
   it("does not start the worker environment sidecar after close begins", async () => {

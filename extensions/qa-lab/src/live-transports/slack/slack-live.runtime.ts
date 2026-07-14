@@ -78,6 +78,7 @@ const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
 const SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS = 15_000;
 const SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT = 101;
+const SLACK_QA_LOG_TAIL_TIMEOUT_MS = 20_000;
 const SLACK_QA_INVALID_TABLE_CAPTION = "QA invalid_blocks fallback";
 const SLACK_QA_INVALID_TABLE_HEADERS = ["Row", "Value"] as const;
 const SLACK_QA_CHART_TITLE = "QA latency trend";
@@ -139,6 +140,7 @@ type SlackQaScenarioId =
   | "slack-codex-approval-exec-native"
   | "slack-codex-approval-plugin-native"
   | "slack-chart-presentation-native"
+  | "slack-channel-disabled-warning"
   | "slack-mention-gating"
   | "slack-progress-commentary-false"
   | "slack-progress-commentary-omitted"
@@ -178,10 +180,12 @@ function resolveSlackQaSutAccountId(value?: string) {
 }
 
 type SlackQaMessageScenarioRun = {
+  afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
   matchText: string;
+  preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
   verifyObserved?: (params: {
@@ -245,6 +249,7 @@ type SlackQaBeforeRunResult =
 
 type SlackQaConfigOverrides = {
   allowFrom?: string[];
+  channelEnabled?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -369,7 +374,7 @@ type SlackQaScenarioResult = {
   title: string;
 };
 
-export type SlackQaRunResult = {
+type SlackQaRunResult = {
   gatewayDebugDirPath?: string;
   observedMessagesPath: string;
   outputDir: string;
@@ -663,6 +668,52 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         expectReply: false,
         input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
         matchText: token,
+      };
+    },
+  },
+  {
+    id: "slack-channel-disabled-warning",
+    title: "Slack disabled channel warns and does not trigger",
+    timeoutMs: 8_000,
+    defaultEnabled: false,
+    configOverrides: { channelEnabled: false },
+    buildRun: (sutUserId) => {
+      const marker = `SLACK_QA_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      let logCursor = 0;
+      return {
+        expectReply: false,
+        input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
+        matchText: marker,
+        preserveGatewayDebug: true,
+        beforeRun: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { limit: 1, maxBytes: 32_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { cursor?: unknown };
+          logCursor = typeof gatewayLogTail.cursor === "number" ? gatewayLogTail.cursor : 0;
+        },
+        afterNoReply: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { cursor: logCursor, limit: 200, maxBytes: 256_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { lines?: unknown };
+          const gatewayLogLines = Array.isArray(gatewayLogTail.lines)
+            ? gatewayLogTail.lines.filter((line): line is string => typeof line === "string")
+            : [];
+          const expectedFields = [
+            "Slack channel denied by configuration",
+            "channel_not_allowed",
+            "channel_disabled",
+          ];
+          if (
+            !gatewayLogLines.some((line) => expectedFields.every((field) => line.includes(field)))
+          ) {
+            throw new Error("disabled Slack channel did not emit the structured warning");
+          }
+          return "structured disabled-channel warning observed";
+        },
       };
     },
   },
@@ -1246,7 +1297,7 @@ function buildSlackQaConfig(
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {
-                enabled: true,
+                enabled: params.overrides?.channelEnabled ?? true,
                 requireMention: true,
                 allowBots: true,
                 users: params.overrides?.users ?? [params.driverBotUserId],
@@ -3486,13 +3537,26 @@ export async function runSlackQaLive(params: {
               sutIdentity,
               timeoutMs: scenario.timeoutMs,
             });
+            const afterNoReplyDetails = await scenarioRun.afterNoReply?.({
+              ...baseScenarioContext,
+              sentTs: sent.ts,
+            });
+            if (scenarioRun.preserveGatewayDebug) {
+              preserveAttemptGatewayDebug = true;
+              preservedGatewayDebugArtifacts = true;
+            }
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
               standardId: scenario.standardId,
               status: "pass",
-              details:
-                scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
+              details: [
+                "no reply",
+                afterNoReplyDetails,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
             });
           }
           break;

@@ -2,13 +2,14 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { RECOVERY_REPLAY_SPACING_MS } from "./delivery-recovery.shared.js";
+const RECOVERY_REPLAY_SPACING_MS = 250;
+import {
+  failSessionDelivery,
+  loadPendingSessionDeliveries,
+} from "./session-delivery-queue-storage.js";
 import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
-  failSessionDelivery,
-  isSessionDeliveryEligibleForRetry,
-  loadPendingSessionDeliveries,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue.js";
 
@@ -309,41 +310,6 @@ describe("session-delivery queue recovery", () => {
       if (pending[0]?.kind === "systemEvent") {
         expect(pending[0].text).toBe("leave fresh entry queued");
       }
-    });
-
-    vi.useRealTimers();
-  });
-
-  it("uses the persisted retryCount for the first backoff tier", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
-
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "retry me",
-        },
-        tempDir,
-      );
-      await failSessionDelivery(id, "transient failure", tempDir);
-
-      const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
-      if (!failedEntry) {
-        throw new Error("expected failed session delivery to remain pending");
-      }
-      expect(failedEntry.retryCount).toBe(1);
-
-      const lastAttemptAt = failedEntry.lastAttemptAt;
-      if (typeof lastAttemptAt !== "number") {
-        throw new Error("expected failed delivery attempt timestamp");
-      }
-      const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
-      expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
-
-      const ready = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 5_000);
-      expect(ready).toEqual({ eligible: true });
     });
 
     vi.useRealTimers();

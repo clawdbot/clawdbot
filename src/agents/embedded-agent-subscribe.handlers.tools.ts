@@ -1423,6 +1423,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1430,7 +1431,6 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&

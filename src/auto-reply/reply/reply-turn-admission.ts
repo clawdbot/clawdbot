@@ -26,10 +26,10 @@ import {
 } from "./reply-run-registry.js";
 
 /** Kinds of turns that compete for one reply run slot per session. */
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
-export type ReplyTurnAdmission =
+type ReplyTurnAdmission =
   | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
   | {
       status: "skipped";

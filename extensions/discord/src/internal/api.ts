@@ -32,7 +32,6 @@ export {
 export {
   createInteractionCallback,
   createWebhookMessage,
-  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.interactions.js";

@@ -21,10 +21,8 @@ describe("splitMediaFromOutput", () => {
     }
     if ("mediaUrls" in expected) {
       expect(result.mediaUrls).toEqual(expected.mediaUrls);
-      expect(result.mediaUrl).toBe(expected.mediaUrls?.[0]);
     } else {
       expect(result.mediaUrls).toBeUndefined();
-      expect(result.mediaUrl).toBeUndefined();
     }
   }
 

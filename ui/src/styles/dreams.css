@@ -1027,22 +1027,11 @@
   border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
 }
 
-.dreams-diary__preview-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 32px;
-  background: color-mix(in oklab, var(--bg) 72%, black 28%);
-  backdrop-filter: blur(10px);
-}
-
 .dreams-diary__preview-panel {
   display: flex;
   flex-direction: column;
   width: min(1120px, 100%);
+  height: min(840px, calc(100dvh - 64px));
   min-height: 0;
   border-radius: 18px;
   border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
@@ -1185,10 +1174,6 @@
 
   .dreams-diary {
     padding: 20px 16px 48px;
-  }
-
-  .dreams-diary__preview-backdrop {
-    padding: 12px;
   }
 
   .dreams-diary__preview-header {

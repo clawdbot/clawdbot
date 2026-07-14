@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   getInstalledPluginIndexInstallRecordsCache,
@@ -269,25 +269,24 @@ function readPersistedInstalledPluginIndexForRecords(
     return tryReadJsonSync(options.filePath);
   }
   try {
-    const database = openOpenClawStateDatabase(
-      resolveInstalledPluginIndexStateDatabaseOptions(options),
-    );
-    const row = database.db
-      .prepare(
-        `
-          SELECT install_records_json, plugins_json
-            FROM installed_plugin_index
-           WHERE index_key = ?
-        `,
-      )
-      .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
-    if (!row) {
-      return null;
-    }
-    return {
-      installRecords: parseJsonColumn(row.install_records_json),
-      plugins: parseJsonColumn(row.plugins_json),
-    };
+    return withOpenClawStateDatabaseReadOnly(({ db }) => {
+      const row = db
+        .prepare(
+          `
+            SELECT install_records_json, plugins_json
+              FROM installed_plugin_index
+             WHERE index_key = ?
+          `,
+        )
+        .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
+      if (!row) {
+        return null;
+      }
+      return {
+        installRecords: parseJsonColumn(row.install_records_json),
+        plugins: parseJsonColumn(row.plugins_json),
+      };
+    }, resolveInstalledPluginIndexStateDatabaseOptions(options));
   } catch {
     return null;
   }

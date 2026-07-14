@@ -10,10 +10,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
-import {
-  runRemoteGatewayInferenceOnboarding,
-  type RemoteGatewayInferenceOnboardingDeps,
-} from "./onboard-remote-gateway.js";
+import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
+
+type RemoteGatewayInferenceOnboardingDeps = NonNullable<
+  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
+>;
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 

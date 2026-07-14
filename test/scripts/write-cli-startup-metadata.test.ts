@@ -114,24 +114,6 @@ async function waitForChildClose(
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  it("caps concurrent metadata render workers while preserving result order", async () => {
-    let active = 0;
-    let peakActive = 0;
-
-    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      active -= 1;
-      return `rendered-${value}`;
-    });
-
-    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
-    expect(peakActive).toBe(2);
-  });
-
   it("fails command help rendering when captured output exceeds the byte limit", async () => {
     await expect(
       __testing.spawnText(["--eval", "process.stdout.write('x'.repeat(2048))"], {

@@ -19,11 +19,26 @@ const mcpAppMocks = vi.hoisted(() => ({ fetchMcpAppView: vi.fn() }));
 
 vi.mock("./mcp-ui-resource.js", () => ({
   fetchMcpAppView: mcpAppMocks.fetchMcpAppView,
-  buildMcpAppCanvasPayload: (view: { viewId: string; title: string }) => ({
+  buildMcpAppCanvasPayload: (view: {
+    viewId: string;
+    title: string;
+    serverName: string;
+    toolName: string;
+    uiResourceUri: string;
+    toolCallId?: string;
+    resultMetaState?: "unavailable";
+  }) => ({
     kind: "canvas",
     view: { id: view.viewId, title: view.title },
     presentation: { target: "assistant_message", sandbox: "scripts" },
-    mcpApp: { viewId: view.viewId },
+    mcpApp: {
+      viewId: view.viewId,
+      serverName: view.serverName,
+      toolName: view.toolName,
+      uiResourceUri: view.uiResourceUri,
+      ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
+    },
   }),
 }));
 
@@ -152,6 +167,10 @@ describe("createBundleMcpToolRuntime", () => {
     mcpAppMocks.fetchMcpAppView.mockResolvedValue({
       viewId: "cv_app",
       title: "Demo UI",
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolCallId: "call-1",
     });
     const tool: McpCatalogTool = {
       serverName: "demo",
@@ -166,6 +185,7 @@ describe("createBundleMcpToolRuntime", () => {
       serverName: "demo",
       result: {
         content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        _meta: { "ui/state": { selected: true } },
       },
     });
     sessionRuntime.mcpAppsEnabled = true;
@@ -178,10 +198,22 @@ describe("createBundleMcpToolRuntime", () => {
     ).execute("call-1", {}, undefined, undefined);
     expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
     expect(result.details).toMatchObject({
-      mcpAppPreview: { mcpApp: { viewId: "cv_app" } },
+      mcpAppPreview: {
+        mcpApp: {
+          viewId: "cv_app",
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app",
+          toolCallId: "call-1",
+          resultMetaState: "unavailable",
+        },
+      },
     });
     expect(mcpAppMocks.fetchMcpAppView).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedAppToolNames: new Set(["show"]) }),
+      expect.objectContaining({
+        toolCallId: "call-1",
+        allowedAppToolNames: new Set(["show"]),
+      }),
     );
   });
 

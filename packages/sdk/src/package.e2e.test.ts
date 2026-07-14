@@ -20,6 +20,7 @@ const COMMAND_TIMEOUT_MS = 120_000;
 const tempDirs: string[] = [];
 const WORKSPACE_PACKAGE_NAMES = [
   "@openclaw/gateway-protocol",
+  "@openclaw/retry",
   "@openclaw/gateway-client",
   "@openclaw/sdk",
 ] as const;
@@ -345,6 +346,7 @@ describe("OpenClaw SDK package e2e", () => {
     const repoRoot = process.cwd();
     const packageRoots = [
       path.join(repoRoot, "packages", "gateway-protocol"),
+      path.join(repoRoot, "packages", "retry"),
       path.join(repoRoot, "packages", "gateway-client"),
       path.join(repoRoot, "packages", "sdk"),
     ];

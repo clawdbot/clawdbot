@@ -9,6 +9,74 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
+import type {
+  SecretTargetExpected,
+  SecretTargetRegistryEntry,
+  SecretTargetShape,
+} from "./target-registry-types.js";
+
+export type ChannelSecretTargetPathSpec = {
+  path: string;
+  refPath?: string;
+  targetType?: string;
+  targetTypeAliases?: string[];
+  secretShape?: SecretTargetShape;
+  expectedResolvedValue?: SecretTargetExpected;
+  accountIdPathSegmentIndex?: number;
+};
+
+function buildChannelSecretTargetRegistryEntry(params: {
+  channelKey: string;
+  scope: "account" | "channel";
+  spec: string | ChannelSecretTargetPathSpec;
+}): SecretTargetRegistryEntry {
+  const spec = typeof params.spec === "string" ? { path: params.spec } : params.spec;
+  const scopePrefix =
+    params.scope === "account"
+      ? `channels.${params.channelKey}.accounts.*`
+      : `channels.${params.channelKey}`;
+  const pathPattern = `${scopePrefix}.${spec.path}`;
+  return {
+    id: pathPattern,
+    targetType: spec.targetType ?? pathPattern,
+    ...(spec.targetTypeAliases ? { targetTypeAliases: spec.targetTypeAliases } : {}),
+    configFile: "openclaw.json",
+    pathPattern,
+    ...(spec.refPath ? { refPathPattern: `${scopePrefix}.${spec.refPath}` } : {}),
+    secretShape: spec.secretShape ?? "secret_input",
+    expectedResolvedValue: spec.expectedResolvedValue ?? "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    ...(spec.accountIdPathSegmentIndex !== undefined
+      ? { accountIdPathSegmentIndex: spec.accountIdPathSegmentIndex }
+      : {}),
+  };
+}
+
+// Builds standard channel/account secret registry rows without repeating fixed metadata.
+export function createChannelSecretTargetRegistryEntries(params: {
+  channelKey: string;
+  account?: readonly (string | ChannelSecretTargetPathSpec)[];
+  channel?: readonly (string | ChannelSecretTargetPathSpec)[];
+}): SecretTargetRegistryEntry[] {
+  return [
+    ...(params.account ?? []).map((spec) =>
+      buildChannelSecretTargetRegistryEntry({
+        channelKey: params.channelKey,
+        scope: "account",
+        spec,
+      }),
+    ),
+    ...(params.channel ?? []).map((spec) =>
+      buildChannelSecretTargetRegistryEntry({
+        channelKey: params.channelKey,
+        scope: "channel",
+        spec,
+      }),
+    ),
+  ];
+}
 
 export type ChannelAccountEntry = {
   accountId: string;

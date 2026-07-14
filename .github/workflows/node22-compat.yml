@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources

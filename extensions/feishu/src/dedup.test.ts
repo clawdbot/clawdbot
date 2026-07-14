@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { feishuDedupeState } from "./dedup-state.js";
 import {
   claimUnprocessedFeishuMessage,
   finalizeFeishuMessageProcessing,
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing,
-  testingHooks,
   warmupDedupFromPluginState,
 } from "./dedup.js";
 
@@ -21,12 +21,11 @@ beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-dedup-"));
   process.env.OPENCLAW_STATE_DIR = tempDir;
-  testingHooks.resetFeishuDedupForTests();
+  feishuDedupeState.reset();
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  testingHooks.resetFeishuDedupForTests();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -41,8 +40,8 @@ afterEach(() => {
 
 // Simulates a process restart: a fresh guard has empty memory and no in-flight
 // claims, so any duplicate verdict must come from the persisted SQLite rows.
-function restartFeishuDedup(): void {
-  testingHooks.resetFeishuDedupForTests();
+async function restartFeishuDedup(): Promise<void> {
+  feishuDedupeState.reset();
 }
 
 describe("Feishu claimable dedupe", () => {
@@ -79,7 +78,7 @@ describe("Feishu claimable dedupe", () => {
     ).resolves.toBe("claimed");
     releaseFeishuMessageProcessing("msg-3", "account-a");
 
-    restartFeishuDedup();
+    await restartFeishuDedup();
     await expect(
       claimUnprocessedFeishuMessage({ messageId: "msg-3", namespace: "account-a" }),
     ).resolves.toBe("claimed");
@@ -90,7 +89,7 @@ describe("Feishu claimable dedupe", () => {
       finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe(true);
 
-    restartFeishuDedup();
+    await restartFeishuDedup();
     await expect(
       claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe("duplicate");
@@ -125,13 +124,13 @@ describe("Feishu claimable dedupe", () => {
     await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(true);
     await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(false);
 
-    restartFeishuDedup();
+    await restartFeishuDedup();
     await expect(recordProcessedFeishuMessage("msg-6", "broadcast")).resolves.toBe(false);
   });
 
   it("warms memory from persisted plugin state", async () => {
     await expect(recordProcessedFeishuMessage("msg-7", "account-a")).resolves.toBe(true);
-    restartFeishuDedup();
+    await restartFeishuDedup();
 
     await expect(warmupDedupFromPluginState("account-a")).resolves.toBe(1);
     await expect(recordProcessedFeishuMessage("msg-7", "account-a")).resolves.toBe(false);
@@ -141,7 +140,7 @@ describe("Feishu claimable dedupe", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     await expect(recordProcessedFeishuMessage("msg-8", "account-a")).resolves.toBe(true);
-    restartFeishuDedup();
+    await restartFeishuDedup();
 
     vi.setSystemTime(1_000 + 24 * 60 * 60 * 1000 + 1);
     await expect(hasProcessedFeishuMessage("msg-8", "account-a")).resolves.toBe(false);

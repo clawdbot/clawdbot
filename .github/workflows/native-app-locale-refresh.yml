@@ -13,6 +13,8 @@ on:
       - apps/.i18n/native/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
+      - scripts/android-app-i18n.ts
+      - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
@@ -264,8 +266,17 @@ jobs:
       - name: Refresh shared native inventory
         run: node --import tsx scripts/native-app-i18n.ts sync --write
 
+      - name: Refresh Android native resources
+        run: node --import tsx scripts/android-app-i18n.ts sync
+
+      - name: Refresh Apple native resources
+        run: node --import tsx scripts/apple-app-i18n.ts sync-ios --write
+
       - name: Validate native locale refresh
-        run: node --import tsx scripts/native-app-i18n.ts check
+        run: |
+          node --import tsx scripts/native-app-i18n.ts check
+          node --import tsx scripts/android-app-i18n.ts check
+          node --import tsx scripts/apple-app-i18n.ts check
 
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
@@ -281,6 +292,15 @@ jobs:
           generated-paths: |
             apps/.i18n/native
             apps/.i18n/native-source.json
+            apps/.i18n/apple-translation-contradictions.json
+            apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
+            apps/android/app/src/main/res/values*/assistant.xml
+            apps/android/app/src/main/res/values*/strings.xml
+            apps/ios/Resources/Localizable.xcstrings
+            apps/ios/Sources/*.lproj/InfoPlist.strings
+            apps/ios/WatchApp/*.lproj/InfoPlist.strings
+            apps/ios/ShareExtension/*.lproj/InfoPlist.strings
+            apps/ios/ActivityWidget/*.lproj/InfoPlist.strings
           invalidation-paths: |
             apps/android/app/src/main
             apps/ios
@@ -288,6 +308,8 @@ jobs:
             apps/macos/Package.swift
             apps/shared/OpenClawKit/Sources
             scripts/control-ui-i18n.ts
+            scripts/android-app-i18n.ts
+            scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
@@ -310,3 +332,5 @@ jobs:
 
             - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             - `node --import tsx scripts/native-app-i18n.ts check`
+            - `node --import tsx scripts/android-app-i18n.ts check`
+            - `node --import tsx scripts/apple-app-i18n.ts check`

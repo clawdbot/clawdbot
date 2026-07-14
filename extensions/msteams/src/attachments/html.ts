@@ -106,13 +106,6 @@ export function summarizeMSTeamsHtmlAttachments(
   };
 }
 
-export function buildMSTeamsAttachmentPlaceholder(
-  attachments: MSTeamsAttachmentLike[] | undefined,
-  limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
-): string {
-  return resolveMSTeamsInboundAttachmentPresentation(attachments, limits).placeholder;
-}
-
 function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): boolean {
   const contentType = normalizeContentType(attachment.contentType) ?? "";
   if (

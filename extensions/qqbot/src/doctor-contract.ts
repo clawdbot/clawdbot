@@ -11,6 +11,66 @@ const RESTRICTED_GROUP_TOOLS: GroupToolPolicyConfig = {
   deny: ["exec", "read", "write"],
 };
 
+// QQBot's legacy scalar `streaming` is not a plain mode alias: `true` enabled
+// block streaming AND the official C2C stream API (shouldUseOfficialC2cStream
+// treated `true` like `c2cStreamApi: true`), while `false` only disabled block
+// streaming. It migrates to the nested `{mode, nativeTransport}` shape here
+// instead of the shared alias DSL because qqbot has no flat delivery aliases
+// and its strict streaming schema rejects the DSL's chunkMode/block slots.
+// No account seeding: named accounts never inherit root config (bridge/config
+// resolves them standalone), and the boolean carries its full semantics.
+function hasLegacyStreamingValue(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return (
+    typeof entry.streaming === "boolean" ||
+    asObjectRecord(entry.streaming)?.c2cStreamApi !== undefined
+  );
+}
+
+function hasLegacyAccountStreamingValues(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyStreamingValue(account));
+}
+
+function migrateStreamingValue(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const streaming = params.entry.streaming;
+  const path = `${params.pathPrefix}.streaming`;
+  if (typeof streaming === "boolean") {
+    const next: Record<string, unknown> = streaming
+      ? { mode: "partial", nativeTransport: true }
+      : { mode: "off" };
+    params.changes.push(`Moved ${path} (boolean) → ${path}.mode (${next.mode as string}).`);
+    if (streaming) {
+      // `streaming: true` also enabled the official C2C stream API.
+      params.changes.push(`Moved ${path} (boolean) → ${path}.nativeTransport.`);
+    }
+    return { entry: { ...params.entry, streaming: next }, changed: true };
+  }
+  const streamingRecord = asObjectRecord(streaming);
+  if (!streamingRecord || streamingRecord.c2cStreamApi === undefined) {
+    return { entry: params.entry, changed: false };
+  }
+  const { c2cStreamApi, ...rest } = streamingRecord;
+  const next: Record<string, unknown> = { ...rest };
+  if (next.nativeTransport === undefined) {
+    next.nativeTransport = c2cStreamApi;
+    params.changes.push(`Moved ${path}.c2cStreamApi → ${path}.nativeTransport.`);
+  } else {
+    params.changes.push(`Removed ${path}.c2cStreamApi (${path}.nativeTransport already set).`);
+  }
+  return { entry: { ...params.entry, streaming: next }, changed: true };
+}
+
 function hasLegacyGroupToolPolicy(value: unknown): boolean {
   const groups = asObjectRecord(value);
   if (!groups) {
@@ -82,6 +142,18 @@ function migrateGroups(params: {
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
+    path: ["channels", "qqbot"],
+    message:
+      'channels.qqbot.streaming (boolean) and channels.qqbot.streaming.c2cStreamApi are legacy; use channels.qqbot.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
+    match: hasLegacyStreamingValue,
+  },
+  {
+    path: ["channels", "qqbot", "accounts"],
+    message:
+      'channels.qqbot.accounts.<id>.streaming (boolean) and streaming.c2cStreamApi are legacy; use channels.qqbot.accounts.<id>.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
+    match: hasLegacyAccountStreamingValues,
+  },
+  {
     path: ["channels", "qqbot", "groups"],
     message:
       'channels.qqbot.groups.<id>.toolPolicy is legacy and was ignored by QQBot group tool enforcement; use channels.qqbot.groups.<id>.tools instead. Run "openclaw doctor --fix".',
@@ -109,6 +181,14 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = false;
 
+  const rootStreaming = migrateStreamingValue({
+    entry: updated,
+    pathPrefix: "channels.qqbot",
+    changes,
+  });
+  updated = rootStreaming.entry;
+  changed = changed || rootStreaming.changed;
+
   const groups = asObjectRecord(updated.groups);
   if (groups) {
     const migrated = migrateGroups({
@@ -128,17 +208,32 @@ export function normalizeCompatibilityConfig({
     const nextAccounts = { ...accounts };
     for (const [accountId, rawAccount] of Object.entries(accounts)) {
       const account = asObjectRecord(rawAccount);
-      const accountGroups = asObjectRecord(account?.groups);
-      if (!account || !accountGroups) {
+      if (!account) {
         continue;
       }
-      const migrated = migrateGroups({
-        groups: accountGroups,
-        pathPrefix: `channels.qqbot.accounts.${accountId}.groups`,
+      const accountStreaming = migrateStreamingValue({
+        entry: account,
+        pathPrefix: `channels.qqbot.accounts.${accountId}`,
         changes,
       });
-      if (migrated.changed) {
-        nextAccounts[accountId] = { ...account, groups: migrated.groups };
+      let nextAccount = accountStreaming.entry;
+      let accountChanged = accountStreaming.changed;
+
+      const accountGroups = asObjectRecord(nextAccount.groups);
+      if (accountGroups) {
+        const migrated = migrateGroups({
+          groups: accountGroups,
+          pathPrefix: `channels.qqbot.accounts.${accountId}.groups`,
+          changes,
+        });
+        if (migrated.changed) {
+          nextAccount = { ...nextAccount, groups: migrated.groups };
+          accountChanged = true;
+        }
+      }
+
+      if (accountChanged) {
+        nextAccounts[accountId] = nextAccount;
         accountsChanged = true;
       }
     }

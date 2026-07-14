@@ -10,7 +10,7 @@ export type ProviderThinkingPolicyContext = {
   modelId: string;
 };
 
-export type ProviderThinkingModelCompat = {
+type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
   supportedReasoningEfforts?: readonly string[] | null;
 };
@@ -34,7 +34,7 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   compat?: ProviderThinkingModelCompat | null;
 };
 
-export type ProviderThinkingLevelId =
+type ProviderThinkingLevelId =
   | "off"
   | "minimal"
   | "low"
@@ -45,7 +45,7 @@ export type ProviderThinkingLevelId =
   | "max"
   | "ultra";
 
-export type ProviderThinkingLevel = {
+type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;
   /**
    * Optional display label. Use this when the stored value differs from the

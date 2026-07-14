@@ -47,7 +47,6 @@ const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
-const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_ACCESS_TOKEN_ENV_VAR = "CODEX_ACCESS_TOKEN";
@@ -179,7 +178,7 @@ export function resolveCodexAppServerAuthProfileStore(params: {
   });
 }
 
-export type CodexAppServerPreparedAuthProfileSnapshot = {
+type CodexAppServerPreparedAuthProfileSnapshot = {
   loginParams: CodexLoginAccountParams;
   secretFreeCacheKey: string;
 };
@@ -348,7 +347,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
   return resolveChatgptAccountId(profileId, credential);
 }
 
-export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+function resolveCodexAppServerEnvApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -422,10 +421,6 @@ function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
   return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
-}
-
-export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
-  return path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
 }
 
 async function withCodexHomeEnvironment(

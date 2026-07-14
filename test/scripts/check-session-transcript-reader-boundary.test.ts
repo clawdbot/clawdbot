@@ -23,6 +23,7 @@ describe("session transcript reader boundary guard", () => {
         "src/gateway/gateway-models.profiles.live.test.ts",
         "src/gateway/managed-image-attachments.test.ts",
         "src/gateway/managed-image-attachments.ts",
+        "src/gateway/mcp-app-reconstruction.ts",
         "src/gateway/server-methods/artifacts.test.ts",
         "src/gateway/server-methods/artifacts.ts",
         "src/gateway/server-methods/chat.ts",

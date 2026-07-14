@@ -12,6 +12,7 @@ import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat.css";
 import "./chat-pane.ts";
 import {
   resolveSplitDropZone,

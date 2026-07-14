@@ -290,7 +290,7 @@ export type ContextEnginePromptCacheInfo = {
   expiresAt?: number;
 };
 
-export type ContextEngineTranscriptStorageInfo = {
+type ContextEngineTranscriptStorageInfo = {
   /**
    * Authoritative transcript backend for this runtime turn.
    *

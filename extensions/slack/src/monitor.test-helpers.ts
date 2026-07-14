@@ -1,9 +1,9 @@
 // Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
-import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -31,6 +31,7 @@ type SlackTestState = {
   resolveSlackUserAllowlistMock: Mock<
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
+  socketModeLogger?: { error: (...args: unknown[]) => void };
 };
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
@@ -46,7 +47,16 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
   resolveSlackUserAllowlistMock: vi.fn(),
+  socketModeLogger: undefined,
 }));
+
+const slackInboundDeliveryTestCache = resolveGlobalDedupeCache(
+  Symbol.for("openclaw.slackInboundDeliveries"),
+  {
+    ttlMs: 24 * 60 * 60 * 1000,
+    maxSize: 20_000,
+  },
+);
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
@@ -212,8 +222,9 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
-  clearSlackInboundDeliveryStateForTest();
+  slackInboundDeliveryTestCache.clear();
   slackTestState.config = config;
+  slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
@@ -270,20 +281,14 @@ vi.mock("./monitor/reply.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
     "./monitor/reply.runtime.js",
   );
-  type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
   type BufferedDispatchParams = Parameters<
     typeof actual.dispatchReplyWithBufferedBlockDispatcher
   >[0];
-  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
+  type ReplyResolver = NonNullable<BufferedDispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
-      actual.dispatchInboundMessage({
-        ...params,
-        replyResolver,
-      }),
     dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
       actual.dispatchReplyWithBufferedBlockDispatcher({
         ...params,
@@ -370,6 +375,10 @@ vi.mock("@slack/bolt", () => {
       on: vi.fn(),
       off: vi.fn(),
     };
+
+    constructor(args: { logger?: { error: (...args: unknown[]) => void } }) {
+      slackTestState.socketModeLogger = args.logger;
+    }
   }
   return {
     App,

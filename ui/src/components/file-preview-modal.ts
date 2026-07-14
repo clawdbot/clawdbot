@@ -754,10 +754,6 @@ function fileKind(path: string): string {
   return map[ext] ?? (ext ? ext.toUpperCase() : "File");
 }
 
-if (!customElements.get("openclaw-file-preview-modal")) {
-  customElements.define("openclaw-file-preview-modal", OpenClawFilePreviewModal);
-}
-
 const CODE_EXTENSIONS = new Set([
   "ts",
   "tsx",

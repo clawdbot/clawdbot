@@ -4,7 +4,7 @@ import { writeBase64ToFile } from "./nodes-camera.js";
 import { asRecord, asString, resolveTempPathParts } from "./nodes-media-utils.js";
 
 /** Validated payload returned by `nodes screen record` RPC calls. */
-export type ScreenRecordPayload = {
+type ScreenRecordPayload = {
   format: string;
   base64: string;
   durationMs?: number;
@@ -47,7 +47,7 @@ export async function writeScreenRecordToFile(
 }
 
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
-export type ScreenSnapshotPayload = {
+type ScreenSnapshotPayload = {
   format: string;
   base64: string;
   /** Node-issued token binding this image to one physical display geometry. */

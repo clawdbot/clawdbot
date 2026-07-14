@@ -92,11 +92,12 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
-import {
-  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
-  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-  startCodexConversationThread as startCodexConversationThreadImpl,
-} from "./conversation-binding.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
+
+const handleCodexConversationBindingResolvedImpl =
+  codexConversationBindingRuntime.handleBindingResolved;
+const handleCodexConversationInboundClaimImpl = codexConversationBindingRuntime.handleInboundClaim;
+const startCodexConversationThreadImpl = codexConversationBindingRuntime.startThread;
 
 function testConversationIdentity(sessionFile: string) {
   return {

@@ -1,6 +1,7 @@
 // Matrix helper module supports config schema behavior.
 import {
   AllowFromListSchema,
+  BlockStreamingCoalesceSchema,
   buildChannelConfigSchema,
   buildNestedDmConfigSchema,
   ContextVisibilityModeSchema,
@@ -82,6 +83,14 @@ const matrixNetworkSchema = z
 const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    block: z
+      .object({
+        enabled: z.boolean().optional(),
+        coalesce: BlockStreamingCoalesceSchema.optional(),
+      })
+      .strict()
+      .optional(),
     progress: z
       .object({
         label: z.union([z.string(), z.literal(false)]).optional(),
@@ -125,14 +134,10 @@ export const MatrixConfigSchema = z.object({
   groupPolicy: GroupPolicySchema.optional(),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
-  blockStreaming: z.boolean().optional(),
-  streaming: z
-    .union([z.enum(["partial", "quiet", "progress", "off"]), z.boolean(), matrixStreamingSchema])
-    .optional(),
+  streaming: matrixStreamingSchema.optional(),
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
   responsePrefix: z.string().optional(),
   ackReaction: z.string().optional(),
   ackReactionScope: z

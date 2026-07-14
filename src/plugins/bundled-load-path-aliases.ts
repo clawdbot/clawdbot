@@ -3,23 +3,23 @@ import path from "node:path";
 import { isPathInside } from "./path-safety.js";
 
 /** Alias class for current packaged paths and legacy bundled extension paths. */
-export type BundledPluginLoadPathAliasKind = "current" | "legacy";
+type BundledPluginLoadPathAliasKind = "current" | "legacy";
 
 /** Load path alias used while resolving bundled plugins across package layouts. */
-export type BundledPluginLoadPathAlias = {
+type BundledPluginLoadPathAlias = {
   kind: BundledPluginLoadPathAliasKind;
   path: string;
 };
 
 /** Parsed path metadata for a bundled plugin in a packaged dist root. */
-export type PackagedBundledPluginPath = {
+type PackagedBundledPluginPath = {
   packageRoot: string;
   bundledRoot: string;
   bundledLeaf: string;
 };
 
 /** Parsed path metadata for a bundled plugin in the legacy extensions root. */
-export type LegacyBundledPluginPath = {
+type LegacyBundledPluginPath = {
   packageRoot: string;
   legacyRoot: string;
   bundledLeaf: string;

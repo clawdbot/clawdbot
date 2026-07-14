@@ -12,7 +12,12 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -271,6 +276,58 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
   await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
   expect(loadSessionEntry({ storePath, sessionKey: ordinaryKey })).toBeUndefined();
   expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
+});
+
+test("sessions.delete removes a locked plugin-owned session from its persisted alias", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const requestedKey = "agent:main:catalog-owned";
+  const persistedKey = "catalog-owned";
+  const canonicalSessionId = "sess-catalog-owned-canonical";
+  const aliasSessionId = "sess-catalog-owned-alias";
+  await writeSessionStore({
+    entries: {
+      [requestedKey]: sessionStoreEntry(canonicalSessionId, {
+        modelSelectionLocked: true,
+        pluginOwnerId: "anthropic",
+        updatedAt: 2,
+      }),
+    },
+  });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: persistedKey, storePath },
+    sessionStoreEntry(aliasSessionId, {
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      updatedAt: 1,
+    }),
+  );
+  for (const sessionId of [canonicalSessionId, aliasSessionId]) {
+    await replaceSqliteTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
+      { type: "session", id: sessionId, content: sessionId },
+    ]);
+  }
+
+  const deleted = await directSessionReq<{ archived: string[]; deleted: boolean; ok: true }>(
+    "sessions.delete",
+    {
+      key: persistedKey,
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(loadSessionEntry({ storePath, sessionKey: requestedKey })).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey: persistedKey })).toBeUndefined();
+  expect(deleted.payload?.archived).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(`${canonicalSessionId}.jsonl.deleted.`),
+      expect.stringContaining(`${aliasSessionId}.jsonl.deleted.`),
+    ]),
+  );
+  for (const sessionId of [canonicalSessionId, aliasSessionId]) {
+    await expect(
+      loadTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }),
+    ).resolves.toEqual([]);
+  }
 });
 
 test("sessions.delete interrupts work admitted before runtime registration", async () => {

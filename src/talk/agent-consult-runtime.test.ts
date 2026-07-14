@@ -1,19 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
-import type {
-  ForkSessionEntryFromParentParams,
-  ForkSessionEntryFromParentResult,
-} from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import {
   setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
-  resolveRealtimeVoiceAgentConsultTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
+import {
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+} from "./agent-consult-tool.js";
+
+type ForkSessionEntryFromParent =
+  typeof import("../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
+type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0];
+type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<

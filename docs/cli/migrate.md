@@ -45,7 +45,7 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
   Build the plan and exit without changing state.
 </ParamField>
 <ParamField path="--from <path>" type="string">
-  Override the source state directory. Hermes defaults to `~/.hermes`, Codex defaults to `~/.codex` (or `$CODEX_HOME`), Claude defaults to `~/.claude`.
+  Override the source state directory. Hermes follows `$HERMES_HOME` and the active profile, then uses the platform default (`~/.hermes` or `%LOCALAPPDATA%\hermes`). Codex defaults to `~/.codex` (or `$CODEX_HOME`), Claude defaults to `~/.claude`.
 </ParamField>
 <ParamField path="--include-secrets" type="boolean">
   Import supported credentials without prompting. Interactive apply asks before importing detected auth credentials, with yes selected by default; non-interactive `--yes` requires `--include-secrets` to import them.
@@ -173,28 +173,28 @@ If Codex app-server plugin inventory is unavailable during planning, migration f
 
 ## Hermes provider
 
-The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from <path>` when Hermes lives elsewhere.
+The bundled Hermes provider follows `$HERMES_HOME` and the active profile, then uses the platform default (`~/.hermes` or `%LOCALAPPDATA%\hermes`). Use `--from <path>` to override discovery.
 
 ### What Hermes imports
 
 - Default model configuration from `config.yaml`.
-- Configured model providers and custom OpenAI-compatible endpoints from `providers` and `custom_providers`.
-- MCP server definitions from `mcp_servers` or `mcp.servers`.
+- Configured model providers and custom OpenAI-compatible endpoints from `model`, `providers`, and `custom_providers`.
+- MCP server definitions from `mcp_servers` or `mcp.servers`. Exact OpenClaw mappings cover default Streamable HTTP routing, OAuth scope, boolean TLS verification, separate client certificate/key paths, and Hermes native/resource/prompt tool policy. Unsupported Hermes-only runtime or credential fields are reported for manual review.
 - `SOUL.md` and `AGENTS.md` into the OpenClaw agent workspace.
 - `memories/MEMORY.md` and `memories/USER.md` appended to workspace memory files.
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
-- Skills that include a `SKILL.md` file under `skills/<name>/`.
+- Skills that include a `SKILL.md` file anywhere under `skills/`; nested skills are flattened into the workspace skill directory.
 - Per-skill config values from `skills.config`.
-- OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set. Hermes `auth.json` OAuth entries are legacy state reported for manual OpenAI reauth or doctor repair.
+- Current Hermes OpenAI Codex OAuth credentials and OpenCode OpenAI OAuth credentials when interactive credential migration is accepted, or when `--include-secrets` is set. Do not keep Hermes and OpenClaw using the same imported refresh grant.
 - Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys
 
-`AI_GATEWAY_API_KEY`, `ALIBABA_API_KEY`, `ANTHROPIC_API_KEY`, `ARCEEAI_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `FIREWORKS_API_KEY`, `GEMINI_API_KEY`, `GH_TOKEN`, `GITHUB_TOKEN`, `GLM_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODING_API_KEY`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MOONSHOT_API_KEY`, `NVIDIA_API_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_GO_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `TOGETHER_API_KEY`, `VENICE_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `ZAI_API_KEY`, `Z_AI_API_KEY`.
+`AI_GATEWAY_API_KEY`, `ALIBABA_API_KEY`, `ANTHROPIC_API_KEY`, `ARCEEAI_API_KEY`, `CEREBRAS_API_KEY`, `CHUTES_API_KEY`, `CLOUDFLARE_AI_GATEWAY_API_KEY`, `COPILOT_GITHUB_TOKEN`, `DASHSCOPE_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `FIREWORKS_API_KEY`, `GEMINI_API_KEY`, `GH_TOKEN`, `GITHUB_TOKEN`, `GLM_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, `KILOCODE_API_KEY`, `KIMICODE_API_KEY`, `KIMI_API_KEY`, `KIMI_CODING_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CODING_API_KEY`, `MISTRAL_API_KEY`, `MODELSTUDIO_API_KEY`, `MOONSHOT_API_KEY`, `NVIDIA_API_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENCODE_GO_API_KEY`, `OPENCODE_ZEN_API_KEY`, `OPENROUTER_API_KEY`, `QIANFAN_API_KEY`, `QWEN_API_KEY`, `TOGETHER_API_KEY`, `VENICE_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`, `ZAI_API_KEY`, `Z_AI_API_KEY`.
 
 ### Archive-only state
 
-Hermes state that OpenClaw cannot safely interpret is copied into the migration report for manual review, but it is not loaded into live OpenClaw config or credentials. This preserves opaque or unsafe state without pretending OpenClaw can execute or trust it automatically: `plugins/`, `sessions/`, `logs/`, `cron/`, `mcp-tokens/`, `state.db`.
+Hermes state that OpenClaw cannot safely interpret is copied into the migration report for manual review, but it is not loaded into live OpenClaw config or credentials. This includes `plugins/`, `sessions/`, `logs/`, `cron/`, `mcp-tokens/`, `plans/`, `workspace/`, `skins/`, `kanban/`, pairing/platform state, gateway routing/process state, and the detected Hermes SQLite databases.
 
 ### After applying
 

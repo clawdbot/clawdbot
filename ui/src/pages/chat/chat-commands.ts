@@ -34,7 +34,7 @@ type RemoteSlashCommandCacheEntry = {
   inFlight?: Promise<SlashCommandDef[]>;
 };
 
-let remoteSlashCommandCache = new WeakMap<
+const remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, RemoteSlashCommandCacheEntry>
 >();
@@ -48,7 +48,7 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
-export type ChatCommandDispatchResult = "completed" | "failed" | "uncertain";
+type ChatCommandDispatchResult = "completed" | "failed" | "uncertain";
 
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
@@ -184,12 +184,6 @@ export async function refreshSlashCommands(params: {
     return;
   }
   replaceSlashCommands(commands);
-}
-
-export function resetChatSlashCommandMetadataForTest(): void {
-  refreshSeq = 0;
-  remoteSlashCommandCache = new WeakMap();
-  replaceSlashCommands(buildFallbackSlashCommands());
 }
 
 export function shouldQueueLocalSlashCommand(name: string): boolean {

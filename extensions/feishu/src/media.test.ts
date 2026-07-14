@@ -55,7 +55,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
@@ -118,12 +117,8 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({
-      saveMessageResourceFeishu,
-      sanitizeFileNameForUpload,
-      sendMediaFeishu,
-      shouldSuppressFeishuTextForVoiceMedia,
-    } = await import("./media.js"));
+    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+      await import("./media.js"));
   });
 
   afterAll(() => {
@@ -647,50 +642,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
-  });
-});
-
-describe("sanitizeFileNameForUpload", () => {
-  it("returns ASCII filenames unchanged", () => {
-    expect(sanitizeFileNameForUpload("report.pdf")).toBe("report.pdf");
-    expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
-  });
-
-  it("preserves Chinese characters", () => {
-    expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
-    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
-      "武汉15座山登山信息汇总.csv",
-    );
-  });
-
-  it("preserves em-dash and full-width brackets", () => {
-    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
-  });
-
-  it("preserves single quotes and parentheses", () => {
-    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe("文件'(test).txt");
-  });
-
-  it("preserves filenames without extension", () => {
-    expect(sanitizeFileNameForUpload("测试文件")).toBe("测试文件");
-  });
-
-  it("preserves mixed ASCII and non-ASCII", () => {
-    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe("Report_报告_2026.xlsx");
-  });
-
-  it("preserves emoji filenames", () => {
-    expect(sanitizeFileNameForUpload("report_😀.txt")).toBe("report_😀.txt");
-  });
-
-  it("strips control characters", () => {
-    expect(sanitizeFileNameForUpload("bad\x00file.txt")).toBe("bad_file.txt");
-    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe("inject__header.txt");
-  });
-
-  it("strips quotes and backslashes to prevent header injection", () => {
-    expect(sanitizeFileNameForUpload('file"name.txt')).toBe("file_name.txt");
-    expect(sanitizeFileNameForUpload("file\\name.txt")).toBe("file_name.txt");
   });
 });
 

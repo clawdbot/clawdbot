@@ -70,7 +70,7 @@ const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 30_000;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV =
   "OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS";
 
-export type CodexMigrationTargetAppServerPreparation = {
+type CodexMigrationTargetAppServerPreparation = {
   dispose: () => Promise<void>;
 };
 
@@ -365,9 +365,7 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-export function targetCodexMarketplaceDiscoveryTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
+function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );

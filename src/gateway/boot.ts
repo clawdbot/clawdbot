@@ -36,7 +36,7 @@ const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
 /** Result of attempting to run a workspace BOOT.md check. */
-export type BootRunResult =
+type BootRunResult =
   | { status: "skipped"; reason: "missing" | "empty" }
   | { status: "ran" }
   | { status: "failed"; reason: string };

@@ -7,7 +7,7 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 
-export type PluginRuntimeGatewayRequestScope = {
+type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
@@ -18,7 +18,7 @@ export type PluginRuntimeGatewayRequestScope = {
   gatewayMethodDispatchAllowed?: boolean;
 };
 
-export type PluginRuntimePluginScope = {
+type PluginRuntimePluginScope = {
   pluginId: string;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;

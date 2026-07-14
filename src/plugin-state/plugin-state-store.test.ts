@@ -16,13 +16,15 @@ import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
-  PluginStateStoreError,
-  probePluginStateStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import {
+  probePluginStateStore,
+  setMaxPluginStateEntriesPerPluginForTests,
+} from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState | undefined;
 

@@ -2,20 +2,24 @@
 // client factory installation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
-import {
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-  TEST_UNDICI_RUNTIME_DEPS_KEY,
-} from "./undici-runtime.js";
+import { createHttp1EnvHttpProxyAgent, createHttp1ProxyAgent } from "./undici-runtime.js";
 
 const envHttpProxyAgentCtor = vi.fn();
 const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+  envHttpProxyAgentCtor.mockReset();
+  poolCtor.mockReset();
+  proxyAgentCtor.mockReset();
+  proxyConnect.mockReset();
+});
 
 class MockAgent {
   readonly __testStub = true;
@@ -104,15 +108,6 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
   }
   connect({ host: "127.0.0.1:8443", servername }, vi.fn());
 }
-
-afterEach(() => {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  envHttpProxyAgentCtor.mockReset();
-  poolCtor.mockReset();
-  proxyAgentCtor.mockReset();
-  proxyConnect.mockReset();
-  resetActiveManagedProxyStateForTests();
-});
 
 describe("createHttp1ProxyAgent", () => {
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {

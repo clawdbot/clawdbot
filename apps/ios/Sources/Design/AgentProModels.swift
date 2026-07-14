@@ -2,6 +2,19 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
+struct AgentOverviewRefreshGate {
+    private var generation: UInt64 = 0
+
+    mutating func begin() -> UInt64 {
+        self.generation &+= 1
+        return self.generation
+    }
+
+    func isCurrent(_ generation: UInt64) -> Bool {
+        self.generation == generation
+    }
+}
+
 enum AgentProValueReader {
     static func intValue(_ value: AnyCodable?) -> Int? {
         switch value?.value {

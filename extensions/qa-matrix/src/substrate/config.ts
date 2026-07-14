@@ -440,17 +440,26 @@ function buildMatrixQaChannelAccountConfig(params: {
     params.snapshot.autoJoin === "allowlist" && params.snapshot.autoJoinAllowlist.length > 0
       ? { autoJoinAllowlist: params.snapshot.autoJoinAllowlist }
       : {};
-  const blockStreamingConfig =
-    params.overrides?.blockStreaming !== undefined
-      ? { blockStreaming: params.snapshot.blockStreaming }
-      : {};
-  const chunkModeConfig =
-    params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {};
   const execApprovalsConfig = buildMatrixQaAccountExecApprovalsConfig(
     params.snapshot.execApprovals,
   );
+  // Matrix accepts only the nested streaming shape; harness overrides keep
+  // their scalar/boolean vocabulary and normalize here before config write.
+  const streamingSlots = {
+    ...(params.overrides?.streaming !== undefined
+      ? { mode: resolveMatrixQaStreamingMode(params.overrides.streaming) }
+      : {}),
+    ...(isMatrixQaStreamingConfig(params.overrides?.streaming) &&
+    params.overrides.streaming.preview?.toolProgress !== undefined
+      ? { preview: { toolProgress: params.overrides.streaming.preview.toolProgress } }
+      : {}),
+    ...(params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {}),
+    ...(params.overrides?.blockStreaming !== undefined
+      ? { block: { enabled: params.snapshot.blockStreaming } }
+      : {}),
+  };
   const streamingConfig =
-    params.overrides?.streaming !== undefined ? { streaming: params.overrides.streaming } : {};
+    Object.keys(streamingSlots).length > 0 ? { streaming: streamingSlots } : {};
   const startupVerificationConfig =
     params.snapshot.startupVerification !== undefined
       ? { startupVerification: params.snapshot.startupVerification }
@@ -488,8 +497,6 @@ function buildMatrixQaChannelAccountConfig(params: {
     userId: params.sutUserId,
     ...autoJoinConfig,
     ...autoJoinAllowlistConfig,
-    ...blockStreamingConfig,
-    ...chunkModeConfig,
     ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
     ...streamingConfig,
     ...textChunkLimitConfig,

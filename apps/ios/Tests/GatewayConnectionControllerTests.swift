@@ -97,6 +97,70 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
     }
 }
 
+@Suite(.serialized) struct GatewayReconnectErrorRetentionTests {
+    @Test @MainActor func `retained display problem does not control next retry`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel._test_prepareForGatewayConnect(
+            stableID: "manual|gateway.example.com|443",
+            preservingGatewayProblem: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let mapped = appModel._test_mapNodeGatewayConnectionError(cancelled)
+        #expect(mapped?.kind == .websocketCancelled)
+        #expect(mapped?.requestId == nil)
+        #expect(mapped?.pauseReconnect == false)
+    }
+
+    @Test @MainActor func `active operator problem survives node cancellation`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let applied = appModel._test_applyNodeGatewayConnectionError(cancelled)
+
+        #expect(applied == problem)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == "req-admin")
+
+        appModel._test_clearOperatorGatewayConnectionProblemIfCurrent()
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+}
+
 @Suite(.serialized) struct GatewayConnectionControllerTests {
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
         let appModel = NodeAppModel()
@@ -200,6 +264,20 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(!GatewayConnectionController._test_isLocationAvailable(
             servicesEnabled: true,
             status: .denied))
+    }
+
+    @Test @MainActor func `registration permissions exclude watch availability`() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let permissions = await controller._test_currentPermissions()
+
+        #expect(!permissions.keys.contains(where: { $0.hasPrefix("watch") }))
+    }
+
+    @Test @MainActor func `legacy EventKit permission means readable access`() {
+        #expect(GatewayConnectionController._test_hasEventKitReadAccess(.fullAccess))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.writeOnly))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.denied))
     }
 
     @Test @MainActor func `current commands exclude dangerous system exec commands`() {
@@ -386,6 +464,42 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayStatusText == "Connected")
     }
 
+    @Test @MainActor func `retained gateway problem clears only when explicit target changes`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let problem = GatewayConnectionProblem(
+            kind: .connectionRefused,
+            owner: .network,
+            title: "Connection refused",
+            message: "The gateway refused the connection.",
+            retryable: true,
+            pauseReconnect: false)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        #expect(appModel.lastGatewayProblem == problem)
+
+        appModel.applyGatewayConnectConfig(currentConfig, forceReconnect: true)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
+        let replacementURL = try #require(URL(string: "wss://replacement.example.com:443"))
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.gatewayStatusText == "Connecting…")
+        #expect(appModel.gatewayDisplayStatusText == "Connecting…")
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
     @Test func `gateway connect config matches equivalent inputs`() {
         let lhs = Self.makeGatewayConnectConfig()
         let rhs = GatewayConnectConfig(
@@ -406,6 +520,63 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
                 clientDisplayName: "Phone"))
 
         #expect(lhs.hasSameConnectionInputs(as: rhs))
+    }
+
+    @Test @MainActor func `same target retry unpauses retained pairing problem`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        #expect(appModel.gatewayPairingPaused)
+
+        appModel.applyGatewayConnectConfig(config, forceReconnect: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
+    @Test @MainActor func `gateway preflight retains only the readable problem snapshot`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(appModel.gatewayStatusText == "Verifying gateway TLS fingerprint…")
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+        #expect(appModel.lastGatewayProblem == nil)
     }
 
     @Test func `gateway connect config keeps stable owner bytes exact`() {

@@ -148,6 +148,7 @@ import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js"
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import { callGateway } from "../../gateway/call.runtime.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import {
   ensureOutboundSessionEntry,
@@ -162,7 +163,7 @@ import {
   resetCompletedDirectCronDeliveriesForTests,
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import type { RunCronAgentTurnResult } from "./run.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
   readDescendantSubagentFallbackReply,
@@ -1774,10 +1775,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("retries transient direct announce failures before succeeding", async () => {
+  it("retries proven-not-sent direct announce failures before succeeding", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(deliverOutboundPayloads)
-      .mockRejectedValueOnce(new Error("ECONNRESET while sending"))
+      .mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("upload stopped before final dispatch", {
+          cause: new Error("gateway upload failed"),
+        }),
+      )
       .mockResolvedValueOnce([{ ok: true } as never]);
 
     const params = makeBaseParams({ synthesizedText: "Retry me once." });
@@ -1787,6 +1792,149 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry ambiguous direct announce send errors", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      Object.assign(new Error("read ECONNRESET after send"), {
+        code: "ECONNRESET",
+      }),
+    );
+
+    const params = makeBaseParams({ synthesizedText: "Do not duplicate me." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, {
+      status: "error",
+      error: "Error: read ECONNRESET after send",
+      deliveryAttempted: true,
+    });
+  });
+
+  it("does not retry a batch after an earlier direct announce payload was sent", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "second payload stopped before final dispatch",
+      {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      },
+    );
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "sent",
+        results: [{ channel: "telegram", messageId: "tg-first" }] as never,
+      });
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: notDispatchedError,
+        sentBeforeError: false,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "tg-first" }] as never;
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(notDispatchedError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456",
+        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
+        "One or more scheduled message payloads may already have been delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+      },
+    );
+  });
+
+  it("does not retry after an earlier direct announce payload returned no identity", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "second payload stopped before final dispatch",
+      {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      },
+    );
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "adapter_returned_no_identity",
+      });
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: notDispatchedError,
+        sentBeforeError: false,
+        stage: "platform_send",
+      });
+      return [] as never;
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(notDispatchedError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456",
+        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
+        "One or more scheduled message payloads may already have been delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+      },
+    );
   });
 
   it("keeps direct announce delivery idempotent across replay for the same cron execution", async () => {
@@ -2043,10 +2191,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expectDeliveryCall(0, { skipQueue: true });
   });
 
-  it("transient retry delivers exactly once with skipQueue on both attempts", async () => {
-    // First call throws a transient error, second call succeeds.
+  it("proven-not-sent retry delivers exactly once with skipQueue on both attempts", async () => {
+    // First call throws before a recipient-visible send, second call succeeds.
     vi.mocked(deliverOutboundPayloads)
-      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("gateway stopped before final dispatch", {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+        }),
+      )
       .mockResolvedValueOnce([{ ok: true } as never]);
 
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");

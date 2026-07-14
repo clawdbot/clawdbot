@@ -2,29 +2,9 @@
  * Gateway WebSocket log formatting tests.
  */
 import { describe, expect, test } from "vitest";
-import { formatForLog, shortId, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { formatForLog, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 describe("gateway ws log helpers", () => {
-  test.each([
-    {
-      name: "compacts uuids",
-      input: "12345678-1234-1234-1234-123456789abc",
-      expected: "12345678…9abc",
-    },
-    {
-      name: "compacts long strings",
-      input: "a".repeat(30),
-      expected: "aaaaaaaaaaaa…aaaa",
-    },
-    {
-      name: "trims before checking length",
-      input: " short ",
-      expected: "short",
-    },
-  ])("shortId $name", ({ input, expected }) => {
-    expect(shortId(input)).toBe(expected);
-  });
-
   test.each([
     {
       name: "formats Error instances",

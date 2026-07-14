@@ -19,11 +19,6 @@ import {
   formatMissingSkillSummary,
 } from "./doctor-skills-core.js";
 
-export {
-  collectUnavailableAgentSkills,
-  disableUnavailableSkillsInConfig,
-} from "./doctor-skills-core.js";
-
 function formatInstallHints(skill: SkillStatusEntry): string[] {
   if (skill.install.length === 0) {
     return [];

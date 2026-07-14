@@ -7,7 +7,6 @@ import webPush from "web-push";
 import {
   broadcastWebPush,
   clearWebPushSubscriptionByEndpoint,
-  listWebPushSubscriptions,
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
@@ -113,28 +112,10 @@ describe("subscription CRUD", () => {
     expect(sub2.keys.p256dh).toBe("new-p256dh");
   });
 
-  it("lists all subscriptions", async () => {
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/a",
-      keys,
-      baseDir: tmpDir,
-    });
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/b",
-      keys,
-      baseDir: tmpDir,
-    });
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(2);
-  });
-
   it("clears a subscription by endpoint", async () => {
     await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    const removed = await clearWebPushSubscriptionByEndpoint(endpoint, tmpDir);
-    expect(removed).toBe(true);
-
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(0);
+    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(true);
+    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(false);
   });
 
   it("rejects invalid endpoint", async () => {

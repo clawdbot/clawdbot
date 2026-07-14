@@ -256,15 +256,46 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     ]);
   });
 
-  it("keeps account values over seeded root values on conflict", () => {
+  it("resolves conflicting root/account slots with per-resolver precedence", () => {
+    // Pre-migration precedence differs per slot: mode and block.enabled
+    // resolve on the MERGED entry (root nested outranks account flat aliases),
+    // while chunkMode resolves the raw account entry first, so the account
+    // alias wins there. Seeding preserves each slot's actual resolver order.
     const res = normalizeChannel({
       streaming: { mode: "block", chunkMode: "word" },
       accounts: { work: { streamMode: "partial", chunkMode: "newline" } },
     });
 
     expect(workStreaming(res.entry)).toEqual({
-      mode: "partial",
+      mode: "block",
       chunkMode: "newline",
+    });
+  });
+
+  it("merges coalesce per field and keeps root preview.chunk atomic when seeding", () => {
+    // block.coalesce: resolveProviderBlockStreamingCoalesce merges the account
+    // pick over the root pick per field. preview.chunk: the merged-entry
+    // resolver picks the whole object atomically, so the root nested chunk
+    // must not blend with the account draftChunk-derived one.
+    const res = normalizeChannel({
+      streaming: {
+        mode: "block",
+        block: { coalesce: { idleMs: 5, minChars: 100 } },
+        preview: { chunk: { minChars: 200 } },
+      },
+      accounts: {
+        work: {
+          blockStreaming: true,
+          blockStreamingCoalesce: { minChars: 900 },
+          draftChunk: { maxChars: 800 },
+        },
+      },
+    });
+
+    expect(workStreaming(res.entry)).toEqual({
+      mode: "block",
+      block: { enabled: true, coalesce: { idleMs: 5, minChars: 900 } },
+      preview: { chunk: { minChars: 200 } },
     });
   });
 

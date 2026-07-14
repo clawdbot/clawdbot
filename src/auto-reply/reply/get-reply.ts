@@ -1,7 +1,6 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -68,6 +67,7 @@ import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { isContinuationHeartbeatEquivalent, resolveReplyHookTrigger } from "./run-provenance.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
+import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -152,31 +152,6 @@ function loadHookRunnerGlobal() {
 
 function loadOriginRouting() {
   return originRoutingLoader.load();
-}
-
-function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
-  const normalize = (list?: string[]) => {
-    if (!Array.isArray(list)) {
-      return undefined;
-    }
-    return normalizeStringEntries(list);
-  };
-  const channel = normalize(channelFilter);
-  const agent = normalize(agentFilter);
-  if (!channel && !agent) {
-    return undefined;
-  }
-  if (!channel) {
-    return agent;
-  }
-  if (!agent) {
-    return channel;
-  }
-  if (channel.length === 0 || agent.length === 0) {
-    return [];
-  }
-  const agentSet = new Set(agent);
-  return channel.filter((name) => agentSet.has(name));
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
@@ -513,6 +488,8 @@ export async function getReplyFromConfig(
             ...(internalOptsWithSkillFilter?.expectedExistingSessionId
               ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
               : {}),
+            pinExpectedExistingSession:
+              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,

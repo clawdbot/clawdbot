@@ -60,12 +60,9 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const {
-  createTelegramBotCore: createTelegramBotBase,
-  getTelegramSequentialKey,
-  resolveTelegramScopedGroupConfig,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot-core.js");
+const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
@@ -84,7 +81,8 @@ const {
   resetTelegramForumFlagCacheForTest,
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
-const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
+  await import("./group-config-helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;

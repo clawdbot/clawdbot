@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
         .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.0"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
@@ -89,6 +89,7 @@ let package = Package(
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawChatUI", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),

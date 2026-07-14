@@ -46,7 +46,7 @@ export type MantisTelegramDesktopBuilderOptions = {
 
 export type MantisTelegramDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisTelegramDesktopBuilderResult = {
+type MantisTelegramDesktopBuilderResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;

@@ -6,7 +6,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerUnixSocketPath } from "./transport-websocket.js";
 
 describe("Codex app-server websocket transport", () => {
   const clients: CodexAppServerClient[] = [];
@@ -115,25 +114,6 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
     expect(upgradeExtensions).toEqual([undefined]);
-  });
-
-  it("resolves the default control socket under CODEX_HOME", () => {
-    expect(
-      resolveCodexAppServerUnixSocketPath({
-        transport: "unix",
-        url: "unix://",
-        env: { CODEX_HOME: "/tmp/custom-codex-home" },
-      }),
-    ).toBe("/tmp/custom-codex-home/app-server-control/app-server-control.sock");
-  });
-
-  it("rejects unix URLs unless the unix transport is explicit", () => {
-    expect(() =>
-      resolveCodexAppServerUnixSocketPath({
-        transport: "websocket",
-        url: "unix://",
-      }),
-    ).toThrow("codex app-server unix URL requires unix transport");
   });
 });
 

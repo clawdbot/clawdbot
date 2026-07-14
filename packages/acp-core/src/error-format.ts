@@ -57,25 +57,4 @@ export function redactSensitiveText(value: string): string {
   return redacted;
 }
 
-/**
- * Render a non-Error `cause` value without leaking `[object Object]` or throwing
- * while formatting nested ACP runtime failures.
- */
-export function stringifyNonErrorCause(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  try {
-    // JSON.stringify returns undefined (not a string) for functions/symbols/undefined; fall back to
-    // a tag string so this `string`-typed helper never leaks undefined (matches src/infra/errors.ts).
-    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
+export { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";

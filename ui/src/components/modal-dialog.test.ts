@@ -7,7 +7,6 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
@@ -33,7 +32,10 @@ async function renderModal() {
   return await getRenderedModalDialog(container);
 }
 
-function expectShadowElement(modal: OpenClawModalDialog, id: string): HTMLElement {
+function expectShadowElement(
+  modal: Awaited<ReturnType<typeof getRenderedModalDialog>>["modal"],
+  id: string,
+): HTMLElement {
   const element = modal.shadowRoot?.getElementById(id);
   if (!(element instanceof HTMLElement)) {
     throw new Error(`Expected shadow element #${id}`);
@@ -80,6 +82,18 @@ describe("openclaw-modal-dialog", () => {
 
     expect(modal.shadowRoot?.activeElement).toBe(dialog);
     expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
+  });
+
+  it("focuses slotted autofocus content", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea id="autofocus-target" autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    await getRenderedModalDialog(container);
+
+    expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
   });
 
   it("cycles Tab and Shift+Tab inside focusable dialog content", async () => {
@@ -130,6 +144,16 @@ describe("openclaw-modal-dialog", () => {
         composed: true,
       }),
     );
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits modal-cancel when the backdrop is clicked", async () => {
+    const { modal, dialog } = await renderModal();
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    dialog.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });

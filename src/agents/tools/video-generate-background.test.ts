@@ -1,7 +1,7 @@
 // Video generation background tests cover detached task lifecycle, keepalive
 // progress, completion announcement, and direct failure delivery.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAgentRunContext, resetAgentRunContextForTest } from "../../infra/agent-events.js";
+import { getAgentRunContext, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   announceDeliveryMocks,
@@ -28,7 +28,7 @@ const { withMediaGenerationTaskKeepalive } = await import("./media-generate-back
 
 describe("video generate background helpers", () => {
   beforeEach(() => {
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetMediaBackgroundMocks({
       taskExecutorMocks,
       taskDeliveryRuntimeMocks,
@@ -38,7 +38,7 @@ describe("video generate background helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
   });
 
   it("creates a running task with queued progress text", () => {

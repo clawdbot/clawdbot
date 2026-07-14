@@ -6,7 +6,10 @@ import type {
   WAPresence,
 } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 
 export type WhatsAppSocketTimingOptions = {
   keepAliveIntervalMs?: number;
@@ -47,10 +50,6 @@ export class WhatsAppSocketOperationTimeoutError extends Error {
   }
 }
 
-function positiveInteger(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 export function resolveWhatsAppSocketTiming(
   cfg: OpenClawConfig,
   overrides?: WhatsAppSocketTimingOptions,
@@ -58,16 +57,16 @@ export function resolveWhatsAppSocketTiming(
   const configured = cfg.web?.whatsapp;
   return {
     keepAliveIntervalMs:
-      positiveInteger(overrides?.keepAliveIntervalMs) ??
-      positiveInteger(configured?.keepAliveIntervalMs) ??
+      parseStrictPositiveInteger(overrides?.keepAliveIntervalMs) ??
+      parseStrictPositiveInteger(configured?.keepAliveIntervalMs) ??
       DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
     connectTimeoutMs:
-      positiveInteger(overrides?.connectTimeoutMs) ??
-      positiveInteger(configured?.connectTimeoutMs) ??
+      parseStrictPositiveInteger(overrides?.connectTimeoutMs) ??
+      parseStrictPositiveInteger(configured?.connectTimeoutMs) ??
       DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
     defaultQueryTimeoutMs:
-      positiveInteger(overrides?.defaultQueryTimeoutMs) ??
-      positiveInteger(configured?.defaultQueryTimeoutMs) ??
+      parseStrictPositiveInteger(overrides?.defaultQueryTimeoutMs) ??
+      parseStrictPositiveInteger(configured?.defaultQueryTimeoutMs) ??
       DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
   };
 }

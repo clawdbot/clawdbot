@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { clearAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
@@ -50,7 +51,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { PluginLoaderCacheState } from "./loader-cache-state.js";
+import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cache-instances.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
@@ -99,7 +100,6 @@ import {
 } from "./plugin-module-loader-cache.js";
 import {
   createPluginRegistrationTransaction,
-  type PluginProcessGlobalState,
   restorePluginProcessGlobalState,
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
@@ -113,7 +113,6 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
-import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryParams } from "./registry-types.js";
@@ -130,18 +129,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import {
   buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  listPluginSdkAliasCandidates,
-  listPluginSdkExportedSubpaths,
   type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
-  resolveExtensionApiAlias,
-  resolvePluginSdkAliasCandidateOrder,
-  resolvePluginSdkAliasFile,
-  resolvePluginRuntimeModulePath,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
@@ -152,9 +142,6 @@ import type {
   PluginLogger,
   PluginRegistrationMode,
 } from "./types.js";
-
-export type PluginLoadResult = PluginRegistry;
-export { PluginLoadReentryError } from "./loader-cache-state.js";
 
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
@@ -339,18 +326,8 @@ class PluginLoadFailureError extends Error {
   }
 }
 
-type CachedPluginState = {
-  registry: PluginRegistry;
-  processGlobalState: PluginProcessGlobalState;
-};
-
-const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
-const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
+const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoaderCacheState } =
+  pluginLoaderCacheInstances;
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -388,13 +365,6 @@ function createPluginCandidatesFromManifestRegistry(
     ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
   }));
 }
-
-export function clearPluginLoaderCache(): void {
-  pluginLoaderCacheState.clear();
-  fullWorkspacePluginLoaderCacheState.clear();
-  clearActivatedPluginRuntimeState();
-}
-
 export function clearActivatedPluginRuntimeState(): void {
   clearAgentHarnesses();
   clearPluginCommands();
@@ -519,34 +489,6 @@ function formatPluginRuntimeModuleResolutionError(params: {
     ...(resolution.error ? [`resolverError=${resolution.error}`] : []),
   ].join("; ");
 }
-
-export const testing = {
-  buildPluginLoaderJitiOptions,
-  buildPluginLoaderAliasMap,
-  listPluginSdkAliasCandidates,
-  listPluginSdkExportedSubpaths,
-  resolveExtensionApiAlias,
-  resolvePluginSdkScopedAliasMap,
-  resolvePluginSdkAliasCandidateOrder,
-  resolvePluginSdkAliasFile,
-  resolvePluginRuntimeModulePath,
-  ensureOpenClawPluginSdkAlias,
-  shouldLoadChannelPluginInSetupRuntime,
-  shouldPreferNativeModuleLoad,
-  toSafeImportPath,
-  createGuardedPluginRegistrationApi,
-  runPluginRegisterSync,
-  getCompatibleActivePluginRegistry,
-  resolvePluginLoadCacheContext,
-  get maxPluginRegistryCacheEntries() {
-    return pluginLoaderCacheState.maxEntries;
-  },
-  setMaxPluginRegistryCacheEntriesForTest(value?: number) {
-    pluginLoaderCacheState.setMaxEntriesForTest(value);
-    fullWorkspacePluginLoaderCacheState.setMaxEntriesForTest(value);
-  },
-};
-
 function getPluginRegistryCache(onlyPluginIds?: string[]) {
   return onlyPluginIds ? pluginLoaderCacheState : fullWorkspacePluginLoaderCacheState;
 }
@@ -1344,11 +1286,10 @@ function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
-}): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
-  const value = params.value;
-  const schema = params.schema;
+}): Result<Record<string, unknown> | undefined, string[]> {
+  const { schema, value } = params;
   if (!schema) {
-    return { ok: true, value: value as Record<string, unknown> | undefined };
+    return ok(value as Record<string, unknown> | undefined);
   }
   if (isEmptyPluginConfigJsonSchema(schema)) {
     if (
@@ -1358,12 +1299,12 @@ function validatePluginConfig(params: {
         !Array.isArray(value) &&
         Object.keys(value).length === 0)
     ) {
-      return { ok: true, value: {} };
+      return ok({});
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { ok: false, errors: ["<root>: must be object"] };
+      return resultError(["<root>: must be object"]);
     }
-    return { ok: false, errors: ["<root>: config must be empty"] };
+    return resultError(["<root>: config must be empty"]);
   }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
@@ -1373,9 +1314,9 @@ function validatePluginConfig(params: {
     applyDefaults: true,
   });
   if (result.ok) {
-    return { ok: true, value: result.value as Record<string, unknown> | undefined };
+    return ok(result.value as Record<string, unknown> | undefined);
   }
-  return { ok: false, errors: result.errors.map((error) => error.text) };
+  return resultError(result.errors.map((error) => error.text));
 }
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
@@ -2110,10 +2051,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
 
       if (!validatedConfig.ok) {
-        logger.error(
-          `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
-        );
-        pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+        logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
+        pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
         continue;
       }
 
@@ -2871,8 +2810,8 @@ export async function loadOpenClawPluginCliRegistry(
       value: entry?.config,
     });
     if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
+      pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
       continue;
     }
 
@@ -3056,4 +2995,3 @@ function resolveCliMetadataEntrySource(rootDir: string): string | null {
   }
   return null;
 }
-export { testing as __testing };

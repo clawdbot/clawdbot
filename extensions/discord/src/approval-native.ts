@@ -8,7 +8,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
@@ -22,16 +21,6 @@ import {
   isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
 } from "./exec-approvals.js";
-
-// Legacy export kept for monitor test/support surfaces; native routing now uses
-// the shared session-conversation fallback helper instead.
-export function extractDiscordChannelId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
-  return match?.[1] ?? null;
-}
 
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {

@@ -1014,7 +1014,7 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentRuntimePolicySchema = z
+const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })

@@ -128,7 +128,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node|bun>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -331,13 +331,40 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-Both node commands are read-only. They expose catalog metadata and transcript
+The list and read commands are read-only. They expose catalog metadata and transcript
 content only through the generic `sessions.catalog.list` and
 `sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. Paired-node rows stay view-only. A Gateway-local Claude CLI
-row can be adopted from the normal Chat composer: OpenClaw imports bounded
-visible history, resumes with `--fork-session` on the first turn, and leaves the
-source transcript untouched. Claude Desktop rows remain view-only.
+`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
+Chat composer: OpenClaw imports bounded visible history, resumes with
+`--fork-session` on the first turn, and leaves the source transcript untouched.
+
+A headless node host can opt into the same continuation flow:
+
+```json5
+{
+  nodeHost: {
+    agentRuns: {
+      claude: { enabled: true },
+    },
+  },
+}
+```
+
+The node advertises `agent.cli.claude.run.v1` only when this node-local setting
+is enabled and the `claude` executable resolves on that node. The Gateway cannot
+enable it remotely. The command also passes through the node's existing exec
+approval policy. When all three Claude commands are advertised and permitted by
+the Gateway's node command policy, a Claude CLI
+row on that node becomes continuable: OpenClaw imports bounded history, binds
+the adopted session to the node and its catalog-reported working directory, and
+runs each one-shot `claude -p` turn there. The first turn still uses
+`--fork-session`, preserving the source transcript.
+
+Node-placed turns use the node's Claude defaults. In v1 they do not receive the
+Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
+Gateway transcript, and reject attachments and images. Claude Desktop rows and
+nodes that do not advertise the run command remain view-only. The macOS app
+node does not advertise this command yet, so its rows remain view-only.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -351,6 +378,17 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 ```
 
 `nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (canvas, camera, screen, location, below).
+
+Long-running streaming node commands use additive `node.invoke.progress`
+events. Each event carries the invoke ID, a zero-based sequence number, and a
+bounded UTF-8 text chunk; the Gateway orders chunks before delivering them to
+the caller. The existing `node.invoke.result` remains the single terminal
+response. Streaming callers can set an inactivity deadline that starts with the
+first progress event and resets after later progress while retaining the
+invoke's separate hard timeout during approval and execution. Result, hard
+timeout, inactivity timeout, and node disconnect all discard pending stream
+state. Caller cancellation emits `node.invoke.cancel`; the node host then
+terminates the matching process tree. Existing request/response commands are unchanged.
 
 ## Command policy
 
@@ -378,7 +416,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
+Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [HealthKit summaries](/platforms/ios-healthkit) for the iPhone consent gate and [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.allowCommands` opt-in.
 

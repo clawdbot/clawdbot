@@ -358,16 +358,22 @@ export class VoiceCallWebhookServer {
       maxConnections: streaming.maxConnections,
       resolveClientIp: (request) => this.resolveMediaStreamClientIp(request),
       shouldAcceptStream: ({ callId, token }) => {
+        // The classic media handler parses Twilio frames and only Twilio issues
+        // its per-call token. Other carriers use their separate realtime path.
+        if (this.provider.name !== "twilio") {
+          this.logger.warn(
+            `Rejecting media stream: provider ${this.provider.name} does not support authenticated classic streaming`,
+          );
+          return false;
+        }
         const call = this.manager.getCallByProviderCallId(callId);
         if (!call) {
           return false;
         }
-        if (this.provider.name === "twilio") {
-          const twilio = this.provider as TwilioProvider;
-          if (!twilio.isValidStreamToken(callId, token)) {
-            this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
-            return false;
-          }
+        const twilio = this.provider as TwilioProvider;
+        if (!twilio.isValidStreamToken(callId, token)) {
+          this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
+          return false;
         }
         return true;
       },

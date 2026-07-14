@@ -33,7 +33,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 

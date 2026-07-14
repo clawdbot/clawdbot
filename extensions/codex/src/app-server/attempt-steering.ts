@@ -116,13 +116,13 @@ export function createCodexSteeringQueue(params: {
 }
 
 /** Normalizes steer debounce milliseconds, preserving explicit zero. */
-export function normalizeCodexSteerDebounceMs(value: number | undefined): number {
+function normalizeCodexSteerDebounceMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : CODEX_STEER_ALL_DEBOUNCE_MS;
 }
 
 /** Converts plain text into the Codex app-server user-input shape. */
-export function toCodexTextInput(text: string): CodexUserInput {
+function toCodexTextInput(text: string): CodexUserInput {
   return { type: "text", text, text_elements: [] };
 }

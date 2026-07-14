@@ -373,7 +373,7 @@ function parseMediaKeys(
   }
 }
 
-export function toMessageResourceType(messageType: string): "image" | "file" {
+function toMessageResourceType(messageType: string): "image" | "file" {
   return messageType === "image" ? "image" : "file";
 }
 

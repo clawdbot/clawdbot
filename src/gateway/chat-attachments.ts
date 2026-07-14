@@ -59,7 +59,7 @@ type SavedMediaRef = {
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
-export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];

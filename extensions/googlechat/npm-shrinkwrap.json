@@ -8,7 +8,6 @@
       "name": "@openclaw/googlechat",
       "version": "2026.7.2",
       "dependencies": {
-        "gaxios": "7.1.5",
         "google-auth-library": "10.9.0",
         "zod": "4.4.3"
       },

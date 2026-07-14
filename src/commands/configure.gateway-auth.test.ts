@@ -1,6 +1,6 @@
 // Configure gateway auth tests cover gateway auth config generation and token handling.
 import { describe, expect, it } from "vitest";
-import { buildGatewayAuthConfig } from "./configure.js";
+import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 
 function expectGeneratedTokenFromInput(
   token: string | undefined,

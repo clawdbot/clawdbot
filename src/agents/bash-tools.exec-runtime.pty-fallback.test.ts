@@ -10,7 +10,8 @@ import {
   type DiagnosticExecProcessCompletedEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { ManagedRun, SpawnInput } from "../process/supervisor/index.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 
 let listRunningSessions: typeof import("./bash-process-registry.js").listRunningSessions;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;

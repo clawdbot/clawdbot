@@ -1,5 +1,5 @@
 /** Agent identity fields returned by gateway session listing APIs. */
-export type GatewayAgentIdentity = {
+type GatewayAgentIdentity = {
   name?: string;
   theme?: string;
   emoji?: string;
@@ -8,7 +8,7 @@ export type GatewayAgentIdentity = {
 };
 
 /** Model summary returned for an agent/session row. */
-export type GatewayAgentModel = {
+type GatewayAgentModel = {
   primary?: string;
   fallbacks?: string[];
 };

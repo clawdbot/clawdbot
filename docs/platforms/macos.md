@@ -67,7 +67,7 @@ Right-click an external link to choose **Open in Sidebar**, **Open in Default Br
 
 ## Import browser logins
 
-When the app runs against a local Gateway and a Chrome-family profile with cookies exists on the Mac, the dashboard window shows a dismissible banner offering to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from the banner's **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 ## Choose a Gateway mode
 

@@ -52,7 +52,7 @@ export type CodexBoundedTurnOptions = {
   clientFactory?: CodexAppServerClientFactory;
 };
 
-export type CodexBoundedTurnResult = {
+type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
   model: string;

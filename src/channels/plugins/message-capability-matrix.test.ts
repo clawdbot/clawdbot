@@ -1,7 +1,7 @@
 // Message capability matrix tests cover channel message feature support across plugin surfaces.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ChannelMessageActionAdapter, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionAdapter, ChannelPlugin } from "./types.public.js";
 
 const telegramDescribeMessageToolMock = vi.fn();
 const discordDescribeMessageToolMock = vi.fn();

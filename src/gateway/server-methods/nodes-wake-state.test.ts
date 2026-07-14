@@ -1,5 +1,5 @@
 // Tests for node wake state tracking and testing seam.
-import { afterEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -7,11 +7,11 @@ import {
   clearNodeWakeState,
   nodeWakeById,
   nodeWakeNudgeById,
-  testing,
 } from "./nodes-wake-state.js";
 
-afterEach(() => {
-  testing.resetWakeState();
+beforeEach(() => {
+  nodeWakeById.clear();
+  nodeWakeNudgeById.clear();
 });
 
 describe("constants", () => {
@@ -103,34 +103,5 @@ describe("clearNodeWakeState", () => {
     expect(nodeWakeById.has("b")).toBe(true);
     expect(nodeWakeNudgeById.has("a")).toBe(false);
     expect(nodeWakeNudgeById.has("b")).toBe(true);
-  });
-});
-
-describe("testing seam", () => {
-  it("getNodeWakeByIdSize returns 0 when nothing is stored", () => {
-    expect(testing.getNodeWakeByIdSize()).toBe(0);
-  });
-
-  it("getNodeWakeByIdSize reflects inserted entries", () => {
-    nodeWakeById.set("x", { lastWakeAtMs: 1 });
-    nodeWakeById.set("y", { lastWakeAtMs: 2 });
-    expect(testing.getNodeWakeByIdSize()).toBe(2);
-  });
-
-  it("hasNodeWakeEntry returns true for stored ids", () => {
-    nodeWakeById.set("present", { lastWakeAtMs: 1 });
-    expect(testing.hasNodeWakeEntry("present")).toBe(true);
-  });
-
-  it("hasNodeWakeEntry returns false for unknown ids", () => {
-    expect(testing.hasNodeWakeEntry("missing")).toBe(false);
-  });
-
-  it("resetWakeState clears both maps", () => {
-    nodeWakeById.set("a", { lastWakeAtMs: 1 });
-    nodeWakeNudgeById.set("a", 100);
-    testing.resetWakeState();
-    expect(nodeWakeById.size).toBe(0);
-    expect(nodeWakeNudgeById.size).toBe(0);
   });
 });

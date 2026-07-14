@@ -14,11 +14,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import {
   createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshotForWrite,
+  readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -771,6 +773,46 @@ describe("config io write", () => {
       });
       expectInputOwnerDisplayUnchanged(input);
       expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
+    });
+  });
+
+  it("drops keys that exist only on the next-config prototype", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local", port: 18789 },
+            commands: { ownerDisplay: "hash" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const nextConfig = Object.assign(
+        Object.create({ commands: { ownerDisplay: "raw" } }) as Record<string, unknown>,
+        { gateway: { mode: "local", port: 19001 } },
+      );
+
+      await io.writeConfigFile(nextConfig as OpenClawConfig);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted.gateway).toEqual({ mode: "local", port: 19001 });
+      expect(Object.hasOwn(persisted, "commands")).toBe(false);
     });
   });
 
@@ -2528,6 +2570,201 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves auth-store refresh scope through managed preflight and notification", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = {
+        gateway: { mode: "local" as const },
+        logging: { level: "info" as const },
+      } satisfies OpenClawConfig;
+      await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
+      const preflight = vi.fn(
+        async (
+          sourceConfig: OpenClawConfig,
+          refreshOptions?: { includeAuthStoreRefs?: boolean },
+        ) => ({
+          runtimeConfig: sourceConfig,
+          compareConfig: sourceConfig,
+          refreshOptions,
+        }),
+      );
+      const notifications: Array<{ includeAuthStoreRefs?: boolean } | undefined> = [];
+      const unsubscribe = registerConfigWriteListener(
+        (event) => notifications.push(event.runtimeRefresh),
+        {
+          ownsRuntimeActivationFor: configPath,
+          preCommitRuntimePreflight: preflight,
+        },
+      );
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          setRuntimeConfigSnapshot(initialConfig, initialConfig);
+          await writeConfigFile(
+            { ...initialConfig, logging: { level: "debug" } },
+            { runtimeRefresh: { includeAuthStoreRefs: false } },
+          );
+        });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(preflight).toHaveBeenCalledWith(expect.any(Object), {
+        includeAuthStoreRefs: false,
+      });
+      expect(notifications).toEqual([{ includeAuthStoreRefs: false }]);
+    });
+  });
+
+  it("stages managed root-write config env until the owner accepts it", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const envKey = "OPENCLAW_TEST_MANAGED_ROOT_ENV";
+      const initialAuthoredConfig = {
+        gateway: {
+          mode: "local" as const,
+          auth: { mode: "token" as const, token: "${OPENCLAW_TEST_MANAGED_ROOT_ENV}" },
+        },
+        env: { vars: { [envKey]: "old" } },
+      } satisfies OpenClawConfig;
+      const initialConfig = {
+        ...initialAuthoredConfig,
+        gateway: {
+          ...initialAuthoredConfig.gateway,
+          auth: { mode: "token" as const, token: "old" },
+        },
+      } satisfies OpenClawConfig;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(initialAuthoredConfig, null, 2)}\n`,
+        "utf-8",
+      );
+      let preparedEnv: NodeJS.ProcessEnv | undefined;
+      let notifiedSource: OpenClawConfig | undefined;
+      const unsubscribe = registerConfigWriteListener(
+        (event) => {
+          notifiedSource = event.sourceConfig;
+        },
+        {
+          ownsRuntimeActivationFor: configPath,
+          preCommitRuntimePreflight: async (sourceConfig) => {
+            const runtimeEnv = prepareConfigRuntimeEnv({
+              previousConfig: initialConfig,
+              nextConfig: sourceConfig,
+            });
+            preparedEnv = runtimeEnv.env;
+            return { runtimeConfig: sourceConfig, compareConfig: sourceConfig, runtimeEnv };
+          },
+        },
+      );
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath, [envKey]: "old" }, async () => {
+          setRuntimeConfigSnapshot(initialConfig, initialConfig);
+          initializePublishedConfigRuntimeEnv(initialConfig, {
+            ownedEnv: { [envKey]: "old" },
+          });
+          await writeConfigFile({
+            ...initialConfig,
+            env: { vars: { [envKey]: "candidate" } },
+          });
+
+          expect(preparedEnv?.[envKey]).toBe("candidate");
+          expect(notifiedSource?.gateway?.auth?.token).toBe("candidate");
+          expect(process.env[envKey]).toBe("old");
+        });
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
+  it("resolves watcher candidates after removing the accepted config env layer", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const envKey = "OPENCLAW_TEST_WATCHER_ENV";
+      const activeConfig = {
+        env: { vars: { [envKey]: "old" } },
+        gateway: { auth: { mode: "token" as const, token: "old" } },
+      } satisfies OpenClawConfig;
+      const candidate = {
+        env: { vars: { [envKey]: "new" } },
+        gateway: { auth: { mode: "token" as const, token: "${OPENCLAW_TEST_WATCHER_ENV}" } },
+      } satisfies OpenClawConfig;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(candidate, null, 2)}\n`, "utf-8");
+
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath, [envKey]: "old" }, async () => {
+        initializePublishedConfigRuntimeEnv(activeConfig, {
+          ownedEnv: { [envKey]: "old" },
+        });
+        const snapshot = await readConfigFileSnapshotForRuntimeTransaction(activeConfig);
+
+        expect(snapshot.sourceConfig.gateway?.auth?.token).toBe("new");
+        expect(process.env[envKey]).toBe("old");
+      });
+    });
+  });
+
+  it("rereads a managed write against an env transaction accepted during preflight", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const envKey = "OPENCLAW_TEST_INTERLEAVED_WRITE_ENV";
+      const makeConfig = (value: string, token: string): OpenClawConfig => ({
+        env: { vars: { [envKey]: value } },
+        gateway: { mode: "local", auth: { mode: "token", token } },
+      });
+      const configA = makeConfig("a", "a");
+      const authoredA = makeConfig("a", `\${${envKey}}`);
+      const configB = makeConfig("b", "a");
+      const configC = makeConfig("c", "c");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(authoredA, null, 2)}\n`, "utf-8");
+      let notifiedSource: OpenClawConfig | undefined;
+      const unsubscribe = registerConfigWriteListener(
+        (event) => {
+          notifiedSource = event.sourceConfig;
+        },
+        {
+          ownsRuntimeActivationFor: configPath,
+          preCommitRuntimePreflight: async (sourceConfig) => {
+            const staleRuntimeEnv = prepareConfigRuntimeEnv({
+              previousConfig: configA,
+              nextConfig: sourceConfig,
+            });
+            await Promise.resolve();
+            process.env[envKey] = "c";
+            initializePublishedConfigRuntimeEnv(configC, {
+              ownedEnv: { [envKey]: "c" },
+            });
+            return {
+              runtimeConfig: sourceConfig,
+              compareConfig: sourceConfig,
+              runtimeEnv: staleRuntimeEnv,
+            };
+          },
+        },
+      );
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath, [envKey]: "a" }, async () => {
+          setRuntimeConfigSnapshot(configA, configA);
+          initializePublishedConfigRuntimeEnv(configA, {
+            ownedEnv: { [envKey]: "a" },
+          });
+          await writeConfigFile(configB);
+
+          expect(notifiedSource?.gateway?.auth?.token).toBe("b");
+          expect(process.env[envKey]).toBe("c");
+        });
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
   it("rejects ambiguous removals from arrays containing environment references", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -2995,6 +3232,51 @@ describe("config io write", () => {
       } finally {
         setRuntimeConfigSnapshotRefreshHandler(null);
       }
+    });
+  });
+
+  it("rolls back a managed root write when canonical rereads exhaust env generations", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      const readFileSync = fsNode.readFileSync.bind(fsNode);
+      let generationChanges = 0;
+      const readSpy = vi.spyOn(fsNode, "readFileSync").mockImplementation((target, options) => {
+        const result = readFileSync(target, options);
+        if (String(target) === configPath && String(result).includes("19001")) {
+          generationChanges += 1;
+          initializePublishedConfigRuntimeEnv(initialConfig);
+        }
+        return result;
+      });
+      const unsubscribe = registerConfigWriteListener(() => {}, {
+        ownsRuntimeActivationFor: configPath,
+        preCommitRuntimePreflight: async (sourceConfig) => ({
+          runtimeConfig: sourceConfig,
+          compareConfig: sourceConfig,
+        }),
+      });
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          setRuntimeConfigSnapshot(initialConfig, initialConfig);
+          initializePublishedConfigRuntimeEnv(initialConfig);
+
+          await expect(
+            writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
+          ).rejects.toThrow("active config environment changed during every canonical reread");
+        });
+      } finally {
+        unsubscribe();
+        readSpy.mockRestore();
+      }
+
+      expect(generationChanges).toBeGreaterThanOrEqual(3);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
     });
   });
 

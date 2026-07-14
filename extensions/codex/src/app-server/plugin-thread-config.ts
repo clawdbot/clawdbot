@@ -43,7 +43,7 @@ export type PluginAppPolicyContextEntry = {
 };
 
 /** Policy context for one account-connected app admitted without a plugin package. */
-export type AccountAppPolicyContextEntry = {
+type AccountAppPolicyContextEntry = {
   source: "account";
   appName: string;
   allowDestructiveActions: boolean;
@@ -62,7 +62,7 @@ export type PluginAppPolicyContext = {
 };
 
 /** Diagnostic emitted while building app config for a native Codex thread. */
-export type CodexPluginThreadConfigDiagnostic =
+type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
       code:
@@ -86,7 +86,7 @@ export type CodexPluginThreadConfig = {
 };
 
 /** Inputs for building a Codex thread app/plugin config patch. */
-export type BuildCodexPluginThreadConfigParams = {
+type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;

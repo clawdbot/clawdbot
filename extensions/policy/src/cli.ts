@@ -101,7 +101,7 @@ export function registerPolicyCli(program: Command): void {
     });
 }
 
-export async function policyCompareCommand(
+async function policyCompareCommand(
   options: PolicyCompareOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -123,7 +123,7 @@ export async function policyCompareCommand(
   }
 }
 
-export async function policyCheckCommand(
+async function policyCheckCommand(
   options: PolicyCheckOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
@@ -137,7 +137,7 @@ export async function policyCheckCommand(
   }
 }
 
-export async function policyWatchCommand(
+async function policyWatchCommand(
   options: PolicyWatchOptions,
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {

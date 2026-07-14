@@ -255,7 +255,7 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 ### Message limits
 
 - `textChunkLimit` - outbound text chunk size (default: `4000` chars)
-- `chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
+- `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
 ### Streaming
@@ -266,14 +266,16 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 {
   channels: {
     feishu: {
-      streaming: true, // enable streaming card output (default: true)
-      blockStreaming: true, // opt into completed-block streaming
+      streaming: {
+        mode: "partial", // streaming card output (default: "partial")
+        block: { enabled: true }, // opt into completed-block streaming
+      },
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
 ### Quota optimization
 
@@ -597,11 +599,11 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                           | unlimited                            |
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                                   | `4000`                               |
-| `channels.feishu.chunkMode`                              | Chunk splitting (`length` or `newline`)                                              | `length`                             |
+| `channels.feishu.streaming.chunkMode`                    | Chunk splitting (`length` or `newline`)                                              | `length`                             |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                     | `30`                                 |
 | `channels.feishu.renderMode`                             | Reply rendering (`auto`, `raw`, `card`)                                              | `auto`                               |
-| `channels.feishu.streaming`                              | Streaming card output                                                                | `true`                               |
-| `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                      | `false`                              |
+| `channels.feishu.streaming.mode`                         | Streaming card output (`partial` or `off`)                                           | `partial`                            |
+| `channels.feishu.streaming.block.enabled`                | Completed-block reply streaming                                                      | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                                | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                         | `true`                               |
 | `channels.feishu.configWrites`                           | Allow channel-initiated config writes (needed by dynamic agents)                     | `true`                               |

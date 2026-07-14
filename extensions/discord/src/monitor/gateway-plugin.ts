@@ -27,11 +27,6 @@ import {
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
 
-export {
-  parseDiscordGatewayInfoBody,
-  resolveDiscordGatewayInfoTimeoutMs,
-} from "./gateway-metadata.js";
-
 const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";

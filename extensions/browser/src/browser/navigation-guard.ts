@@ -81,7 +81,7 @@ export function withBrowserNavigationPolicy(
 }
 
 /** Return true when strict policy requires redirect-chain inspection. */
-export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
+function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
   return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 

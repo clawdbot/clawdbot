@@ -3,10 +3,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
+import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -40,6 +37,7 @@ const watcher = "agent:main:main";
 const nestedWatcher = "agent:main:subagent:parent";
 const child = "agent:main:subagent:child";
 const cfg = {} as OpenClawConfig;
+let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
 function createDatabaseOptions() {
   const stateDir = makeTempDir(tempDirs, "openclaw-session-state-");
@@ -108,9 +106,10 @@ async function createWatcherSession(
 }
 
 afterEach(() => {
+  disposeHeartbeatWakeHandler?.();
+  disposeHeartbeatWakeHandler = undefined;
   closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
-  resetHeartbeatWakeStateForTests();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -194,7 +193,10 @@ describe("session state events", () => {
   it("wakes main watchers but only queues notices for nested watchers", async () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-    setHeartbeatWakeHandler(wakes);
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    // Drain notices queued by earlier tests before checking this watcher's routing.
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
     const database = createDatabaseOptions();
     seedChild(database, nestedWatcher);
 

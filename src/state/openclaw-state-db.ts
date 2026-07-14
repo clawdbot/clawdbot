@@ -30,7 +30,14 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  ensureColumn,
+  tableExists,
+  tableHasColumn,
+  tablePrimaryKeyColumns,
+} from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -82,8 +89,6 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
     "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
     "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
-    "cron_run_logs.created_at": ["created_at INTEGER NOT NULL DEFAULT 0"],
-    "cron_run_logs.entry_json": ["entry_json TEXT NOT NULL DEFAULT '{}'"],
     "current_conversation_bindings.conversation_kind": [
       "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
     ],
@@ -213,39 +218,6 @@ export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.Pro
       bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
   }
-}
-
-function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  return rows.some((row) => row.name === columnName);
-}
-
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
-}
-
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
-  if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
-    return false;
-  }
-  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-  return true;
 }
 
 function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
@@ -1526,6 +1498,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "flow_runs", "chain_id TEXT");
   ensureColumn(db, "task_runs", "tool_use_count INTEGER");
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
+  ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
@@ -1554,6 +1527,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      migrateLegacyCronRunLogsToTaskRuns(db);
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
       // never had a shipped writer (the node surface lives on device_pairing_paired

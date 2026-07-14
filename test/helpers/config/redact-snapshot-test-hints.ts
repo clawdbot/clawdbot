@@ -1,8 +1,9 @@
-// Redaction snapshot hints list config UI hints used by redaction tests.
-import type { ConfigUiHints } from "../../../src/config/schema.js";
-
 // Keep this fixture minimal so redaction tests exercise the hint-matching
 // behavior they care about without paying to build the full config schema graph.
+type ConfigUiHints = NonNullable<
+  Parameters<typeof import("../../../src/config/redact-snapshot.js").restoreRedactedValues>[2]
+>;
+
 export const redactSnapshotTestHints: ConfigUiHints = {
   "agents.defaults.memorySearch.remote.apiKey": { sensitive: true },
   "agents.list[].memorySearch.remote.apiKey": { sensitive: true },

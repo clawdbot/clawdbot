@@ -531,17 +531,6 @@ export function listRawChannelPluginCatalogEntries(
     });
 }
 
-/**
- * @deprecated Use `listTrustedChannelPluginCatalogEntries` for execution-facing
- * paths, or `listRawChannelPluginCatalogEntries` for internal plumbing
- * that applies its own trust filtering.
- */
-export function listChannelPluginCatalogEntries(
-  options: CatalogOptions = {},
-): ChannelPluginCatalogEntry[] {
-  return listRawChannelPluginCatalogEntries(options);
-}
-
 export function getChannelPluginCatalogEntry(
   id: string,
   options: CatalogOptions = {},

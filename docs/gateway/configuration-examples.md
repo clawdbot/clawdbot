@@ -386,10 +386,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
     sessionRetention: "24h",
-    runLog: {
-      maxBytes: "2mb",
-      keepLines: 2000,
-    },
   },
 
   // Webhooks

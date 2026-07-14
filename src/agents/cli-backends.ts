@@ -51,6 +51,7 @@ export type ResolvedCliBackend = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
@@ -88,6 +89,7 @@ type FallbackCliBackendPolicy = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
@@ -131,6 +133,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     textTransforms: entry.backend.textTransforms,
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
+    autoSelectAuthProfile: entry.backend.autoSelectAuthProfile,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
@@ -433,6 +436,7 @@ export function resolveCliBackendConfig(
       textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
+      autoSelectAuthProfile: registered.autoSelectAuthProfile,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
@@ -468,6 +472,7 @@ export function resolveCliBackendConfig(
       ),
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
+      autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
       contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
       ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
@@ -500,6 +505,7 @@ export function resolveCliBackendConfig(
     ),
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
+    autoSelectAuthProfile: fallbackPolicy?.autoSelectAuthProfile,
     contextEngineHostCapabilities: fallbackPolicy?.contextEngineHostCapabilities,
     ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,

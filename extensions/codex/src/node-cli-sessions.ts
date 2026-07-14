@@ -20,8 +20,8 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
-export const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
-export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
+const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
@@ -29,7 +29,7 @@ const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
-export type CodexCliSessionSummary = {
+type CodexCliSessionSummary = {
   sessionId: string;
   updatedAt?: string;
   lastMessage?: string;
@@ -38,12 +38,12 @@ export type CodexCliSessionSummary = {
   messageCount: number;
 };
 
-export type CodexCliSessionsListResult = {
+type CodexCliSessionsListResult = {
   sessions: CodexCliSessionSummary[];
   codexHome: string;
 };
 
-export type CodexCliSessionResumeResult = {
+type CodexCliSessionResumeResult = {
   ok: true;
   sessionId: string;
   text: string;
@@ -320,7 +320,7 @@ async function runCodexExecResume(params: {
   }
 }
 
-export function resolveCodexCliResumeSpawnInvocation(
+function resolveCodexCliResumeSpawnInvocation(
   args: string[],
   runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {

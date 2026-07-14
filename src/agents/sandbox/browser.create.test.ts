@@ -20,7 +20,6 @@ import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 let BROWSER_BRIDGES: Map<string, unknown>;
 let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
-let resetNoVncObserverTokensForTests: typeof import("./novnc-auth.js").resetNoVncObserverTokensForTests;
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -112,7 +111,6 @@ async function loadFreshBrowserModulesForTest() {
   vi.resetModules();
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
   ({ ensureSandboxBrowser } = await import("./browser.js"));
-  ({ resetNoVncObserverTokensForTests } = await import("./novnc-auth.js"));
 }
 
 function buildConfig(enableNoVnc: boolean): SandboxConfig {
@@ -248,7 +246,6 @@ describe("ensureSandboxBrowser create args", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
-    resetNoVncObserverTokensForTests();
     dockerMocks.dockerContainerState.mockClear();
     dockerMocks.execDocker.mockClear();
     dockerMocks.readDockerContainerEnvVar.mockClear();

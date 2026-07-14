@@ -10,13 +10,13 @@ export type JsonValue =
 
 export type WorkspaceActor = "user" | "system" | `agent:${string}`;
 export type WorkspaceGrid = { x: number; y: number; w: number; h: number };
-export type WorkspaceRpcBinding = {
+type WorkspaceRpcBinding = {
   source: "rpc";
   method: string;
   params?: Record<string, JsonValue>;
 };
-export type WorkspaceFileBinding = { source: "file"; path: string; pointer?: string };
-export type WorkspaceStaticBinding = { source: "static"; value: JsonValue };
+type WorkspaceFileBinding = { source: "file"; path: string; pointer?: string };
+type WorkspaceStaticBinding = { source: "static"; value: JsonValue };
 export type WorkspaceBinding = WorkspaceRpcBinding | WorkspaceFileBinding | WorkspaceStaticBinding;
 export type WorkspaceWidget = {
   id: string;
@@ -54,7 +54,7 @@ export type WorkspaceDoc = {
   prefs: { tabOrder: string[] };
 };
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 1;
+const CURRENT_WORKSPACE_SCHEMA_VERSION = 1;
 
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const ACTOR_PATTERN = /^(user|system|agent:[A-Za-z0-9._-]{1,64})$/;

@@ -6,9 +6,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for release changelog rewrites and GitHub release-note source text.
-This is mandatory before every beta, beta rerun, stable release, or stable
-rerun. Use it with `release-openclaw-maintainer`; this skill owns changelog
-content, ordering, grouping, and attribution discipline.
+Run it once after the final Code SHA has green Full Release Validation. Do not
+rerun it for same-candidate tooling retries, resumed publication, or promotion.
+Use it with `release-openclaw-maintainer`; this skill owns changelog content,
+ordering, grouping, and attribution discipline.
 
 ## Goal
 
@@ -25,7 +26,8 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: exact branch/SHA being released.
+- Target ref: the exact green Code SHA. The changelog commit created from this
+  input becomes the Release SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -33,10 +35,12 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Start on `main` before branching when possible:
+1. Confirm the release branch is at the fully validated Code SHA:
    - `git fetch --tags origin`
-   - `git pull --ff-only`
    - confirm clean `git status -sb`
+   - record `git rev-parse HEAD` as the Code SHA
+   - record the successful Full Release Validation run id and attempt
+   - stop if any product/version/backport change is still pending
 2. Audit history, including direct commits:
    - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
    - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
@@ -241,7 +245,13 @@ every human `Thanks @...` attribution.
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
 - commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
-- push, pull/rebase if needed, then branch/rebase release from latest `main`
+- record the new commit as the Release SHA and require
+  `git diff --name-only <code-sha>..<release-sha>` to print only
+  `CHANGELOG.md`
+- push the release branch without rebasing it onto moving `main`
+- dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
+  reuse enabled. It must select `changelog-only-release-v1`; any other changed
+  path returns the release to the Code SHA validation loop
 
 ## Quota / API Outage Rule
 

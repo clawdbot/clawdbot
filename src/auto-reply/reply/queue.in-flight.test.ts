@@ -1,14 +1,13 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearFollowupQueue,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
 describe("followup queue in-flight ownership", () => {

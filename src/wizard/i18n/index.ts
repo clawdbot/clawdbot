@@ -9,7 +9,7 @@ import type {
   WizardTranslationTree,
 } from "./types.js";
 
-export type { WizardI18nParams, WizardLocale, WizardTranslationMap };
+export type { WizardI18nParams };
 
 // Wizard i18n uses dotted keys with English fallback. Locale selection is
 // intentionally small because setup copy is maintained in-tree.
@@ -21,7 +21,7 @@ const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
   "zh-TW": zh_TW,
 };
 
-export const WIZARD_DEFAULT_LOCALE: WizardLocale = "en";
+const WIZARD_DEFAULT_LOCALE: WizardLocale = "en";
 export const WIZARD_SUPPORTED_LOCALES: readonly WizardLocale[] = ["en", "zh-CN", "zh-TW"];
 
 function normalizeLocaleToken(raw: string | undefined): string {

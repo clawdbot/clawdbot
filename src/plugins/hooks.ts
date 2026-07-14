@@ -61,9 +61,6 @@ import type {
   PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookCronChangedEvent,
-  PluginHookGatewayCronDeliveryStatus,
-  PluginHookGatewayCronJobState,
-  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -98,87 +95,14 @@ import type {
 } from "./hook-types.js";
 
 // Re-export types for consumers
-export type {
-  PluginHookAgentContext,
-  PluginHookBeforeAgentReplyEvent,
-  PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforeDispatchContext,
-  PluginHookBeforeDispatchEvent,
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyPayloadSendingContext,
-  PluginHookReplyPayloadSendingEvent,
-  PluginHookReplyPayloadSendingResult,
-  PluginHookReplyPayload,
-  PluginHookReplyDispatchContext,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-  PluginHookBeforeModelResolveEvent,
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildEvent,
-  PluginHookBeforePromptBuildResult,
-  PluginHookModelCallEndedEvent,
-  PluginHookModelCallStartedEvent,
-  PluginHookLlmInputEvent,
-  PluginHookLlmOutputEvent,
-  PluginHookBeforeAgentFinalizeEvent,
-  PluginHookBeforeAgentFinalizeResult,
-  PluginHookAgentEndEvent,
-  PluginHookBeforeCompactionEvent,
-  PluginHookBeforeResetEvent,
-  PluginHookInboundClaimContext,
-  PluginHookInboundClaimEvent,
-  PluginHookInboundClaimResult,
-  PluginHookAfterCompactionEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
-  PluginHookToolContext,
-  PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
-  PluginHookBeforeAgentRunEvent,
-  PluginHookCronReconciledContext,
-  PluginHookCronReconciledEvent,
-  PluginHookAfterToolCallEvent,
-  PluginHookToolResultPersistContext,
-  PluginHookToolResultPersistEvent,
-  PluginHookToolResultPersistResult,
-  PluginHookBeforeMessageWriteEvent,
-  PluginHookBeforeMessageWriteResult,
-  PluginHookSessionContext,
-  PluginHookSessionStartEvent,
-  PluginHookSessionEndEvent,
-  PluginHookSubagentContext,
-  PluginHookSubagentDeliveryTargetEvent,
-  PluginHookSubagentDeliveryTargetResult,
-  PluginHookSubagentSpawningEvent,
-  PluginHookSubagentSpawningResult,
-  PluginHookSubagentSpawnedEvent,
-  PluginHookSubagentEndedEvent,
-  PluginHookCronChangedEvent,
-  PluginHookGatewayCronDeliveryStatus,
-  PluginHookGatewayCronJobState,
-  PluginHookGatewayCronRunStatus,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
-  PluginHookBeforeInstallContext,
-  PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallResult,
-  PluginHookResolveExecEnvContext,
-  PluginHookResolveExecEnvEvent,
-};
 
-export type HookRunnerLogger = {
+type HookRunnerLogger = {
   debug?: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
 };
 
-export type HookFailurePolicy = "fail-open" | "fail-closed";
+type HookFailurePolicy = "fail-open" | "fail-closed";
 export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
 };
@@ -188,7 +112,7 @@ type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinaliz
   retryCandidates?: BeforeAgentFinalizeRetry[];
 };
 
-export type HookRunnerOptions = {
+type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
@@ -258,7 +182,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
 };
 
-export type PluginTargetedInboundClaimOutcome =
+type PluginTargetedInboundClaimOutcome =
   | {
       status: "handled";
       result: PluginHookInboundClaimResult;

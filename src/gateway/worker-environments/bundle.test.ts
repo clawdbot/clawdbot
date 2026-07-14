@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -7,11 +6,10 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
-  verifyPublishedNpmRelease,
-  type WorkerBundleArtifact,
-  type WorkerNpmProofCommandRunner,
+  type WorkerInstallationArtifact,
 } from "./bundle.js";
 
+type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
 const fixturePackageJson = `${JSON.stringify({
   name: "openclaw",
   version: "1.2.3",
@@ -92,6 +90,145 @@ describe("worker bundle producer", () => {
         "openclaw.mjs",
         "package.json",
       ]);
+    });
+  });
+
+  it("prunes workspace deps and lifecycle fields from dev manifests", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const entry = true;\n"]]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: { json5: "2.2.3", "@openclaw/gateway-protocol": "workspace:*" },
+          devDependencies: { vitest: "4.0.0" },
+          scripts: { prepare: "node scripts/prepare.mjs" },
+          pnpm: { patchedDependencies: {} },
+        })}\n`,
+        "utf8",
+      );
+
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+        openclawVersion: "1.2.3",
+      }).prepare();
+      const extractRoot = path.join(root, "extract");
+      await fs.mkdir(extractRoot, { recursive: true });
+      await tar.extract({ file: bundle.tarballPath, cwd: extractRoot });
+      const staged = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(staged.dependencies).toEqual({ json5: "2.2.3" });
+      expect(staged).not.toHaveProperty("devDependencies");
+      expect(staged).not.toHaveProperty("scripts");
+      expect(staged).not.toHaveProperty("pnpm");
+    });
+  });
+
+  it("vendors workspace packages that the shipped dist imports", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [
+        ["dist/entry.js", 'import { fake } from "@openclaw/fake-pkg";\nexport { fake };\n'],
+      ]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: {
+            json5: "2.2.3",
+            "@openclaw/fake-pkg": "workspace:*",
+            "@openclaw/gateway-protocol": "workspace:*",
+          },
+        })}\n`,
+        "utf8",
+      );
+      const vendorSource = path.join(packageRoot, "node_modules/@openclaw/fake-pkg");
+      await fs.mkdir(path.join(vendorSource, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(vendorSource, "package.json"),
+        `${JSON.stringify({
+          name: "@openclaw/fake-pkg",
+          version: "1.2.3",
+          type: "module",
+          main: "./dist/index.js",
+          dependencies: { "partial-json": "0.1.7" },
+          scripts: { build: "tsdown" },
+          devDependencies: { vitest: "4.0.0" },
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(vendorSource, "dist/index.js"),
+        "export const fake = true;\n",
+        "utf8",
+      );
+
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+        openclawVersion: "1.2.3",
+      }).prepare();
+
+      await expect(listTarball(bundle.tarballPath)).resolves.toEqual([
+        "dist/entry.js",
+        "openclaw.mjs",
+        "package.json",
+        "vendor/openclaw-fake-pkg/dist/index.js",
+        "vendor/openclaw-fake-pkg/package.json",
+      ]);
+      const extractRoot = path.join(root, "extract");
+      await fs.mkdir(extractRoot, { recursive: true });
+      await tar.extract({ file: bundle.tarballPath, cwd: extractRoot });
+      const staged = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(staged.dependencies).toEqual({
+        json5: "2.2.3",
+        "@openclaw/fake-pkg": "file:./vendor/openclaw-fake-pkg",
+      });
+      const vendored = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "vendor/openclaw-fake-pkg/package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(vendored.dependencies).toEqual({ "partial-json": "0.1.7" });
+      expect(vendored).not.toHaveProperty("scripts");
+      expect(vendored).not.toHaveProperty("devDependencies");
+    });
+  });
+
+  it("fails closed when a dist-referenced workspace package is not installed", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-missing-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [
+        ["dist/entry.js", 'import "@openclaw/fake-pkg";\nexport {};\n'],
+      ]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: { "@openclaw/fake-pkg": "workspace:*" },
+        })}\n`,
+        "utf8",
+      );
+
+      await expect(
+        createWorkerBundleProducer({
+          packageRoot,
+          cacheDir: path.join(root, "cache"),
+          openclawVersion: "1.2.3",
+        }).prepare(),
+      ).rejects.toThrow("cannot resolve workspace dependency @openclaw/fake-pkg");
     });
   });
 
@@ -238,125 +375,6 @@ describe("worker bundle producer", () => {
 });
 
 describe("worker npm installation artifact", () => {
-  it("pins npm package integrity and worker content to one snapshot", async () => {
-    await withTempDir({ prefix: "openclaw-worker-npm-proof-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      const cacheDir = path.join(root, "cache");
-      await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      const bundle = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      const calls: Array<{ argv: string[]; cwd: string | undefined }> = [];
-      let integrity = "";
-      const runCommand: WorkerNpmProofCommandRunner = async (argv, options) => {
-        const cwd = typeof options === "number" ? undefined : options.cwd;
-        calls.push({ argv, cwd });
-        if (argv[1] === "pack") {
-          if (!cwd) {
-            throw new Error("missing pack cwd");
-          }
-          const filename = "openclaw-1.2.3.tgz";
-          const tarballPath = path.join(cwd, filename);
-          await tar.create(
-            { cwd: root, file: tarballPath, gzip: true, noMtime: true, portable: true },
-            ["package"],
-          );
-          const contents = await fs.readFile(tarballPath);
-          integrity = `sha512-${createHash("sha512").update(contents).digest("base64")}`;
-          return {
-            stdout: JSON.stringify([{ name: "openclaw", version: "1.2.3", integrity, filename }]),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }
-        return {
-          stdout: JSON.stringify({
-            name: "openclaw",
-            version: "1.2.3",
-            "dist.integrity": integrity,
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      };
-
-      // The registry lookup runs first, so provide the integrity of the deterministic fixture tarball.
-      const proofTarball = path.join(root, "proof.tgz");
-      await tar.create(
-        { cwd: root, file: proofTarball, gzip: true, noMtime: true, portable: true },
-        ["package"],
-      );
-      integrity = `sha512-${createHash("sha512")
-        .update(await fs.readFile(proofTarball))
-        .digest("base64")}`;
-
-      await expect(
-        verifyPublishedNpmRelease({
-          bundleHash: bundle.bundleHash,
-          version: "1.2.3",
-          runCommand,
-        }),
-      ).resolves.toBe(integrity);
-
-      expect(calls).toHaveLength(2);
-      expect(calls[0]?.argv).toContain("--registry=https://registry.npmjs.org/");
-      expect(calls[1]?.argv).toContain("--pack-destination");
-      expect(calls[1]?.argv).toContain("--ignore-scripts");
-      expect(calls[1]?.argv).toContain("openclaw@1.2.3");
-      expect(calls[1]?.argv).toContain("--registry=https://registry.npmjs.org/");
-      expect(calls[0]?.cwd).toBe(calls[1]?.cwd);
-      await expect(
-        verifyPublishedNpmRelease({
-          bundleHash: "b".repeat(64),
-          version: "1.2.3",
-          runCommand,
-        }),
-      ).rejects.toThrow("does not match the prepared worker bundle");
-    });
-  });
-
-  it("rejects installed package byte drift", async () => {
-    const publishedIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
-    const modifiedIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
-    const runCommand: WorkerNpmProofCommandRunner = async (argv, options) => {
-      const cwd = typeof options === "number" ? undefined : options.cwd;
-      if (argv[1] === "pack" && cwd) {
-        await fs.writeFile(path.join(cwd, "openclaw-1.2.3.tgz"), "modified", "utf8");
-      }
-      return {
-        stdout: JSON.stringify(
-          argv[1] === "view"
-            ? { name: "openclaw", version: "1.2.3", "dist.integrity": publishedIntegrity }
-            : [
-                {
-                  name: "openclaw",
-                  version: "1.2.3",
-                  integrity: modifiedIntegrity,
-                  filename: "openclaw-1.2.3.tgz",
-                },
-              ],
-        ),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    };
-
-    await expect(
-      verifyPublishedNpmRelease({
-        bundleHash: "a".repeat(64),
-        version: "1.2.3",
-        runCommand,
-      }),
-    ).rejects.toThrow("does not match the published package");
-  });
-
   it("uses an exact registry-proven gateway package", async () => {
     await withTempDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);

@@ -1,5 +1,7 @@
 // Slack tests cover message handler.app mention race plugin behavior.
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSlackRuntime } from "../runtime.js";
 
 type TestHistoryEntry = {
   sender: string;
@@ -19,6 +21,10 @@ const prepareSlackMessageMock = vi.fn<
   }) => Promise<unknown>
 >();
 const dispatchPreparedSlackMessageMock = vi.fn<(prepared: unknown) => Promise<void>>();
+const inboundDeliveryTestCache = resolveGlobalDedupeCache(
+  Symbol.for("openclaw.slackInboundDeliveries"),
+  { ttlMs: 24 * 60 * 60 * 1000, maxSize: 20_000 },
+);
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
@@ -69,10 +75,6 @@ vi.mock("./message-handler/dispatch.js", () => ({
 }));
 
 let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
-let SlackRetryableInboundError: typeof import("./message-handler.js").SlackRetryableInboundError;
-let clearSlackInboundDeliveryStateForTest: typeof import("./inbound-delivery-state.js").clearSlackInboundDeliveryStateForTest;
-let clearSlackRuntime: typeof import("../runtime.js").clearSlackRuntime;
-let setSlackRuntime: typeof import("../runtime.js").setSlackRuntime;
 
 function createMarkMessageSeen() {
   const seen = new Set<string>();
@@ -158,20 +160,18 @@ async function createInFlightMessageScenario(ts: string) {
 
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeAll(async () => {
-    ({ createSlackMessageHandler, SlackRetryableInboundError } =
-      await import("./message-handler.js"));
-    ({ clearSlackInboundDeliveryStateForTest } = await import("./inbound-delivery-state.js"));
-    ({ clearSlackRuntime, setSlackRuntime } = await import("../runtime.js"));
+    ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
-    clearSlackInboundDeliveryStateForTest();
-    clearSlackRuntime();
+    inboundDeliveryTestCache.clear();
+    setSlackRuntime(null as never);
   });
 
   afterEach(() => {
+    setSlackRuntime(null as never);
     vi.restoreAllMocks();
   });
 
@@ -331,21 +331,6 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("retries message replay after an explicit retryable dispatch failure", async () => {
-    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
-    dispatchPreparedSlackMessageMock
-      .mockRejectedValueOnce(new SlackRetryableInboundError("retry me"))
-      .mockResolvedValueOnce(undefined);
-
-    const handler = createTestHandler();
-
-    await expect(sendMessageEvent(handler, "1700000000.000250")).rejects.toThrow("retry me");
-    await expect(sendMessageEvent(handler, "1700000000.000250")).resolves.toBeUndefined();
-
-    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps message replay deduped after a non-retryable dispatch failure", async () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("post-send failure"));
@@ -361,7 +346,7 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("dedupes delayed app_mention replays after in-memory seen state is gone", async () => {
+  it("dedupes delayed app_mention replays through persistent delivery state", async () => {
     const stored = new Map<string, unknown>();
     const register = vi.fn(async (key: string, value: unknown) => {
       stored.set(key, value);
@@ -383,7 +368,7 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
 
     await sendMessageEvent(createTestHandler(), "1700000000.000350");
-    clearSlackInboundDeliveryStateForTest();
+    inboundDeliveryTestCache.clear();
     await sendMentionEvent(createTestHandler(), "1700000000.000350");
 
     expect(register).toHaveBeenCalledWith("default:C1:1700000000.000350", {

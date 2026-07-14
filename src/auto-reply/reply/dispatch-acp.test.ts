@@ -19,7 +19,7 @@ import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 

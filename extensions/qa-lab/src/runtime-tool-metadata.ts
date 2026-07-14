@@ -37,19 +37,19 @@ export type QaRuntimeToolCoverageMetadata = {
   action?: string;
 };
 
-export const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
+const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
   "codex-native-workspace",
   "openclaw-dynamic-integration",
   "optional-profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
+const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic",
   "profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic-direct",
   "openclaw-dynamic-searchable",

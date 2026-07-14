@@ -13,7 +13,7 @@ export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
 type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
-export type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
+type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
 type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];

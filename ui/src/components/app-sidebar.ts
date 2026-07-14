@@ -4,23 +4,16 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
-  isPluginsHubRoute,
-  isSettingsNavigationRoute,
-  navigationIconForRoute,
   scheduleRoutePreload,
   type NavigationRouteId,
-  SIDEBAR_NAV_ROUTES,
   type SidebarNavRoute,
-  sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -29,19 +22,21 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { t } from "../i18n/index.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
+import "./sidebar-agent-chip.ts";
 import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { t } from "../i18n/index.ts";
+import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -50,7 +45,10 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  CATALOG_SESSION_CONTINUED_EVENT,
+  type CatalogSessionContinuedDetail,
+} from "../lib/sessions/catalog-key.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -78,13 +76,38 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
-import { icons, type IconName } from "./icons.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
+import {
+  isSidebarRouteActive,
+  renderSidebarCustomizeMenu,
+  renderSidebarMoreMenu,
+  renderSidebarMoreRow,
+  renderSidebarNavRoute,
+  shouldHandleNavigationClick,
+  sidebarMoreMenuHoldsActiveRoute,
+  sidebarPluginTabs,
+} from "./app-sidebar-nav-menus.ts";
+import {
+  mergeCatalogSessionRows,
+  mergeSessionCatalogPage,
+  preserveExpandedCatalogHost,
+  sessionCatalogRequestError,
+} from "./app-sidebar-session-catalog-state.ts";
+import {
+  adoptedCatalogSessionKeys,
+  bindAdoptedCatalogSession,
+  type CatalogBackingSessionDisplay,
+  formatSidebarTimestamp,
+  renderSessionCatalogGroups,
+} from "./app-sidebar-session-catalogs.ts";
+import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   LOBSTER_PET_BUILD_MULS,
@@ -139,7 +162,19 @@ type SidebarSessionGroupDropTarget = {
   position: "before" | "after";
 };
 
+type SidebarSessionMutationScope = {
+  epoch: number;
+  context: ApplicationContext<RouteId>;
+  gateway: ApplicationContext<RouteId>["gateway"];
+  sessions: SessionCapability;
+  client: GatewayBrowserClient;
+  selectedAgentId: string;
+};
+
+type SidebarSessionMutationResult = "completed" | "failed" | "stale";
+
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_SESSION_PAGE_SIZE = 10;
 const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
@@ -173,6 +208,10 @@ function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   );
 }
 
+function loadStoredSidebarSessionsShowCron(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
+}
+
 function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
@@ -195,52 +234,8 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
 
-function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
-  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
-  if (value === "just now") {
-    return "now";
-  }
-  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
-}
-
-function shouldHandleNavigationClick(event: MouseEvent): boolean {
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
-}
-
 function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
-}
-
-function mergeCatalogSessionRows(
-  first: readonly SessionCatalogSession[],
-  second: readonly SessionCatalogSession[],
-): SessionCatalogSession[] {
-  const seen = new Set(first.map((session) => session.threadId));
-  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
-}
-
-function preserveExpandedCatalogHost(
-  freshHost: SessionCatalogHost,
-  previous: SessionCatalogHost | undefined,
-): SessionCatalogHost {
-  if (!previous) {
-    return freshHost;
-  }
-  const { sessions, nextCursor, ...previousDetails } = previous;
-  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  return {
-    ...previousDetails,
-    ...freshDetails,
-    sessions,
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
 }
 
 class AppSidebar extends OpenClawLightDomContentsElement {
@@ -253,7 +248,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
     DEFAULT_SIDEBAR_PINNED_ROUTES;
-  @property({ attribute: false }) sidebarMoreExpanded = false;
+  /** Agents surfaced first in the chip quick switcher when many exist. */
+  @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
@@ -264,10 +260,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
-  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  @property({ attribute: false }) onOpenNewSession?: (
+    agentId: string,
+    target?: NewSessionTarget,
+  ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
-  @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
@@ -277,6 +275,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
+  @state() private moreMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   // Multi-select set for batch menu actions; stale keys are dropped lazily by
   // selectedVisibleSessions() so list refreshes never need to prune here.
@@ -291,7 +290,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private collapsedSessionSections = loadStoredCollapsedSessionSections();
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
+  @state() private sessionsShowCron = loadStoredSidebarSessionsShowCron();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
+  // Anchored by its bottom edge so the footer menu grows upward regardless of height.
+  @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
+  @state() private agentMenuFilter = "";
+  @state() private agentMenuHelpOpen = false;
   @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -299,25 +303,33 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
   @state() private sessionCatalogs: SessionCatalog[] = [];
   @state() private loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
+  @state() private sessionMutationError: string | null = null;
   @state() private logoVisit: LobsterLogoVisitDetail | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
+  private moreMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
   // Guards the async work fetch: a menu reopened for another session must not
   // adopt a stale response.
   private sessionMenuWorkVersion = 0;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
+  private agentMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
   private sessionsSource: SessionCapability | null = null;
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  // Mutation completions belong to one context/capability/connection epoch.
+  // Bumping this prevents old failures or batch tails crossing a reconnect.
+  private sessionMutationEpoch = 0;
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
@@ -358,10 +370,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       );
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    // Document listener: the chat pane announces catalog adoptions so the
+    // catalog row binds to the new session key before the next catalog poll.
+    document.addEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
     this.dismissTransientMenus();
+    this.invalidateSessionMutations();
     this.gatewaySource = null;
     this.gatewayClient = null;
+    this.gatewayConnected = false;
     this.sessionCatalogGeneration += 1;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
@@ -380,6 +408,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   override updated() {
     this.syncSessionsScrollObserver();
     const snapshot = this.context?.gateway.snapshot;
+    if (this.context) {
+      this.synchronizeSessionCatalogAgent(this.expandedAgentId());
+    }
     if (
       !snapshot?.connected ||
       !snapshot.client ||
@@ -392,6 +423,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     void this.refreshSessionCatalogs();
   }
 
+  private synchronizeSessionCatalogAgent(agentId: string) {
+    if (agentId === this.sessionCatalogAgentId) {
+      return;
+    }
+    this.sessionCatalogAgentId = agentId;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
+    this.loadingMoreSessionCatalogIds = new Set();
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
+    if (this.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
+      this.sessionCatalogs = this.sessionCatalogs.map((catalog) => {
+        const { createSession: _createSession, ...capabilities } = catalog.capabilities;
+        return { ...catalog, capabilities };
+      });
+    }
+  }
+
+  private readonly handleCatalogSessionContinued = (
+    event: CustomEvent<CatalogSessionContinuedDetail>,
+  ) => {
+    const detail = event.detail;
+    if (!detail?.sessionKey) {
+      return;
+    }
+    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
+    // Invalidate in-flight polls and load-more merges so a pre-adoption
+    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+    this.sessionCatalogRevision += 1;
+    this.sessionCatalogRevisions.set(
+      detail.catalogId,
+      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+    );
+  };
+
   private async refreshSessionCatalogs() {
     const client = this.context?.gateway.snapshot.client;
     if (!client || !this.connected) {
@@ -399,12 +467,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     if (this.sessionCatalogRequestGeneration === generation) {
       return;
     }
     this.sessionCatalogRequestGeneration = generation;
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         limitPerHost: 40,
       });
       if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
@@ -414,6 +484,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         catalogs: result.catalogs,
         client,
         generation,
+        agentId,
       });
       if (
         generation !== this.sessionCatalogGeneration ||
@@ -457,6 +528,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     catalogs: SessionCatalog[];
     client: GatewayBrowserClient;
     generation: number;
+    agentId: string;
   }): Promise<SessionCatalog[]> {
     const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
     return Promise.all(
@@ -483,7 +555,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               try {
                 result = await params.client.request<SessionsCatalogListResult>(
                   "sessions.catalog.list",
-                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                  {
+                    agentId: params.agentId,
+                    catalogId: catalog.id,
+                    cursors: { [host.hostId]: nextCursor },
+                  },
                 );
               } catch {
                 return previous ?? host;
@@ -541,10 +617,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
     this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         catalogId,
         cursors,
       });
@@ -559,49 +637,37 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       if (!page) {
         return;
       }
-      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
-      const requestedHosts = new Set(Object.keys(cursors));
-      let updated = false;
-      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
-        if (currentCatalog.id !== catalogId) {
-          return currentCatalog;
-        }
-        return {
-          ...currentCatalog,
-          hosts: currentCatalog.hosts.map((host) => {
-            const pageHost = pageHosts.get(host.hostId);
-            if (
-              !requestedHosts.has(host.hostId) ||
-              host.nextCursor !== cursors[host.hostId] ||
-              !pageHost ||
-              pageHost.error
-            ) {
-              return host;
-            }
-            updated = true;
-            const key = sessionCatalogHostKey(catalogId, host.hostId);
-            this.sessionCatalogPageDepths.set(
-              key,
-              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
-            );
-            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
-            const { nextCursor: _currentCursor, ...currentHost } = host;
-            return {
-              ...currentHost,
-              ...pageHostDetails,
-              sessions: mergeCatalogSessionRows(host.sessions, sessions),
-              ...(nextCursor ? { nextCursor } : {}),
-            };
-          }),
-        };
-      });
-      if (updated) {
-        this.sessionCatalogs = catalogs;
-        this.sessionCatalogRevisions.set(catalogId, revision + 1);
-        this.sessionCatalogRevision += 1;
+      const current = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+      if (!current) {
+        return;
       }
-    } catch {
-      // Keep the current cursor so the user can retry the same page.
+      const merged = mergeSessionCatalogPage({ current, page, cursors });
+      for (const hostId of merged.advancedHostIds) {
+        const key = sessionCatalogHostKey(catalogId, hostId);
+        this.sessionCatalogPageDepths.set(key, (this.sessionCatalogPageDepths.get(key) ?? 0) + 1);
+      }
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId ? merged.catalog : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
+    } catch (error) {
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      // Preserve rows and cursors: the visible error explains that retrying
+      // Load More will request the same page rather than advancing past it.
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId
+          ? { ...candidate, error: sessionCatalogRequestError(error) }
+          : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
     } finally {
       if (generation === this.sessionCatalogGeneration) {
         const loading = new Set(this.loadingMoreSessionCatalogIds);
@@ -651,14 +717,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   dismissTransientMenus(): boolean {
     const hadTransientMenu = Boolean(
       this.customizeMenuPosition ||
+      this.moreMenuPosition ||
       this.sessionMenu ||
       this.sessionGroupMenu ||
-      this.sessionSortMenuPosition,
+      this.sessionSortMenuPosition ||
+      this.agentMenuPosition,
     );
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     return hadTransientMenu;
   }
 
@@ -699,6 +769,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private synchronizeSessions(sessions: SessionCapability) {
     if (sessions !== this.sessionsSource) {
+      this.invalidateSessionMutations();
       this.clearSessionCache();
       this.sessionsSource = sessions;
     }
@@ -711,14 +782,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
     const client = gateway.snapshot.client;
-    if (gateway === this.gatewaySource && client === this.gatewayClient) {
+    const connected = gateway.snapshot.connected;
+    const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
+    const connectionChanged = connected !== this.gatewayConnected;
+    if (!sourceOrClientChanged && !connectionChanged) {
+      return;
+    }
+    this.invalidateSessionMutations();
+    this.gatewaySource = gateway;
+    this.gatewayClient = client;
+    this.gatewayConnected = connected;
+    if (!sourceOrClientChanged) {
       return;
     }
     this.clearSessionCache();
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogRevision += 1;
-    this.gatewaySource = gateway;
-    this.gatewayClient = client;
     if (this.sessionCatalogTimer) {
       globalThis.clearTimeout(this.sessionCatalogTimer);
       this.sessionCatalogTimer = null;
@@ -736,6 +815,52 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.sessionRowsByAgent = {};
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  }
+
+  private invalidateSessionMutations() {
+    this.sessionMutationEpoch += 1;
+    this.sessionMutationError = null;
+  }
+
+  private beginSessionMutation(): SidebarSessionMutationScope | null {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return null;
+    }
+    const gateway = context.gateway;
+    const client = gateway.snapshot.client;
+    if (!gateway.snapshot.connected || !client) {
+      return null;
+    }
+    this.sessionMutationError = null;
+    return {
+      epoch: this.sessionMutationEpoch,
+      context,
+      gateway,
+      sessions: context.sessions,
+      client,
+      selectedAgentId: this.getSessionNavigationState().selectedAgentId,
+    };
+  }
+
+  private isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean {
+    const context = this.context;
+    const gateway = context?.gateway;
+    return (
+      this.connected &&
+      this.sessionMutationEpoch === scope.epoch &&
+      context === scope.context &&
+      gateway === scope.gateway &&
+      context.sessions === scope.sessions &&
+      gateway.snapshot.connected &&
+      gateway.snapshot.client === scope.client
+    );
+  }
+
+  private publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown) {
+    if (this.isSessionMutationScopeCurrent(scope)) {
+      this.sessionMutationError = String(error);
+    }
   }
 
   private readonly handleLogoVisit = (event: Event) => {
@@ -877,6 +1002,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      showCron: this.sessionsShowCron,
       compareSessions: this.compareSidebarSessionRows,
     });
     const highlightCurrentSession = this.activeRouteId === "chat";
@@ -929,13 +1055,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       ranges and batch actions both key off this order. */
   private visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const navigationState = this.getSessionNavigationState();
-    const agents = this.context?.agents.state.agentsList?.agents ?? [];
-    const rows =
-      agents.length > 1
-        ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
-        : navigationState.visibleSessions;
     const sections = groupSidebarSessionRows(
-      limitSidebarSessionRows(rows, this.visibleSessionLimit),
+      limitSidebarSessionRows(
+        this.selectedAgentSessionRows(navigationState),
+        this.visibleSessionLimit,
+      ),
       {
         grouping: this.sessionsGrouping,
         knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
@@ -1025,7 +1149,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   };
 
-  /** Browsing another agent's sessions never navigates; only row clicks do. */
+  /** Chip switching selects the agent and refreshes its session list. */
   private readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
@@ -1033,6 +1157,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const nextAgentId = normalizeAgentId(agentId);
     if (nextAgentId === normalizeAgentId(this.expandedAgentId())) {
+      context.agentSelection.setScope(nextAgentId);
       return;
     }
     this.clearSessionSelection();
@@ -1066,84 +1191,122 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       label?: string | null;
       category?: string | null;
     },
-  ) => {
-    const context = this.context;
-    if (!context || !this.connected) {
-      return;
+    scope: SidebarSessionMutationScope | null = this.beginSessionMutation(),
+  ): Promise<SidebarSessionMutationResult> => {
+    if (!scope) {
+      return "stale";
     }
-    const { selectedAgentId } = this.getSessionNavigationState();
-    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
     try {
-      const patched = await context.sessions.patch(session.key, patch, { agentId });
-      if (!patched || patch.archived !== true || !session.active) {
-        return;
+      const patched = await scope.sessions.patch(session.key, patch, { agentId });
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      if (!patched) {
+        if (scope.sessions.state.error) {
+          this.publishSessionMutationError(scope, scope.sessions.state.error);
+        }
+        return "failed";
+      }
+      if (patch.archived !== true || !session.active) {
+        return "completed";
       }
       this.replaceCurrentSession(
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
+            agentsList: scope.context.agents.state.agentsList,
+            hello: scope.gateway.snapshot.hello,
           }),
         }),
       );
-    } catch {
-      // Session capability publishes the actionable error for the owning page.
+      return "completed";
+    } catch (error) {
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      this.publishSessionMutationError(scope, error);
+      return "failed";
     }
   };
 
-  private patchSessions(
+  private async patchSessions(
     rows: readonly SidebarRecentSession[],
     patch: { archived?: boolean; unread?: boolean; category?: string | null },
-  ) {
-    void (async () => {
-      // Sequential like deleteMany: parallel patches would race the shared
-      // session-state publishes inside the capability.
-      for (const row of rows) {
-        await this.patchSession(row, patch);
+    scope: SidebarSessionMutationScope | null = this.beginSessionMutation(),
+  ): Promise<SidebarSessionMutationResult> {
+    if (!scope) {
+      return "stale";
+    }
+    let result: SidebarSessionMutationResult = "completed";
+    // Sequential like deleteMany: parallel patches would race the shared
+    // session-state publishes inside the capability.
+    for (const row of rows) {
+      const rowResult = await this.patchSession(row, patch, scope);
+      if (rowResult === "stale") {
+        return "stale";
       }
-    })();
+      if (rowResult === "failed") {
+        result = "failed";
+      }
+    }
+    return result;
   }
 
   /** Batch delete: one confirm and one preserved-worktrees alert for the whole
       selection instead of cascading per-session prompts. */
   private async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
-    const context = this.context;
-    if (!context || rows.length === 0) {
+    if (rows.length === 0) {
       return;
     }
     if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
       return;
     }
-    const { selectedAgentId } = this.getSessionNavigationState();
-    const result = await context.sessions.deleteMany(
-      rows.map((row) => ({
-        key: row.key,
-        agentId: parseAgentSessionKey(row.key)?.agentId ?? selectedAgentId,
-        deleteTranscript: true,
-      })),
-    );
-    // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
-    // instead of cascading one force-delete confirm per session.
-    if (result.preservedWorktrees.length > 0) {
-      window.alert(
-        t("sessionsView.deletePreservedWorktrees", {
-          count: String(result.preservedWorktrees.length),
-          branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-        }),
-      );
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
     }
-    const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
-    if (deletedActive) {
-      this.replaceCurrentSession(
-        buildAgentMainSessionKey({
-          agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? selectedAgentId,
-          mainKey: resolveUiConfiguredMainKey({
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
-          }),
-        }),
+    try {
+      const result = await scope.sessions.deleteMany(
+        rows.map((row) => ({
+          key: row.key,
+          agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
+          deleteTranscript: true,
+        })),
       );
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
+      // instead of cascading one force-delete confirm per session.
+      if (result.preservedWorktrees.length > 0) {
+        window.alert(
+          t("sessionsView.deletePreservedWorktrees", {
+            count: String(result.preservedWorktrees.length),
+            branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
+          }),
+        );
+        if (!this.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+      }
+      const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
+      if (deletedActive) {
+        this.replaceCurrentSession(
+          buildAgentMainSessionKey({
+            agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? scope.selectedAgentId,
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: scope.context.agents.state.agentsList,
+              hello: scope.gateway.snapshot.hello,
+            }),
+          }),
+        );
+      }
+      if (result.errors.length > 0) {
+        this.publishSessionMutationError(scope, result.errors.join("; "));
+      }
+    } catch (error) {
+      this.publishSessionMutationError(scope, error);
     }
   }
 
@@ -1154,10 +1317,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   ) {
     switch (action.kind) {
       case "toggle-unread":
-        this.patchSessions(rows, { unread: !allUnread });
+        void this.patchSessions(rows, { unread: !allUnread });
         break;
       case "move-to-group":
-        this.patchSessions(
+        void this.patchSessions(
           rows.filter((row) => (row.category ?? null) !== action.category),
           { category: action.category },
         );
@@ -1166,7 +1329,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         this.createSessionGroup(rows);
         break;
       case "toggle-archived":
-        this.patchSessions(rows, { archived: true });
+        void this.patchSessions(rows, { archived: true });
         break;
       case "delete":
         void this.deleteSessionsBatch(rows);
@@ -1204,9 +1367,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     // Clamp so the fixed-position menu never overflows the viewport.
     const menuWidth = 240;
     const menuMaxHeight = 420;
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -1223,6 +1388,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const trigger = this.customizeMenuTrigger;
     this.customizeMenuTrigger = null;
     this.customizeMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private toggleMoreMenu(trigger: HTMLElement) {
+    if (this.moreMenuPosition) {
+      this.closeMoreMenu();
+      return;
+    }
+    // Clamp so the fixed-position menu never overflows the viewport.
+    const menuWidth = 240;
+    const menuMaxHeight = 420;
+    const rect = trigger.getBoundingClientRect();
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.closeAgentMenu();
+    this.moreMenuTrigger = trigger;
+    this.moreMenuPosition = {
+      x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-more-menu .sidebar-customize-menu__item")?.focus();
+    });
+  }
+
+  private closeMoreMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.moreMenuTrigger;
+    this.moreMenuTrigger = null;
+    this.moreMenuPosition = null;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -1251,8 +1453,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     trigger: HTMLElement | null = null,
   ) {
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionMenu = { session, x, y };
     this.loadSessionMenuWork(session);
@@ -1298,8 +1502,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuWidth = 224;
     const menuMaxHeight = 160;
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.sessionGroupMenuTrigger = trigger;
     this.sessionGroupMenu = {
       group,
@@ -1333,8 +1539,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuMaxHeight = 280;
     const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
+    this.closeAgentMenu();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
@@ -1358,6 +1566,132 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private toggleAgentMenu(trigger: HTMLElement) {
+    if (this.agentMenuPosition) {
+      this.closeAgentMenu();
+      return;
+    }
+    const menuWidth = 240;
+    const rect = trigger.getBoundingClientRect();
+    this.closeCustomizeMenu();
+    this.closeMoreMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.agentMenuTrigger = trigger;
+    this.agentMenuFilter = "";
+    // Right-aligned to the toggle so the menu stays over the sidebar column.
+    this.agentMenuPosition = {
+      x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+      bottom: Math.max(8, window.innerHeight - rect.top + 4),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      // Large rosters open on the filter so typing narrows immediately.
+      this.querySelector<HTMLElement>(
+        ".sidebar-agent-menu__filter input, .sidebar-agent-menu .sidebar-customize-menu__item",
+      )?.focus();
+    });
+  }
+
+  private closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.agentMenuTrigger;
+    this.agentMenuTrigger = null;
+    this.agentMenuPosition = null;
+    this.agentMenuFilter = "";
+    this.agentMenuHelpOpen = false;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private activeChipAgent() {
+    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const activeId = this.expandedAgentId();
+    const agent = agents.find((entry) => normalizeAgentId(entry.id) === activeId);
+    return { activeId, agent, agents };
+  }
+
+  /** Newest visible session for an agent; the chip menu's agent switch resumes here. */
+  private latestAgentSessionRow(agentId: string): SessionsListResult["sessions"][number] | null {
+    const normalized = normalizeAgentId(agentId);
+    const rows =
+      normalized === normalizeAgentId(this.sessionsAgentId ?? "")
+        ? (this.sessionsResult?.sessions ?? [])
+        : (this.sessionRowsByAgent[normalized] ?? []);
+    // Unprefixed keys belong to the system default agent (the filter's
+    // contract); keeping them for other agents would resume the wrong agent's
+    // session because resume navigates with the raw key.
+    const visible = filterVisibleSessionRows(rows, {
+      agentId: normalized,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+      filterByAgent: true,
+    });
+    return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+  }
+
+  private agentResumeKey(agentId: string): string {
+    const latest = this.latestAgentSessionRow(agentId);
+    if (latest) {
+      return latest.key;
+    }
+    return buildAgentMainSessionKey({
+      agentId,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+    });
+  }
+
+  /** Offline routes to Settings (connection) instead of a dead chat load. */
+  private openAgentConversation(agentId: string) {
+    if (!this.connected) {
+      this.onNavigate?.("config");
+      return;
+    }
+    this.selectSession(this.agentResumeKey(agentId));
+  }
+
+  private agentChipSubtitle(agentId: string): string {
+    if (!this.connected) {
+      return t("common.offline");
+    }
+    const latest = this.latestAgentSessionRow(agentId);
+    if (latest?.hasActiveRun) {
+      return t("agentChip.working");
+    }
+    if (latest) {
+      const label = resolveSessionDisplayName(latest.key, latest);
+      const meta = formatSidebarTimestamp(latest.updatedAt);
+      return meta ? `${label} · ${meta}` : label;
+    }
+    return t("agentChip.ready");
+  }
+
+  private switchChipAgent(agentId: string) {
+    this.closeAgentMenu();
+    this.expandAgent(agentId);
+    this.openAgentConversation(agentId);
+  }
+
+  private askAgentCapabilities(agentId: string) {
+    this.closeAgentMenu();
+    if (!this.connected) {
+      return;
+    }
+    const key = this.agentResumeKey(agentId);
+    const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
+    this.context?.gateway.setSessionKey(key);
+    this.onNavigate?.("chat", { search: `${searchForSession(key)}&draft=${draft}` });
+  }
+
   private knownSessionGroups(): string[] {
     const catalog = this.context?.sessions.state.groups ?? [];
     const catalogSet = new Set(catalog);
@@ -1368,10 +1702,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     return [...catalog, ...new Set(discovered)];
   }
 
-  private rememberSessionGroup(name: string) {
+  private async rememberSessionGroup(
+    name: string,
+    scope: SidebarSessionMutationScope,
+  ): Promise<SidebarSessionMutationResult> {
     const groups = this.knownSessionGroups();
-    if (!groups.includes(name)) {
-      void this.context?.sessions.groupsPut([...groups, name]);
+    if (groups.includes(name)) {
+      return "completed";
+    }
+    try {
+      await scope.sessions.groupsPut([...groups, name]);
+      return this.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+    } catch (error) {
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      this.publishSessionMutationError(scope, error);
+      return "failed";
     }
   }
 
@@ -1388,51 +1735,76 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!name) {
       return;
     }
-    this.rememberSessionGroup(name);
-    if (sessions.length > 0) {
-      this.patchSessions(sessions, { category: name });
-    } else {
-      // Header-created groups start empty; re-render so the section shows up.
-      this.requestUpdate();
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
     }
+    void (async () => {
+      if ((await this.rememberSessionGroup(name, scope)) !== "completed") {
+        return;
+      }
+      if (sessions.length > 0) {
+        await this.patchSessions(sessions, { category: name }, scope);
+      } else if (this.isSessionMutationScopeCurrent(scope)) {
+        // Header-created groups start empty; re-render so the section shows up.
+        this.requestUpdate();
+      }
+    })();
   }
 
   private renameSessionGroupFromMenu(group: string) {
-    const context = this.context;
-    if (!context || !this.connected) {
-      return;
-    }
     const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
     if (!next || next === group) {
       return;
     }
-    // The gateway renames the catalog entry and repoints member sessions.
-    void context.sessions.groupsRename(group, next).finally(() => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    // Collapse keys follow only a confirmed Gateway rename. A stale completion
+    // must not rewrite storage owned by the replacement connection.
+    void (async () => {
+      try {
+        const outcome = await scope.sessions.groupsRename(group, next);
+        if (outcome !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.requestUpdate();
+      } catch (error) {
+        this.publishSessionMutationError(scope, error);
       }
-      this.requestUpdate();
-    });
+    })();
   }
 
   private deleteSessionGroupFromMenu(group: string) {
-    const context = this.context;
-    if (!context || !this.connected) {
-      return;
-    }
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    void context.sessions.groupsDelete(group).finally(() => {
-      const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(`category:${group}`);
-      this.saveCollapsedSessionSections(collapsed);
-      this.requestUpdate();
-    });
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    void (async () => {
+      try {
+        const outcome = await scope.sessions.groupsDelete(group);
+        if (outcome !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(`category:${group}`);
+        this.saveCollapsedSessionSections(collapsed);
+        this.requestUpdate();
+      } catch (error) {
+        this.publishSessionMutationError(scope, error);
+      }
+    })();
   }
 
   private saveCollapsedSessionSections(sections: ReadonlySet<string>) {
@@ -1459,8 +1831,37 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
     const groups = reorderSessionCustomGroups(this.knownSessionGroups(), source, target, position);
-    void this.context?.sessions.groupsPut(groups);
-    this.requestUpdate();
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    void (async () => {
+      try {
+        await scope.sessions.groupsPut(groups);
+        if (this.isSessionMutationScopeCurrent(scope)) {
+          this.requestUpdate();
+        }
+      } catch (error) {
+        this.publishSessionMutationError(scope, error);
+      }
+    })();
+  }
+
+  private assignSessionCategory(
+    session: SidebarRecentSession,
+    category: string | null,
+    patch: { pinned?: boolean } = {},
+  ) {
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    void (async () => {
+      if (category && (await this.rememberSessionGroup(category, scope)) !== "completed") {
+        return;
+      }
+      await this.patchSession(session, { category, ...patch }, scope);
+    })();
   }
 
   private handleSessionSectionDragOver(event: DragEvent, sectionId: string, category?: string) {
@@ -1538,13 +1939,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
       const nextCategory = category ?? null;
       if (session && (session.category !== nextCategory || session.pinned)) {
-        if (category) {
-          this.rememberSessionGroup(category);
-        }
-        void this.patchSession(session, {
-          category: nextCategory,
-          ...(session.pinned ? { pinned: false } : {}),
-        });
+        this.assignSessionCategory(session, nextCategory, session.pinned ? { pinned: false } : {});
       }
     }
     this.draggingSessionKey = null;
@@ -1562,20 +1957,40 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private setSessionsShowCron(show: boolean) {
+    this.sessionsShowCron = show;
+    try {
+      getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+    } catch {
+      // ignore storage failures
+    }
+  }
+
   private async forkSession(session: SidebarRecentSession) {
-    const context = this.context;
-    if (!context) {
+    const scope = this.beginSessionMutation();
+    if (!scope) {
       return;
     }
-    const { selectedAgentId } = this.getSessionNavigationState();
-    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
-    const key = await context.sessions.create({
-      parentSessionKey: session.key,
-      fork: true,
-      agentId,
-    });
-    if (key) {
-      this.selectSession(key);
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    try {
+      const key = await scope.sessions.create({
+        parentSessionKey: session.key,
+        fork: true,
+        agentId,
+      });
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      if (key) {
+        this.selectSession(key);
+      } else {
+        this.publishSessionMutationError(
+          scope,
+          scope.sessions.state.error ?? t("newSession.createFailed"),
+        );
+      }
+    } catch (error) {
+      this.publishSessionMutationError(scope, error);
     }
   }
 
@@ -1583,17 +1998,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
       return;
     }
-    const context = this.context;
-    if (!context) {
+    const scope = this.beginSessionMutation();
+    if (!scope) {
       return;
     }
-    const { selectedAgentId } = this.getSessionNavigationState();
-    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
     try {
-      const outcome = await context.sessions.delete(session.key, {
+      const outcome = await scope.sessions.delete(session.key, {
         agentId,
         deleteTranscript: true,
       });
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
       // Dirty/unpushed checkouts survive the delete; offer an explicit force
       // removal instead of silently orphaning them under the state dir.
       if (outcome.worktreePreserved) {
@@ -1603,13 +2020,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
           )
         ) {
+          if (!this.isSessionMutationScopeCurrent(scope)) {
+            return;
+          }
           try {
-            await context.gateway.snapshot.client?.request("worktrees.remove", {
+            await scope.client.request("worktrees.remove", {
               id: preserved.id,
               force: true,
             });
           } catch (error) {
-            window.alert(String(error));
+            this.publishSessionMutationError(scope, error);
+          }
+          if (!this.isSessionMutationScopeCurrent(scope)) {
+            return;
           }
         }
       }
@@ -1620,13 +2043,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
+            agentsList: scope.context.agents.state.agentsList,
+            hello: scope.gateway.snapshot.hello,
           }),
         }),
       );
-    } catch {
-      // Session capability publishes the actionable error for the owning page.
+    } catch (error) {
+      this.publishSessionMutationError(scope, error);
     }
   }
 
@@ -1635,15 +2058,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (this.sessionSortMenuTrigger && path.includes(this.sessionSortMenuTrigger)) {
       return;
     }
+    if (this.agentMenuTrigger && path.includes(this.agentMenuTrigger)) {
+      return;
+    }
+    if (this.moreMenuTrigger && path.includes(this.moreMenuTrigger)) {
+      return;
+    }
     const menu = this.querySelector(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
     );
     if (menu && path.includes(menu)) {
       return;
     }
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
   };
 
   // Registered only while one of the transient menus is open. Keeping this
@@ -1653,16 +2084,20 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       event.preventDefault();
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeMoreMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      this.closeAgentMenu({ restoreFocus: true });
       return;
     }
     if (event.key === "Tab") {
       // Menu items stay outside the page tab order. Restore the durable trigger
       // before the browser performs its normal forward/backward Tab movement.
       this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeMoreMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      this.closeAgentMenu({ restoreFocus: true });
       return;
     }
     this.moveTransientMenuFocus(event);
@@ -1670,7 +2105,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private moveTransientMenuFocus(event: KeyboardEvent) {
     const menu = this.querySelector<HTMLElement>(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
     );
     if (!menu) {
       return;
@@ -1681,6 +2116,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       ),
     ).filter((item) => !item.matches(":disabled"));
     if (items.length === 0) {
+      return;
+    }
+    // Typing in a menu filter keeps caret keys; arrows still enter the list.
+    if (
+      (event.target as HTMLElement | null)?.tagName === "INPUT" &&
+      (event.key === "Home" || event.key === "End")
+    ) {
       return;
     }
     const activeIndex = items.indexOf(document.activeElement as HTMLElement);
@@ -1701,66 +2143,54 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     items[nextIndex]?.focus();
   }
 
-  private togglePinnedRoute(routeId: SidebarNavRoute) {
-    const pinned = this.sidebarPinnedRoutes;
-    const next = pinned.includes(routeId)
-      ? pinned.filter((route) => route !== routeId)
-      : [...pinned, routeId];
-    this.onUpdatePinnedRoutes?.(next);
+  private renderCustomizeMenu() {
+    return renderSidebarCustomizeMenu({
+      position: this.customizeMenuPosition,
+      pinnedRoutes: this.sidebarPinnedRoutes,
+      isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onToggleRoute: (routeId) => {
+        const pinned = this.sidebarPinnedRoutes;
+        const next = pinned.includes(routeId)
+          ? pinned.filter((route) => route !== routeId)
+          : [...pinned, routeId];
+        this.onUpdatePinnedRoutes?.(next);
+      },
+      onReset: () => {
+        this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+        this.closeCustomizeMenu({ restoreFocus: true });
+      },
+    });
   }
 
-  private renderCustomizeMenu() {
-    const position = this.customizeMenuPosition;
-    if (!position) {
-      return nothing;
-    }
-    return html`
-      <openclaw-menu-surface>
-        <div
-          class="sidebar-customize-menu"
-          role="menu"
-          aria-label=${t("nav.customize")}
-          style="left: ${position.x}px; top: ${position.y}px;"
-        >
-          <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-          ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
-            const pinned = this.sidebarPinnedRoutes.includes(routeId);
-            return html`
-              <button
-                type="button"
-                class="sidebar-customize-menu__item"
-                role="menuitemcheckbox"
-                tabindex="-1"
-                aria-checked=${String(pinned)}
-                @click=${() => this.togglePinnedRoute(routeId)}
-              >
-                <span class="nav-item__icon" aria-hidden="true"
-                  >${icons[navigationIconForRoute(routeId)]}</span
-                >
-                <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-                <span class="sidebar-customize-menu__check" aria-hidden="true">
-                  ${pinned ? icons.check : nothing}
-                </span>
-              </button>
-            `;
-          })}
-          <div class="sidebar-customize-menu__separator" role="separator"></div>
-          <button
-            type="button"
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            @click=${() => {
-              this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
-              this.closeCustomizeMenu({ restoreFocus: true });
-            }}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
-            <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
-          </button>
-        </div>
-      </openclaw-menu-surface>
-    `;
+  private renderAgentMenu() {
+    const { activeId, agent, agents } = this.activeChipAgent();
+    return renderSidebarAgentMenu({
+      position: this.agentMenuPosition,
+      activeId,
+      activeName: agent ? normalizeAgentLabel(agent) : activeId,
+      agents,
+      filter: this.agentMenuFilter,
+      pinnedAgentIds: this.pinnedAgentIds,
+      connected: this.connected,
+      canPairDevice: this.canPairDevice,
+      basePath: this.basePath,
+      gatewayVersion: this.gatewayVersion,
+      themeMode: this.themeMode,
+      agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
+      helpOpen: this.agentMenuHelpOpen,
+      onHelpOpenChange: (next) => {
+        this.agentMenuHelpOpen = next;
+      },
+      onFilterChange: (next) => {
+        this.agentMenuFilter = next;
+      },
+      onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
+      onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
+      onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
+      onClose: () => this.closeAgentMenu(),
+      onNavigate: (routeId, options) => this.onNavigate?.(routeId, options),
+      onPairMobile: () => this.onPairMobile?.(),
+    });
   }
 
   private renderSessionMenu() {
@@ -1841,7 +2271,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               break;
             case "move-to-group":
               if (action.category === null || session.category !== action.category) {
-                void this.patchSession(session, { category: action.category });
+                this.assignSessionCategory(session, action.category);
               }
               break;
             case "new-group":
@@ -1979,94 +2409,62 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               </button>
             `,
           )}
+          <div class="session-menu__separator" role="separator"></div>
+          <button
+            type="button"
+            class="sidebar-session-sort-menu__item"
+            role="menuitemcheckbox"
+            tabindex="-1"
+            aria-checked=${String(this.sessionsShowCron)}
+            @click=${() => {
+              this.setSessionsShowCron(!this.sessionsShowCron);
+              this.closeSessionSortMenu({ restoreFocus: true });
+            }}
+          >
+            <span class="session-menu__check" aria-hidden="true">
+              ${this.sessionsShowCron ? icons.check : nothing}
+            </span>
+            <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+          </button>
         </div>
       </openclaw-menu-surface>
     `;
   }
 
   private renderRoute(routeId: NavigationRouteId) {
-    const active =
-      routeId === "config"
-        ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
-        : routeId === "plugins"
-          ? this.activeRouteId !== undefined && isPluginsHubRoute(this.activeRouteId)
-          : this.activeRouteId === routeId;
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
       return nothing;
     }
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
-    const href =
-      routeSessionKey && routeId === "chat"
-        ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
-        : pathForRoute(routeId, this.basePath);
-    const label = titleForRoute(routeId);
-    return html`
-      <a
-        href=${href}
-        class="nav-item ${active ? "nav-item--active" : ""}"
-        @focus=${(event: Event) => this.preloadRoute(routeId, event)}
-        @blur=${this.cancelPreload}
-        @pointerenter=${(event: Event) => this.preloadRoute(routeId, event)}
-        @pointerleave=${this.cancelPreload}
-        @touchstart=${(event: TouchEvent) => this.preloadRoute(routeId, event, true)}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.(
-            routeId,
-            routeId === "chat" && routeSessionKey
-              ? {
-                  search: searchForSession(routeSessionKey),
-                }
-              : undefined,
-          );
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true"
-          >${icons[navigationIconForRoute(routeId)]}</span
-        >
-        <span class="nav-item__text">${label}</span>
-      </a>
-    `;
+    const chatSearch =
+      routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
+    return renderSidebarNavRoute({
+      routeId,
+      href: chatSearch
+        ? `${pathForRoute("chat", this.basePath)}${chatSearch}`
+        : pathForRoute(routeId, this.basePath),
+      active: isSidebarRouteActive(this.activeRouteId, routeId),
+      onNavigate: () => {
+        this.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+      },
+      onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
+      onCancelPreload: this.cancelPreload,
+    });
   }
 
-  /** Dynamic plugin tabs stay in More; only stable static route ids can be persisted as pins. */
-  private pluginTabs(): GatewayControlUiPluginTab[] {
-    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
-    return ["chat", "control", "agent", "settings"].flatMap((group) =>
-      tabs.filter((tab) => (tab.group ?? "control") === group),
-    );
-  }
-
-  private renderPluginTab(tab: GatewayControlUiPluginTab) {
-    const ref = { pluginId: tab.pluginId, id: tab.id };
-    const search = pluginTabSearch(ref);
-    const href = `${pathForRoute("plugin", this.basePath)}${search}`;
-    const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
-    const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
-    return html`
-      <a
-        href=${href}
-        class="nav-item ${active ? "nav-item--active" : ""}"
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.("plugin", { search });
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-        <span class="nav-item__text">${tab.label}</span>
-      </a>
-    `;
-  }
-
-  private renderRecentSession(session: SidebarRecentSession) {
+  private renderRecentSession(
+    session: SidebarRecentSession,
+    display?: CatalogBackingSessionDisplay,
+  ) {
+    const label = display?.label ?? session.label;
+    const subtitle = display
+      ? display.subtitle
+      : session.subtitle && session.workSession && session.subtitle !== session.label
+        ? session.subtitle
+        : undefined;
+    const meta = display?.meta ?? session.meta;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -2104,7 +2502,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${`${session.label} · ${session.key}`}
+          title=${display?.title ?? `${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
           ${session.hasActiveRun
@@ -2122,9 +2520,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>`
               : nothing}
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
-            ${session.subtitle && session.workSession && session.subtitle !== session.label
-              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
           ${session.worktreeId || session.hasAutomation
@@ -2151,7 +2549,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${session.meta}</span>
+          <span class="session-row-trail">${meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -2338,22 +2736,38 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** Rows for a non-active agent come from the per-agent cache filled on expand. */
-  private sidebarRowsForAgent(
-    agentId: string,
+  /** The list follows the chip-selected agent. While route and loaded result
+      agree with it (every settled online state), keep the navigation rows and
+      their pinned-active semantics; mid-switch or offline, fall back to that
+      agent's loaded/cached raw rows instead of flashing empty or stale. */
+  private selectedAgentSessionRows(
     navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
   ): SidebarRecentSession[] {
-    const normalized = normalizeAgentId(agentId);
-    if (normalized === normalizeAgentId(navigationState.selectedAgentId)) {
-      return navigationState.visibleSessions;
+    // Adopted catalog sessions render inside their catalog group; hiding them
+    // here keeps one selectable row per session instead of a duplicate that
+    // jumps to the top of the regular list.
+    const adopted = adoptedCatalogSessionKeys(this.sessionCatalogs);
+    const selected = this.expandedAgentId();
+    const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
+    const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
+    if (selected === routeAgentId && selected === loadedAgentId) {
+      return navigationState.visibleSessions.filter((row) => !adopted.has(row.key));
     }
-    const cached = this.sessionRowsByAgent[normalized] ?? [];
-    return filterVisibleSessionRows(cached, {
-      agentId: normalized,
-      defaultAgentId: navigationState.selectedAgentId,
+    const rows =
+      selected === loadedAgentId
+        ? (this.sessionsResult?.sessions ?? [])
+        : (this.sessionRowsByAgent[selected] ?? []);
+    return filterVisibleSessionRows(rows, {
+      agentId: selected,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
       filterByAgent: true,
+      showCron: this.sessionsShowCron,
     })
       .toSorted(this.compareSidebarSessionRows)
+      .filter((row) => !adopted.has(row.key))
       .map(navigationState.toSidebarSession);
   }
 
@@ -2435,57 +2849,36 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  private renderAgentSection(
-    agent: { id: string; name?: string; identity?: { name?: string } },
-    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
-  ) {
-    const agentId = normalizeAgentId(agent.id);
-    const expanded = agentId === this.expandedAgentId();
-    const label = agent.identity?.name ?? agent.name ?? agent.id;
-    const unread = expanded ? 0 : this.agentUnreadCount(agentId);
-    const initial = (label || agent.id).slice(0, 1).toUpperCase();
-    return html`
-      <div class="sidebar-agent-section ${expanded ? "sidebar-agent-section--expanded" : ""}">
-        <button
-          type="button"
-          class="sidebar-agent-section__header"
-          aria-expanded=${String(expanded)}
-          @click=${() => this.expandAgent(agentId)}
-        >
-          <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-            >${expanded ? icons.chevronDown : icons.chevronRight}</span
-          >
-          <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-          <span class="sidebar-agent-section__name">${label}</span>
-          ${unread > 0
-            ? html`<span
-                class="session-unread-dot sidebar-agent-section__unread"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
-        </button>
-        ${expanded
-          ? this.renderSessionListBody(this.sidebarRowsForAgent(agentId, navigationState), {
-              showDraft:
-                Boolean(this.draftSessionAgentId) &&
-                normalizeAgentId(this.draftSessionAgentId) === agentId,
-              showFallback: true,
-            })
-          : nothing}
-      </div>
-    `;
-  }
-
   private renderSessions() {
-    const context = this.context;
     const navigationState = this.getSessionNavigationState();
-    const { visibleSessions, newSessionDisabled, newSessionTitle } = navigationState;
-    const agents = context?.agents.state.agentsList?.agents ?? [];
-    const multiAgent = agents.length > 1;
+    const { newSessionDisabled, newSessionTitle } = navigationState;
+    const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
+        ${this.sessionMutationError
+          ? html`
+              <div
+                class="sidebar-session-error callout danger callout--dismissible"
+                role="alert"
+                data-sidebar-session-error
+              >
+                <span class="callout__content">${this.sessionMutationError}</span>
+                <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+                  <button
+                    class="callout__dismiss"
+                    type="button"
+                    @click=${() => {
+                      this.sessionMutationError = null;
+                    }}
+                    aria-label=${t("chat.actions.dismissError")}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
+              </div>
+            `
+          : nothing}
         <div
           class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
             .sessionsScrollState}"
@@ -2520,13 +2913,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               ${icons.plus}
             </button>
           </div>
-          ${multiAgent
-            ? agents.map((agent) => this.renderAgentSection(agent, navigationState))
-            : this.renderSessionListBody(visibleSessions, {
-                showDraft: Boolean(this.draftSessionAgentId),
-                showFallback: true,
-              })}
-          ${this.renderSessionCatalogs()}
+          ${this.renderSessionListBody(visibleSessions, {
+            showDraft:
+              Boolean(this.draftSessionAgentId) &&
+              normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
+            showFallback: true,
+          })}
+          ${this.renderSessionCatalogs(navigationState)}
         </div>
       </section>
     `;
@@ -2536,135 +2929,71 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   // .sidebar-sessions sections would form a second scroll-less region that
   // flex-squeezes under the shell body's overflow clip and paints rows over
   // the following section.
-  private renderSessionCatalogs() {
-    return this.sessionCatalogs.map((catalog) => {
-      const sectionId = `catalog:${catalog.id}`;
-      const collapsed = this.collapsedSessionSections.has(sectionId);
-      const hosts = catalog.hosts;
-      const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
-      const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
-      const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-      return html`
-        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-          <div class="sidebar-recent-sessions__head">
-            <button
-              type="button"
-              class="sidebar-session-group-toggle"
-              aria-expanded=${String(!collapsed)}
-              aria-label=${catalog.label}
-              @click=${() => this.toggleSessionSection(sectionId)}
-            >
-              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-              >
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-              <span class="sidebar-session-group-count">${rows.length}</span>
-            </button>
-          </div>
-          ${collapsed
-            ? nothing
-            : html`<div class="sidebar-recent-sessions__list">
-                  ${rows.map(({ host, session }) =>
-                    this.renderCatalogSession(catalog, host, session),
-                  )}
-                </div>
-                ${hasMore
-                  ? html`<button
-                      type="button"
-                      class="sidebar-session-catalog-load-more"
-                      data-session-catalog-load-more=${catalog.id}
-                      ?disabled=${loadingMore}
-                      aria-busy=${String(loadingMore)}
-                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
-                    >
-                      ${t("chat.selectors.loadMoreSessions")}
-                    </button>`
-                  : nothing}`}
-        </div>
-      `;
+  private renderSessionCatalogs(
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ) {
+    return renderSessionCatalogGroups({
+      catalogs: this.sessionCatalogs,
+      connected: this.connected,
+      basePath: this.basePath,
+      routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      newSessionAgentId: this.expandedAgentId(),
+      collapsedSections: this.collapsedSessionSections,
+      loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+      liveRows: [
+        ...(this.sessionsResult?.sessions ?? []),
+        ...Object.values(this.sessionRowsByAgent).flat(),
+      ],
+      renderLiveRow: (row, display) =>
+        this.renderRecentSession(navigationState.toSidebarSession(row), display),
+      onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
+      onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
+      onOpenNewSession: this.onOpenNewSession,
+      onNavigate: this.onNavigate,
     });
   }
 
-  private renderCatalogSession(
-    catalog: SessionCatalog,
-    host: SessionCatalogHost,
-    session: SessionCatalogSession,
-  ) {
-    const key =
-      session.openClawSessionKey ??
-      buildCatalogSessionKey({
-        catalogId: catalog.id,
-        hostId: host.hostId,
-        threadId: session.threadId,
-      });
-    const href = `${pathForRoute("chat", this.basePath)}${searchForSession(key)}`;
-    const hostSubtitle = catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
-    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-    const timestamp =
-      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-        ? rawTimestamp * 1000
-        : rawTimestamp;
-    return html`
-      <div class="sidebar-recent-session session-row-host" data-session-key=${key}>
-        <a
-          href=${href}
-          class="sidebar-recent-session__link"
-          title=${`${session.name || session.threadId} · ${host.label}`}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.onNavigate?.("chat", { search: searchForSession(key) });
-          }}
-        >
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee"
-              >${session.name || session.threadId}</span
-            >
-            ${hostSubtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
-              : nothing}
-          </span>
-          <span class="sidebar-recent-session__aside session-row-aside">
-            <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
-          </span>
-        </a>
-      </div>
-    `;
+  private renderMoreRow() {
+    return renderSidebarMoreRow({
+      open: this.moreMenuPosition !== null,
+      active: sidebarMoreMenuHoldsActiveRoute({
+        activeRouteId: this.activeRouteId,
+        pinnedRoutes: this.sidebarPinnedRoutes,
+        isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      }),
+      onToggle: (trigger) => this.toggleMoreMenu(trigger),
+    });
   }
 
-  private renderMoreSection() {
-    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes);
-    const expanded = this.sidebarMoreExpanded;
-    return html`
-      <section class="nav-section nav-section--more ${expanded ? "" : "nav-section--collapsed"}">
-        <button
-          class="nav-section__label"
-          @click=${() => this.onToggleMore?.()}
-          aria-expanded=${String(expanded)}
-        >
-          <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron">${icons.chevronDown}</span>
-        </button>
-        <div class="nav-section__items">
-          ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
-          ${this.pluginTabs().map((tab) => this.renderPluginTab(tab))}
-          <button
-            type="button"
-            class="nav-item nav-item--action"
-            @click=${(event: MouseEvent) => {
-              const trigger = event.currentTarget as HTMLElement;
-              const rect = trigger.getBoundingClientRect();
-              this.openCustomizeMenu(rect.left, rect.bottom + 4, trigger);
-            }}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
-            <span class="nav-item__text">${t("nav.customize")}</span>
-          </button>
-        </div>
-      </section>
-    `;
+  private renderMoreMenu() {
+    return renderSidebarMoreMenu({
+      position: this.moreMenuPosition,
+      basePath: this.basePath,
+      activeRouteId: this.activeRouteId,
+      activePluginTabId: this.activePluginTabId,
+      pinnedRoutes: this.sidebarPinnedRoutes,
+      pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
+      isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onNavigateRoute: (routeId) => {
+        this.closeMoreMenu({ restoreFocus: true });
+        this.onNavigate?.(routeId);
+      },
+      onNavigatePluginTab: (search) => {
+        this.closeMoreMenu({ restoreFocus: true });
+        this.onNavigate?.("plugin", { search });
+      },
+      onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
+      onCancelPreload: this.cancelPreload,
+      onEditPinnedItems: () => {
+        // Hand the durable More row over as the pin editor's trigger so
+        // Escape restores focus there once this menu is gone.
+        const position = this.moreMenuPosition;
+        const trigger = this.moreMenuTrigger;
+        if (position) {
+          this.openCustomizeMenu(position.x, position.y, trigger);
+        }
+      },
+    });
   }
 
   private renderChatFallback() {
@@ -2693,19 +3022,28 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const settingsActive =
-      this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
-    const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
+    const { activeId: chipAgentId, agent: chipAgent, agents: chipAgents } = this.activeChipAgent();
+    const chipMenuUnread = chipAgents.some((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return agentId !== chipAgentId && this.agentUnreadCount(agentId) > 0;
+    });
+    const chipName = chipAgent ? normalizeAgentLabel(chipAgent) : chipAgentId;
+    const chipAvatarText =
+      (chipAgent ? resolveAgentTextAvatar(chipAgent) : null) ??
+      (chipName || chipAgentId).slice(0, 1).toUpperCase();
     return html`
       <aside class="sidebar">
-        <div class="sidebar-shell">
+        <!-- The Mac app reserves this padding strip for the titlebar; presses
+             on the bare inset ask the host to move the window (the native
+             drag region that used to float here is gone). -->
+        <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${this.renderBrand()}
           <div class="sidebar-shell__body">
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               <div class="nav-section__items">
                 ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+                ${this.renderMoreRow()}
               </div>
-              ${this.renderMoreSection()}
             </nav>
             ${this.renderSessions()}
           </div>
@@ -2734,81 +3072,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
                 </div>`
               : nothing}
-            <div class="sidebar-footer-bar">
-              <openclaw-tooltip .content=${gatewayStatus}>
-                <span
-                  class="sidebar-status__dot ${this.connected
-                    ? "sidebar-connection-status--online"
-                    : "sidebar-connection-status--offline"}"
-                  role="img"
-                  aria-live="polite"
-                  aria-label=${gatewayStatus}
-                ></span>
-              </openclaw-tooltip>
-              <openclaw-sidebar-build-chip
-                .basePath=${this.basePath}
-                .gatewayVersion=${this.gatewayVersion}
-                .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
-              ></openclaw-sidebar-build-chip>
-              <span class="sidebar-footer-bar__spacer"></span>
-              <openclaw-tooltip .content=${settingsTooltip}>
-                <a
-                  href=${pathForRoute("config", this.basePath)}
-                  class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
-                  aria-label=${titleForRoute("config")}
-                  aria-current=${settingsActive ? "page" : nothing}
-                  @focus=${(event: Event) => this.preloadRoute("config", event)}
-                  @blur=${this.cancelPreload}
-                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
-                  @pointerleave=${this.cancelPreload}
-                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    this.onNavigate?.("config");
-                  }}
-                >
-                  ${icons.settings}
-                </a>
-              </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
-                <a
-                  class="sidebar-footer-icon"
-                  href="https://docs.openclaw.ai"
-                  target=${EXTERNAL_LINK_TARGET}
-                  rel=${buildExternalLinkRel()}
-                  aria-label=${t("common.docs")}
-                >
-                  ${icons.book}
-                </a>
-              </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${this.canPairDevice
-                  ? t("nodes.pairing.button")
-                  : t("nodes.pairing.adminRequired")}
-              >
-                <button
-                  class="sidebar-footer-icon sidebar-pair-mobile"
-                  type="button"
-                  aria-label=${t("nodes.pairing.button")}
-                  ?disabled=${!this.canPairDevice}
-                  @click=${() => this.onPairMobile?.()}
-                >
-                  ${icons.smartphone}
-                </button>
-              </openclaw-tooltip>
-              <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-              </span>
-            </div>
+            <openclaw-sidebar-agent-chip
+              .agentName=${chipName}
+              .avatarUrl=${chipAgent ? resolveAgentAvatarUrl(chipAgent) : null}
+              .avatarText=${chipAvatarText}
+              .connected=${this.connected}
+              .statusLabel=${gatewayStatus}
+              .subtitle=${this.agentChipSubtitle(chipAgentId)}
+              .menuOpen=${this.agentMenuPosition !== null}
+              .menuUnread=${chipMenuUnread}
+              .newSessionDisabled=${!this.connected}
+              .onNewSession=${() => this.onOpenNewSession?.(chipAgentId)}
+              .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
+            ></openclaw-sidebar-agent-chip>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
-        ${this.renderSessionSortMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderMoreMenu()} ${this.renderAgentMenu()}
+        ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()} ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

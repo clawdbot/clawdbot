@@ -96,6 +96,7 @@ const workspacePackageAliasEntries = {
         srcFile: "src/record-coerce.ts",
         distFile: "dist/record-coerce.mjs",
       },
+      result: { srcFile: "src/result.ts", distFile: "dist/result.mjs" },
       "string-coerce": {
         srcFile: "src/string-coerce.ts",
         distFile: "dist/string-coerce.mjs",
@@ -108,6 +109,12 @@ const workspacePackageAliasEntries = {
         srcFile: "src/utf16-slice.ts",
         distFile: "dist/utf16-slice.mjs",
       },
+    },
+  },
+  "@openclaw/retry": {
+    dir: "retry",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
     },
   },
 };

@@ -15,7 +15,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
@@ -37,7 +37,7 @@ export type SplitMediaFromOutputOptions = {
 const FILE_URL_PREFIX_RE = /^file:\/\//i;
 
 /** Converts file URLs into plain local paths before downstream media validation. */
-export function normalizeMediaSource(src: string): string {
+function normalizeMediaSource(src: string): string {
   return src.replace(FILE_URL_PREFIX_RE, "");
 }
 
@@ -489,8 +489,6 @@ export function splitMediaFromOutput(
 ): {
   text: string;
   mediaUrls?: string[];
-  /** @deprecated Use mediaUrls[0]. */
-  mediaUrl?: string;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -718,7 +716,6 @@ export function splitMediaFromOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
-    mediaUrl: media[0],
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

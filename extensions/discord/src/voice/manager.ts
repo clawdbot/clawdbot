@@ -6,7 +6,6 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import {
   type APIVoiceState,
   type Client,
@@ -38,6 +37,7 @@ import {
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
+import { resolveDiscordVoiceOwnerAccess } from "./owner-access.js";
 import {
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
@@ -277,6 +277,7 @@ export class DiscordVoiceManager {
     { message: string; skipLogged: boolean }
   >();
   private readonly ownerAllowFrom?: string[];
+  private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
   private readonly followUserIds: Set<string>;
@@ -301,11 +302,9 @@ export class DiscordVoiceManager {
   ) {
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
-    this.ownerAllowFrom =
-      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom ??
-      [];
+    const ownerAccess = resolveDiscordVoiceOwnerAccess(params);
+    this.ownerAllowFrom = ownerAccess.ownerAllowFrom;
+    this.ownerAllowAll = ownerAccess.ownerAllowAll;
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -316,6 +315,7 @@ export class DiscordVoiceManager {
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
+      ownerAllowAll: this.ownerAllowAll,
     });
   }
 
@@ -1696,6 +1696,7 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       ownerAllowFrom: this.ownerAllowFrom,
+      ownerAllowAll: this.ownerAllowAll,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1731,6 +1732,7 @@ export class DiscordVoiceManager {
       context,
       toolsAllow,
       ownerAllowFrom: this.ownerAllowFrom,
+      ownerAllowAll: this.ownerAllowAll,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1762,6 +1764,7 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       ownerAllowFrom: this.ownerAllowFrom,
+      ownerAllowAll: this.ownerAllowAll,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
       transcripts: params.entry.transcripts,

@@ -25,6 +25,13 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("../worker-environments/session-target.js", () => ({
+  resolveWorkerSessionTarget: () => ({
+    agentId: "work",
+    sessionKey: "agent:work:dashboard:worker",
+  }),
+}));
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
@@ -140,6 +147,10 @@ function expectRespondErrorMessage(respond: RespondFn, message: string): void {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
+function mockChatSuccess(mock: typeof chatAbortMock, payload: Record<string, unknown>): void {
+  mock.mockImplementationOnce(({ respond }: { respond: RespondFn }) => respond(true, payload));
+}
+
 function expectSessionsListActiveRun(respond: RespondFn, hasActiveRun: boolean): void {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -252,6 +263,26 @@ describe("sessions.abort agent scope", () => {
 
     expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
     expectChatAbortParams({ sessionKey: "agent:beta:dashboard:target", runId: "run-beta" });
+  });
+
+  it("resolves runId-only worker aborts to the owning session", async () => {
+    const resolveInferenceSessionForRunId = vi.fn(() => "session-worker");
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: true, runIds: ["run-worker"] });
+    const context = createContext({
+      extra: {
+        workerEnvironmentService: { resolveInferenceSessionForRunId } as never,
+        dedupe: new Map(),
+        getSessionEventSubscriberConnIds: () => new Set(),
+      },
+    });
+
+    await callSessions("sessions.abort", { runId: "run-worker" }, { context });
+
+    expectChatAbortParams({
+      sessionKey: "agent:work:dashboard:worker",
+      runId: "run-worker",
+    });
+    expect(context.dedupe?.size).toBe(0);
   });
 
   it("aborts global-scope active runs for non-default agents", async () => {

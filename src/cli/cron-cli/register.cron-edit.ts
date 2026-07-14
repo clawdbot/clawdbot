@@ -21,7 +21,7 @@ import {
   parseCronCommandEnv,
   parseCronFallbacks,
   parseCronToolsAllow,
-  parseDurationMs,
+  parsePositiveCronDurationMs,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
@@ -605,7 +605,7 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              const cooldownMs = parsePositiveCronDurationMs(String(opts.failureAlertCooldown));
               if (!cooldownMs && cooldownMs !== 0) {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }

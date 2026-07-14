@@ -14,28 +14,28 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
   "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
   "ConvertTo-Json -Compress";
 
-export type AdvertisedLanHostCandidate = {
+type AdvertisedLanHostCandidate = {
   interfaceName: string;
   address: string;
   order: number;
 };
 
-export type AdvertisedLanRouteHint = {
+type AdvertisedLanRouteHint = {
   interfaceName: string;
 };
 
-export type AdvertisedLanHostCommandResult = {
+type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
 };
 
-export type AdvertisedLanHostCommandRunner = (
+type AdvertisedLanHostCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<AdvertisedLanHostCommandResult>;
 
-export type ResolveAdvertisedLanHostOptions = {
+type ResolveAdvertisedLanHostOptions = {
   networkInterfaces?: () => NetworkInterfacesSnapshot;
   runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
   platform?: NodeJS.Platform;
@@ -71,7 +71,7 @@ function normalizeMetric(value: unknown): number {
   return 0;
 }
 
-export function listAdvertisedLanHostCandidates(
+function listAdvertisedLanHostCandidates(
   snapshot: NetworkInterfacesSnapshot | undefined,
 ): AdvertisedLanHostCandidate[] {
   return listExternalInterfaceAddresses(snapshot, "IPv4")
@@ -83,7 +83,7 @@ export function listAdvertisedLanHostCandidates(
     }));
 }
 
-export function selectAdvertisedLanHost(
+function selectAdvertisedLanHost(
   candidates: AdvertisedLanHostCandidate[],
   routeHints: AdvertisedLanRouteHint[] = [],
 ): string | null {
@@ -107,7 +107,7 @@ export function selectAdvertisedLanHost(
   return candidates[0]?.address ?? null;
 }
 
-export function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return [];
@@ -150,12 +150,12 @@ export function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRout
   return rankedRows.map((row) => ({ interfaceName: row.interfaceName }));
 }
 
-export function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const match = /^\s*interface:\s*(\S+)/m.exec(stdout);
   return match?.[1] ? [{ interfaceName: match[1] }] : [];
 }
 
-export function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const hints: AdvertisedLanRouteHint[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.startsWith("default ")) {

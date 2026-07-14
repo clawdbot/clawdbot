@@ -5,8 +5,9 @@ import {
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
   prunePersistedToolStreamMessages,
-  type StreamReconciliationState,
 } from "./stream-reconciliation.ts";
+
+type StreamReconciliationState = Parameters<typeof materializeVisibleStreamState>[1];
 
 const visibleStreamOptions = {
   isHiddenAssistantMessage: () => false,

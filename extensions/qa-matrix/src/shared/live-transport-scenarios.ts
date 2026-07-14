@@ -5,5 +5,4 @@ export {
   findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";

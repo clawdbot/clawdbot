@@ -13,7 +13,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { pluginCommands } from "../plugins/command-registry-state.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,

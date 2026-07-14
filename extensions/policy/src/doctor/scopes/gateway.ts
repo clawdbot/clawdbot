@@ -2,7 +2,7 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
-import { CHECK_IDS } from "../metadata.js";
+import { CHECK_IDS } from "../check-ids.js";
 import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";

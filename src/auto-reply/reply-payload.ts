@@ -73,7 +73,7 @@ export type ReplyPayload = {
 // through Plugin SDK; this is not a third-party plugin contract.
 const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
-export type PairingQrReplyChannelData = {
+type PairingQrReplyChannelData = {
   setupCode: string;
   expiresAtMs: number;
 };
@@ -84,17 +84,6 @@ function normalizePairingQrSetupCode(value: unknown): string | undefined {
 
 function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-export function buildPairingQrReplyChannelData(
-  params: PairingQrReplyChannelData,
-): Record<string, unknown> {
-  return {
-    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
-      setupCode: params.setupCode,
-      expiresAtMs: params.expiresAtMs,
-    },
-  };
 }
 
 export function readPairingQrReplyChannelData(

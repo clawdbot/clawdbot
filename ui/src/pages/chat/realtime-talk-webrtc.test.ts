@@ -201,7 +201,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     await transport.start();
 
     expect(getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { exact: "usb-mic" } },
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "usb-mic" },
+      },
     });
     transport.stop();
   });

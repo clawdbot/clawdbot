@@ -5,7 +5,6 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -27,6 +26,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { BrowserSnapshotDefaultsSchema, NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -41,28 +41,24 @@ import {
 // built dist renders every issue as the bare "Invalid input" fallback. Register
 // the locale explicitly where the config schemas live; zod stores it on
 // globalThis, so one call covers every zod parse in the process.
-export function installZodDefaultLocale(): void {
+function installZodDefaultLocale(): void {
   z.config(z.locales.en());
 }
 installZodDefaultLocale();
-
-const BrowserSnapshotDefaultsSchema = z
-  .object({
-    mode: z.literal("efficient").optional(),
-  })
-  .strict()
-  .optional();
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
 
 const GatewayRemoteSchemaShape = {
-  enabled: z.boolean().optional(),
   url: z.string().optional(),
+
   transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+
   remotePort: z.number().int().min(1).max(65_535).optional(),
+
   token: SecretInputSchema.optional().register(sensitive),
+
   password: SecretInputSchema.optional().register(sensitive),
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
@@ -382,7 +378,7 @@ const TalkSchema = z
     }
   });
 
-export const McpServerSchema = z
+const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),
@@ -508,6 +504,7 @@ const NodeHostMcpServerNameSchema = z
 
 const NodeHostSchema = z
   .object({
+    agentRuns: NodeHostAgentRunsSchema,
     browserProxy: z
       .object({
         enabled: z.boolean().optional(),
@@ -1080,13 +1077,6 @@ export const OpenClawSchema = z
         webhook: HttpUrlSchema.optional(),
         webhookToken: SecretInputSchema.optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
-        runLog: z
-          .object({
-            maxBytes: z.union([z.string(), z.number()]).optional(),
-            keepLines: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),
@@ -1123,20 +1113,19 @@ export const OpenClawSchema = z
             });
           }
         }
-        if (val.runLog?.maxBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.runLog.maxBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["runLog", "maxBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
-            });
-          }
-        }
       })
+      .optional(),
+    worktrees: z
+      .object({
+        cleanup: z
+          .object({
+            maxCount: z.number().int().min(0).optional(),
+            maxTotalSizeGb: z.number().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
       .optional(),
     transcripts: z
       .object({

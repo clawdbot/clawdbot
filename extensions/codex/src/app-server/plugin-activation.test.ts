@@ -6,11 +6,7 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
-import {
-  ensureCodexAppsSubstrateConfig,
-  ensureCodexPluginActivation,
-  upsertTomlBoolean,
-} from "./plugin-activation.js";
+import { ensureCodexPluginActivation } from "./plugin-activation.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin activation", () => {
@@ -309,27 +305,6 @@ describe("Codex plugin activation", () => {
     });
     expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("upserts native apps substrate config without clobbering other toml", async () => {
-    const existing = 'model = "gpt-5.5"\n\n[features]\nother = true\n';
-    expect(upsertTomlBoolean(existing, "features", "apps", true)).toBe(
-      'model = "gpt-5.5"\n\n[features]\nother = true\napps = true\n',
-    );
-
-    const writes: Array<{ path: string; content: string }> = [];
-    const result = await ensureCodexAppsSubstrateConfig({
-      codexHome: "/codex-home",
-      readFile: vi.fn(async () => existing),
-      mkdir: vi.fn(async () => undefined),
-      writeFile: vi.fn(async (filePath, content) => {
-        writes.push({ path: String(filePath), content: String(content) });
-      }),
-    });
-
-    expect(result).toEqual({ changed: true, configPath: "/codex-home/config.toml" });
-    expect(writes[0]?.content).toContain("[features]\nother = true\napps = true");
-    expect(writes[0]?.content).toContain("[apps._default]\nenabled = true");
   });
 });
 

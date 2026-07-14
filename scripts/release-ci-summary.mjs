@@ -66,7 +66,12 @@ const CHILD_DISPATCHES = [
   },
 ];
 
-const EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
+const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
+const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+const EVIDENCE_REUSE_POLICIES = new Set([
+  EXACT_TARGET_EVIDENCE_REUSE_POLICY,
+  CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+]);
 
 const RERUN_GROUP_CHILD_KEYS = new Map([
   ["all", ["normalCi", "releaseChecks", "pluginPrerelease", "productPerformance"]],
@@ -459,7 +464,7 @@ export function validateParentManifest(value, expected) {
       value.evidenceReuse,
       "release validation manifest evidence reuse",
     );
-    if (reuse.policy !== EVIDENCE_REUSE_POLICY) {
+    if (!EVIDENCE_REUSE_POLICIES.has(reuse.policy)) {
       throw new Error("release validation manifest evidence reuse policy is invalid");
     }
     if (!/^[a-f0-9]{40}$/u.test(String(reuse.evidenceSha))) {
@@ -502,13 +507,15 @@ export function validateParentManifest(value, expected) {
   };
 }
 
-export function validateEvidenceReuseChain(currentManifest, selectedManifest, rootManifest) {
+export function validateEvidenceReuseChain(
+  currentManifest,
+  selectedManifest,
+  rootManifest,
+  compareCommits,
+) {
   const reuse = currentManifest.evidenceReuse;
   if (!reuse) {
     throw new Error("release validation manifest does not authorize evidence reuse");
-  }
-  if (reuse.changedPaths.length !== 0) {
-    throw new Error("full release evidence reuse requires an exact target with no changed paths");
   }
   if (rootManifest.evidenceReuse || selectedManifest.evidenceReuse) {
     throw new Error("evidence reuse must select a root execution manifest");
@@ -529,14 +536,42 @@ export function validateEvidenceReuseChain(currentManifest, selectedManifest, ro
   if (selectedManifest.targetSha !== reuse.evidenceSha) {
     throw new Error("evidence reuse selected manifest SHA mismatch");
   }
-  if (
-    currentManifest.targetSha !== reuse.evidenceSha ||
-    rootManifest.targetSha !== reuse.evidenceSha
-  ) {
-    throw new Error("full release evidence reuse target SHA mismatch");
+  if (rootManifest.targetSha !== reuse.evidenceSha) {
+    throw new Error("full release evidence reuse root SHA mismatch");
   }
   if (selectedManifest.runId !== rootManifest.runId) {
     throw new Error("evidence reuse selected manifest is not the chain root");
+  }
+  if (reuse.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY) {
+    if (reuse.changedPaths.length !== 0 || currentManifest.targetSha !== reuse.evidenceSha) {
+      throw new Error("exact-target release evidence reuse requires no changed paths");
+    }
+  } else if (reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY) {
+    if (
+      reuse.changedPaths.length !== 1 ||
+      reuse.changedPaths[0] !== "CHANGELOG.md" ||
+      currentManifest.targetSha === reuse.evidenceSha
+    ) {
+      throw new Error("changelog-only release evidence reuse has an invalid target delta");
+    }
+    if (typeof compareCommits !== "function") {
+      throw new Error("changelog-only release evidence reuse requires commit comparison");
+    }
+    const comparison = compareCommits(reuse.evidenceSha, currentManifest.targetSha);
+    const changedFiles = Array.isArray(comparison?.files) ? comparison.files : [];
+    const changelog = changedFiles[0];
+    if (
+      comparison?.status !== "ahead" ||
+      comparison?.merge_base_commit?.sha !== reuse.evidenceSha ||
+      changedFiles.length !== 1 ||
+      changelog?.filename !== "CHANGELOG.md" ||
+      changelog?.status !== "modified" ||
+      changelog?.previous_filename
+    ) {
+      throw new Error("changelog-only release evidence reuse failed commit comparison");
+    }
+  } else {
+    throw new Error("release validation manifest evidence reuse policy is invalid");
   }
 
   const rootIdentity = JSON.stringify(manifestEvidenceIdentity(rootManifest));
@@ -1311,6 +1346,7 @@ export function validateReleaseRunEvidence(
       currentEvidence.manifest,
       selectedEvidence.manifest,
       rootEvidence.manifest,
+      (base, head) => evidenceClient.compareCommits(base, head),
     );
   }
 
@@ -1692,12 +1728,17 @@ async function main() {
         currentManifest,
         selectedManifest,
         rootManifest,
+        (base, head) => githubRestJson(`compare/${base}...${head}`, repository),
       );
       sourceManifest = rootManifest;
       sourceParent = rootParent;
       console.log(`evidence-selected-run: ${selectedRunId}`);
       console.log(`evidence-root-run: ${rootRunId}`);
       console.log(`evidence-sha: ${evidenceSha}`);
+      console.log(`evidence-policy: ${currentManifest.evidenceReuse.policy}`);
+      console.log(
+        `evidence-changed-paths: ${JSON.stringify(currentManifest.evidenceReuse.changedPaths)}`,
+      );
     }
 
     const expectedChildren = expectedSelectedChildDispatches(

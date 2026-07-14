@@ -18,7 +18,7 @@ type Bucket = {
 const controlPlaneBuckets = new Map<string, Bucket>();
 
 /** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
-export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
+function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
   const deviceId = normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device");
   const clientIp = normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip");
   if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
@@ -106,12 +106,3 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
   }
   return pruned;
 }
-
-export const testing = {
-  getControlPlaneRateLimitBucketCount() {
-    return controlPlaneBuckets.size;
-  },
-  resetControlPlaneRateLimitState() {
-    controlPlaneBuckets.clear();
-  },
-};

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -30,6 +31,7 @@ type UnsafeLocalArtifact = {
 };
 
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
+const UNSAFE_LOCAL_SYNC_CONCURRENCY = 16;
 
 function detectFenceLanguage(filePath: string): string {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
@@ -222,8 +224,9 @@ export async function syncMemoryWikiUnsafeLocalSources(
     incomingCount: artifacts.length,
   });
   const activeKeys = new Set<string>();
-  const results = await Promise.all(
-    artifacts.map(async (artifact) => {
+  const results = await pMap(
+    artifacts,
+    async (artifact) => {
       const stats = await fs.stat(artifact.absolutePath);
       activeKeys.add(artifact.syncKey);
       return await writeUnsafeLocalSourcePage({
@@ -233,7 +236,8 @@ export async function syncMemoryWikiUnsafeLocalSources(
         sourceSize: stats.size,
         state,
       });
-    }),
+    },
+    { concurrency: UNSAFE_LOCAL_SYNC_CONCURRENCY, stopOnError: true },
   );
 
   const removedCount = await pruneImportedSourceEntries({

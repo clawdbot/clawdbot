@@ -6,8 +6,6 @@ import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
 
-export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
-
 // Keep session persistence lazy so channel SDK type paths do not load disk writers.
 const loadInboundSessionRuntime = createLazyRuntimeModule(
   () => import("../config/sessions/inbound.runtime.js"),

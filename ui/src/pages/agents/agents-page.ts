@@ -20,11 +20,6 @@ import {
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
-  resolveAgentConfig,
-  resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
-} from "../../lib/agents/display.ts";
-import {
   loadToolsCatalog,
   loadToolsEffective,
   buildToolsEffectiveRequestKey,
@@ -46,6 +41,15 @@ import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
+import {
+  resetIdentityDraft,
+  saveIdentityDraft,
+  selectIdentityAvatar,
+  setIdentityDraftField,
+  togglePinnedAgent,
+} from "./identity-actions.ts";
+import { stageAgentModelFallbacks, stageAgentPrimaryModel } from "./model-config.ts";
+import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
@@ -94,6 +98,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() agentFileSaving = false;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
+  @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
+  @state() identitySaving = false;
+  @state() identityError: string | null = null;
   @state() agentSkillsLoading = false;
   @state() agentSkillsError: string | null = null;
   @state() agentSkillsReport: SkillStatusReport | null = null;
@@ -171,6 +178,10 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     .watch(
       () => this.context?.channels,
       (channels, notify) => channels.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.navigation,
+      (navigation, notify) => navigation.subscribe(notify),
     )
     .watch(
       () => this.context?.runtimeConfig,
@@ -369,7 +380,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentsError = data.error;
     if (data.agentsList) {
       this.agentsList = data.agentsList;
-      this.agentsSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
+      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
+      if (nextSelectedId !== this.agentsSelectedId) {
+        this.agentsSelectedId = nextSelectedId;
+        // Route-driven agent switches (chip menu "Agent settings") must not
+        // carry per-agent panel caches or identity drafts across agents.
+        this.resetSelectionState();
+      }
     }
   }
 
@@ -561,6 +578,27 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
+  private saveIdentityDraft() {
+    const client = this.client;
+    const agentId = this.resolveSelectedAgentId();
+    if (!client || !agentId || this.identitySaving) {
+      return;
+    }
+    const generation = this.requestGeneration;
+    const agents = this.context.agents;
+    const agentIdentity = this.context.agentIdentity;
+    void saveIdentityDraft({
+      host: this,
+      client,
+      agentId,
+      agents,
+      agentIdentity,
+      isCurrent: () =>
+        this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
+      onSaved: () => this.syncAgentState(agents),
+    });
+  }
+
   private resetSelectionState() {
     this.requestGeneration += 1;
     this.agentFilesList = null;
@@ -576,6 +614,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentSkillsAgentId = null;
     this.agentIdentityLoading = false;
     this.agentIdentityError = null;
+    resetIdentityDraft(this);
     this.toolsCatalogResult = null;
     this.toolsCatalogError = null;
     this.toolsCatalogLoading = false;
@@ -597,18 +636,6 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   private toolsPath(agentId: string, ensure: boolean) {
     const index = ensure ? this.ensureAgentIndex(agentId) : this.findAgentIndex(agentId);
     return index >= 0 ? (["agents", "list", index, "tools"] as Array<string | number>) : null;
-  }
-
-  private modelEntry(index: number) {
-    const list = (
-      currentConfigObject(this.context.runtimeConfig.state) as {
-        agents?: { list?: unknown[] };
-      } | null
-    )?.agents?.list;
-    const existing = Array.isArray(list)
-      ? (list[index] as { model?: unknown } | undefined)?.model
-      : undefined;
-    return { path: ["agents", "list", index, "model"] as Array<string | number>, existing };
   }
 
   private loadEffectiveToolsForAgent(agentId: string) {
@@ -758,6 +785,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           agentIdentityLoading: this.agentIdentityLoading,
           agentIdentityError: this.agentIdentityError,
           agentIdentityById: this.agentIdentityById(),
+          identityDraft: this.identityDraft,
+          identitySaving: this.identitySaving,
+          identityError: this.identityError,
           agentSkills: {
             report: this.agentSkillsReport,
             loading: this.agentSkillsLoading,
@@ -778,6 +808,8 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
+          pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
+          onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
           onSelectAgent: (agentId) => this.selectAgent(agentId),
           onSelectPanel: (panel) => this.selectPanel(panel),
@@ -838,6 +870,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           },
           onConfigReload: () => this.reloadConfig(),
           onConfigSave: () => this.saveAgentConfig(),
+          onIdentityFieldChange: (field, value) => setIdentityDraftField(this, field, value),
+          onIdentityAvatarSelect: (file) => selectIdentityAvatar(this, file),
+          onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
@@ -884,67 +919,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
           },
           onModelChange: (agentId, modelId) => {
-            const index = modelId ? this.ensureAgentIndex(agentId) : this.findAgentIndex(agentId);
-            if (index < 0) {
-              return;
-            }
-            const entry = this.modelEntry(index);
-            if (!modelId) {
-              this.context.runtimeConfig.removeFormValue(entry.path);
-            } else if (entry.existing && typeof entry.existing === "object") {
-              const fallbacks = (entry.existing as { fallbacks?: unknown }).fallbacks;
-              this.context.runtimeConfig.patchForm(entry.path, {
-                primary: modelId,
-                ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-              });
-            } else {
-              this.context.runtimeConfig.patchForm(entry.path, modelId);
-            }
+            stageAgentPrimaryModel(this.context.runtimeConfig, agentId, modelId);
             void refreshVisibleToolsEffectiveForCurrentSession(this);
           },
-          onModelFallbacksChange: (agentId, fallbacks) => {
-            const normalized = normalizeStringEntries(fallbacks);
-            const resolved = resolveAgentConfig(config, agentId);
-            const primary =
-              resolveModelPrimary(resolved.entry?.model) ??
-              resolveModelPrimary(resolved.defaults?.model);
-            const effective = resolveEffectiveModelFallbacks(
-              resolved.entry?.model,
-              resolved.defaults?.model,
-            );
-            const index =
-              normalized.length > 0
-                ? primary
-                  ? this.ensureAgentIndex(agentId)
-                  : -1
-                : (effective?.length ?? 0) > 0 || this.findAgentIndex(agentId) >= 0
-                  ? this.ensureAgentIndex(agentId)
-                  : -1;
-            if (index < 0) {
-              return;
-            }
-            const entry = this.modelEntry(index);
-            const currentPrimary =
-              typeof entry.existing === "string"
-                ? entry.existing.trim()
-                : entry.existing &&
-                    typeof entry.existing === "object" &&
-                    typeof (entry.existing as { primary?: unknown }).primary === "string"
-                  ? (entry.existing as { primary: string }).primary.trim()
-                  : "";
-            if (normalized.length === 0) {
-              if (currentPrimary || primary) {
-                this.context.runtimeConfig.patchForm(entry.path, currentPrimary || primary);
-              } else {
-                this.context.runtimeConfig.removeFormValue(entry.path);
-              }
-            } else if (currentPrimary || primary) {
-              this.context.runtimeConfig.patchForm(entry.path, {
-                primary: currentPrimary || primary,
-                fallbacks: normalized,
-              });
-            }
-          },
+          onModelFallbacksChange: (agentId, fallbacks) =>
+            stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks),
           onSetDefault: (agentId) => {
             void (async () => {
               await this.context.runtimeConfig.ensureLoaded();

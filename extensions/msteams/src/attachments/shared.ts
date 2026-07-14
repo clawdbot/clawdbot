@@ -90,7 +90,7 @@ export { isRecord };
 
 // Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
 // hot MSTeams attachment tests for one tiny estimator.
-export function estimateBase64DecodedBytes(base64: string): number {
+function estimateBase64DecodedBytes(base64: string): number {
   let effectiveLen = 0;
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
@@ -183,17 +183,6 @@ export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undef
     return undefined;
   }
   return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return normalizeOptionalString(current);
 }
 
 export function resolveRequestUrl(input: RequestInfo | URL): string {

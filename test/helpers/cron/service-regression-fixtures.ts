@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { clearAllBootstrapSnapshots } from "../../../src/agents/bootstrap-cache.js";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import {
   createDeferred,
@@ -12,7 +11,7 @@ import {
 } from "../../../src/cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
-import { resetAgentRunContextForTest } from "../../../src/infra/agent-events.js";
+import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
 import {
   resetCommandQueueStateForTest,
   waitForActiveTasks,
@@ -49,8 +48,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     await waitForActiveTasks(250);
     resetCommandQueueStateForTest();
     clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
+    resetAgentEventsForTest();
   });
 
   afterAll(async () => {

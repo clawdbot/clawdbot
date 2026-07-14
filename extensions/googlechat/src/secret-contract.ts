@@ -1,5 +1,6 @@
 // Googlechat plugin module implements secret contract behavior.
 import {
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
   pushAssignment,
@@ -17,35 +18,28 @@ type GoogleChatAccountLike = {
   accounts?: Record<string, unknown>;
 };
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "googlechat",
+  account: [
     {
-      id: "channels.googlechat.accounts.*.serviceAccount",
+      path: "serviceAccount",
+      refPath: "serviceAccountRef",
       targetType: "channels.googlechat.serviceAccount",
       targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
       secretShape: "sibling_ref",
       expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
       accountIdPathSegmentIndex: 3,
     },
+  ],
+  channel: [
     {
-      id: "channels.googlechat.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.serviceAccount",
-      refPathPattern: "channels.googlechat.serviceAccountRef",
+      path: "serviceAccount",
+      refPath: "serviceAccountRef",
       secretShape: "sibling_ref",
       expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
     },
-  ];
+  ],
+});
 
 function resolveSecretInputRef(params: {
   value: unknown;

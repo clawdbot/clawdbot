@@ -251,7 +251,7 @@ export async function moveToFailed(id: string, stateDir?: string): Promise<void>
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
 }
 
-export type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
+type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
 
 /** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
 export async function failPendingDelivery(

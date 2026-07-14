@@ -174,6 +174,12 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(prepare.if).toBeUndefined();
     expect(prepare.run).toContain('bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}"');
+    expect(prepare.run).toContain('raw.lastIndexOf("[")');
+    expect(prepare.run).toContain("npm can print bundled-dependency summaries");
+    expect(prepare.run).toContain("if (index === 0)");
+    expect(prepare.run).toContain(
+      "fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\\n`)",
+    );
     expect(prepare.run).toContain('path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
     expect(prepare.run).toContain('kind: "openclaw-plugin-npm-preflight"');
     expect(prepare.run).toContain('mode: "preflight-only"');
@@ -185,6 +191,8 @@ describe("plugin npm extended-stable workflow", () => {
     expect(prepare.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");
     expect(prepare.run).toContain("npmIntegrity: actualIntegrity");
     expect(prepare.run).toContain("npmShasum: actualShasum");
+    expect(prepare.run).toContain('typeof pluginManifest.id !== "string"');
+    expect(prepare.run).not.toContain("pluginManifest.id !== process.env.EXTENSION_ID");
     expect(prepare.run).toContain(
       'trustPolicy: "workflow-main-and-target-main-or-release-ancestor"',
     );
@@ -226,6 +234,8 @@ describe("plugin npm extended-stable workflow", () => {
     expect(readback.run).toContain(
       "Packed plugin identity, package hashes, or install route changed",
     );
+    expect(readback.run).toContain("manifest.package.pluginId !== pluginManifest.id");
+    expect(readback.run).not.toContain("manifest.package.pluginId !== process.env.EXTENSION_ID");
     expect(readback.run).toContain(
       'trustPolicy: "workflow-main-and-target-main-or-release-ancestor"',
     );

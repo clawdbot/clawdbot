@@ -3,9 +3,17 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
-import type { SessionMenuAction, SessionMenuData, SessionMenuWork } from "./session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
+type SessionMenuData = {
+  key: string;
+  label: string;
+  pinned: boolean;
+  unread: boolean;
+  archived: boolean;
+  category: string | null;
+};
 
 const containers: HTMLElement[] = [];
 

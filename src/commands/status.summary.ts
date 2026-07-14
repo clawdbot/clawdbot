@@ -13,7 +13,6 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -338,10 +337,7 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  // Configure maintenance store before reading task summaries so cron-backed tasks are in scope.
-  taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  taskMaintenanceModule.configureTaskRegistryMaintenance();
   const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);

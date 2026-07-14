@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import pMap from "p-map";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -272,21 +273,13 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
         platform: process.platform,
         splitCore: shardArgs.splitCore,
       });
-      const results =
-        shardConcurrency <= 1
-          ? await runShardsSerial({
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            })
-          : await runShardsParallel({
-              concurrency: Math.min(shardConcurrency, selectedShards.length),
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            });
+      const results = await runShards({
+        concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
+        entries: selectedShards,
+        env,
+        extraArgs: shardArgs.oxlintArgs,
+        runner,
+      });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {
@@ -385,38 +378,17 @@ export function resolveOxlintShardConcurrency({
   );
 }
 
-async function runShardsSerial({ entries, env, extraArgs, runner }) {
-  const results = [];
-  for (const shard of entries) {
-    results.push(await runShard({ env, extraArgs, runner, shard }));
-    if (isParentTerminationRequested()) {
-      break;
-    }
-  }
-  return results;
-}
-
-async function runShardsParallel({ concurrency, entries, env, extraArgs, runner }) {
-  const results = [];
-  results.length = entries.length;
-  let nextIndex = 0;
-
-  const workers = Array.from({ length: concurrency }, async () => {
-    for (;;) {
+async function runShards({ concurrency, entries, env, extraArgs, runner }) {
+  const results = await pMap(
+    entries,
+    async (shard) => {
       if (isParentTerminationRequested()) {
-        return;
+        return undefined;
       }
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      const shard = entries[currentIndex];
-      if (!shard) {
-        return;
-      }
-      results[currentIndex] = await runShard({ env, extraArgs, runner, shard });
-    }
-  });
-
-  await Promise.all(workers);
+      return await runShard({ env, extraArgs, runner, shard });
+    },
+    { concurrency, stopOnError: true },
+  );
   return results.filter((status) => status !== undefined);
 }
 

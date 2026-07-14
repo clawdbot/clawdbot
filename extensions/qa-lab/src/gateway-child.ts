@@ -1603,4 +1603,3 @@ export async function startQaGatewayChild(params: {
     throw new Error(message, { cause: error });
   }
 }
-export { testing as __testing };

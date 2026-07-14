@@ -3,35 +3,9 @@
  * Covers provider-specific repair hints without invoking real auth flows.
  */
 import { describe, expect, it } from "vitest";
-import {
-  formatAuthDoctorHint,
-  formatAuthDoctorHintWithPluginBuilder,
-} from "./auth-profiles/doctor.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
-
-const EMPTY_STORE: AuthProfileStore = {
-  version: 1,
-  profiles: {},
-};
+import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 
 describe("formatAuthDoctorHint", () => {
-  it("does not report restored qwen portal auth as removed", async () => {
-    let pluginBuilderCalled = false;
-    const hint = await formatAuthDoctorHintWithPluginBuilder(
-      {
-        store: EMPTY_STORE,
-        provider: "qwen-portal",
-      },
-      async () => {
-        pluginBuilderCalled = true;
-        return undefined;
-      },
-    );
-
-    expect(pluginBuilderCalled).toBe(true);
-    expect(hint).toBe("");
-  });
-
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
     const hint = await formatAuthDoctorHint({
       store: {

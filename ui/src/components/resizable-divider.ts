@@ -7,7 +7,7 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
  * An accessible draggable divider for resizable split views.
  * Dispatches 'resize' events with { splitRatio: number } detail.
  */
-export class ResizableDivider extends OpenClawLitElement {
+class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
   @property({ type: Number }) minRatio = 0.4;
   @property({ type: Number }) maxRatio = 0.7;

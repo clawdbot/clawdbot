@@ -16,7 +16,7 @@ type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
 };
 
 /** Normalize missing or blank config issue paths to the root marker used in CLI output. */
-export function normalizeConfigIssuePath(path: string | null | undefined): string {
+function normalizeConfigIssuePath(path: string | null | undefined): string {
   if (typeof path !== "string") {
     return "<root>";
   }
@@ -25,7 +25,7 @@ export function normalizeConfigIssuePath(path: string | null | undefined): strin
 }
 
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
-export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
+function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
   return {
     path: normalizeConfigIssuePath(issue.path),

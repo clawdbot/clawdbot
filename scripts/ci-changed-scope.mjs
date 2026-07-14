@@ -4,6 +4,7 @@ import { appendFileSync } from "node:fs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -47,7 +48,7 @@ const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
   /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const WINDOWS_DAEMON_SCOPE_RE =
@@ -187,6 +188,14 @@ export function shouldRunNativeI18n(changedPaths) {
   );
 }
 
+/** Returns whether the changed paths include TypeScript governed by the LOC ratchet. */
+export function shouldRunTsLoc(changedPaths) {
+  return (
+    !Array.isArray(changedPaths) ||
+    changedPaths.some((path) => isProductionTypeScriptFile(path.trim()))
+  );
+}
+
 /**
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
@@ -320,6 +329,7 @@ export function writeGitHubOutput(
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
   runNativeI18n = true,
+  runTsLoc = true,
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -351,6 +361,7 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
   appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
   appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_ts_loc=${runTsLoc}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -397,7 +408,7 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false);
+      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, false);
       process.exit(0);
     }
     writeGitHubOutput(
@@ -406,8 +417,9 @@ if (isDirectRun()) {
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
       shouldRunNativeI18n(changedPaths),
+      shouldRunTsLoc(changedPaths),
     );
   } catch {
-    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true);
+    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, true);
   }
 }

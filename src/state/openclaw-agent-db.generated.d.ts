@@ -111,6 +111,7 @@ export interface SessionEntries {
   entry_json: string;
   session_id: string;
   session_key: string;
+  status: string | null;
   updated_at: number;
 }
 

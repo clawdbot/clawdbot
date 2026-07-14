@@ -25,22 +25,13 @@ import {
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
-} from "./oauth-shared.js";
-
-export type ExternalCliResolvedProfile = {
+type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-export type ExternalCliAuthProfileOptions = {
+type ExternalCliAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
   providerIds?: Iterable<string>;
   profileIds?: Iterable<string>;
@@ -64,7 +55,7 @@ type ExternalCliSyncProvider = {
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
 /** Return true when imported CLI credentials match an existing profile identity. */
-export function isSafeToUseExternalCliCredential(
+function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {
@@ -301,6 +292,26 @@ function listScopedExternalCliProfileIds(params: {
   return options?.providerIds ? [providerConfig.profileId] : [];
 }
 
+function backfillExternalCliIdentity(params: {
+  providerConfig: ExternalCliSyncProvider;
+  existingOAuth: OAuthCredential;
+  allowKeychainPrompt?: boolean;
+}): OAuthCredential | null {
+  if (params.existingOAuth.email) {
+    return null;
+  }
+  const creds = params.providerConfig.readCredentials({
+    allowKeychainPrompt: params.allowKeychainPrompt,
+  });
+  // Matching token material is the only proof the stored profile IS the CLI
+  // login; identity fields are absent on the stored side by definition here.
+  const sameLogin =
+    creds?.email &&
+    (creds.refresh === params.existingOAuth.refresh ||
+      creds.access === params.existingOAuth.access);
+  return sameLogin ? { ...params.existingOAuth, email: creds.email } : null;
+}
+
 /** Resolve scoped external CLI auth profiles available to overlay or persist. */
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
@@ -349,6 +360,16 @@ export function resolveExternalCliAuthProfiles(
         !providerConfig.bootstrapOnly &&
         hasUsableOAuthCredential(existingOAuth, now)
       ) {
+        // Profiles synced before identity capture carry no email; backfill the
+        // non-secret metadata once the CLI read proves it is the same login.
+        const backfilled = backfillExternalCliIdentity({
+          providerConfig,
+          existingOAuth,
+          allowKeychainPrompt: options?.allowKeychainPrompt,
+        });
+        if (backfilled) {
+          profiles.push({ profileId, credential: backfilled, persistence: "persisted" });
+        }
         continue;
       }
       const creds = normalizeExternalCliCredentialProvider(

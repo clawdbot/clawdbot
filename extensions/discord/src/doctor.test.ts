@@ -64,9 +64,16 @@ describe("discord doctor", () => {
         work: {
           streaming: {
             mode: "off",
+            chunkMode: "newline",
             block: {
+              enabled: true,
               coalesce: {
                 idleMs: 250,
+              },
+            },
+            preview: {
+              chunk: {
+                minChars: 120,
               },
             },
           },
@@ -80,6 +87,7 @@ describe("discord doctor", () => {
       "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
       "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+      "Copied flat channels.discord delivery keys into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 

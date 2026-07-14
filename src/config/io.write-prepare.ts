@@ -1082,7 +1082,7 @@ function unsetPathForWriteAt(
   };
 }
 
-export function unsetPathForWrite(
+function unsetPathForWrite(
   root: OpenClawConfig,
   pathSegments: string[],
 ): { changed: boolean; next: OpenClawConfig } {
@@ -1160,8 +1160,8 @@ export function collectChangedPaths(
     const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
     for (const key of keys) {
       const childPath = path ? `${path}.${key}` : key;
-      const hasBase = key in base;
-      const hasTarget = key in target;
+      const hasBase = Object.hasOwn(base, key);
+      const hasTarget = Object.hasOwn(target, key);
       if (!hasTarget || !hasBase) {
         output.add(childPath);
         continue;

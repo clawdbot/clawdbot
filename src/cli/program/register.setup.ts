@@ -12,29 +12,11 @@ import type {
 } from "../../commands/onboard-types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { parsePort } from "../shared/parse-port.js";
-import { pickOnboardAuthOptionValues, registerOnboardAuthOptions } from "./register.onboard.js";
-
-function resolveInstallDaemonFlag(
-  command: unknown,
-  opts: { installDaemon?: boolean },
-): boolean | undefined {
-  if (!command || typeof command !== "object") {
-    return undefined;
-  }
-  const getOptionValueSource =
-    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") {
-    return undefined;
-  }
-
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
-    return false;
-  }
-  if (getOptionValueSource.call(command, "installDaemon") === "cli") {
-    return Boolean(opts.installDaemon);
-  }
-  return undefined;
-}
+import {
+  pickOnboardAuthOptionValues,
+  registerOnboardAuthOptions,
+  resolveInstallDaemonFlag,
+} from "./register.onboard.js";
 
 /** Register the `setup` command as an onboarding alias. */
 export function registerSetupCommand(program: Command): void {
@@ -91,7 +73,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -107,7 +89,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .option("--json", "Output JSON summary", false)
-    .action(async (opts, commandRuntime) => {
+    .action(async (opts, commandRuntime: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (opts.baseline) {
@@ -115,9 +97,7 @@ export function registerSetupCommand(program: Command): void {
           await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
           return;
         }
-        const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-          installDaemon: Boolean(opts.installDaemon),
-        });
+        const installDaemon = resolveInstallDaemonFlag(commandRuntime);
         const gatewayPort = parsePort(opts.gatewayPort);
         const { setupWizardCommand } = await import("../../commands/onboard.js");
         await setupWizardCommand(

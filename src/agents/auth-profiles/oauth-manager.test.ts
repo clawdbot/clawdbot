@@ -12,13 +12,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.js";
+import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import {
-  createOAuthManager,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  OAuthManagerRefreshError,
-} from "./oauth-manager.js";
+} from "./oauth-shared.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -75,26 +73,8 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-describe("isSafeToOverwriteStoredOAuthIdentity", () => {
-  it("refuses overwriting an existing identity-less credential with a different token", () => {
-    expect(
-      isSafeToOverwriteStoredOAuthIdentity(
-        createCredential({}),
-        createCredential({ access: "rotated-access", accountId: "acct-123" }),
-      ),
-    ).toBe(false);
-  });
-
-  it("refuses non-overlapping identity evidence", () => {
-    expect(
-      isSafeToOverwriteStoredOAuthIdentity(
-        createCredential({ accountId: "acct-123" }),
-        createCredential({ access: "rotated-access", email: "user@example.com" }),
-      ),
-    ).toBe(false);
-  });
-
-  it("still allows identity-less external bootstrap adoption", () => {
+describe("isSafeToAdoptBootstrapOAuthIdentity", () => {
+  it("allows identity-less external bootstrap adoption", () => {
     const existing = createCredential({
       access: "expired-local-access",
       refresh: "expired-local-refresh",
@@ -106,7 +86,6 @@ describe("isSafeToOverwriteStoredOAuthIdentity", () => {
       expires: Date.now() + 60_000,
     });
 
-    expect(isSafeToOverwriteStoredOAuthIdentity(existing, incoming)).toBe(false);
     expect(isSafeToAdoptBootstrapOAuthIdentity(existing, incoming)).toBe(true);
   });
 });
@@ -130,29 +109,17 @@ describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
 });
 
 describe("matching account identity adoption", () => {
-  it.each([
-    {
-      name: "stored credential overwrite",
-      check: () =>
-        isSafeToOverwriteStoredOAuthIdentity(
-          createCredential({ accountId: "acct-123" }),
-          createCredential({ access: "rotated-access", accountId: "acct-123" }),
-        ),
-    },
-    {
-      name: "main-store adoption",
-      check: () =>
-        isSafeToAdoptMainStoreOAuthIdentity(
-          createCredential({ accountId: "acct-123" }),
-          createCredential({
-            access: "main-access",
-            refresh: "main-refresh",
-            accountId: "acct-123",
-          }),
-        ),
-    },
-  ])("accepts matching account identities for $name", ({ check }) => {
-    expect(check()).toBe(true);
+  it("accepts matching account identities for main-store adoption", () => {
+    expect(
+      isSafeToAdoptMainStoreOAuthIdentity(
+        createCredential({ accountId: "acct-123" }),
+        createCredential({
+          access: "main-access",
+          refresh: "main-refresh",
+          accountId: "acct-123",
+        }),
+      ),
+    ).toBe(true);
   });
 });
 

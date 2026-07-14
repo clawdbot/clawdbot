@@ -29,5 +29,6 @@ export function createGatewayMaintenanceStateForTest(params?: {
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
+    getRuntimeConfig: () => ({}),
   };
 }

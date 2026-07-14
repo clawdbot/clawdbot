@@ -105,7 +105,17 @@ function coerceCanvasPreview(
       ? { sandbox: preview.sandbox }
       : {}),
     ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
-      ? { mcpApp: { viewId: mcpApp.viewId } }
+      ? {
+          mcpApp: {
+            viewId: mcpApp.viewId,
+            ...(typeof mcpApp.serverName === "string" ? { serverName: mcpApp.serverName } : {}),
+            ...(typeof mcpApp.toolName === "string" ? { toolName: mcpApp.toolName } : {}),
+            ...(typeof mcpApp.uiResourceUri === "string"
+              ? { uiResourceUri: mcpApp.uiResourceUri }
+              : {}),
+            ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
+          },
+        }
       : {}),
   };
 }

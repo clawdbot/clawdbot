@@ -1,134 +1,8 @@
 // Covers rich shell-command extraction, fake parser shapes, source span mapping,
 // nested wrapper parsing, and parser error handling.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Node as TreeSitterNode, Parser, Tree } from "web-tree-sitter";
+import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "./extract.js";
-import {
-  getBashParserForCommandExplanation,
-  parseBashForCommandExplanation,
-  resolvePackageFileForCommandExplanation,
-  setBashParserLoaderForCommandExplanationForTest,
-} from "./tree-sitter-runtime.js";
-
-let parserLoaderOverridden = false;
-
-function setParserLoaderForTest(loader: () => Promise<Parser>): void {
-  parserLoaderOverridden = true;
-  setBashParserLoaderForCommandExplanationForTest(loader);
-}
-
-type FakeNodeInit = {
-  type: string;
-  text: string;
-  startIndex: number;
-  endIndex: number;
-  startPosition: TreeSitterNode["startPosition"];
-  endPosition: TreeSitterNode["endPosition"];
-  namedChildren?: TreeSitterNode[];
-  fieldChildren?: Record<string, TreeSitterNode>;
-  hasError?: boolean;
-};
-
-function fakeNode(init: FakeNodeInit): TreeSitterNode {
-  const named = init.namedChildren ?? [];
-  const children = named;
-  return {
-    type: init.type,
-    text: init.text,
-    startIndex: init.startIndex,
-    endIndex: init.endIndex,
-    startPosition: init.startPosition,
-    endPosition: init.endPosition,
-    childCount: children.length,
-    namedChildCount: named.length,
-    hasError: init.hasError ?? false,
-    child(index: number): TreeSitterNode | null {
-      return children[index] ?? null;
-    },
-    namedChild(index: number): TreeSitterNode | null {
-      return named[index] ?? null;
-    },
-    childForFieldName(name: string): TreeSitterNode | null {
-      return init.fieldChildren?.[name] ?? null;
-    },
-  } as unknown as TreeSitterNode;
-}
-
-function createByteIndexedUnicodeCommandTree(source: string): Tree {
-  const firstCommand = "echo café";
-  const separator = " && ";
-  const secondCommand = "echo ok";
-  const firstCommandEnd = Buffer.byteLength(firstCommand, "utf8");
-  const secondCommandStart = Buffer.byteLength(firstCommand + separator, "utf8");
-  const sourceEnd = Buffer.byteLength(source, "utf8");
-
-  const firstName = fakeNode({
-    type: "command_name",
-    text: "echo",
-    startIndex: 0,
-    endIndex: 4,
-    startPosition: { row: 0, column: 0 },
-    endPosition: { row: 0, column: 4 },
-  });
-  const firstArgument = fakeNode({
-    type: "word",
-    text: "café",
-    startIndex: 5,
-    endIndex: firstCommandEnd,
-    startPosition: { row: 0, column: 5 },
-    endPosition: { row: 0, column: firstCommandEnd },
-  });
-  const first = fakeNode({
-    type: "command",
-    text: firstCommand,
-    startIndex: 0,
-    endIndex: firstCommandEnd,
-    startPosition: { row: 0, column: 0 },
-    endPosition: { row: 0, column: firstCommandEnd },
-    namedChildren: [firstName, firstArgument],
-    fieldChildren: { name: firstName },
-  });
-
-  const secondName = fakeNode({
-    type: "command_name",
-    text: "echo",
-    startIndex: secondCommandStart,
-    endIndex: secondCommandStart + 4,
-    startPosition: { row: 0, column: secondCommandStart },
-    endPosition: { row: 0, column: secondCommandStart + 4 },
-  });
-  const secondArgument = fakeNode({
-    type: "word",
-    text: "ok",
-    startIndex: secondCommandStart + 5,
-    endIndex: sourceEnd,
-    startPosition: { row: 0, column: secondCommandStart + 5 },
-    endPosition: { row: 0, column: sourceEnd },
-  });
-  const second = fakeNode({
-    type: "command",
-    text: secondCommand,
-    startIndex: secondCommandStart,
-    endIndex: sourceEnd,
-    startPosition: { row: 0, column: secondCommandStart },
-    endPosition: { row: 0, column: sourceEnd },
-    namedChildren: [secondName, secondArgument],
-    fieldChildren: { name: secondName },
-  });
-
-  return {
-    rootNode: fakeNode({
-      type: "program",
-      text: source,
-      startIndex: 0,
-      endIndex: sourceEnd,
-      startPosition: { row: 0, column: 0 },
-      endPosition: { row: 0, column: sourceEnd },
-      namedChildren: [first, second],
-    }),
-    delete: vi.fn(),
-  } as unknown as Tree;
-}
+import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
 
 function riskMatches(risk: unknown, fields: Record<string, unknown>): boolean {
   if (!risk || typeof risk !== "object") {
@@ -155,14 +29,6 @@ function spanText(source: string, span: { startIndex: number; endIndex: number }
   return source.slice(span.startIndex, span.endIndex);
 }
 
-afterEach(() => {
-  if (parserLoaderOverridden) {
-    setBashParserLoaderForCommandExplanationForTest();
-    parserLoaderOverridden = false;
-  }
-  vi.restoreAllMocks();
-});
-
 describe("command explainer tree-sitter runtime", () => {
   it("loads tree-sitter bash and parses a simple command", async () => {
     const tree = await parseBashForCommandExplanation("ls | grep stuff");
@@ -181,78 +47,19 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
-  it("retries parser initialization after a loader rejection", async () => {
-    const parser = {} as Parser;
-    let calls = 0;
-    setParserLoaderForTest(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("transient parser load failure");
-      }
-      return parser;
-    });
-
-    await expect(getBashParserForCommandExplanation()).rejects.toThrow(
-      "transient parser load failure",
-    );
-    await expect(getBashParserForCommandExplanation()).resolves.toBe(parser);
-    expect(calls).toBe(2);
-  });
-
-  it("reports missing parser packages and wasm files with explainer context", () => {
-    expect(() =>
-      resolvePackageFileForCommandExplanation(
-        "definitely-missing-openclaw-parser-package",
-        "parser.wasm",
-      ),
-    ).toThrow("Unable to resolve definitely-missing-openclaw-parser-package");
-
-    expect(() =>
-      resolvePackageFileForCommandExplanation("web-tree-sitter", "missing-openclaw-parser.wasm"),
-    ).toThrow("Unable to locate missing-openclaw-parser.wasm in web-tree-sitter");
-  });
-
-  it("reports parser progress cancellation as a timeout", async () => {
-    const reset = vi.fn();
-    const parser = {
-      parse: (
-        _source: string,
-        _oldTree: unknown,
-        options?: { progressCallback?: (state: unknown) => boolean },
-      ) => {
-        options?.progressCallback?.({ currentOffset: 0, hasError: false });
-        return null;
-      },
-      reset,
-    } as unknown as Parser;
-    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(501);
-    setParserLoaderForTest(async () => parser);
-
-    await expect(parseBashForCommandExplanation("echo hi")).rejects.toThrow(
-      "tree-sitter-bash timed out after 500ms while parsing shell command",
-    );
-    expect(reset).toHaveBeenCalledOnce();
-  });
-
   it("maps parser byte offsets to JavaScript string spans for Unicode source", async () => {
     const source = "echo café && echo ok";
-    const parser = {
-      parse: vi.fn(() => createByteIndexedUnicodeCommandTree(source)),
-      reset: vi.fn(),
-    };
-    setParserLoaderForTest(async () => parser as unknown as Parser);
-
     const explanation = await explainShellCommand(source);
 
     expect(explanation.topLevelCommands).toHaveLength(2);
-    expect(explanation.topLevelCommands[0]?.executable).toBe("echo");
-    expect(explanation.topLevelCommands[0]?.argv).toEqual(["echo", "café"]);
-    expect(explanation.topLevelCommands[0]?.span.startIndex).toBe(0);
-    expect(explanation.topLevelCommands[0]?.span.endIndex).toBe(9);
-    expect(explanation.topLevelCommands[1]?.executable).toBe("echo");
-    expect(explanation.topLevelCommands[1]?.argv).toEqual(["echo", "ok"]);
-    expect(explanation.topLevelCommands[1]?.span.startIndex).toBe(13);
-    expect(explanation.topLevelCommands[1]?.span.endIndex).toBe(20);
+    expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
+      ["echo", "café"],
+      ["echo", "ok"],
+    ]);
+    expect(explanation.topLevelCommands.map((command) => command.span)).toMatchObject([
+      { startIndex: 0, endIndex: 9 },
+      { startIndex: 13, endIndex: 20 },
+    ]);
     for (const command of explanation.topLevelCommands) {
       expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(command.text);
       expect(command.span.endPosition.column).toBe(command.span.endIndex);

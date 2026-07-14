@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
@@ -40,7 +41,6 @@ const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let formatError: typeof import("./session.js").formatError;
-let logWebSelfId: typeof import("./session.js").logWebSelfId;
 let OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV: typeof import("./session.js").OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV;
 let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
@@ -226,7 +226,6 @@ describe("web session", () => {
     ({
       createWaSocket,
       formatError,
-      logWebSelfId,
       OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV,
       waitForWaConnection,
       waitForCredsSaveQueue,

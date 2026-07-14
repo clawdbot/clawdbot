@@ -724,9 +724,3 @@ export async function startMatrixQaRecordingProxy(params: {
     stop: () => proxy.stop(),
   };
 }
-
-export const testing = {
-  buildExpectation,
-  normalizeMatrixQaRoute,
-};
-export { testing as __testing };

@@ -3,14 +3,7 @@ export type {
   BlockReplyContext,
   ContinuationTrigger,
   GetReplyOptions,
-  PartialReplyPayload,
   ReplyThreadingPolicy,
   TypingPolicy,
 } from "./get-reply-options.types.js";
-export {
-  copyReplyPayloadMetadata,
-  markCommandReplyForDelivery,
-  markReplyPayloadForSourceSuppressionDelivery,
-  setReplyPayloadMetadata,
-} from "./reply-payload.js";
 export type { ReplyPayload } from "./reply-payload.js";

@@ -267,7 +267,7 @@ function recordNativeToolFailureDisposition(
 }
 
 /** Converts an OpenClaw approval outcome into the app-server method response. */
-export function buildApprovalResponse(
+function buildApprovalResponse(
   method: string,
   requestParams: JsonObject | undefined,
   outcome: AppServerApprovalOutcome,

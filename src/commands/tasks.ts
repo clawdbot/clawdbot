@@ -118,10 +118,7 @@ async function tryCancelGatewayOwnedTaskViaGateway(
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  const cfg = getRuntimeConfig();
-  configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  configureTaskRegistryMaintenance();
 }
 
 type SessionRegistryMaintenanceStoreSummary = {

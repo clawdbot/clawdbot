@@ -2619,6 +2619,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
   });
 
+  it("retains and clears a preclaimed transcript-only recovery run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      updatedAt: 1,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "continue after restart",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "recovery-run",
+    });
+
+    const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        context: params.entry?.restartRecoveryDeliveryContext,
+        runId: params.entry?.restartRecoveryDeliveryRunId,
+        sourceRunId: params.entry?.restartRecoveryDeliverySourceRunId,
+      };
+    });
+    expect(persistedClaims).toContainEqual({
+      context: undefined,
+      runId: "recovery-run",
+      sourceRunId: "control-ui-run",
+    });
+    expect(persistedClaims.at(-1)).toEqual({
+      context: undefined,
+      runId: undefined,
+      sourceRunId: undefined,
+    });
+    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionStore?: Record<string, SessionEntry>;
+        }
+      | undefined;
+    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
+    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
   it("refreshes delivery session entries through the session accessor", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));

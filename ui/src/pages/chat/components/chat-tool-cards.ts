@@ -2,18 +2,19 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
-import "../../../components/mcp-app-view.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
-  formatDistinctCollapsedToolSummaryText,
+  formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -85,7 +86,7 @@ ${text}
 \`\`\``;
 }
 
-export function buildToolCardSidebarContent(card: ToolCard): string {
+function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
@@ -228,6 +229,27 @@ function renderPreviewFrame(params: {
   );
 }
 
+const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+
+function renderMcpAppView(params: {
+  sessionKey: string;
+  viewId: string;
+  height: number;
+  title: string;
+}) {
+  // Insert the tag before its chunk arrives. Native custom-element upgrade
+  // preserves these bound fields, so the first preview initializes after registration.
+  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
+    console.error("[openclaw] failed to load MCP App view", error);
+  });
+  return html`<mcp-app-view
+    .sessionKey=${params.sessionKey}
+    .viewId=${params.viewId}
+    .height=${params.height}
+    .title=${params.title}
+  ></mcp-app-view>`;
+}
+
 export function renderToolPreview(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message" | "sidebar",
@@ -262,12 +284,12 @@ export function renderToolPreview(
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${preview.mcpApp
-          ? html`<mcp-app-view
-              .sessionKey=${options?.sessionKey ?? ""}
-              .viewId=${preview.mcpApp.viewId}
-              .height=${preview.preferredHeight ?? 600}
-              .title=${preview.title?.trim() || t("mcpApp.title")}
-            ></mcp-app-view>`
+          ? renderMcpAppView({
+              sessionKey: options?.sessionKey ?? "",
+              viewId: preview.mcpApp.viewId,
+              height: preview.preferredHeight ?? 600,
+              title: preview.title?.trim() || t("mcpApp.title"),
+            })
           : renderPreviewFrame({
               title: preview.title?.trim() || t("chat.toolCards.canvas"),
               src: resolveCanvasIframeUrl(
@@ -298,7 +320,7 @@ function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -446,7 +468,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  // Generic tools keep the resolver-driven label + detail.
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const summary = resolveCollapsedToolSummaryParts({
     card,
@@ -455,12 +476,13 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
       <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${displayLabel}</span>
+      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
     `;
   }
   return html`
@@ -540,7 +562,7 @@ function tokenizeCommand(command: string): CommandToken[] {
   return tokens;
 }
 
-export function renderHighlightedCommand(command: string) {
+function renderHighlightedCommand(command: string) {
   if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
     return html`${command}`;
   }
@@ -710,7 +732,6 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
   return resolveToolCardOutcome(card, runActive) === "running";
 }
 
-/** Plain-text row label, e.g. for the group header while a tool is running. */
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   if (view.kind === "command" && view.command) {
@@ -721,7 +742,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return display.label;
+  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
 export function renderToolCard(

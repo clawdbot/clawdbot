@@ -11,7 +11,7 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import type { PluginRuntime } from "./runtime/types.js";
 
 /** Adds Gateway timer grace for plugin CLI node invoke calls. */
-export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
+function resolvePluginCliNodeInvokeGatewayTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0

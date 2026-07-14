@@ -628,16 +628,17 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  // Flat chunkMode stays canonical for channels without a nested streaming
-  // schema (signal, irc, googlechat, whatsapp); nested-only channels are
-  // covered by the imessage rows below.
-  const providerCfg = { channels: { signal: { chunkMode: "newline" as const } } };
+  // All bundled channels are nested-only now; the flat chunkMode row below
+  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
+  const providerCfg = {
+    channels: { signal: { streaming: { chunkMode: "newline" as const } } },
+  };
   const accountCfg = {
     channels: {
       signal: {
-        chunkMode: "length" as const,
+        streaming: { chunkMode: "length" as const },
         accounts: {
-          primary: { chunkMode: "newline" as const },
+          primary: { streaming: { chunkMode: "newline" as const } },
         },
       },
     },
@@ -677,8 +678,8 @@ describe("resolveChunkMode", () => {
       accountId: undefined,
       expected: "length",
     },
-    // Mattermost's schema accepts both shapes; the nested streaming config
-    // wins over the flat key when both are present.
+    // Deprecated SDK fallback: nested config wins over a stale flat key, and
+    // a flat-only entry still resolves until the SDK deprecation window ends.
     {
       cfg: {
         channels: {
@@ -689,6 +690,12 @@ describe("resolveChunkMode", () => {
         },
       },
       provider: "mattermost",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
+      provider: "sdk-plugin",
       accountId: undefined,
       expected: "newline",
     },

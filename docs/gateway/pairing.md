@@ -89,9 +89,10 @@ Notes:
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:
   - commandless request: `operator.pairing`
-  - non-exec command request: `operator.pairing` + `operator.write`
-  - `system.run` / `system.run.prepare` / `system.which` request:
-    `operator.pairing` + `operator.admin`
+  - ordinary command request: `operator.pairing` + `operator.write`
+  - admin-sensitive request containing `system.run`, `system.run.prepare`,
+    `system.which`, `browser.proxy`, `fs.listDir`, or
+    `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.

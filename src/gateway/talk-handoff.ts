@@ -24,7 +24,7 @@ const DEFAULT_TALK_HANDOFF_TTL_MS = 10 * 60 * 1000;
 const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;
 
 /** Inputs captured when a gateway caller creates a managed Talk room. */
-export type TalkHandoffCreateParams = {
+type TalkHandoffCreateParams = {
   sessionKey: string;
   sessionId?: string;
   channel?: string;
@@ -39,7 +39,7 @@ export type TalkHandoffCreateParams = {
 };
 
 /** Private handoff state, including the hashed room token and event controller. */
-export type TalkHandoffRecord = {
+type TalkHandoffRecord = {
   id: string;
   roomId: string;
   roomUrl: string;
@@ -60,7 +60,7 @@ export type TalkHandoffRecord = {
 };
 
 /** Public handoff shape returned to clients; never includes token material. */
-export type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "room"> & {
+type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "room"> & {
   room: {
     activeClientId?: string;
     activeTurnId?: string;
@@ -68,11 +68,11 @@ export type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "roo
   };
 };
 
-export type TalkHandoffCreateResult = TalkHandoffPublicRecord & {
+type TalkHandoffCreateResult = TalkHandoffPublicRecord & {
   token: string;
 };
 
-export type TalkHandoffJoinResult =
+type TalkHandoffJoinResult =
   | {
       ok: true;
       record: TalkHandoffPublicRecord;
@@ -83,7 +83,7 @@ export type TalkHandoffJoinResult =
     }
   | { ok: false; reason: "not_found" | "expired" | "invalid_token" };
 
-export type TalkHandoffRevokeResult = {
+type TalkHandoffRevokeResult = {
   revoked: boolean;
   roomId?: string;
   activeClientId?: string;
@@ -291,13 +291,8 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
 }
 
 /** Verifies the caller token without exposing the stored token hash. */
-export function verifyTalkHandoffToken(record: TalkHandoffRecord, token: string): boolean {
+function verifyTalkHandoffToken(record: TalkHandoffRecord, token: string): boolean {
   return record.tokenHash === hashTalkHandoffToken(token);
-}
-
-/** Clears process-local handoffs between tests. */
-export function clearTalkHandoffsForTest(): void {
-  handoffs.clear();
 }
 
 function normalizeTtlMs(value: number | undefined): number {

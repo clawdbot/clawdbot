@@ -11,14 +11,14 @@ import { isRecord, toFiniteNumber, widgetProps } from "./types.ts";
 
 const DEFAULT_LIMIT = 20;
 
-export type ActivityEntryModel = {
+type ActivityEntryModel = {
   ts: number | null;
   title: string;
   detail: string | null;
   status: string | null;
 };
 
-export type ActivityModel = {
+type ActivityModel = {
   entries: ActivityEntryModel[];
   total: number;
 };
@@ -28,7 +28,7 @@ function entryTitle(entry: Record<string, unknown>): string {
   return typeof name === "string" && name.trim() ? name : "run";
 }
 
-export function mapActivity(widget: WorkspaceWidget, value: unknown): ActivityModel {
+function mapActivity(widget: WorkspaceWidget, value: unknown): ActivityModel {
   const raw = isRecord(value) && Array.isArray(value.entries) ? value.entries : [];
   const limitProp = toFiniteNumber(widgetProps(widget).limit);
   const limit = limitProp && limitProp > 0 ? Math.trunc(limitProp) : DEFAULT_LIMIT;

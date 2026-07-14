@@ -9,8 +9,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   shouldLogVerbose: () => false,
 }));
 
-const { clearSlackDefaultSendIdentitiesForTest, sendMessageSlack, setSlackDefaultSendIdentity } =
-  await import("./send.js");
+const { sendMessageSlack, setSlackDefaultSendIdentity } = await import("./send.js");
 const { slackPlugin } = await import("./channel.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
@@ -67,7 +66,7 @@ function readPostMessagePayload(
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
-    clearSlackDefaultSendIdentitiesForTest();
+    setSlackDefaultSendIdentity("default", undefined);
   });
 
   it("uses the relay-provided default identity", async () => {

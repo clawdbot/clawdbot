@@ -531,12 +531,4 @@ export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[
   );
 }
 
-export type {
-  AuthProfileType,
-  DiscoveredConfigSecretTarget,
-  ResolvedPlanTarget,
-  SecretTargetConfigFile,
-  SecretTargetExpected,
-  SecretTargetRegistryEntry,
-  SecretTargetShape,
-} from "./target-registry-types.js";
+export type { DiscoveredConfigSecretTarget, ResolvedPlanTarget } from "./target-registry-types.js";

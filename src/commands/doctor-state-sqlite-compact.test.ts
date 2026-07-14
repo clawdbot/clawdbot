@@ -11,10 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
-import {
-  type DoctorStateSqliteCompactReport,
-  runDoctorStateSqliteCompact,
-} from "./doctor-state-sqlite-compact.js";
+import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -22,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+type DoctorStateSqliteCompactReport = Awaited<ReturnType<typeof runDoctorStateSqliteCompact>>;
 type CompletedStateSqliteCompactReport = Extract<
   DoctorStateSqliteCompactReport,
   { skipped: false }
@@ -138,10 +136,10 @@ function expectOwnerOnlySqlitePermissions(sqlitePath: string): void {
 }
 
 describe("runDoctorStateSqliteCompact", () => {
-  it("reports a missing canonical database as skipped", () => {
+  it("reports a missing canonical database as skipped", async () => {
     const env = createStateEnv();
 
-    expect(runDoctorStateSqliteCompact({ env })).toEqual({
+    await expect(runDoctorStateSqliteCompact({ env })).resolves.toEqual({
       mode: "compact",
       path: resolveOpenClawStateSqlitePath(env),
       reason: "missing",
@@ -149,11 +147,11 @@ describe("runDoctorStateSqliteCompact", () => {
     });
   });
 
-  it("compacts the canonical database and reports verified before/after state", () => {
+  it("compacts the canonical database and reports verified before/after state", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
 
-    const report = runDoctorStateSqliteCompact({ env });
+    const report = await runDoctorStateSqliteCompact({ env });
 
     expectCompletedReport(report);
     expect(report.path).toBe(sqlitePath);
@@ -169,20 +167,20 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.integrityCheck).toBe("ok");
   });
 
-  it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", () => {
+  it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
 
-    runDoctorStateSqliteCompact({ env });
+    await runDoctorStateSqliteCompact({ env });
 
     expectOwnerOnlySqlitePermissions(sqlitePath);
   });
 
-  it("rejects non-global schema metadata before mutation", () => {
+  it("rejects non-global schema metadata before mutation", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, role: "agent", withBloat: true });
 
-    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/schema role agent.*global/);
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/schema role agent.*global/);
 
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
@@ -199,11 +197,11 @@ describe("runDoctorStateSqliteCompact", () => {
     ["future", OPENCLAW_STATE_SCHEMA_VERSION + 1, /uses newer schema version/],
   ] as const)(
     "rejects a %s shared-state schema before mutation",
-    (_label, schemaVersion, message) => {
+    async (_label, schemaVersion, message) => {
       const env = createStateEnv();
       const sqlitePath = seedStateDatabase({ env, schemaVersion });
 
-      expect(() => runDoctorStateSqliteCompact({ env })).toThrow(message);
+      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(message);
 
       const sqlite = requireNodeSqlite();
       const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
@@ -217,7 +215,7 @@ describe("runDoctorStateSqliteCompact", () => {
 
   it.skipIf(process.platform === "win32")(
     "refuses a symlink at the canonical database path",
-    () => {
+    async () => {
       const env = createStateEnv();
       const canonicalPath = resolveOpenClawStateSqlitePath(env);
       const externalEnv = createStateEnv();
@@ -225,18 +223,45 @@ describe("runDoctorStateSqliteCompact", () => {
       fs.mkdirSync(path.dirname(canonicalPath), { recursive: true });
       fs.symlinkSync(externalPath, canonicalPath);
 
-      expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/not a regular file/);
+      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/not a regular file/);
     },
   );
 
-  it("refuses compaction while this process owns an open shared-state handle", () => {
+  it("refuses compaction while this process owns an open shared-state handle", async () => {
     const env = createStateEnv();
     openOpenClawStateDatabase({ env });
 
-    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/already open in this process/);
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
+      /already open in this process/,
+    );
   });
 
-  it("treats a busy truncating checkpoint as failure", () => {
+  it("leaves the database untouched when exclusive state ownership is unavailable", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+
+    await expect(
+      runDoctorStateSqliteCompact(
+        { env },
+        {
+          withMaintenanceLock: async () => {
+            throw new Error("Gateway owns this OpenClaw state directory");
+          },
+        },
+      ),
+    ).rejects.toThrow(/Gateway owns/);
+
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(readPragma(database, "auto_vacuum")).toBe(0);
+      expect(readPragma(database, "freelist_count")).toBeGreaterThan(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("treats a busy truncating checkpoint as failure", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env });
     const sqlite = requireNodeSqlite();
@@ -246,7 +271,10 @@ describe("runDoctorStateSqliteCompact", () => {
       reader.exec("BEGIN; SELECT COUNT(*) FROM compact_payload;");
       writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
 
-      expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/checkpoint remained busy/);
+      // Exercise the real busy checkpoint result without waiting the production lock timeout.
+      await expect(runDoctorStateSqliteCompact({ env }, { busyTimeoutMs: 0 })).rejects.toThrow(
+        /checkpoint remained busy/,
+      );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
     } finally {
       reader.exec("ROLLBACK;");
@@ -255,7 +283,7 @@ describe("runDoctorStateSqliteCompact", () => {
     }
   });
 
-  it("rejects stale secondary indexes before mutating the database", () => {
+  it("rejects stale secondary indexes before mutating the database", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
     createUnsafeIndexDrift(sqlitePath);
@@ -274,7 +302,7 @@ describe("runDoctorStateSqliteCompact", () => {
       before.close();
     }
 
-    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
 
@@ -294,7 +322,7 @@ describe("runDoctorStateSqliteCompact", () => {
     }
   });
 
-  it("rejects foreign-key violations before mutating the database", () => {
+  it("rejects foreign-key violations before mutating the database", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
     const sqlite = requireNodeSqlite();
@@ -323,7 +351,7 @@ describe("runDoctorStateSqliteCompact", () => {
       corrupted.close();
     }
 
-    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
       /foreign_key_check failed.*compact_children row 1 references compact_parents \(foreign key 0\)/iu,
     );
 

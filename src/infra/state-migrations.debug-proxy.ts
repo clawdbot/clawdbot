@@ -10,7 +10,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
-export type LegacyDebugProxyCaptureDetection = {
+type LegacyDebugProxyCaptureDetection = {
   sourcePath: string;
   blobDir: string;
   hasLegacy: boolean;

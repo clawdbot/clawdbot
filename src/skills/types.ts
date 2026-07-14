@@ -38,7 +38,7 @@ export type SkillInvocationPolicy = {
   disableModelInvocation: boolean;
 };
 
-export type SkillCommandDispatchSpec = {
+type SkillCommandDispatchSpec = {
   kind: "tool";
   /** Name of the tool to invoke (AnyAgentTool.name). */
   toolName: string;
@@ -85,7 +85,7 @@ export type SkillsInstallPreferences = {
 
 export type ParsedSkillFrontmatter = Record<string, string>;
 
-export type SkillExposure = {
+type SkillExposure = {
   includeInRuntimeRegistry: boolean;
   includeInAvailableSkillsPrompt: boolean;
   userInvocable: boolean;

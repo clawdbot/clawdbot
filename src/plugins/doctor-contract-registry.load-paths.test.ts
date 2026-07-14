@@ -7,11 +7,11 @@ import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
-  clearPluginDoctorContractRegistryCache,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
   listPluginDoctorSessionStoreAgentIds,
 } from "./doctor-contract-registry.js";
+import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs: string[] = [];
 const repoRoot = path.resolve(import.meta.dirname, "../..");

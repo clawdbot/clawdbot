@@ -14,6 +14,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
   isOpenClawInternalSourceReplyMirrorAssistantMessage,
@@ -139,7 +140,6 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway not connected/i,
   /no active .* listener/i,
   /socket hang up/i,
-  /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
 ];
 
 /** Return true for transient gateway/transport failures that callers may retry. */
@@ -151,7 +151,10 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (message.includes("gateway timeout")) {
     return false;
   }
-  return RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  return (
+    hasRetryableConnectionErrorCode(message) ||
+    RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message))
+  );
 }
 
 function normalizePendingRunIds(runIds: Iterable<string>): string[] {

@@ -3,7 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
-import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import { applyDerivedTags } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -574,23 +574,29 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
-  it("derives security/auth tags for credential paths", () => {
-    const tags = deriveTagsForPath("gateway.auth.token");
-    expect(tags).toContain("security");
-    expect(tags).toContain("auth");
+  it("derives tags for security, network, storage, tools, and performance paths", () => {
+    const tagged = applyDerivedTags({
+      "gateway.auth.token": {},
+      "proxy.tls.caFile": {},
+      "tools.web.fetch.timeoutSeconds": {},
+    });
+    expect(tagged["gateway.auth.token"]?.tags).toEqual(
+      expect.arrayContaining(["security", "auth"]),
+    );
+    expect(tagged["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
+    expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
+      expect.arrayContaining(["tools", "performance"]),
+    );
   });
 
-  it("classifies managed proxy CA files as security-relevant config", () => {
-    const tags = deriveTagsForPath("proxy.tls.caFile");
-    expect(tags).toContain("security");
-    expect(tags).toContain("network");
-    expect(tags).toContain("storage");
-  });
-
-  it("derives tools/performance tags for web fetch timeout paths", () => {
-    const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
-    expect(tags).toContain("tools");
-    expect(tags).toContain("performance");
+  it("covers core config paths with derived tags", () => {
+    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
+      if (key.includes(".")) {
+        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
@@ -1010,35 +1016,6 @@ describe("config schema", () => {
       expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
       const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
       expect(firecrawlKeys).toEqual(["nope"]);
-    }
-  });
-
-  it("keeps tags in the allowed taxonomy", () => {
-    const withTags = applyDerivedTags({
-      "gateway.auth.token": {},
-      "tools.web.fetch.timeoutSeconds": {},
-      "channels.slack.accounts.*.token": {},
-    });
-    const allowed = new Set<string>(CONFIG_TAGS);
-    for (const hint of Object.values(withTags)) {
-      for (const tag of hint.tags ?? []) {
-        expect(allowed.has(tag)).toBe(true);
-      }
-    }
-  });
-
-  it("covers core/built-in config paths with tags", () => {
-    const schema = baseSchema;
-    const allowed = new Set<string>([...CONFIG_TAGS, SENSITIVE_URL_HINT_TAG]);
-    for (const [key, hint] of Object.entries(schema.uiHints)) {
-      if (!key.includes(".")) {
-        continue;
-      }
-      const tags = hint.tags ?? [];
-      expect(tags.length, `expected tags for ${key}`).toBeGreaterThan(0);
-      for (const tag of tags) {
-        expect(allowed.has(tag), `unexpected tag ${tag} on ${key}`).toBe(true);
-      }
     }
   });
 

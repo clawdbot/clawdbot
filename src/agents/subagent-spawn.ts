@@ -53,6 +53,7 @@ import {
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -76,14 +77,6 @@ import {
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
-import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-import { registerSubagentTraceparentHandoff } from "./subagent-traceparent-handoff.js";
-export {
-  SUBAGENT_SPAWN_ACCEPTED_NOTE,
-  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
-} from "./subagent-spawn-accepted-note.js";
-import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -121,17 +114,15 @@ import type {
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
+import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
+import { registerSubagentTraceparentHandoff } from "./subagent-traceparent-handoff.js";
 
+export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 export {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_SPAWN_MODES,
-  SUBAGENT_SPAWN_SANDBOX_MODES,
-} from "./subagent-spawn.types.js";
-export type {
-  SpawnSubagentContextMode,
-  SpawnSubagentMode,
-  SpawnSubagentSandboxMode,
-} from "./subagent-spawn.types.js";
+  SUBAGENT_SPAWN_ACCEPTED_NOTE,
+  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
+} from "./subagent-spawn-accepted-note.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
@@ -245,7 +236,7 @@ export type SpawnSubagentContext = {
   inheritedToolDenylist?: string[];
 };
 
-export type SpawnSubagentResult = {
+type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;

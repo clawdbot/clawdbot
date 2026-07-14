@@ -194,7 +194,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       });
       return {
         payloads: [{ text: "summary done" }],
@@ -216,7 +215,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       }),
     ).toBe(true);
   });
@@ -258,7 +256,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       });
       return {
         payloads: [{ text: "summary done" }],
@@ -278,7 +275,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(
       hasPhaseWithFields(phases, {
         phase: "model_call_started",
-        firstModelCallStarted: true,
       }),
     ).toBe(false);
 
@@ -302,7 +298,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(
       hasPhaseWithFields(phases, {
         phase: "model_call_started",
-        firstModelCallStarted: true,
       }),
     ).toBe(true);
   });

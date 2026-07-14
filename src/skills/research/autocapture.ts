@@ -45,7 +45,12 @@ type SkillResearchAgentContext = {
 
 const log = createSubsystemLogger("skills/research");
 const AUTO_CAPTURE_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
-const AUTO_CAPTURE_BLOCKED_SESSION_SEGMENTS = new Set(["cron", "hook", "subagent"]);
+const AUTO_CAPTURE_BLOCKED_SESSION_SEGMENTS = new Set([
+  "cron",
+  "hook",
+  "subagent",
+  "skill-workshop-review",
+]);
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "tool_use", "function_call"]);
 const SKILL_WORKSHOP_MUTATING_ACTIONS = new Set(["create", "update", "revise"]);
 const skillCaptureQueue = new KeyedAsyncQueue();

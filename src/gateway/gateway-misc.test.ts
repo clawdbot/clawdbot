@@ -13,7 +13,6 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
@@ -81,7 +80,6 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
-    resetActiveManagedProxyStateForTests();
     delete process.env["NO_PROXY"];
     delete process.env["no_proxy"];
     delete process.env["HTTP_PROXY"];

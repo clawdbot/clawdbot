@@ -156,7 +156,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
             defaultMode: "notify", // notify | conversation
           },
 
-          streaming: { enabled: true /* see Streaming transcription */ },
+          streaming: { enabled: true /* Twilio only; see Streaming transcription */ },
           realtime: { enabled: false /* see Realtime voice conversations */ },
         },
       },
@@ -399,7 +399,10 @@ options.
 
 ## Streaming transcription
 
-`streaming` selects a realtime transcription provider for live call audio.
+`streaming` connects Twilio Media Streams to a realtime transcription provider.
+The classic streaming path requires `provider: "twilio"`; configuration with
+Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
+authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 

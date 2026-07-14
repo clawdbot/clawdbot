@@ -16,15 +16,6 @@ export {
   patchSessionEntryWithKey,
   resetSessionEntryLifecycle,
   resolveSessionEntryCandidateTarget,
-  type CanonicalizeSessionEntryAliasesResult,
-  type DeleteSessionEntryLifecycleParams,
-  type DeleteSessionEntryLifecycleResult,
-  type ResolvedSessionEntryCandidateTarget,
-  type ResetSessionEntryLifecycleParams,
-  type ResetSessionEntryLifecycleResult,
-  type SessionEntryCandidateAccessScope,
-  type SessionLifecycleArchivedTranscript,
-  type SessionLifecycleStoreTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";

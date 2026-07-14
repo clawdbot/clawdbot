@@ -3,7 +3,7 @@
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 
-export type OpenAiCompatError = {
+type OpenAiCompatError = {
   status: number;
   error: {
     message: string;

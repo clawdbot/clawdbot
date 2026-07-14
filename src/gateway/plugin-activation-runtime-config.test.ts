@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
+import { resolveGatewayReloadPluginActivationCandidate } from "./plugin-activation-runtime-config.js";
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: vi.fn(),
@@ -58,5 +59,37 @@ describe("resolveGatewayStartupPluginActivationConfig", () => {
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry, discovery }),
     );
+  });
+});
+
+describe("resolveGatewayReloadPluginActivationCandidate", () => {
+  it("retains implicit provider and channel activation on a logging-only reload", () => {
+    const sourceConfig = { logging: { level: "debug" as const } };
+    const autoEnabledConfig = {
+      ...sourceConfig,
+      channels: { telegram: { enabled: true } },
+      plugins: {
+        allow: ["openai-codex", "telegram"],
+        entries: {
+          "openai-codex": { enabled: true },
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+
+    const result = resolveGatewayReloadPluginActivationCandidate({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      env: {},
+    });
+
+    expect(result.compareConfig).toBe(autoEnabledConfig);
+    expect(result.runtimeConfig.plugins).toEqual(autoEnabledConfig.plugins);
+    expect(result.runtimeConfig.channels?.telegram?.enabled).toBe(true);
   });
 });

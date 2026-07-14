@@ -39,6 +39,10 @@ function configItem(): MigrationItem {
   };
 }
 
+function fakeSecret(label: string): string {
+  return ["sk", label, "secret", "12345678"].join("-");
+}
+
 function plan(items: MigrationItem[]): MigrationPlan {
   return {
     providerId: "codex",
@@ -117,6 +121,25 @@ describe("formatMigrationPreview", () => {
       "⚠️  Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
     );
   });
+
+  it("redacts secrets from item text and warnings", () => {
+    const secret = fakeSecret("preview");
+    const output = formatMigrationPreview({
+      ...plan([
+        {
+          ...pluginItem("google-calendar"),
+          status: "error",
+          reason: `Provider rejected ${secret}`,
+        },
+      ]),
+      warnings: [`Retry with Bearer ${secret}`],
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).not.toContain(secret);
+    expect(output).toContain("[redacted]");
+  });
 });
 
 describe("formatMigrationResult", () => {
@@ -185,5 +208,24 @@ describe("formatMigrationResult", () => {
       .join("\n");
 
     expect(output).toContain("(Skipped)");
+  });
+
+  it("redacts secrets from item text and next steps", () => {
+    const secret = fakeSecret("result");
+    const output = formatMigrationResult({
+      ...plan([
+        {
+          ...pluginItem("google-calendar"),
+          status: "warning",
+          message: `Provider returned Bearer ${secret}`,
+        },
+      ]),
+      nextSteps: [`Save ${secret} for retry`],
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).not.toContain(secret);
+    expect(output).toContain("[redacted]");
   });
 });

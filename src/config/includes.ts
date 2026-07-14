@@ -16,17 +16,17 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
-export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
-export const MAX_INCLUDE_PATH_LENGTH = 4096;
+const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 export function hashConfigIncludeRaw(raw: string | null): string {
   const hash = crypto.createHash("sha256");
@@ -136,21 +136,8 @@ export class CircularIncludeError extends ConfigIncludeError {
 // ============================================================================
 
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
-export function deepMerge(target: unknown, source: unknown): unknown {
-  if (Array.isArray(target) && Array.isArray(source)) {
-    return [...target, ...source];
-  }
-  if (isPlainObject(target) && isPlainObject(source)) {
-    const result: Record<string, unknown> = { ...target };
-    for (const key of Object.keys(source)) {
-      if (isBlockedObjectKey(key)) {
-        continue;
-      }
-      result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
-    }
-    return result;
-  }
-  return source;
+function deepMerge(target: unknown, source: unknown): unknown {
+  return mergeDeepValues(target, source, { arrays: "concat", undefinedValues: "replace" });
 }
 
 // ============================================================================

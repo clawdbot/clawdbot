@@ -291,9 +291,7 @@ export function isRawAssistantProgressNotification(notification: CodexServerNoti
 }
 
 /** Returns true for raw assistant completion outside commentary phase. */
-export function isRawAssistantCompletionNotification(
-  notification: CodexServerNotification,
-): boolean {
+function isRawAssistantCompletionNotification(notification: CodexServerNotification): boolean {
   if (!isRawAssistantProgressNotification(notification) || !isJsonObject(notification.params)) {
     return false;
   }

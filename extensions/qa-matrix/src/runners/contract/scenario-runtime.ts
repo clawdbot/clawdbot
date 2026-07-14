@@ -105,22 +105,13 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  readMatrixQaSyncCursor,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
-  writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-export {
-  buildMatrixReplyArtifact,
-  buildMatrixReplyDetails,
-  buildMentionPrompt,
-  readMatrixQaSyncCursor,
-  runMatrixQaCanary,
-  writeMatrixQaSyncCursor,
-};
+export { buildMatrixReplyArtifact, buildMatrixReplyDetails, buildMentionPrompt, runMatrixQaCanary };
 export type { MatrixQaScenarioContext };
 
 async function runDriverTopologyScopedScenario(params: {

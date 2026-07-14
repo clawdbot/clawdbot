@@ -28,13 +28,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
-export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
-export {
-  normalizeExecAsk,
-  normalizeExecHost,
-  normalizeExecSecurity,
-  normalizeExecTarget,
-} from "../infra/exec-approvals.js";
+export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -80,7 +74,7 @@ function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | u
  * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
  * or null if no toggle is found.
  */
-export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+function detectCursorKeyMode(raw: string): "application" | "normal" | null {
   const lastSmkx = raw.lastIndexOf(SMKX);
   const lastRmkx = raw.lastIndexOf(RMKX);
   if (lastSmkx === -1 && lastRmkx === -1) {
@@ -118,7 +112,7 @@ const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 /** Failure categories used to explain exec process exits. */
-export type ExecProcessFailureKind =
+type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
   | "overall-timeout"
@@ -420,8 +414,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
   return Math.floor(value);
 }
 
-export { renderExecUpdateText } from "./bash-tools.exec-output.js";
-
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
@@ -448,7 +440,7 @@ function classifyExecFailureKind(params: {
 }
 
 /** Formats a user-facing reason for a failed exec process exit. */
-export function formatExecFailureReason(params: {
+function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
@@ -473,7 +465,7 @@ export function formatExecFailureReason(params: {
 }
 
 /** Converts a supervisor exit record into a normalized exec process outcome. */
-export function buildExecExitOutcome(params: {
+function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
   durationMs: number;

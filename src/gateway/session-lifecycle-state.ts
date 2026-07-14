@@ -131,7 +131,7 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-export function deriveGatewaySessionLifecycleSnapshot(params: {
+function deriveGatewaySessionLifecycleSnapshot(params: {
   session?: Partial<LifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
@@ -173,7 +173,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   };
 }
 
-export function derivePersistedSessionLifecyclePatch(params: {
+function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {

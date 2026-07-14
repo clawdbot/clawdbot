@@ -160,7 +160,7 @@ extension OpenClawChatViewModel {
         }
         // Capture the effective value only after model selection settles. Raw
         // preferences can outlive this process, when model metadata is absent.
-        await self.waitForPendingModelPatches(
+        await self.waitForPendingSessionSettings(
             in: session.key,
             canonicalSessionKey: deliverySessionKey,
             agentID: agentID,
@@ -556,9 +556,9 @@ extension OpenClawChatViewModel {
                 continue
             }
             // Same ordering contract as the live send path: a run must not
-            // start on a stale model while a sessions.patch(model) for its
-            // session is still in flight.
-            await self.waitForPendingModelPatches(
+            // start with stale model or thinking state while a settings patch
+            // for its session is still in flight.
+            await self.waitForPendingSessionSettings(
                 in: next.sessionKey,
                 canonicalSessionKey: next.deliverySessionKey,
                 agentID: next.agentID,
@@ -876,7 +876,7 @@ extension OpenClawChatViewModel {
         guard let agentID else { return nil }
         let normalized = raw.lowercased()
         if normalized == "global" { return "global" }
-        if Self.agentID(fromSessionKey: raw) != nil { return raw }
+        if OpenClawChatSessionKey.agentID(from: raw) != nil { return raw }
         // A malformed ownership prefix must fail closed, not become a nested
         // key such as agent:<id>:agent::main.
         guard !normalized.hasPrefix("agent:") else { return nil }

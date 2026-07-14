@@ -18,13 +18,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-export {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
-  shouldRefreshSnapshotForVersion,
-  type SkillsChangeEvent,
-} from "./refresh-state.js";
+export { bumpSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
   watcher: FSWatcher;

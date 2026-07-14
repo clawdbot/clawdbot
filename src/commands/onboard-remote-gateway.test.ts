@@ -5,11 +5,12 @@ import type { CallGatewayCliOptions } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
-import {
-  runRemoteGatewayInferenceOnboarding,
-  type RemoteGatewayInferenceOnboardingDeps,
-  type RemoteGatewayInferenceTarget,
-} from "./onboard-remote-gateway.js";
+import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
+
+type RemoteGatewayInferenceTarget = Parameters<typeof runRemoteGatewayInferenceOnboarding>[0];
+type RemoteGatewayInferenceOnboardingDeps = NonNullable<
+  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
+>;
 
 type GatewayCall = NonNullable<RemoteGatewayInferenceOnboardingDeps["callGateway"]>;
 type RunGuidedOnboarding = NonNullable<RemoteGatewayInferenceOnboardingDeps["runGuidedOnboarding"]>;

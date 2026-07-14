@@ -253,6 +253,108 @@ export function normalizeLegacyStreamingAliases(
   return { entry: updated, changed };
 }
 
+/**
+ * Root flat delivery aliases resolved per-key for every account (nested-first,
+ * flat-fallback), even when the account carried its own `streaming` value that
+ * replaces the root object wholesale at merge time. Capture them before root
+ * migration so replace-semantics channels can seed existing account streaming
+ * objects with the delivery settings those accounts previously inherited.
+ */
+function buildRootFlatDeliverySeed(
+  entry: Record<string, unknown>,
+  includePreviewChunk: boolean | undefined,
+): Record<string, unknown> | null {
+  const seed: Record<string, unknown> = {};
+  if (entry.chunkMode !== undefined) {
+    seed.chunkMode = entry.chunkMode;
+  }
+  const block: Record<string, unknown> = {};
+  if (entry.blockStreaming !== undefined) {
+    block.enabled = entry.blockStreaming;
+  }
+  if (entry.blockStreamingCoalesce !== undefined) {
+    block.coalesce = entry.blockStreamingCoalesce;
+  }
+  if (Object.keys(block).length > 0) {
+    seed.block = block;
+  }
+  if (includePreviewChunk === true && entry.draftChunk !== undefined) {
+    seed.preview = { chunk: entry.draftChunk };
+  }
+  return Object.keys(seed).length > 0 ? seed : null;
+}
+
+/**
+ * Rebuilds a materialized account streaming object with the per-slot
+ * precedence the runtime resolvers applied pre-migration. The slots disagree:
+ * - mode, block.enabled, preview.chunk resolve on the MERGED entry
+ *   (src/channels/streaming.ts nested-first), so the root nested object
+ *   outranked account flat aliases and preview.chunk picks atomically.
+ * - chunkMode resolves the raw account entry before the root entry
+ *   (resolveChunkModeForProvider in src/auto-reply/chunk.ts), so an account
+ *   flat chunkMode outranked every root spelling.
+ * - block.coalesce merges the account pick over the root pick per field
+ *   (resolveProviderBlockStreamingCoalesce in
+ *   src/auto-reply/reply/block-streaming.ts).
+ * One generic deep-fill cannot express that ladder, so seed slot by slot.
+ * Copying root values freezes inheritance at fix time by design (the change
+ * message records it); merged-entry channels (mattermost-style resolved
+ * accounts) would otherwise lose the root values entirely once the account
+ * owns a streaming object.
+ */
+function seedMaterializedAccountStreaming(params: {
+  created: Record<string, unknown>;
+  rootNestedBefore: Record<string, unknown> | null;
+  rootFlat: Record<string, unknown> | null;
+  rootAfter: Record<string, unknown>;
+}): Record<string, unknown> {
+  const { created } = params;
+  const rootNested = params.rootNestedBefore ?? {};
+  const rootFlat = params.rootFlat ?? {};
+  // Root-first base for the merged-entry slots plus inherited root extras
+  // (progress, preview.toolProgress, ...). Account values fill the gaps.
+  let seeded = fillMissingRecordFields(structuredClone(rootNested), created).value;
+  seeded = fillMissingRecordFields(seeded, rootFlat).value;
+  // Root migration can add fields the pre-migration snapshot lacked (mode
+  // restored from root streamMode/scalar aliases); the account previously
+  // inherited the root object wholesale, so it inherits the restored intent.
+  seeded = fillMissingRecordFields(seeded, params.rootAfter).value;
+  // chunkMode: account-entry-first resolver, so the account alias wins.
+  if (created.chunkMode !== undefined) {
+    seeded = { ...seeded, chunkMode: created.chunkMode };
+  }
+  // block.coalesce: account fields merge over the root pick per field.
+  const createdCoalesce = asObjectRecord(asObjectRecord(created.block)?.coalesce);
+  if (createdCoalesce) {
+    const rootCoalesce =
+      asObjectRecord(asObjectRecord(rootNested.block)?.coalesce) ??
+      asObjectRecord(asObjectRecord(rootFlat.block)?.coalesce);
+    seeded = {
+      ...seeded,
+      block: {
+        ...asObjectRecord(seeded.block),
+        coalesce: { ...structuredClone(rootCoalesce ?? {}), ...structuredClone(createdCoalesce) },
+      },
+    };
+  }
+  // preview.chunk: merged-entry resolver picks the whole object atomically, so
+  // never blend a root nested chunk with an account draftChunk-derived one.
+  const rootNestedPreviewChunk = asObjectRecord(rootNested.preview)?.chunk;
+  if (
+    rootNestedPreviewChunk !== undefined &&
+    asObjectRecord(created.preview)?.chunk !== undefined
+  ) {
+    seeded = {
+      ...seeded,
+      preview: {
+        ...asObjectRecord(seeded.preview),
+        chunk: structuredClone(rootNestedPreviewChunk),
+      },
+    };
+  }
+  return seeded;
+}
+
 /** Deep-fills record fields missing from target with copies of source values. */
 function fillMissingRecordFields(
   target: Record<string, unknown>,
@@ -311,6 +413,19 @@ export function normalizeLegacyChannelAliases(params: {
 }): CompatMutationResult {
   let updated = params.entry;
   let changed = false;
+
+  // Captured before root migration deletes the flat keys / rewrites the
+  // nested object, because seeding must reproduce the per-slot precedence the
+  // resolvers applied pre-migration: root.nested > account.flat > root.flat.
+  const rootFlatDeliverySeed =
+    params.seedAccountStreamingFromRoot === true
+      ? buildRootFlatDeliverySeed(
+          params.entry,
+          params.resolveStreamingOptions(params.entry).includePreviewChunk,
+        )
+      : null;
+  const rootNestedStreamingBefore =
+    params.seedAccountStreamingFromRoot === true ? asObjectRecord(params.entry.streaming) : null;
 
   if (params.normalizeDm === true) {
     const dm = normalizeLegacyDmAliases({
@@ -388,12 +503,87 @@ export function normalizeLegacyChannelAliases(params: {
       rootStreaming
     ) {
       const created = asObjectRecord(accountEntry.streaming);
-      const seeded = created ? fillMissingRecordFields(created, rootStreaming) : null;
-      if (seeded?.filled) {
-        accountEntry = { ...accountEntry, streaming: seeded.value };
-        params.changes.push(
-          `Copied ${params.pathPrefix}.streaming into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
-        );
+      if (created) {
+        const seeded = seedMaterializedAccountStreaming({
+          created,
+          rootNestedBefore: rootNestedStreamingBefore,
+          rootFlat: rootFlatDeliverySeed,
+          rootAfter: rootStreaming,
+        });
+        if (JSON.stringify(seeded) !== JSON.stringify(created)) {
+          accountEntry = { ...accountEntry, streaming: seeded };
+          params.changes.push(
+            `Copied ${params.pathPrefix}.streaming into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
+          );
+        }
+      }
+    } else if (rootFlatDeliverySeed && beforeAccountStreaming !== undefined) {
+      // The account already had a streaming value, so merged-entry channels
+      // (mattermost-style resolved accounts) replace the root object wholesale
+      // and would lose the root FLAT keys they previously read through the
+      // merged flat fallback. Fill only slots the account does not set itself
+      // (per-field for coalesce, atomically for preview.chunk); copying the
+      // current value freezes inheritance at fix time by design — the change
+      // message records it — while raw-entry channels (matrix, feishu) keep
+      // resolving the same values from the migrated root entry either way.
+      const accountStreamingObject = asObjectRecord(accountEntry.streaming);
+      if (accountStreamingObject) {
+        let seededAccount = accountStreamingObject;
+        if (rootFlatDeliverySeed.chunkMode !== undefined && seededAccount.chunkMode === undefined) {
+          seededAccount = { ...seededAccount, chunkMode: rootFlatDeliverySeed.chunkMode };
+        }
+        const rootFlatBlock = asObjectRecord(rootFlatDeliverySeed.block);
+        const rootFlatBlockEnabled = rootFlatBlock?.enabled;
+        if (
+          rootFlatBlockEnabled !== undefined &&
+          asObjectRecord(seededAccount.block)?.enabled === undefined
+        ) {
+          seededAccount = {
+            ...seededAccount,
+            block: {
+              ...asObjectRecord(seededAccount.block),
+              enabled: rootFlatBlockEnabled,
+            },
+          };
+        }
+        const rootFlatCoalesce = asObjectRecord(rootFlatBlock?.coalesce);
+        if (rootFlatCoalesce) {
+          const accountCoalesce = asObjectRecord(asObjectRecord(seededAccount.block)?.coalesce);
+          const mergedCoalesce = {
+            ...structuredClone(rootFlatCoalesce),
+            ...structuredClone(accountCoalesce ?? {}),
+          };
+          if (JSON.stringify(mergedCoalesce) !== JSON.stringify(accountCoalesce ?? {})) {
+            seededAccount = {
+              ...seededAccount,
+              block: {
+                ...asObjectRecord(seededAccount.block),
+                coalesce: mergedCoalesce,
+              },
+            };
+          }
+        }
+        const rootFlatPreviewChunk = asObjectRecord(rootFlatDeliverySeed.preview)?.chunk;
+        // Atomic slot: only copy the whole chunk object when the account has none.
+        if (
+          rootFlatPreviewChunk !== undefined &&
+          asObjectRecord(seededAccount.preview)?.chunk === undefined
+        ) {
+          seededAccount = {
+            ...seededAccount,
+            preview: {
+              ...asObjectRecord(seededAccount.preview),
+              chunk: structuredClone(rootFlatPreviewChunk),
+            },
+          };
+        }
+        if (seededAccount !== accountStreamingObject) {
+          accountEntry = { ...accountEntry, streaming: seededAccount };
+          accountChanged = true;
+          params.changes.push(
+            `Copied flat ${params.pathPrefix} delivery keys into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
+          );
+        }
       }
     }
 

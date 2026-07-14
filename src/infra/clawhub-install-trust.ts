@@ -33,7 +33,7 @@ export type ClawHubRiskAcknowledgementRequest = {
   warning: string;
 };
 
-export type ClawHubTrustInstallRecordFields = {
+type ClawHubTrustInstallRecordFields = {
   clawhubTrustDisposition: "clean" | "review-recommended" | "review-required" | "blocked";
   clawhubTrustScanStatus?: string;
   clawhubTrustModerationState?: string;
@@ -44,13 +44,13 @@ export type ClawHubTrustInstallRecordFields = {
   clawhubTrustAcknowledgedAt?: string;
 };
 
-export type ClawHubTrustAcceptedResult = {
+type ClawHubTrustAcceptedResult = {
   ok: true;
   trustInstallRecordFields: ClawHubTrustInstallRecordFields;
   warning?: string;
 };
 
-export type ClawHubTrustFailure = {
+type ClawHubTrustFailure = {
   ok: false;
   error: string;
   code?: ClawHubTrustErrorCode;

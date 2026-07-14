@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines metadata-only audit query payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 export const AuditEventKindSchema = Type.Union([
@@ -38,58 +39,46 @@ export const AuditEventErrorCodeSchema = Type.Union([
 ]);
 
 /** One content-free run/tool audit record. */
-export const AuditEventSchema = Type.Object(
-  {
-    eventId: NonEmptyString,
-    sequence: Type.Integer({ minimum: 1 }),
-    sourceSequence: Type.Integer({ minimum: 1 }),
-    occurredAt: Type.Integer({ minimum: 0 }),
-    kind: AuditEventKindSchema,
-    action: AuditEventActionSchema,
-    status: AuditEventStatusSchema,
-    errorCode: Type.Optional(AuditEventErrorCodeSchema),
-    actor: Type.Object(
-      {
-        type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
-        id: NonEmptyString,
-      },
-      { additionalProperties: false },
-    ),
-    agentId: NonEmptyString,
-    sessionKey: Type.Optional(NonEmptyString),
-    sessionId: Type.Optional(NonEmptyString),
-    runId: NonEmptyString,
-    toolCallId: Type.Optional(NonEmptyString),
-    toolName: Type.Optional(NonEmptyString),
-    redaction: Type.Literal("metadata_only"),
-  },
-  { additionalProperties: false },
-);
+export const AuditEventSchema = closedObject({
+  eventId: NonEmptyString,
+  sequence: Type.Integer({ minimum: 1 }),
+  sourceSequence: Type.Integer({ minimum: 1 }),
+  occurredAt: Type.Integer({ minimum: 0 }),
+  kind: AuditEventKindSchema,
+  action: AuditEventActionSchema,
+  status: AuditEventStatusSchema,
+  errorCode: Type.Optional(AuditEventErrorCodeSchema),
+  actor: closedObject({
+    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+    id: NonEmptyString,
+  }),
+  agentId: NonEmptyString,
+  sessionKey: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
+  runId: NonEmptyString,
+  toolCallId: Type.Optional(NonEmptyString),
+  toolName: Type.Optional(NonEmptyString),
+  redaction: Type.Literal("metadata_only"),
+});
 
 /** Bounded newest-first audit query filters. */
-export const AuditListParamsSchema = Type.Object(
-  {
-    agentId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    kind: Type.Optional(AuditEventKindSchema),
-    status: Type.Optional(AuditEventStatusSchema),
-    after: Type.Optional(Type.Integer({ minimum: 0 })),
-    before: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    cursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditListParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  kind: Type.Optional(AuditEventKindSchema),
+  status: Type.Optional(AuditEventStatusSchema),
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  before: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  cursor: Type.Optional(NonEmptyString),
+});
 
 /** Stable sequence-cursor page suitable for bounded JSON export. */
-export const AuditListResultSchema = Type.Object(
-  {
-    events: Type.Array(AuditEventSchema),
-    nextCursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditListResultSchema = closedObject({
+  events: Type.Array(AuditEventSchema),
+  nextCursor: Type.Optional(NonEmptyString),
+});
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.

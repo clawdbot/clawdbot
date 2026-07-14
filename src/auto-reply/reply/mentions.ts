@@ -16,7 +16,7 @@ import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../securi
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
-export type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
+export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];

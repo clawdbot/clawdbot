@@ -7,11 +7,12 @@ import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
-  type BundledPluginMetadata,
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
   resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
+
+type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
 import { resolveGatewayStartupPluginIdsFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,

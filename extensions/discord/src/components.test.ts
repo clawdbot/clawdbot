@@ -115,6 +115,32 @@ describe("discord components", () => {
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
+  it.each([
+    { label: "minimum", accentColor: 0, expected: 0 },
+    { label: "maximum", accentColor: 0xffffff, expected: 0xffffff },
+    { label: "negative", accentColor: -1, expected: undefined },
+    { label: "fractional", accentColor: 1.5, expected: undefined },
+    { label: "above maximum", accentColor: 0x1000000, expected: undefined },
+  ])("serializes $label numeric container accent colors safely", ({ accentColor, expected }) => {
+    const spec = readDiscordComponentSpec({
+      text: "Status",
+      container: { accentColor },
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const serialized = buildDiscordComponentMessage({ spec }).components[0]?.serialize() as
+      | { accent_color?: unknown }
+      | undefined;
+
+    if (expected === undefined) {
+      expect(serialized).not.toHaveProperty("accent_color");
+    } else {
+      expect(serialized?.accent_color).toBe(expected);
+    }
+  });
+
   it("serializes disabled link buttons", () => {
     const spec = readDiscordComponentSpec({
       blocks: [

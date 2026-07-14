@@ -38,6 +38,7 @@ type RunExtraParamsCaseParams<
   options?: SimpleStreamOptions;
   payload: TPayload;
   thinkingLevel?: ProviderThinkLevel;
+  workspaceDir?: string;
 };
 
 export function runExtraParamsCase<
@@ -73,6 +74,8 @@ export function runExtraParamsCase<
       params.applyModelId ?? params.model.id,
       undefined,
       params.thinkingLevel,
+      undefined,
+      params.workspaceDir,
     );
   } finally {
     if (params.mockProviderRuntime === true) {

@@ -83,19 +83,15 @@ import {
 } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
-  type ChatInputHistoryKeyInput,
-  type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
+  hasAbortableSessionRun,
   isChatBusy,
   isChatStopCommand,
   reconcileChatRunLifecycle,
@@ -240,12 +236,6 @@ function normalizeAckTimingValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export type {
-  ChatSendAck,
-  ChatSendAckServerTiming,
-  ChatSendAckStatus,
-} from "./chat-send-contract.ts";
-
 function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -281,7 +271,7 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   };
 }
 
-export async function requestChatSend(
+async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
@@ -341,7 +331,7 @@ function resolveChatSendRouting(
   };
 }
 
-export async function requestSkillWorkshopRevisionChatSend(
+async function requestSkillWorkshopRevisionChatSend(
   state: ChatState,
   params: {
     proposalId: string;
@@ -412,7 +402,7 @@ async function sendChatMessageWithGeneratedRunId(
   }
 }
 
-export async function sendDetachedChatMessage(
+async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
@@ -420,22 +410,6 @@ export async function sendDetachedChatMessage(
 ): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments, () => true, runId);
 }
-
-export async function sendSteerChatMessage(
-  state: ChatState,
-  message: string,
-  attachments?: ChatAttachment[],
-): Promise<ChatSendAck | null> {
-  return sendChatMessageWithGeneratedRunId(state, message, attachments);
-}
-
-export {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
-  resetChatInputHistoryNavigation,
-};
-export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 function isChatResetCommand(text: string) {
   const parsed = parseSlashCommand(text);
@@ -2167,7 +2141,12 @@ export async function handleSendChat(
   }
 
   if (shouldInterpretChatCommands) {
-    if (isChatStopCommand(message)) {
+    // Natural words such as "wait" and "exit" are stop aliases only while a
+    // run exists. Keep the explicit /stop command available at any time.
+    const shouldAbort =
+      isChatStopCommand(message) &&
+      (message.trim().startsWith("/") || hasAbortableSessionRun(host));
+    if (shouldAbort) {
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }

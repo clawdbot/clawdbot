@@ -6,7 +6,8 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import type { Result } from "@openclaw/normalization-core/result";
+import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
@@ -27,12 +28,7 @@ type PendingBridgeRequest = {
   args: unknown[];
 };
 
-type SettledBridgeRequest = {
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
@@ -435,7 +431,6 @@ async function createVm(params: {
   const vm = await QuickJS.create({
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
-    intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
       timedOut = deadlineReached();
@@ -489,7 +484,6 @@ async function restoreVm(params: {
   const vm = await QuickJS.restore(snapshot, {
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
-    intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
       timedOut = deadlineReached();
@@ -565,19 +559,6 @@ function throwWorkerFailureWithOutput(params: {
   throw params.error;
 }
 
-function drainPendingJobs(vm: QuickJS): void {
-  for (let index = 0; index < 1000; index += 1) {
-    if (vm.executePendingJobs() === 0) {
-      return;
-    }
-  }
-  throw new Error("code mode pending job limit exceeded");
-}
-
-function getResultHandle(vm: QuickJS): JSValueHandle {
-  return vm.global.getProp("__openclawResult");
-}
-
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
     return toJsonSafe(vm.dump(resultHandle));
@@ -633,9 +614,9 @@ async function runVmExecution(params: {
   let output: unknown[] = [];
   try {
     params.prepare();
-    drainPendingJobs(params.vm);
+    params.vm.executePendingJobs();
     output = takeOutput(params.vm);
-    const resultHandle = getResultHandle(params.vm);
+    const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       if (params.pendingRequests.length > 0) {
         // Pending host work suspends the VM instead of blocking in-worker; the

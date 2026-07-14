@@ -375,31 +375,6 @@ export interface CronJobs {
   wake_mode: string;
 }
 
-export interface CronRunLogs {
-  created_at: number;
-  delivered: number | null;
-  delivery_error: string | null;
-  delivery_status: string | null;
-  diagnostics_summary: string | null;
-  duration_ms: number | null;
-  entry_json: string;
-  error: string | null;
-  job_id: string;
-  model: string | null;
-  next_run_at_ms: number | null;
-  provider: string | null;
-  run_at_ms: number | null;
-  run_id: string | null;
-  seq: number;
-  session_id: string | null;
-  session_key: string | null;
-  status: string | null;
-  store_key: string;
-  summary: string | null;
-  total_tokens: number | null;
-  ts: number;
-}
-
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -1005,6 +980,7 @@ export interface TaskRuns {
   cleanup_after: number | null;
   created_at: number;
   delivery_status: string;
+  detail_json: string | null;
   ended_at: number | null;
   error: string | null;
   label: string | null;
@@ -1137,6 +1113,43 @@ export interface WorkerEnvironments {
   updated_at_ms: number;
 }
 
+export interface WorkerInferenceTurns {
+  created_at_ms: number;
+  environment_id: string;
+  request_hash: string;
+  run_epoch: number;
+  run_id: string;
+  session_id: string;
+  state: string;
+  terminal_json: string | null;
+  turn_id: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerSessionPlacements {
+  active_owner_epoch: number | null;
+  agent_id: string;
+  created_at_ms: number;
+  environment_id: string | null;
+  last_live_event_ack_cursor: number | null;
+  last_transcript_ack_cursor: number | null;
+  recovery_error: string | null;
+  remote_workspace_dir: string | null;
+  session_id: string;
+  session_key: string;
+  state: string;
+  state_changed_at_ms: number;
+  transition_generation: Generated<number>;
+  turn_claim_generation: number | null;
+  turn_claim_id: string | null;
+  turn_claim_owner: string | null;
+  turn_claim_owner_epoch: number | null;
+  turn_claim_run_id: string | null;
+  updated_at_ms: number;
+  worker_bundle_hash: string | null;
+  workspace_base_manifest_ref: string | null;
+}
+
 export interface WorkerTranscriptCommitHeads {
   environment_id: string;
   next_seq: number;
@@ -1205,7 +1218,6 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
-  cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1259,6 +1271,8 @@ export interface DB {
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
+  worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
   workspace_setup_state: WorkspaceSetupState;

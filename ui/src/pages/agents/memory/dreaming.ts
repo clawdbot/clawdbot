@@ -1,5 +1,7 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
@@ -362,13 +364,6 @@ function buildDreamDiaryActionSuccessMessage(
       return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
   }
   return "Dream diary action complete.";
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -1151,27 +1146,18 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
   if (!path) {
     return false;
   }
-  if (!globalThis.navigator?.clipboard?.writeText) {
-    state.dreamDiaryActionMessage = {
-      kind: "error",
-      text: "Could not copy archive path.",
-    };
-    return false;
-  }
-  try {
-    await globalThis.navigator.clipboard.writeText(path);
+  if (await copyToClipboard(path)) {
     state.dreamDiaryActionMessage = {
       kind: "success",
       text: "Archive path copied.",
     };
     return true;
-  } catch {
-    state.dreamDiaryActionMessage = {
-      kind: "error",
-      text: "Could not copy archive path.",
-    };
-    return false;
   }
+  state.dreamDiaryActionMessage = {
+    kind: "error",
+    text: "Could not copy archive path.",
+  };
+  return false;
 }
 
 export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {

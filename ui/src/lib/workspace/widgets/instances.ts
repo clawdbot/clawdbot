@@ -14,14 +14,14 @@ const DEFAULT_LIMIT = 8;
 // A presence row idle beyond this window renders as degraded rather than live.
 const HEALTHY_IDLE_SECONDS = 120;
 
-export type InstanceModel = {
+type InstanceModel = {
   id: string;
   detail: string | null;
   healthy: boolean;
   lastInputMs: number | null;
 };
 
-export type InstancesModel = {
+type InstancesModel = {
   instances: InstanceModel[];
   total: number;
 };
@@ -38,7 +38,7 @@ function instanceDetail(entry: Record<string, unknown>): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-export function mapInstances(widget: WorkspaceWidget, value: unknown): InstancesModel {
+function mapInstances(widget: WorkspaceWidget, value: unknown): InstancesModel {
   const raw = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.presence)

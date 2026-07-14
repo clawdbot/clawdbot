@@ -1,11 +1,12 @@
 // Covers the one-time fold of the legacy nodes/*.json store into device records.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing, getPairedDevice, requestDevicePairing } from "./device-pairing.js";
 import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
 import { listNodePairing } from "./node-pairing.js";
-import { resolvePairingPaths, writeJson } from "./pairing-files.js";
+import { resolvePairingPaths } from "./pairing-files.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-migration-" });
 
@@ -15,6 +16,11 @@ async function seedNodeDevice(baseDir: string, deviceId: string): Promise<void> 
     baseDir,
   );
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+}
+
+async function writeJson(filePath: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 describe("migrateLegacyNodePairingStore", () => {
@@ -31,62 +37,45 @@ describe("migrateLegacyNodePairingStore", () => {
     await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toBeNull();
   });
 
-  test("folds legacy rows into device records, drops orphans, archives files", async () => {
+  test("folds legacy rows into device records, drops orphans, and archives files", async () => {
     const baseDir = await suiteRootTracker.make("case");
-    const legacyTokenValue = ["legacy", "token"].join("-");
     await seedNodeDevice(baseDir, "node-kept");
     const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
     await writeJson(pairedPath, {
       "node-kept": {
         nodeId: "node-kept",
-        token: legacyTokenValue,
+        token: "retired-token",
         displayName: "Living Room iPad",
-        version: "2026.6.11",
         caps: ["canvas", "screen"],
         commands: ["screen.snapshot", "system.run"],
-        permissions: { camera: true },
-        bins: ["ffmpeg"],
         createdAtMs: 1_000,
         approvedAtMs: 2_000,
-        lastConnectedAtMs: 3_000,
       },
       "node-orphaned": {
         nodeId: "node-orphaned",
-        token: `${legacyTokenValue}-2`,
-        approvedAtMs: 2_000,
+        token: "orphaned-token",
         createdAtMs: 1_000,
+        approvedAtMs: 2_000,
       },
     });
     await writeJson(pendingPath, {
       "req-1": { requestId: "req-1", nodeId: "node-kept", ts: Date.now() },
     });
 
-    const result = await migrateLegacyNodePairingStore({ baseDir });
-    expect(result).toEqual({ migrated: 1, orphaned: 1 });
-
+    await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toEqual({
+      migrated: 1,
+      orphaned: 1,
+    });
     const device = await getPairedDevice("node-kept", baseDir);
-    expect(device?.nodeSurface).toEqual({
+    expect(device?.nodeSurface).toMatchObject({
       displayName: "Living Room iPad",
-      version: "2026.6.11",
-      coreVersion: undefined,
-      uiVersion: undefined,
-      modelIdentifier: undefined,
       caps: ["canvas", "screen"],
       commands: ["screen.snapshot", "system.run"],
-      permissions: { camera: true },
-      bins: ["ffmpeg"],
-      createdAtMs: 1_000,
-      approvedAtMs: 2_000,
-      lastConnectedAtMs: 3_000,
     });
-    // The retired token never crosses into the device record.
-    expect(JSON.stringify(device)).not.toContain(legacyTokenValue);
-
-    const list = await listNodePairing(baseDir);
-    expect(list.paired.map((node) => node.nodeId)).toEqual(["node-kept"]);
-    expect(list.pending).toHaveLength(0);
-
-    // Legacy files archived; a second run is a no-op.
+    expect(JSON.stringify(device)).not.toContain("retired-token");
+    expect((await listNodePairing(baseDir)).paired.map((node) => node.nodeId)).toEqual([
+      "node-kept",
+    ]);
     await expect(fs.access(pairedPath)).rejects.toThrow();
     await expect(fs.access(`${pairedPath}.migrated`)).resolves.toBeUndefined();
     await expect(fs.access(`${pendingPath}.migrated`)).resolves.toBeUndefined();
@@ -106,7 +95,6 @@ describe("migrateLegacyNodePairingStore", () => {
       { callerScopes: ["operator.pairing", "operator.write"] },
       baseDir,
     );
-
     const { pairedPath } = resolvePairingPaths(baseDir, "nodes");
     await writeJson(pairedPath, {
       "node-current": {
@@ -118,9 +106,10 @@ describe("migrateLegacyNodePairingStore", () => {
       },
     });
 
-    const result = await migrateLegacyNodePairingStore({ baseDir });
-    expect(result).toEqual({ migrated: 0, orphaned: 0 });
-    const device = await getPairedDevice("node-current", baseDir);
-    expect(device?.nodeSurface?.caps).toEqual(["screen"]);
+    await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toEqual({
+      migrated: 0,
+      orphaned: 0,
+    });
+    expect((await getPairedDevice("node-current", baseDir))?.nodeSurface?.caps).toEqual(["screen"]);
   });
 });

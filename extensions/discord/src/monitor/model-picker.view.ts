@@ -63,13 +63,13 @@ type DiscordModelPickerRenderShellParams = {
   trailingRows?: DiscordModelPickerRow[];
 };
 
-export type DiscordModelPickerRenderedView = {
+type DiscordModelPickerRenderedView = {
   layout: DiscordModelPickerLayout;
   content?: string;
   components: TopLevelComponents[];
 };
 
-export type DiscordModelPickerProviderViewParams = {
+type DiscordModelPickerProviderViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -79,7 +79,7 @@ export type DiscordModelPickerProviderViewParams = {
   layout?: DiscordModelPickerLayout;
 };
 
-export type DiscordModelPickerModelViewParams = {
+type DiscordModelPickerModelViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -877,7 +877,7 @@ export function renderDiscordModelPickerModelsView(
   });
 }
 
-export type DiscordModelPickerRecentsViewParams = {
+type DiscordModelPickerRecentsViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;

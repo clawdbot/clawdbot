@@ -27,18 +27,11 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { VERSION } from "../version.js";
 
 export {
-  GATEWAY_CLOSE_CODE_HINTS,
   GatewayClientRequestError,
-  describeGatewayCloseCode,
   isGatewayConnectAssemblyError,
-  resolveGatewayClientConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/index.js";
 export type {
-  DeviceAuthTokenRecord,
-  DeviceIdentity,
   GatewayClientCloseInfo,
-  GatewayClientConnectionMetadata,
-  GatewayClientHostDeps,
   GatewayClientOptions,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,

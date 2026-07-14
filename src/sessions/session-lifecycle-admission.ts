@@ -7,9 +7,22 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  clearSessionWorkAdmissionHandoffs,
+  createSessionWorkAdmissionHandoff,
+  type HandoffSessionWorkAdmission,
+  type SessionWorkAdmissionLease,
+} from "./session-work-admission-handoff.js";
+
+export {
+  cancelSessionWorkAdmissionHandoff,
+  consumeSessionWorkAdmissionHandoff,
+  type SessionWorkAdmissionLease,
+} from "./session-work-admission-handoff.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-type SessionWorkAdmission = {
+type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;
 };
@@ -25,7 +38,7 @@ type SessionLifecycleAdmissionState = {
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
 
-export type SessionLifecycleMutationKind = "compaction";
+type SessionLifecycleMutationKind = "compaction";
 
 // Runtime chunks can load separate module instances while still coordinating
 // the same sessions. One shared state keeps every lock and admission visible.
@@ -54,49 +67,6 @@ const {
 // Older runtime chunks can create the shared state without this newer index.
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
-
-export type SessionWorkAdmissionLease = {
-  release: () => void;
-  run: <T>(run: () => Promise<T>) => Promise<T>;
-};
-
-function normalizeSessionIdentities(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): string[] {
-  const normalizedScope = scope.trim();
-  if (!normalizedScope) {
-    throw new Error("session lifecycle scope is required");
-  }
-  return Array.from(
-    new Set(
-      Array.from(identities, (identity) => identity?.trim()).filter(
-        (identity): identity is string => Boolean(identity),
-      ),
-    ),
-  )
-    .map((identity) => JSON.stringify([normalizedScope, identity]))
-    .toSorted();
-}
-
-function decodeSessionIdentity(
-  normalizedIdentity: string,
-): { scope: string; identity: string } | undefined {
-  try {
-    const decoded: unknown = JSON.parse(normalizedIdentity);
-    if (
-      !Array.isArray(decoded) ||
-      decoded.length !== 2 ||
-      typeof decoded[0] !== "string" ||
-      typeof decoded[1] !== "string"
-    ) {
-      return undefined;
-    }
-    return { scope: decoded[0], identity: decoded[1] };
-  } catch {
-    return undefined;
-  }
-}
 
 async function runWithSessionIdentityLocks<T>(
   identities: readonly string[],
@@ -421,7 +391,10 @@ export async function beginSessionWorkAdmission(params: {
       }
       let resolveReleased = () => {};
       const admission: SessionWorkAdmission = {
+        handoffIds: new Set(),
+        identities: new Set(identities),
         interrupt: params.onInterrupt,
+        interrupted: false,
         released: new Promise<void>((resolve) => {
           resolveReleased = resolve;
         }),
@@ -444,9 +417,16 @@ export async function beginSessionWorkAdmission(params: {
             ACTIVE_SESSION_WORK_ADMISSIONS.delete(identity);
           }
         }
+        clearSessionWorkAdmissionHandoffs(admission);
         resolveReleased();
       };
       const lease: SessionWorkAdmissionLease = {
+        createHandoff: () => {
+          if (released) {
+            throw new Error("cannot hand off a released session work admission");
+          }
+          return createSessionWorkAdmissionHandoff(admission, lease);
+        },
         release,
         run: async <T>(run: () => Promise<T>) => {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
@@ -520,6 +500,7 @@ export async function interruptSessionWorkAdmissions(params: {
     }
   }
   for (const admission of admissions) {
+    admission.interrupted = true;
     admission.interrupt?.();
   }
   const released = Promise.all(Array.from(admissions, (admission) => admission.released));

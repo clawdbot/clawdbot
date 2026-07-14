@@ -2,15 +2,16 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import {
+import { pwAi } from "./pw-ai.js";
+
+const {
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
   retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
-  setCdpConnectRetryDelayMsForTests,
-} from "./pw-session.js";
+} = pwAi;
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -163,7 +164,6 @@ function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
-  setCdpConnectRetryDelayMsForTests();
   await closePlaywrightBrowserConnection().catch(() => {});
   vi.useRealTimers();
 });
@@ -174,7 +174,6 @@ describe("pw-session connection scoping", () => {
     const password = "browser-password";
     const token = "browser-token";
     const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
-    setCdpConnectRetryDelayMsForTests(0);
     connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
@@ -203,7 +202,6 @@ describe("pw-session connection scoping", () => {
 
   it("keeps credentialed HTTP discovery out of Playwright's redirect path", async () => {
     const cdpUrl = "https://browser-user:browser-password@browserless.example/cdp";
-    setCdpConnectRetryDelayMsForTests(0);
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(

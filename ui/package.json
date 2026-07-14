@@ -20,6 +20,7 @@
     "@modelcontextprotocol/ext-apps": "1.7.4",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@noble/ed25519": "3.1.0",
+    "@openclaw/gateway-client": "workspace:*",
     "@openclaw/libterminal": "0.3.1",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
@@ -31,7 +32,8 @@
     "lit": "3.3.3",
     "markdown-it": "14.3.0",
     "markdown-it-task-lists": "2.1.1",
-    "marked": "18.0.5"
+    "marked": "18.0.5",
+    "remend": "1.3.0"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",

@@ -79,6 +79,7 @@ describe("resolveModelAsync startup retry", () => {
       "/tmp/agent",
       {},
       {
+        agentRuntimeId: "openclaw",
         retryTransientProviderRuntimeMiss: true,
         runtimeHooks,
       },
@@ -90,6 +91,13 @@ describe("resolveModelAsync startup retry", () => {
     expect(result.model?.api).toBe("openai-chatgpt-responses");
     expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(2);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(2);
+    for (const call of [prepareProviderDynamicModelMock, runProviderDynamicModelMock]) {
+      expect(call).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({ agentRuntimeId: "openclaw" }),
+        }),
+      );
+    }
   });
 
   it("does not retry during steady-state misses", async () => {

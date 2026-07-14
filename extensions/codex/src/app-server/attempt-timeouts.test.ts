@@ -2,11 +2,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-  CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
@@ -15,6 +10,12 @@ import {
   resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
+
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {

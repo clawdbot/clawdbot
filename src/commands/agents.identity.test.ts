@@ -103,6 +103,25 @@ describe("agents set-identity command", () => {
     });
   });
 
+  it("resolves --from-identity against the selected agent workspace", async () => {
+    const { root, workspace } = await createIdentityWorkspace();
+    await writeIdentityFile(workspace, ["- Name: Workspace Agent"]);
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { list: [{ id: "main", workspace }] } },
+    });
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+
+    try {
+      await agentsSetIdentityCommand({ agent: "main", fromIdentity: true }, runtime);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect(getWrittenMainIdentity()).toEqual({ name: "Workspace Agent" });
+  });
+
   it("errors when multiple agents match the same workspace", async () => {
     const { workspace } = await createIdentityWorkspace("shared");
     await writeIdentityFile(workspace, ["- Name: Echo"]);

@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  markMigrationItemConflict,
   markMigrationItemError,
-  markMigrationItemSkipped,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import {
@@ -22,17 +22,20 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { applyAuthItem } from "./auth.js";
 import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
+import {
+  findHermesModelProviderDependency,
+  HERMES_REASON_MODEL_PROVIDER_CONFLICT,
+  readHermesModelDetails,
+} from "./items.js";
 import { applyModelItem } from "./model.js";
 import { buildHermesPlan } from "./plan.js";
 import { applySecretItem } from "./secrets.js";
 import { resolveTargets } from "./targets.js";
 
-const HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT = "blocked by earlier apply conflict";
-const HERMES_STATE_DB_ARCHIVE_ITEM_ID = "archive:state.db";
-const HERMES_STATE_DB_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-state-";
+const HERMES_SQLITE_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-sqlite-";
 
 async function archiveHermesItem(item: MigrationItem, reportDir: string): Promise<MigrationItem> {
-  if (item.id !== HERMES_STATE_DB_ARCHIVE_ITEM_ID || !item.source) {
+  if (!item.source || path.extname(item.source) !== ".db") {
     return await archiveMigrationItem(item, reportDir);
   }
   const sourcePath = item.source;
@@ -51,9 +54,9 @@ async function archiveHermesItem(item: MigrationItem, reportDir: string): Promis
     // A raw state.db copy can omit committed rows that still live in state.db-wal.
     // Snapshot the live database into one self-contained archive artifact.
     return await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: HERMES_STATE_DB_SNAPSHOT_PREFIX },
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: HERMES_SQLITE_SNAPSHOT_PREFIX },
       async ({ dir: tempDir }) => {
-        const snapshotPath = path.join(tempDir, "state.db");
+        const snapshotPath = path.join(tempDir, path.basename(sourcePath));
         const { DatabaseSync } = await import("node:sqlite");
         const source = new DatabaseSync(sourcePath, { readOnly: true });
         try {
@@ -69,16 +72,48 @@ async function archiveHermesItem(item: MigrationItem, reportDir: string): Promis
     );
   } catch (err) {
     const snapshotReason = err instanceof Error ? err.message : String(err);
-    const rawArchive = await archiveMigrationItem(item, reportDir);
-    if (rawArchive.status === "migrated") {
+    let recoveryArchive: MigrationItem;
+    try {
+      recoveryArchive = await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: HERMES_SQLITE_SNAPSHOT_PREFIX },
+        async ({ dir: tempDir }) => {
+          const recoveryDir = path.join(tempDir, `${path.basename(sourcePath)}-recovery`);
+          await fs.mkdir(recoveryDir, { recursive: true });
+          for (const candidate of [sourcePath, `${sourcePath}-wal`, `${sourcePath}-shm`]) {
+            const stat = await fs.lstat(candidate).catch(() => undefined);
+            if (!stat?.isFile()) {
+              continue;
+            }
+            try {
+              await fs.copyFile(candidate, path.join(recoveryDir, path.basename(candidate)));
+            } catch (copyError) {
+              const copyCode = (copyError as NodeJS.ErrnoException).code;
+              if (candidate !== sourcePath && copyCode === "ENOENT") {
+                continue;
+              }
+              throw copyError;
+            }
+          }
+          return await archiveMigrationItem({ ...item, source: recoveryDir }, reportDir);
+        },
+      );
+    } catch (recoveryError) {
+      const recoveryReason =
+        recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
       return markMigrationItemError(
-        rawArchive,
-        `SQLite snapshot failed; raw state.db preserved for manual review: ${snapshotReason}`,
+        item,
+        `SQLite snapshot failed: ${snapshotReason}; recovery archive failed: ${recoveryReason}`,
+      );
+    }
+    if (recoveryArchive.status === "migrated") {
+      return markMigrationItemError(
+        { ...recoveryArchive, source: sourcePath },
+        `SQLite snapshot failed; database recovery files preserved for manual review: ${snapshotReason}`,
       );
     }
     return markMigrationItemError(
-      rawArchive,
-      `SQLite snapshot failed: ${snapshotReason}; raw archive failed: ${rawArchive.reason ?? rawArchive.status}`,
+      { ...recoveryArchive, source: sourcePath },
+      `SQLite snapshot failed: ${snapshotReason}; recovery archive failed: ${recoveryArchive.reason ?? recoveryArchive.status}`,
     );
   }
 }
@@ -91,25 +126,39 @@ export async function applyHermesPlan(params: {
   const plan = params.plan ?? (await buildHermesPlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
-  const items: MigrationItem[] = [];
+  // Item ids are report labels, not unique execution keys. Preserve object identity so
+  // providers can report repeated source items without cross-wiring their results.
+  const appliedByItem = new Map<MigrationItem, MigrationItem>();
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
   );
   const applyCtx = { ...params.ctx, runtime };
-  let blockedByApplyConflict = false;
-  for (const item of plan.items) {
+  const executionItems = [
+    ...plan.items.filter((item) => item.id.startsWith("config:model-provider:")),
+    ...plan.items.filter((item) => !item.id.startsWith("config:model-provider:")),
+  ];
+  for (const item of executionItems) {
     if (item.status !== "planned") {
-      items.push(item);
-      continue;
-    }
-    if (blockedByApplyConflict) {
-      items.push(markMigrationItemSkipped(item, HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT));
+      appliedByItem.set(item, item);
       continue;
     }
     let appliedItem: MigrationItem;
     if (item.id === "config:default-model") {
-      appliedItem = await applyModelItem(applyCtx, item);
+      const model = readHermesModelDetails(item)?.model;
+      const dependency = model ? findHermesModelProviderDependency(plan.items, model) : undefined;
+      const dependencyResult = dependency ? appliedByItem.get(dependency) : undefined;
+      if (dependencyResult && dependencyResult.status !== "migrated") {
+        appliedItem =
+          dependencyResult.status === "conflict"
+            ? markMigrationItemConflict(item, HERMES_REASON_MODEL_PROVIDER_CONFLICT)
+            : markMigrationItemError(
+                item,
+                `model provider config failed: ${dependencyResult.reason ?? dependencyResult.status}`,
+              );
+      } else {
+        appliedItem = await applyModelItem(applyCtx, item);
+      }
     } else if (item.kind === "config") {
       appliedItem = await applyConfigItem(applyCtx, item);
     } else if (item.kind === "manual") {
@@ -127,14 +176,9 @@ export async function applyHermesPlan(params: {
         overwrite: params.ctx.overwrite,
       });
     }
-    items.push(appliedItem);
-    if (
-      item.kind === "config" &&
-      (appliedItem.status === "conflict" || appliedItem.status === "error")
-    ) {
-      blockedByApplyConflict = true;
-    }
+    appliedByItem.set(item, appliedItem);
   }
+  const items = plan.items.map((item) => appliedByItem.get(item) ?? item);
   const result: MigrationApplyResult = {
     ...plan,
     items,

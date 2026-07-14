@@ -46,8 +46,8 @@ export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
-export type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
-export type ContextEngineRegistration = {
+type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+type ContextEngineRegistration = {
   factory: ContextEngineFactory;
   owner: string;
   lifecycle: ContextEngineRegistrationLifecycle;
@@ -413,7 +413,7 @@ const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistry
 const CORE_CONTEXT_ENGINE_OWNER = "core";
 const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
-export type ContextEngineRuntimeQuarantine = {
+type ContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;

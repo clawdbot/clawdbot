@@ -6,16 +6,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  writePackageDistInventory,
-} from "../src/infra/package-dist-inventory.ts";
-import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 

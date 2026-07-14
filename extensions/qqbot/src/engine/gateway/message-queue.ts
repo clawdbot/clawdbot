@@ -128,7 +128,7 @@ function isSlashCommand(msg: QueuedMessage): boolean {
  *
  * A single-message batch is returned unchanged (no merge overhead).
  */
-export function mergeGroupMessages(batch: QueuedMessage[]): QueuedMessage {
+function mergeGroupMessages(batch: QueuedMessage[]): QueuedMessage {
   if (batch.length === 0) {
     throw new Error("mergeGroupMessages: empty batch");
   }

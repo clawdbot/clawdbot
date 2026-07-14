@@ -6,11 +6,8 @@ import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
-  isTrajectoryPointerArtifactName,
-  isTrajectoryRuntimeArtifactName,
   isTrajectorySessionArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  parseCompactionCheckpointTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
 } from "./artifacts.js";
@@ -65,11 +62,18 @@ describe("session artifact helpers", () => {
   });
 
   it("classifies trajectory sidecar artifacts", () => {
-    expect(isTrajectoryRuntimeArtifactName("abc.trajectory.jsonl")).toBe(true);
-    expect(isTrajectoryPointerArtifactName("abc.trajectory-path.json")).toBe(true);
     expect(isTrajectorySessionArtifactName("abc.trajectory.jsonl")).toBe(true);
     expect(isTrajectorySessionArtifactName("abc.trajectory-path.json")).toBe(true);
     expect(isTrajectorySessionArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("recognizes exact compaction checkpoint transcript names", () => {
+    expect(
+      isCompactionCheckpointTranscriptFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(true);
+    expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint.not-a-uuid.jsonl")).toBe(false);
   });
 
   it("classifies usage-counted transcript files", () => {
@@ -108,23 +112,6 @@ describe("session artifact helpers", () => {
       ),
     ).toBeNull();
     expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
-  });
-
-  it("parses exact compaction checkpoint transcript file names", () => {
-    expect(
-      parseCompactionCheckpointTranscriptFileName(
-        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-      ),
-    ).toEqual({
-      sessionId: "abc",
-      checkpointId: "11111111-1111-4111-8111-111111111111",
-    });
-    expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint.not-a-uuid.jsonl")).toBe(false);
-    expect(
-      isCompactionCheckpointTranscriptFileName(
-        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-01-01T00-00-00.000Z",
-      ),
-    ).toBe(false);
   });
 
   it("formats and parses archive timestamps", () => {

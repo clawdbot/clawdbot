@@ -4,6 +4,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -116,7 +117,8 @@ vi.mock("../draft-stream.js", () => ({
   createDiscordDraftStream: (params: unknown) => deliveryMocks.createDiscordDraftStream(params),
 }));
 
-vi.mock("./reply-delivery.js", () => ({
+vi.mock("./reply-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-delivery.js")>()),
   deliverDiscordReply: (params: unknown) => deliveryMocks.deliverDiscordReply(params),
 }));
 
@@ -534,6 +536,7 @@ function getLastRouteUpdate():
 
 function getLastDispatchCtx():
   | {
+      Body?: string;
       BodyForAgent?: string;
       ChatType?: string;
       CommandBody?: string;
@@ -558,6 +561,7 @@ function getLastDispatchCtx():
   const params = callArgs?.[0] as
     | {
         ctx?: {
+          Body?: string;
           BodyForAgent?: string;
           ChatType?: string;
           CommandBody?: string;
@@ -2095,6 +2099,21 @@ describe("processDiscordMessage draft streaming", () => {
     await runSingleChunkFinalScenario({ streaming: { mode: "partial" }, maxLinesPerMessage: 5 });
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expectFreshFinalText("Hello\nWorld");
+  });
+
+  it("retries stale preview cleanup at teardown after fresh final delivery", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockImplementationOnce(async () => {});
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    await runSingleChunkFinalScenario({
+      streaming: { mode: "partial" },
+      maxLinesPerMessage: 5,
+    });
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
@@ -4232,5 +4251,138 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     // Restore so other tests sharing this worker (isolate=false) keep the
     // real logVerbose binding.
     verboseSpy.mockRestore();
+  });
+});
+
+describe("processDiscordMessage reply session init conflict retry", () => {
+  const conflictError = () =>
+    new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
+
+  it("retries only dispatch while recording, acknowledging, and adding history once", async () => {
+    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    dispatchInboundMessage
+      .mockRejectedValueOnce(conflictError())
+      .mockRejectedValueOnce(conflictError())
+      .mockResolvedValueOnce(createNoQueuedDispatchResult());
+    const guildHistories = new Map();
+    const ctx = await createBaseContext({
+      guildHistories,
+      historyLimit: 10,
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+        },
+      },
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
+    expect(sleepSpy).toHaveBeenNthCalledWith(1, 250, undefined);
+    expect(sleepSpy).toHaveBeenNthCalledWith(2, 1_000, undefined);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(getReactionEmojis()).toEqual(["👀"]);
+    expect(guildHistories.get("c1")).toHaveLength(1);
+    expect(guildHistories.get("c1")?.[0]).toMatchObject({
+      body: "hi",
+      messageId: "m1",
+    });
+    sleepSpy.mockRestore();
+  });
+
+  it("commits replay ownership after a visible terminal failure notice", async () => {
+    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const originalError = conflictError();
+    dispatchInboundMessage.mockRejectedValue(originalError);
+
+    const ctx = await createBaseContext();
+    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(sleepSpy).toHaveBeenNthCalledWith(1, 250, undefined);
+    expect(sleepSpy).toHaveBeenNthCalledWith(2, 1_000, undefined);
+    expect(sleepSpy).toHaveBeenNthCalledWith(3, 2_500, undefined);
+    expectFreshFinalText(
+      "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
+    );
+    sleepSpy.mockRestore();
+  });
+
+  it("keeps exhaustion retryable when the visible failure notice cannot land", async () => {
+    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const originalError = conflictError();
+    dispatchInboundMessage.mockRejectedValue(originalError);
+    deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
+
+    const ctx = await createBaseContext();
+    let thrown: unknown;
+    try {
+      await runProcessDiscordMessage(ctx);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DiscordRetryableInboundError);
+    expect(thrown).toMatchObject({ cause: originalError });
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    sleepSpy.mockRestore();
+  });
+
+  it("rebuilds a released replay without duplicating its pending history", async () => {
+    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    dispatchInboundMessage.mockRejectedValue(conflictError());
+    deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
+    const guildHistories = new Map();
+    const createReplayContext = () =>
+      createBaseContext({
+        guildHistories,
+        historyLimit: 10,
+        inboundEventKind: "room_event",
+      });
+
+    await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBeInstanceOf(
+      DiscordRetryableInboundError,
+    );
+    expect(guildHistories.get("c1")).toHaveLength(1);
+
+    dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
+    await runProcessDiscordMessage(await createReplayContext());
+
+    expect(getLastDispatchCtx()?.Body).not.toContain("[Chat messages since your last reply");
+    expect(guildHistories.get("c1")).toHaveLength(1);
+    expect(guildHistories.get("c1")?.[0]?.messageId).toBe("m1");
+    sleepSpy.mockRestore();
+  });
+
+  it("preserves unrelated dispatch errors", async () => {
+    const originalError = new Error("some other dispatch error");
+    dispatchInboundMessage.mockRejectedValueOnce(originalError);
+
+    const ctx = await createBaseContext();
+    await expect(runProcessDiscordMessage(ctx)).rejects.toBe(originalError);
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an aborted conflict as cancellation", async () => {
+    const abortController = new AbortController();
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      abortController.abort();
+      throw conflictError();
+    });
+
+    const ctx = await createBaseContext({ abortSignal: abortController.signal });
+    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 });

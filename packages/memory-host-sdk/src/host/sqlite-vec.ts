@@ -1,8 +1,8 @@
 // Memory Host SDK module implements sqlite vec behavior.
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "./error-utils.js";
 import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.js";
-import { normalizeOptionalString } from "./string-utils.js";
 
 type SqliteVecModule = {
   getLoadablePath: () => string;

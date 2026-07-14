@@ -11,14 +11,14 @@ import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-prese
 import { pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionRegistryMaintenanceStoreSummary = {
+type SessionRegistryMaintenanceStoreSummary = {
   afterCount: number;
   beforeCount: number;
   preservedRunning: number;
   pruned: number;
 };
 
-export type SessionRegistryMaintenanceStoreOptions = {
+type SessionRegistryMaintenanceStoreOptions = {
   /** Apply pruning to the backing store; false previews against a clone. */
   apply: boolean;
   /** Retention window for cron-run session entries. */

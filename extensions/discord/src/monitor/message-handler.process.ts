@@ -57,7 +57,11 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import {
+  completeDiscordSessionConflict,
+  withDiscordSessionRetry,
+} from "./message-handler.retry.js";
+import { deliverDiscordReply, formatDiscordReplyDeliveryFailure } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 
@@ -68,21 +72,6 @@ const TARGETED_ONLY_ALLOWED_MENTIONS = {
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
-}
-
-function formatDiscordReplyDeliveryFailure(params: {
-  kind: string;
-  err: unknown;
-  target: string;
-  sessionKey?: string;
-}) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
@@ -201,7 +190,7 @@ async function processDiscordMessageInner(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
-  const { dispatchReplyWithBufferedBlockDispatcher } = await loadReplyRuntime();
+  const { dispatchReplyWithBufferedBlockDispatcher: dispatchReply } = await loadReplyRuntime();
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
     ctx: {
@@ -1005,8 +994,7 @@ async function processDiscordMessageInner(
   };
 
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-  let dispatchResult: Awaited<ReturnType<typeof dispatchReplyWithBufferedBlockDispatcher>> | null =
-    null;
+  let dispatchResult: Awaited<ReturnType<typeof dispatchReply>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
@@ -1040,7 +1028,7 @@ async function processDiscordMessageInner(
       ctxPayload,
       recordInboundSession,
       afterRecord: queueInitialAckReactionAfterRecord,
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: withDiscordSessionRetry(dispatchReply, abortSignal),
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -1303,6 +1291,10 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
+    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
+      // The visible terminal notice owns this event, so replay can commit.
+      return;
+    }
     throw err;
   } finally {
     endDiscordInboundEventDeliveryCorrelation();

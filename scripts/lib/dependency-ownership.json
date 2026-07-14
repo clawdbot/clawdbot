@@ -108,6 +108,11 @@
       "class": "core-runtime",
       "risk": ["env-loading"]
     },
+    "execa": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["process-execution", "large-transitive-cone"]
+    },
     "express": {
       "owner": "capability:http-route-host",
       "class": "default-runtime-initially",

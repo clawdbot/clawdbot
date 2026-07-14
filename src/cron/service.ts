@@ -15,7 +15,7 @@ import {
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
-export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {

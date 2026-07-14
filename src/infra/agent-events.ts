@@ -22,17 +22,11 @@ export type AgentEventStream =
   | (string & {});
 
 /** Lifecycle phase for a visible item in the agent activity feed. */
-export type AgentItemEventPhase = "start" | "update" | "end";
+type AgentItemEventPhase = "start" | "update" | "end";
 /** Status rendered for an item-level agent activity event. */
-export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
 /** Item category used by channels and Control UI to choose progress presentation. */
-export type AgentItemEventKind =
-  | "tool"
-  | "command"
-  | "patch"
-  | "search"
-  | "analysis"
-  | (string & {});
+type AgentItemEventKind = "tool" | "command" | "patch" | "search" | "analysis" | (string & {});
 
 /** Payload for a single item shown in the agent activity stream. */
 export type AgentItemEventData = {
@@ -58,11 +52,11 @@ export type AgentItemEventData = {
 };
 
 /** Approval event phase for request/resolution transitions. */
-export type AgentApprovalEventPhase = "requested" | "resolved";
+type AgentApprovalEventPhase = "requested" | "resolved";
 /** Approval status after routing, user action, or delivery failure. */
-export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
 /** Approval family used by renderers and host hooks. */
-export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
+type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
 /** Payload for approval requests and their later resolution events. */
 export type AgentApprovalEventData = {
@@ -135,7 +129,7 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
-export type AgentRunContext = {
+type AgentRunContext = {
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -300,6 +294,8 @@ export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
   options: {
+    /** Adopt a same-generation context only when no tracked execution owns it. */
+    adoptExistingUnowned?: boolean;
     trackOwner?: boolean;
     ownsContext?: boolean;
     exclusive?: boolean;
@@ -316,11 +312,16 @@ export function claimAgentRunContext(
   const existingOwners = ownersById.get(runId);
   const currentOwners =
     existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
+  const adoptsExistingUnowned =
+    options.exclusive === true &&
+    options.adoptExistingUnowned === true &&
+    existing?.lifecycleGeneration === lifecycleGeneration &&
+    currentOwners === undefined;
   if (
     currentOwners?.exclusiveClaimId ||
     (options.exclusive &&
-      (existing?.lifecycleGeneration === lifecycleGeneration ||
-        (currentOwners?.claimIds.size ?? 0) > 0))
+      ((existing?.lifecycleGeneration === lifecycleGeneration && !adoptsExistingUnowned) ||
+        currentOwners !== undefined))
   ) {
     return undefined;
   }
@@ -520,14 +521,6 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     }
   }
   return swept;
-}
-
-/** Clears run context state without removing event listeners; test-only helper. */
-export function resetAgentRunContextForTest() {
-  const state = getAgentEventState();
-  state.runContextById.clear();
-  state.seqByRun.clear();
-  getAgentRunContextOwners(state).clear();
 }
 
 function enrichAgentEvent(
@@ -730,12 +723,14 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(getAgentEventState().auditListeners, listener);
 }
 
-/** Clears all agent event state, including listeners; test-only helper. */
-export function resetAgentEventsForTest() {
+/** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
+export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
   state.seqByRun.clear();
-  state.listeners.clear();
-  state.auditListeners.clear();
+  if (!options?.preserveListeners) {
+    state.listeners.clear();
+    state.auditListeners.clear();
+  }
   state.runContextById.clear();
   getAgentRunContextOwners(state).clear();
 }

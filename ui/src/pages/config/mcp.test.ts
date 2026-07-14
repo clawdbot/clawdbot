@@ -2,7 +2,9 @@
 
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderMcp, type McpViewProps } from "./mcp.ts";
+import { renderMcp } from "./mcp.ts";
+
+type McpViewProps = Parameters<typeof renderMcp>[0];
 
 function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
   return {
@@ -69,7 +71,7 @@ describe("renderMcp", () => {
 
     render(renderMcp(createProps({ configObject: {} })), container);
 
-    expect(container.querySelector(".data-table-empty-state")?.textContent).toContain(
+    expect(container.querySelector(".settings-empty")?.textContent).toContain(
       "No MCP servers configured.",
     );
   });

@@ -208,6 +208,43 @@ async function waitForExit(child: ChildProcess): Promise<void> {
   });
 }
 
+async function waitForStderr(
+  child: ChildProcess,
+  expected: string,
+  timeoutMs: number,
+): Promise<string> {
+  const stderr = child.stderr;
+  if (!stderr) {
+    throw new Error("child stderr is not piped");
+  }
+  stderr.setEncoding("utf8");
+  let output = "";
+  return await new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      stderr.off("data", onData);
+      child.off("exit", onExit);
+    };
+    const onData = (chunk: string) => {
+      output += chunk;
+      if (output.includes(expected)) {
+        cleanup();
+        resolve(output);
+      }
+    };
+    const onExit = () => {
+      cleanup();
+      reject(new Error(`child exited before writing ${JSON.stringify(expected)}: ${output}`));
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for ${JSON.stringify(expected)}: ${output}`));
+    }, timeoutMs);
+    stderr.on("data", onData);
+    child.once("exit", onExit);
+  });
+}
+
 afterEach(async () => {
   for (const child of children.splice(0)) {
     child.kill("SIGKILL");
@@ -759,7 +796,7 @@ describe("pr-gates-lock helper", () => {
     const second = spawnGateLockHolder(repoDir, secondStatus, {
       OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
     });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitForStderr(second, "queued behind the local heavy-check lock", 5_000);
     expect(existsSync(secondStatus)).toBe(false);
 
     first.kill("SIGTERM");

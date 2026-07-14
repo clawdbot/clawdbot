@@ -19,11 +19,11 @@ export type SessionFreshness = {
   staleReason?: SessionResetMode;
 };
 
-export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
-export const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_RESET_MODE: SessionResetMode = "daily";
+const DEFAULT_RESET_AT_HOUR = 4;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
-export function resolveDailyResetAtMs(now: number, atHour: number): number {
+function resolveDailyResetAtMs(now: number, atHour: number): number {
   const normalizedAtHour = normalizeResetAtHour(atHour);
   const resetAt = new Date(now);
   resetAt.setHours(normalizedAtHour, 0, 0, 0);

@@ -43,7 +43,7 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
 /** Resolve a safe direct-Gateway relay URL, preserving an optional proxy base path. */
-export function buildRemoteGatewayRelayUrl(raw: string): string {
+function buildRemoteGatewayRelayUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw.trim());

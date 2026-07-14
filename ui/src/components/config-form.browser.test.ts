@@ -64,7 +64,7 @@ describe("config form renderer", () => {
 
     const tokenInput = expectElement(
       container.querySelector<HTMLInputElement>(
-        '#config-section-gateway input.cfg-input[type="text"]',
+        '#config-section-gateway input.settings-input[type="text"]',
       ),
       "gateway token input",
     );
@@ -73,7 +73,7 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
     const tokenButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "token",
       ),
       "token segmented button",
@@ -89,25 +89,98 @@ describe("config form renderer", () => {
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
-    const addButton = expectElement(container.querySelector(".cfg-array__add"), "array add button");
+    const addButton = expectElement(
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-array button")).find(
+        (btn) => btn.textContent?.trim() === "Add",
+      ),
+      "array add button",
+    );
     addButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], ["+1", ""]);
 
     const removeButton = expectElement(
-      container.querySelector(".cfg-array__item-remove"),
+      container.querySelector(".cfg-array button[aria-label='Remove item']"),
       "array remove button",
     );
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
 
     const tailnetButton = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn")).find(
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-segmented__btn")).find(
         (btn) => btn.textContent?.trim() === "tailnet",
       ),
       "tailnet segmented button",
     );
     tailnetButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
+  });
+
+  it("renders subsection labels exactly once", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: {},
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        activeSubsection: "auth",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const headings = Array.from(container.querySelectorAll(".settings-section__heading")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Auth"]);
+    // The subsection object emits its fields directly; no nested details block
+    // repeats the subsection title inside the group.
+    expect(container.querySelector(".cfg-object")).toBeNull();
+    const rowTitles = Array.from(container.querySelectorAll(".settings-row__title")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(rowTitles).toEqual(["Token"]);
+  });
+
+  it("renders boolean fields as label-wrapped toggle rows", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        features: {
+          type: "object",
+          properties: {
+            beta: { type: "boolean", description: "Enable beta features" },
+          },
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { features: { beta: false } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const checkbox = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
+      "beta checkbox",
+    );
+    const row = expectElement(checkbox.closest(".settings-row"), "beta toggle row");
+    expect(row.tagName).toBe("LABEL");
+    expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe("Beta");
+    expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
+      "Enable beta features",
+    );
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["features", "beta"], true);
   });
 
   it("keeps dropdown selects on their configured value after options render", () => {
@@ -145,7 +218,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    const selects = container.querySelectorAll<HTMLSelectElement>("select.cfg-select");
+    const selects = container.querySelectorAll<HTMLSelectElement>("select.settings-select");
     expect(selects).toHaveLength(2);
     const selectedLabels = Array.from(selects).map((select) =>
       select.selectedOptions[0]?.textContent?.trim(),
@@ -180,7 +253,7 @@ describe("config form renderer", () => {
     );
 
     const removeButton = expectElement(
-      container.querySelector(".cfg-map__item-remove"),
+      container.querySelector(".cfg-map button[aria-label='Remove entry']"),
       "map remove button",
     );
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -224,7 +297,9 @@ describe("config form renderer", () => {
     );
 
     const label = expectElement(
-      container.querySelector(".cfg-toggle-row__label"),
+      Array.from(container.querySelectorAll(".settings-row__title")).find(
+        (node) => node.textContent?.trim() === "Plugin Enabled",
+      ),
       "plugin enabled label",
     );
     expect(label.textContent?.trim()).toBe("Plugin Enabled");
@@ -267,20 +342,23 @@ describe("config form renderer", () => {
     );
 
     const sectionTitle = expectElement(
-      container.querySelector(".config-section-card__title"),
+      container.querySelector(".settings-section__heading"),
       "tag-filtered section title",
     );
     expect(sectionTitle.textContent?.trim()).toBe("Gateway");
     const fieldLabel = expectElement(
-      container.querySelector(".cfg-field__label"),
+      Array.from(container.querySelectorAll(".settings-row__title")).find(
+        (node) => node.textContent?.trim() === "Token",
+      ),
       "tag-filtered field label",
     );
     expect(fieldLabel.textContent?.trim()).toBe("Token");
+    // Only the Auth subtree (matching the tag filter) renders rows.
     expect(
-      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+      Array.from(container.querySelectorAll(".settings-row__title")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Token"]);
+    ).toEqual(["Auth", "Token"]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
@@ -351,9 +429,11 @@ describe("config form renderer", () => {
     );
 
     const apiKeyInput = expectElement(
-      container.querySelector<HTMLInputElement>(
-        "#config-section-models .cfg-map__item-value input.cfg-input[type='text']",
-      ),
+      Array.from(
+        container.querySelectorAll<HTMLInputElement>(
+          "#config-section-models .cfg-map input.settings-input[type='text']",
+        ),
+      ).find((input) => input.value === "old"),
       "provider api key input",
     );
     apiKeyInput.value = "new-key";
@@ -496,7 +576,7 @@ describe("config form renderer", () => {
     );
 
     const removeButton = expectElement(
-      container.querySelector(".cfg-map__item-remove"),
+      container.querySelector(".cfg-map button[aria-label='Remove entry']"),
       "accounts remove button",
     );
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));

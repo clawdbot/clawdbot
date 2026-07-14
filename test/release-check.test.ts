@@ -6,6 +6,10 @@ import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/te
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../scripts/lib/package-dist-inventory.ts";
+import {
   listPluginSdkDistArtifacts,
   listPrivateLocalOnlyPluginSdkDistArtifacts,
 } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -39,10 +43,6 @@ import {
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../src/infra/package-dist-inventory.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {

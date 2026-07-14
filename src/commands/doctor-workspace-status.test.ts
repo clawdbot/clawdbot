@@ -8,7 +8,7 @@ import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
-} from "../plugins/status.test-helpers.js";
+} from "../plugins/status.test-fixtures.js";
 import {
   collectWorkspaceStatusHealthFindings,
   noteWorkspaceStatus,

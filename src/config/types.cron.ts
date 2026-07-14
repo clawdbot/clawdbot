@@ -54,15 +54,6 @@ export type CronConfig = {
    * Default: "24h".
    */
   sessionRetention?: string | false;
-  /**
-   * Run-history pruning controls. History is stored in SQLite; maxBytes is
-   * retained for compatibility with older file-backed run logs.
-   * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
-   */
-  runLog?: {
-    maxBytes?: number | string;
-    keepLines?: number;
-  };
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;

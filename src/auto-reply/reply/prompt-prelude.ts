@@ -81,7 +81,7 @@ export function buildReplyPromptBodies(params: {
 type ReplyPromptEnvelopeStartupAction = "new" | "reset";
 
 /** Full prompt envelope passed into reply run preparation. */
-export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
+type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
   /** User-visible body persisted to transcript before media/inter-session annotation. */
@@ -91,7 +91,7 @@ export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
 };
 
 /** Base prompt envelope fields before body variants are added. */
-export type ReplyPromptEnvelopeBase = {
+type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
   /** User-visible body persisted to transcript before media/inter-session annotation. */

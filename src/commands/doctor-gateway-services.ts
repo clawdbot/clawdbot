@@ -1,9 +1,7 @@
 /** Doctor repairs for installed gateway service config and duplicate legacy services. */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -38,6 +36,7 @@ import {
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
+import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -104,11 +103,12 @@ function updateParentAllowsGatewayServiceRepair(env: NodeJS.ProcessEnv): boolean
   return repairPolicy !== undefined && isTruthyEnvValue(repairPolicy);
 }
 
-const execFileAsync = promisify(execFile);
 const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+const runLaunchctlQuietly = (args: string[]) =>
+  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
@@ -116,7 +116,7 @@ function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDa
   if (first) {
     const base = normalizeLowercaseStringOrEmpty(path.basename(first));
     if (base === "bun" || base === "bun.exe") {
-      return "bun";
+      return DEFAULT_GATEWAY_DAEMON_RUNTIME; // Legacy Bun services cannot open node:sqlite state.
     }
     if (base === "node" || base === "node.exe") {
       return "node";
@@ -344,8 +344,8 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<string | null> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await execFileAsync("launchctl", ["bootout", domain, params.plistPath]).catch(() => undefined);
-  await execFileAsync("launchctl", ["unload", params.plistPath]).catch(() => undefined);
+  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
+  await runLaunchctlQuietly(["unload", params.plistPath]);
 
   const trashDir = path.join(os.homedir(), ".Trash");
   try {
@@ -556,7 +556,7 @@ export async function maybeRepairGatewayServiceConfig(
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.19+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
         "Gateway runtime",
       );
     }

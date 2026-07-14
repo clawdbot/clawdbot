@@ -89,22 +89,29 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
   });
 
-  it("accepts quiet Matrix streaming mode", () => {
+  it("accepts nested quiet Matrix streaming mode with delivery controls", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "quiet",
+      streaming: {
+        mode: "quiet",
+        chunkMode: "newline",
+        block: { enabled: true, coalesce: { idleMs: 100 } },
+      },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts scalar progress Matrix streaming mode", () => {
+  it.each([
+    ["scalar streaming mode", { streaming: "quiet" }],
+    ["boolean streaming", { streaming: true }],
+  ])("rejects legacy %s spelling", (_name, overrides) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "progress",
+      ...overrides,
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("accepts Matrix streaming preview tool progress config", () => {

@@ -11,12 +11,13 @@ import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heart
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  type RetryableHeartbeatBusySkipReason,
   requestHeartbeat,
-  resetHeartbeatWakeStateForTests,
 } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
+  type RetryableHeartbeatBusySkipReason =
+    | typeof HEARTBEAT_SKIP_CRON_IN_PROGRESS
+    | typeof HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT;
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
   const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
@@ -169,7 +170,6 @@ describe("startHeartbeatRunner", () => {
   }
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     resetConfigRuntimeState();
     vi.useRealTimers();
     vi.restoreAllMocks();

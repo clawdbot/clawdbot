@@ -70,8 +70,6 @@ export interface GatewayPluginRuntime {
   };
 }
 
-export type { ProcessedAttachments } from "./inbound-attachments.js";
-
 export interface OutboundResult {
   channel: string;
   messageId?: string;

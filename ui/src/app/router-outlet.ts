@@ -2,6 +2,7 @@ import type { Router } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
+import { icon } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
@@ -86,13 +87,31 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       }
     });
   };
+  // Stale-chunk failures are routine after a gateway update, so present them
+  // as an update prompt instead of a generic failure.
+  const errorClasses = [
+    "lazy-view-error",
+    render ? "lazy-view-error--inline" : "",
+    staleChunk ? "lazy-view-error--stale" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
     ${render?.() ?? nothing}
-    <div class="callout danger" role="alert">
-      <strong>${t("lazyView.errorTitle")}</strong>
-      <div>${routeError}</div>
-      ${staleChunk ? html`<div>${t("lazyView.errorSubtitle")}</div>` : nothing}
-      <button class="btn btn--sm" @click=${handleRetry}>${t("lazyView.retry")}</button>
+    <div class=${errorClasses} role="alert">
+      <div class="lazy-view-error__icon" aria-hidden="true">
+        ${icon(staleChunk ? "refresh" : "alertTriangle")}
+      </div>
+      <div class="lazy-view-error__title">
+        ${staleChunk ? t("lazyView.staleTitle") : t("lazyView.errorTitle")}
+      </div>
+      <div class="lazy-view-error__subtitle">
+        ${staleChunk ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle")}
+      </div>
+      <button class="btn lazy-view-error__action" @click=${handleRetry}>
+        ${staleChunk ? t("common.reload") : t("lazyView.retry")}
+      </button>
+      <code class="lazy-view-error__detail">${routeError}</code>
     </div>
   `;
 }

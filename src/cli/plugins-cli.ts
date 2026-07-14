@@ -45,7 +45,7 @@ type PluginSearchOptions = {
   limit?: number;
 };
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;

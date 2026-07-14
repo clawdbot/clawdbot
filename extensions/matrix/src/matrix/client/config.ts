@@ -420,7 +420,6 @@ function buildMatrixNetworkFields(params: {
   };
 }
 
-export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 export {
   hasReadyMatrixEnvAuth,
   resolveMatrixEnvAuthReadiness,

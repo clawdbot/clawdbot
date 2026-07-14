@@ -49,7 +49,7 @@ export function createAudioAsVoiceBuffer(params: {
 }
 
 /** Creates a stable duplicate key for a complete outbound payload. */
-export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
     statusNotice: isReplyPayloadStatusNotice(payload),

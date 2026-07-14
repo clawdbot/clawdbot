@@ -1,6 +1,6 @@
 // QQ Bot Markdown chunking keeps each sent message self-contained.
 
-export type QQBotBaseMarkdownChunker = (text: string, limit: number) => string[];
+type QQBotBaseMarkdownChunker = (text: string, limit: number) => string[];
 
 const QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 3600;
 
@@ -617,6 +617,3 @@ function isClosingFenceLine(line: string, fence: ActiveFence): boolean {
     match?.[2] && match[2][0] === markerChar && match[2].length >= fence.marker.length,
   );
 }
-
-// Exposed for unit testing of the table-cell splitting logic only.
-export const testing = { splitTableCells, splitPartialTableCells };

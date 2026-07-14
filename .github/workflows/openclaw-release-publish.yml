@@ -99,6 +99,7 @@ jobs:
     steps:
       - name: Validate inputs
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -111,6 +112,7 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
@@ -171,8 +173,24 @@ jobs:
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" ]]; then
-            echo "OpenClaw Release Publish must use trusted main workflow tooling, except for a matching Tideclaw alpha branch." >&2
+          sha_pinned_release_publish=false
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+            if [[ "${WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+              echo "SHA-pinned release publish branch does not match workflow SHA ${WORKFLOW_SHA}." >&2
+              exit 1
+            fi
+            merge_base_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/compare/${WORKFLOW_SHA}...main" \
+                --jq '.merge_base_commit.sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            if [[ "${merge_base_sha}" != "${WORKFLOW_SHA}" ]]; then
+              echo "SHA-pinned release publish workflow revision is not reachable from current main." >&2
+              exit 1
+            fi
+            sha_pinned_release_publish=true
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]; then
+            echo "OpenClaw Release Publish must use trusted main workflow tooling, a SHA-pinned release-publish branch, or a matching Tideclaw alpha branch." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -607,7 +625,9 @@ jobs:
               "${plan_args[@]}" > "${plan_path}"
           cat "${plan_path}"
 
-          bootstrap_should_dispatch="$(jq -er '.bootstrap.shouldDispatch' "${plan_path}")"
+          bootstrap_should_dispatch="$(
+            jq -er '.bootstrap.shouldDispatch | select(type == "boolean") | tostring' "${plan_path}"
+          )"
           echo "bootstrap_should_dispatch=${bootstrap_should_dispatch}" >> "${GITHUB_OUTPUT}"
           if [[ "${bootstrap_should_dispatch}" != "true" ]]; then
             exit 0

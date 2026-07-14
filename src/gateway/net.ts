@@ -11,10 +11,7 @@ import {
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBindMode } from "../config/types.gateway.js";
-import {
-  resetContainerEnvironmentCacheForTest,
-  isContainerEnvironment,
-} from "../infra/container-environment.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
@@ -232,10 +229,7 @@ export function resolveRequestClientIp(
   });
 }
 
-export {
-  isContainerEnvironment,
-  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
-};
+export { isContainerEnvironment };
 
 /**
  * Resolves gateway bind host with fallback strategy.

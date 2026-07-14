@@ -20,6 +20,10 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import {
+  WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
+  validateWorkerInferenceStartParams,
+} from "./worker-inference.js";
 
 const bundleHash = "a".repeat(64);
 const handshake: WorkerAdmissionHandshake = {
@@ -42,6 +46,7 @@ const connectParams = {
     environmentId: "worker-1",
     credential,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: WORKER_RPC_SET_VERSION,
     handshake,
@@ -113,6 +118,20 @@ const params = (liveEvent: unknown, overrides: Record<string, unknown> = {}) => 
 const tool = (phase: string, payload: Record<string, unknown>) =>
   event("tool", { phase, name: "t", toolCallId: "c", ...payload });
 
+const inferenceIdentity = {
+  runEpoch: 2,
+  sessionId: "session-1",
+  runId: "run-1",
+  turnId: "turn-1",
+};
+const inferenceStart = {
+  ...inferenceIdentity,
+  modelRef: { provider: "fixture-provider", model: "fixture-model" },
+  context: {
+    messages: [{ role: "user" as const, content: "Run the probe.", timestamp: 1 }],
+  },
+  options: { temperature: 0.5, maxTokens: 1_024, reasoning: "medium" as const },
+};
 const approval = (phase: string, status: string) =>
   event("approval", { phase, kind: "exec", status, title: "x" });
 const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
@@ -172,6 +191,29 @@ describe("worker protocol schemas", () => {
         params: connectParams,
       }),
     ).toBe(true);
+    const missingRunId = structuredClone(connectParams);
+    Reflect.deleteProperty(missingRunId.admission, "runId");
+    expect(
+      validateWorkerConnectRequestFrame({
+        type: "req",
+        id: "connect-missing-run",
+        method: "connect",
+        params: missingRunId,
+      }),
+    ).toBe(false);
+    for (const admission of [
+      { ...connectParams.admission, sessionId: null, runId: "run-1" },
+      { ...connectParams.admission, sessionId: "session-1", runId: null },
+    ]) {
+      expect(
+        validateWorkerConnectRequestFrame({
+          type: "req",
+          id: "connect-mismatched-session-run",
+          method: "connect",
+          params: { ...connectParams, admission },
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(WorkerAdmissionResponseFrameSchema, {
         type: "res",
@@ -327,6 +369,25 @@ describe("worker protocol schemas", () => {
     }
   });
 
+  it("accepts only a model reference and constrained inference options", () => {
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        options: { ...inferenceStart.options, reasoning: "adaptive" },
+      }),
+    ).toBe(true);
+    const route = { baseUrl: "https://invalid.example", headers: { "x-route": "override" } };
+    for (const candidate of [
+      { ...inferenceStart, model: { provider: "p", id: "m", ...route } },
+      { ...inferenceStart, modelRef: { ...inferenceStart.modelRef, ...route } },
+      { ...inferenceStart, options: { ...inferenceStart.options, ...route } },
+      { ...inferenceStart, options: { ...inferenceStart.options, arbitrary: true } },
+      { ...inferenceStart, options: { maxTokens: WORKER_INFERENCE_MAX_OUTPUT_TOKENS + 1 } },
+    ]) {
+      expect(validateWorkerInferenceStartParams(candidate)).toBe(false);
+    }
+  });
+
   it.each([
     { runEpoch: 2, seq: 1, baseLeafId: null, messages: [] },
     { runEpoch: 2, seq: 0, baseLeafId: null, messages: transcriptMessages },
@@ -412,6 +473,7 @@ describe("worker protocol schemas", () => {
 
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
   });
 });

@@ -6,8 +6,10 @@ import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/st
 import type { GhConfigDiscoveryInput } from "../skills/lifecycle/gh-config-discovery.js";
 import {
   collectUnavailableAgentSkills,
-  describeGhConfigDirHintFromDiscovery,
   disableUnavailableSkillsInConfig,
+} from "./doctor-skills-core.js";
+import {
+  describeGhConfigDirHintFromDiscovery,
   formatUnavailableSkillDoctorLines,
 } from "./doctor-skills.js";
 

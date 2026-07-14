@@ -17,7 +17,7 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
-export type CollectGatewayConfigFindingsOptions = {
+type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };

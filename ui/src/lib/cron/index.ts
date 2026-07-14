@@ -5,6 +5,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsListResult,
   CronJobsSortBy,
+  CronRunResult,
   CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
@@ -23,6 +24,9 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { loadCronFailingCount } from "./scope.ts";
+
+export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -97,7 +101,7 @@ function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
 
-export const DEFAULT_CRON_FORM: CronFormState = {
+const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
@@ -175,7 +179,10 @@ export type CronState = {
   cronJobsLastStatusFilter: CronJobsLastStatusFilter;
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
+  cronAgentId: string | null;
   cronStatus: CronStatus | null;
+  cronScopedTotal: number | null;
+  cronScopedNextWakeAtMs: number | null;
   // Global enabled+error job count for the stats card; null until loaded.
   // Kept separate from cronJobs, which only holds the filtered/paged table.
   cronFailingCount: number | null;
@@ -229,7 +236,10 @@ export function createInitialCronState(
     cronJobsLastStatusFilter: "all",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
+    cronAgentId: null,
     cronStatus: null,
+    cronScopedTotal: null,
+    cronScopedNextWakeAtMs: null,
     cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
@@ -361,26 +371,6 @@ export async function loadCronStatus(state: CronState) {
     } else {
       state.cronError = String(err);
     }
-  }
-}
-
-export async function loadCronFailingCount(state: CronState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    // The stats card needs the unfiltered failing total; the jobs table only
-    // holds the current filtered page. limit=1 because only `total` matters.
-    const res = await state.client.request<CronJobsListResult>("cron.list", {
-      enabled: "enabled",
-      lastRunStatus: "error",
-      limit: 1,
-      offset: 0,
-    });
-    state.cronFailingCount = typeof res?.total === "number" ? res.total : null;
-  } catch {
-    // A missing count degrades the card to n/a; never surface as a page error.
-    state.cronFailingCount = null;
   }
 }
 
@@ -563,6 +553,7 @@ export async function loadCronJobsPage(
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult>("cron.list", {
+      ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
       includeDisabled: state.cronJobsEnabledFilter === "all",
       limit: state.cronJobsLimit,
       offset,
@@ -953,7 +944,7 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   return patch;
 }
 
-export type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
+type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {
@@ -1017,6 +1008,13 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       }
     }
     const selectedDeliveryMode = form.deliveryMode;
+    const normalizedDeliveryAccountId = form.deliveryAccountId.trim();
+    // Update patches need null to clear stored routing; create payloads must
+    // omit blanks because the Gateway accountId schema rejects empty strings.
+    const deliveryAccountId =
+      selectedDeliveryMode === "announce"
+        ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
+        : undefined;
     const delivery =
       selectedDeliveryMode && selectedDeliveryMode !== "none"
         ? {
@@ -1028,8 +1026,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                   })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
-            accountId:
-              selectedDeliveryMode === "announce" ? form.deliveryAccountId.trim() : undefined,
+            accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
           }
         : selectedDeliveryMode === "none"
@@ -1107,9 +1104,37 @@ export async function toggleCronJob(
   return updated;
 }
 
+function cronRunNotStartedMessage(result: CronRunResult): string {
+  if (!("reason" in result)) {
+    return t("cron.runNotStarted.unknown");
+  }
+  switch (result.reason) {
+    case "not-due":
+      return t("cron.runNotStarted.notDue");
+    case "already-running":
+      return t("cron.runNotStarted.alreadyRunning");
+    case "restart-recovery-pending":
+      return t("cron.runNotStarted.recoveryPending");
+    case "invalid-spec":
+      return t("cron.runNotStarted.invalidSpec");
+    case "stopped":
+      return t("cron.runNotStarted.stopped");
+  }
+  return t("cron.runNotStarted.unknown");
+}
+
 export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
   await withCronBusy(state, async (client) => {
-    await client.request("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    if (!result.ok || ("ran" in result && !result.ran)) {
+      state.cronError = cronRunNotStartedMessage(result);
+      // Invalid persisted specs create a skipped history entry with diagnostics;
+      // true no-op outcomes have no new history to fetch.
+      if ("reason" in result && result.reason === "invalid-spec") {
+        await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
+      }
+      return;
+    }
     await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
   });
 }
@@ -1152,6 +1177,7 @@ export async function loadCronRuns(
     }
     const offset = append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0;
     const res = await state.client.request<CronRunsResult>("cron.runs", {
+      ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
       scope,
       id: scope === "job" ? (activeJobId ?? undefined) : undefined,
       limit: state.cronRunsLimit,

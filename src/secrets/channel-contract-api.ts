@@ -63,7 +63,7 @@ function loadBundledChannelPublicArtifact(
   }
 }
 
-export type BundledChannelSecretContractApi = Pick<
+type BundledChannelSecretContractApi = Pick<
   BundledChannelContractApi,
   "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
 >;
@@ -231,7 +231,7 @@ export function loadChannelSecretContractApiForRecord(
   return loadExternalChannelSecretContractFromRecord(record);
 }
 
-export type BundledChannelSecurityContractApi = Pick<
+type BundledChannelSecurityContractApi = Pick<
   BundledChannelContractApi,
   "unsupportedSecretRefSurfacePatterns" | "collectUnsupportedSecretRefConfigCandidates"
 >;

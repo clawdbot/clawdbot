@@ -16,6 +16,10 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
+// Cert fetch shares the same deadline as outbound API calls. Without a timeout,
+// a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
+// cold-start and every 10-minute cache refresh.
+const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
   return readProviderJsonResponse<Record<string, string>>(
@@ -26,18 +30,8 @@ async function readGoogleChatCertsResponse(response: Response): Promise<Record<s
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
-type GoogleAuthModule = typeof import("google-auth-library");
-type GoogleAuthRuntime = {
-  GoogleAuth: GoogleAuthModule["GoogleAuth"];
-  OAuth2Client: GoogleAuthModule["OAuth2Client"];
-};
+type GoogleAuthRuntime = Awaited<ReturnType<typeof loadGoogleAuthRuntime>>;
 type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
-type GoogleAuthOptions = ConstructorParameters<GoogleAuthRuntime["GoogleAuth"]>[0];
-type GoogleAuthTransport = NonNullable<GoogleAuthOptions>["clientOptions"] extends {
-  transporter?: infer T;
-}
-  ? T
-  : never;
 type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
 
 const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
@@ -50,9 +44,7 @@ async function getVerifyClient(): Promise<OAuth2ClientInstance> {
     verifyClientPromise = (async () => {
       try {
         const { OAuth2Client } = await loadGoogleAuthRuntime();
-        // google-auth-library types its transporter through gaxios' CJS surface,
-        // while the plugin imports the ESM entrypoint directly.
-        const transporter = (await getGoogleAuthTransport()) as unknown as GoogleAuthTransport;
+        const transporter = await getGoogleAuthTransport();
         return new OAuth2Client({ transporter });
       } catch (error) {
         verifyClientPromise = null;
@@ -79,12 +71,11 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   if (cached && cached.key === key) {
     return cached.auth;
   }
-  const [{ GoogleAuth }, rawTransporter, credentials] = await Promise.all([
+  const [{ GoogleAuth }, transporter, credentials] = await Promise.all([
     loadGoogleAuthRuntime(),
     getGoogleAuthTransport(),
     resolveValidatedGoogleChatCredentials(account),
   ]);
-  const transporter = rawTransporter as unknown as GoogleAuthTransport;
 
   const evictOldest = () => {
     if (authCache.size > MAX_AUTH_CACHE_SIZE) {
@@ -126,6 +117,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: CHAT_CERTS_URL,
     auditContext: "googlechat.auth.certs",
+    timeoutMs: GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

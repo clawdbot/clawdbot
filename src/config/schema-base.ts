@@ -146,7 +146,7 @@ function applyNodeDocumentation(
   }
 }
 
-export type BaseConfigSchemaResponse = {
+type BaseConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
   version: string;

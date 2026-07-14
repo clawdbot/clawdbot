@@ -11,7 +11,7 @@ import {
 } from "./openai-tool-schema.js";
 
 /** Options for converting internal tool schemas to OpenAI Responses function tools. */
-export interface ConvertResponsesToolsOptions {
+interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
   supportsStrictMode?: boolean;
@@ -35,14 +35,6 @@ type ConvertedResponsesTools = {
 const LOG_SUBSYSTEM = "llm/openai-responses";
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
 const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
-
-/** Converts tools to deterministic OpenAI Responses function tool definitions. */
-export function convertResponsesTools(
-  tools: Tool[],
-  options?: ConvertResponsesToolsOptions,
-): OpenAITool[] {
-  return convertResponsesToolPayload(tools, options).tools;
-}
 
 /** Converts and returns the projection used to reconcile tool choices. */
 export function convertResponsesToolPayload(

@@ -2129,6 +2129,8 @@ class NodeRuntime private constructor(
 
   private var didAutoConnect = false
 
+  @Volatile private var preferredGatewayReconnectSuppressed = false
+
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
@@ -2399,6 +2401,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
   ): Boolean {
+    preferredGatewayReconnectSuppressed = false
     val intent = gatewayLifecycleIntentSeq.incrementAndGet()
     return gatewaySwitchMutex.withLock {
       if (intent != gatewayLifecycleIntentSeq.get()) return@withLock false
@@ -2430,6 +2433,7 @@ class NodeRuntime private constructor(
   }
 
   private fun autoConnectIfNeeded() {
+    if (preferredGatewayReconnectSuppressed) return
     if (didAutoConnect) return
     if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
@@ -2444,6 +2448,7 @@ class NodeRuntime private constructor(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
+    if (preferredGatewayReconnectSuppressed) return
     if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
@@ -2458,11 +2463,15 @@ class NodeRuntime private constructor(
   }
 
   fun setCameraEnabled(value: Boolean) {
+    if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationMode(mode: LocationMode) {
+    if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -2496,13 +2505,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -3082,6 +3091,7 @@ class NodeRuntime private constructor(
     }
 
   fun refreshGatewayConnection() {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchGatewayLifecycle {
       val endpoint = connectedEndpoint
@@ -3103,8 +3113,9 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshNodeSurfaceAfterSharingChange() {
+  private fun refreshNodeSurfaceAfterSettingsChange() {
     launchGatewayLifecycle {
+      if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
       connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
     }
@@ -3335,6 +3346,7 @@ class NodeRuntime private constructor(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = null)
   }
@@ -3343,6 +3355,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = auth)
   }
@@ -3487,6 +3500,7 @@ class NodeRuntime private constructor(
 
   fun disconnect() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = false)
     }
@@ -3494,6 +3508,7 @@ class NodeRuntime private constructor(
 
   fun prepareForGatewaySetup() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = true)
     }
@@ -6137,6 +6152,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubOwnerHandle =
+            clawHub
+              ?.get("ownerHandle")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubInstalledVersion =
             clawHub
               ?.get("installedVersion")
@@ -6879,6 +6900,7 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )
 

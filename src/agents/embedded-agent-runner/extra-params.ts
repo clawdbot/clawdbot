@@ -1129,6 +1129,7 @@ export function applyExtraParamsToAgent(
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
+    workspaceDir,
     context: {
       config: cfg,
       agentDir,

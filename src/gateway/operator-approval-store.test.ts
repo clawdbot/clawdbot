@@ -22,19 +22,23 @@ import {
   consumeOperatorApprovalAllowOnce,
   expireDueOperatorApprovals,
   forceDenyOperatorApproval,
-  getOperatorApproval,
   getOperatorApprovalDetailed,
   getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
-  OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
-  type NewOperatorApproval,
 } from "./operator-approval-store.js";
 
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
+type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
+const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 
 const tempDirs: string[] = [];
 

@@ -81,6 +81,11 @@ internal fun parseClawHubInstallReview(
   val version = latestVersion?.string("version") ?: fallback.version ?: return null
   val ownerDisplayName = owner?.string("displayName")
   val ownerHandle = owner?.string("handle")
+  val reviewedSlug =
+    canonicalClawHubSkillReference(
+      slug = skill?.string("slug") ?: fallback.slug,
+      ownerHandle = ownerHandle,
+    ) ?: return null
   val author =
     when {
       ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) ->
@@ -90,7 +95,7 @@ internal fun parseClawHubInstallReview(
       else -> "Unknown publisher"
     }
   return GatewayClawHubInstallReview(
-    slug = fallback.slug,
+    slug = reviewedSlug,
     displayName = skill?.string("displayName") ?: fallback.displayName,
     summary = skill?.string("summary") ?: fallback.summary,
     version = version,
@@ -162,11 +167,51 @@ internal fun formatClawHubInstallMessage(
 internal fun isClawHubSkillInstalled(
   skills: List<GatewaySkillSummary>,
   slug: String,
+): Boolean {
+  val reference = parseClawHubSkillReference(slug) ?: return false
+  return skills.any { it.matchesClawHubReference(reference) }
+}
+
+internal fun isClawHubSkillInstalled(
+  skills: List<GatewaySkillSummary>,
+  slug: String,
   version: String,
 ): Boolean =
-  skills.any {
-    it.clawHubValid && it.clawHubSlug == slug && it.clawHubInstalledVersion == version
-  }
+  parseClawHubSkillReference(slug)?.let { reference ->
+    skills.any { it.matchesClawHubReference(reference) && it.clawHubInstalledVersion == version }
+  } ?: false
+
+private data class ClawHubSkillReference(
+  val slug: String,
+  val ownerHandle: String?,
+)
+
+private fun parseClawHubSkillReference(rawValue: String): ClawHubSkillReference? {
+  val value = rawValue.trim()
+  if (value.isEmpty()) return null
+  if (!value.startsWith("@")) return ClawHubSkillReference(value, null)
+  val parts = value.drop(1).split("/")
+  if (parts.size != 2 || parts.any(String::isEmpty)) return null
+  return ClawHubSkillReference(slug = parts[1], ownerHandle = parts[0].lowercase())
+}
+
+private fun canonicalClawHubSkillReference(
+  slug: String,
+  ownerHandle: String?,
+): String? {
+  val reference = parseClawHubSkillReference(slug) ?: return null
+  val owner = ownerHandle?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: reference.ownerHandle
+  return owner?.let { "@$it/${reference.slug}" } ?: reference.slug
+}
+
+private fun GatewaySkillSummary.matchesClawHubReference(reference: ClawHubSkillReference): Boolean {
+  if (!clawHubValid) return false
+  val installedReference = clawHubSlug?.let(::parseClawHubSkillReference) ?: return false
+  if (!installedReference.slug.equals(reference.slug, ignoreCase = true)) return false
+  val requestedOwner = reference.ownerHandle ?: return true
+  val installedOwner = installedReference.ownerHandle ?: clawHubOwnerHandle
+  return installedOwner?.equals(requestedOwner, ignoreCase = true) == true
+}
 
 internal fun clawHubInstallOutcomeUnknownMessage(slug: String): String = "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running."
 

@@ -205,7 +205,7 @@ function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalReque
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
 
-export function addExecApproval(
+function addExecApproval(
   queue: ExecApprovalRequest[],
   entry: ExecApprovalRequest,
 ): ExecApprovalRequest[] {

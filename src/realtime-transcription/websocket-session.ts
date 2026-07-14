@@ -1,6 +1,8 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
+import { RetrySupervisor } from "../../packages/retry/src/index.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEvent } from "../proxy-capture/runtime.js";
 import type {
@@ -48,7 +50,6 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
-const DEFAULT_RECONNECT_DELAY_MS = 1000;
 const DEFAULT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 // A raw WebSocket open is not recovery. Only a provider-ready connection
 // that survives this window earns a fresh retry budget.
@@ -85,7 +86,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private queuedBytes = 0;
   private ready = false;
   private readySinceMs: number | undefined;
-  private reconnectAttempts = 0;
+  private readonly reconnectSupervisor: RetrySupervisor;
   private reconnecting = false;
   private suppressReconnect = false;
   private ws: WebSocket | null = null;
@@ -97,10 +98,20 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
 
   constructor(options: RealtimeTranscriptionWebSocketSessionOptions<Event>) {
     this.options = options;
+    this.reconnectSupervisor = new RetrySupervisor(
+      {
+        initialMs: options.reconnectDelayMs ?? 1000,
+        maxMs: Number.MAX_SAFE_INTEGER,
+        factor: 2,
+        jitter: 0,
+      },
+      options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    );
     this.transport = {
       callbacks: options.callbacks,
       closeNow: () => {
         this.closed = true;
+        this.reconnectSupervisor.cancel();
         this.forceClose();
       },
       failConnect: (error) => this.failConnect?.(error),
@@ -116,7 +127,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.closed = false;
     this.suppressReconnect = false;
     this.readySinceMs = undefined;
-    this.reconnectAttempts = 0;
+    this.reconnectSupervisor.reset();
     await this.doConnect();
   }
 
@@ -138,6 +149,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.connected = false;
     this.ready = false;
     this.readySinceMs = undefined;
+    this.reconnectSupervisor.cancel();
     this.queuedAudio = [];
     this.queuedBytes = 0;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -159,21 +171,12 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private get closeTimeoutMs(): number {
     return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
   }
-
   private get connectTimeoutMs(): number {
     return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   }
 
   private get maxQueuedBytes(): number {
     return this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
-  }
-
-  private get maxReconnectAttempts(): number {
-    return this.options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
-  }
-
-  private get reconnectDelayMs(): number {
-    return this.options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
   }
 
   private async doConnect(): Promise<void> {
@@ -314,7 +317,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           this.ready = false;
           this.readySinceMs = undefined;
           if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
-            this.reconnectAttempts = 0;
+            this.reconnectSupervisor.reset();
           }
           if (this.closeTimer) {
             clearTimeout(this.closeTimer);
@@ -359,7 +362,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     if (this.closed || this.reconnecting) {
       return;
     }
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+    const retry = this.reconnectSupervisor.next();
+    if (!retry) {
       this.emitError(
         new Error(
           this.options.reconnectLimitMessage ??
@@ -368,13 +372,9 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       );
       return;
     }
-    this.reconnectAttempts += 1;
-    const delay = this.reconnectDelayMs * 2 ** (this.reconnectAttempts - 1);
     this.reconnecting = true;
     try {
-      await new Promise((resolve) => {
-        setTimeout(resolve, delay);
-      });
+      await sleepWithAbort(retry.delayMs, retry.signal);
       if (!this.closed) {
         await this.doConnect();
       }

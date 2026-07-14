@@ -1,15 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  ANNOTATION_OVERLAY_ATTR,
   type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   planAnnotations,
   type RawAnnotationInput,
-  refToNumber,
   scaleAnnotations,
 } from "./screenshot-annotate.js";
+
+const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
 
 const sampleInputs: RawAnnotationInput[] = [
   {
@@ -24,26 +24,6 @@ const sampleInputs: RawAnnotationInput[] = [
     doc: { x: 300, y: 1500, width: 80, height: 18 },
   },
 ];
-
-describe("refToNumber", () => {
-  it("extracts number from `e<N>` form", () => {
-    expect(refToNumber("e12")).toBe(12);
-    expect(refToNumber("e0")).toBe(0);
-  });
-
-  it("extracts number from `ax<N>` form", () => {
-    expect(refToNumber("ax12")).toBe(12);
-  });
-
-  it("extracts number from bare numeric form", () => {
-    expect(refToNumber("12")).toBe(12);
-  });
-
-  it("returns 0 for non-numeric refs", () => {
-    expect(refToNumber("foo")).toBe(0);
-    expect(refToNumber("")).toBe(0);
-  });
-});
 
 describe("planAnnotations - viewport mode", () => {
   it("subtracts scroll from doc coords", () => {

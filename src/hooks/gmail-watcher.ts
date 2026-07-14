@@ -177,7 +177,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
-export type GmailWatcherStartResult = {
+type GmailWatcherStartResult = {
   started: boolean;
   reason?: string;
 };

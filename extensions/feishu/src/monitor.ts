@@ -3,12 +3,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import {
-  clearFeishuWebhookRateLimitStateForTest,
-  getFeishuWebhookRateLimitStateSizeForTest,
-  isWebhookRateLimitedForTest,
-  stopFeishuMonitorState,
-} from "./monitor.state.js";
 
 type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -42,12 +36,6 @@ export type FeishuStatusSink = (patch: {
 }) => void;
 
 const loadMonitorAccountRuntime = createLazyRuntimeModule(() => import("./monitor.account.js"));
-
-export {
-  clearFeishuWebhookRateLimitStateForTest,
-  getFeishuWebhookRateLimitStateSizeForTest,
-  isWebhookRateLimitedForTest,
-};
 
 export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
   const cfg = opts.config;
@@ -118,8 +106,4 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   }
 
   await Promise.all(monitorPromises);
-}
-
-export async function stopFeishuMonitor(accountId?: string): Promise<void> {
-  await stopFeishuMonitorState(accountId);
 }

@@ -32,7 +32,7 @@ export class ImageProcessorUnavailableError extends Error {
 }
 
 /** JPEG resize request passed through the media-runtime/plugin SDK surface. */
-export type ResizeToJpegParams = {
+type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
   quality: number;
@@ -40,7 +40,7 @@ export type ResizeToJpegParams = {
 };
 
 /** PNG resize request passed through the media-runtime/plugin SDK surface. */
-export type ResizeToPngParams = {
+type ResizeToPngParams = {
   buffer: Buffer;
   maxSide: number;
   compressionLevel?: number;

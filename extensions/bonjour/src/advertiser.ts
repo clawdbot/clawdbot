@@ -1,12 +1,9 @@
-/**
- * Bonjour advertiser runtime. It publishes gateway/canvas/SSH service records,
- * watches ciao state, and repairs stuck or conflicting advertisements.
- */
+/** Publishes gateway/canvas/SSH records and repairs stuck or conflicting ciao advertisements. */
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -17,7 +14,6 @@ const childProcessModule = nodeRequire("node:child_process") as {
   exec: typeof import("node:child_process").exec;
 };
 
-/** Running Bonjour advertiser handle. */
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
@@ -36,41 +32,10 @@ type GatewayBonjourAdvertiseOpts = {
   minimal?: boolean;
 };
 
-type BonjourService = {
-  serviceState?: unknown;
-  advertise: () => Promise<void>;
-  destroy: () => Promise<void>;
-  getFQDN: () => string;
-  getHostname: () => string;
-  getPort: () => number;
-  on: (event: "name-change" | "hostname-change", listener: (value: unknown) => void) => unknown;
-};
-
-type BonjourResponder = {
-  createService: (options: {
-    name: string;
-    type: string;
-    protocol: unknown;
-    port: number;
-    domain: string;
-    hostname: string;
-    txt: Record<string, string>;
-  }) => BonjourService;
-  shutdown: () => Promise<void>;
-};
-
-type CiaoModule = {
-  getResponder: () => BonjourResponder;
-  Protocol: { TCP: unknown };
-};
-
-type BonjourCycle = {
-  responder: BonjourResponder;
-  services: Array<{ label: string; svc: BonjourService }>;
-};
+type BonjourCycle = Array<{ label: string; svc: CiaoService }>;
 
 type ServiceStateTracker = {
-  state: string;
+  state: CiaoService["serviceState"];
   sinceMs: number;
 };
 
@@ -90,19 +55,15 @@ type BonjourAdvertiserDeps = {
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const CONFLICT_SETTLE_MS = 30_000;
-// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
-// previous 8s threshold was triggering false-positive teardowns on every gateway
-// restart in such environments. 20s gives healthy networks plenty of room while
-// still catching genuinely stuck advertisers (announce that never completes).
+// LAN announce typically takes 12-13s on Mac/iOS. A 20s threshold avoids false-positive
+// restart teardowns while still catching advertisers that never complete.
 // See https://github.com/openclaw/openclaw/issues/72481
 const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
 const MAX_CONSECUTIVE_STUCK_STATE_RESTARTS = 1;
-// A flapping advertiser can briefly reach "announced" between probing
-// failures, which resets the consecutive counter. Bound total restarts too.
+// Bound total restarts because flapping can briefly reset the consecutive counter.
 const RESTART_WINDOW_MS = 30 * 60_000;
 const MAX_RESTARTS_IN_WINDOW = 5;
-const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -112,12 +73,9 @@ const defaultLogger = {
   debug: (_msg: string) => {},
 };
 
-const CIAO_MODULE_ID = "@homebridge/ciao";
 const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
 let ciaoExecHidePatchDepth = 0;
 let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
-
-const loadCiaoModule = createLazyRuntimeModule(() => import(CIAO_MODULE_ID) as Promise<CiaoModule>);
 
 function readBonjourDisableOverride(): boolean | null {
   const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
@@ -232,35 +190,8 @@ function prettifyInstanceName(name: string) {
   return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
 }
 
-function serviceSummary(label: string, svc: BonjourService): string {
-  let fqdn = "unknown";
-  let hostname = "unknown";
-  let port = -1;
-  try {
-    fqdn = svc.getFQDN();
-  } catch {
-    // ignore
-  }
-  try {
-    hostname = svc.getHostname();
-  } catch {
-    // ignore
-  }
-  try {
-    port = svc.getPort();
-  } catch {
-    // ignore
-  }
-  const state = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
-  return `${label} fqdn=${fqdn} host=${hostname} port=${port} state=${state}`;
-}
-
-function isAnnouncedState(state: string) {
-  return state === BONJOUR_ANNOUNCED_STATE;
-}
-
-function isAdvertisingInProgressState(state: string) {
-  return state === "probing" || state === "announcing";
+function serviceSummary(label: string, svc: CiaoService): string {
+  return `${label} fqdn=${svc.getFQDN()} host=${svc.getHostname()} port=${svc.getPort()} state=${svc.serviceState}`;
 }
 
 function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
@@ -370,6 +301,12 @@ export async function startGatewayBonjourAdvertiser(
   if (isDisabledByEnv()) {
     return { stop: async () => {} };
   }
+  const announcedState = "announced" as CiaoService["serviceState"];
+  const activeStates = new Set<CiaoService["serviceState"]>([
+    announcedState,
+    "announcing" as CiaoService["serviceState"],
+    "probing" as CiaoService["serviceState"],
+  ]);
 
   const logger = {
     info: deps.logger?.info ?? defaultLogger.info,
@@ -395,7 +332,7 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   try {
-    const { getResponder, Protocol } = await loadCiaoModule();
+    const { getResponder } = await import("@homebridge/ciao");
     restoreConsoleLog = installCiaoConsoleNoiseFilter();
     const handleCiaoProcessError = (reason: unknown): boolean => {
       const classification = classifyCiaoProcessError(reason);
@@ -478,12 +415,11 @@ export async function startGatewayBonjourAdvertiser(
     const responder = getResponder();
 
     function createCycle(): BonjourCycle {
-      const services: Array<{ label: string; svc: BonjourService }> = [];
+      const services: BonjourCycle = [];
 
       const gateway = responder.createService({
         name: safeServiceName(instanceName),
         type: "openclaw-gw",
-        protocol: Protocol.TCP,
         port: opts.gatewayPort,
         domain: "local",
         hostname,
@@ -491,10 +427,10 @@ export async function startGatewayBonjourAdvertiser(
       });
       services.push({
         label: "gateway",
-        svc: gateway as unknown as BonjourService,
+        svc: gateway,
       });
 
-      return { responder, services };
+      return services;
     }
 
     async function stopCycle(
@@ -504,7 +440,7 @@ export async function startGatewayBonjourAdvertiser(
       if (!cycle) {
         return;
       }
-      for (const { svc } of cycle.services) {
+      for (const { svc } of cycle) {
         try {
           await svc.destroy();
         } catch {
@@ -513,28 +449,26 @@ export async function startGatewayBonjourAdvertiser(
       }
       try {
         if (optsValue?.shutdownResponder) {
-          await cycle.responder.shutdown();
+          await responder.shutdown();
         }
       } catch {
         /* ignore */
       }
     }
 
-    function attachConflictListeners(services: Array<{ label: string; svc: BonjourService }>) {
+    function attachConflictListeners(services: BonjourCycle) {
       for (const { label, svc } of services) {
         try {
-          svc.on("name-change", (name: unknown) => {
+          svc.on("name-change", (name) => {
             markConflictObserved(label, svc);
-            const next = typeof name === "string" ? name : String(name);
             logger.warn(
-              `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`,
+              `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
             );
           });
-          svc.on("hostname-change", (nextHostname: unknown) => {
+          svc.on("hostname-change", (nextHostname) => {
             markConflictObserved(label, svc);
-            const next = typeof nextHostname === "string" ? nextHostname : String(nextHostname);
             logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(next)}`,
+              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
             );
           });
         } catch (err) {
@@ -545,7 +479,7 @@ export async function startGatewayBonjourAdvertiser(
 
     function handleAdvertiseFailure(
       label: string,
-      svc: BonjourService,
+      svc: CiaoService,
       err: unknown,
       action: "failed" | "threw",
     ) {
@@ -565,7 +499,7 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    function startAdvertising(services: Array<{ label: string; svc: BonjourService }>) {
+    function startAdvertising(services: BonjourCycle) {
       for (const { label, svc } of services) {
         try {
           void svc
@@ -598,20 +532,19 @@ export async function startGatewayBonjourAdvertiser(
     const stateTracker = new Map<string, ServiceStateTracker>();
     const conflictTracker = new Map<string, number>();
 
-    const markConflictObserved = (label: string, svc: BonjourService) => {
+    const markConflictObserved = (label: string, svc: CiaoService) => {
       const now = Date.now();
       conflictTracker.set(label, now);
-      const nextState = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
-      stateTracker.set(label, { state: nextState, sinceMs: now });
+      stateTracker.set(label, { state: svc.serviceState, sinceMs: now });
     };
 
-    const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
+    const updateStateTrackers = (services: BonjourCycle) => {
       const now = Date.now();
       for (const { label, svc } of services) {
-        const nextState = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
+        const nextState = svc.serviceState;
         const current = stateTracker.get(label);
         const nextEnteredAt =
-          current && !isAnnouncedState(current.state) && !isAnnouncedState(nextState)
+          current && current.state !== announcedState && nextState !== announcedState
             ? current.sinceMs
             : now;
         if (!current || current.state !== nextState || current.sinceMs !== nextEnteredAt) {
@@ -671,8 +604,8 @@ export async function startGatewayBonjourAdvertiser(
         cycle = createCycle();
         stateTracker.clear();
         conflictTracker.clear();
-        attachConflictListeners(cycle.services);
-        startAdvertising(cycle.services);
+        attachConflictListeners(cycle);
+        startAdvertising(cycle);
       })().finally(() => {
         recreatePromise = null;
       });
@@ -681,8 +614,8 @@ export async function startGatewayBonjourAdvertiser(
     requestCiaoRecovery = (classification) => {
       void recreateAdvertiser(`ciao ${classification.kind}: ${classification.formatted}`);
     };
-    attachConflictListeners(cycle.services);
-    startAdvertising(cycle.services);
+    attachConflictListeners(cycle);
+    startAdvertising(cycle);
 
     const lastRepairAttempt = new Map<string, number>();
     const watchdog = setInterval(() => {
@@ -692,14 +625,11 @@ export async function startGatewayBonjourAdvertiser(
       if (disabled || !cycle) {
         return;
       }
-      updateStateTrackers(cycle.services);
-      for (const { label, svc } of cycle.services) {
+      updateStateTrackers(cycle);
+      for (const { label, svc } of cycle) {
         const now = Date.now();
-        const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
-        if (typeof stateUnknown !== "string") {
-          continue;
-        }
-        if (stateUnknown === "announced") {
+        const state = svc.serviceState;
+        if (state === announcedState) {
           consecutiveRestarts = 0;
           consecutiveStuckStateRestarts = 0;
           conflictTracker.delete(label);
@@ -712,13 +642,9 @@ export async function startGatewayBonjourAdvertiser(
           continue;
         }
         const tracked = stateTracker.get(label);
-        if (
-          stateUnknown !== "announced" &&
-          tracked &&
-          now - tracked.sinceMs >= STUCK_ANNOUNCING_MS
-        ) {
+        if (state !== announcedState && tracked && now - tracked.sinceMs >= STUCK_ANNOUNCING_MS) {
           void recreateAdvertiser(
-            `service stuck in ${stateUnknown} for ${now - tracked.sinceMs}ms (${serviceSummary(
+            `service stuck in ${state} for ${now - tracked.sinceMs}ms (${serviceSummary(
               label,
               svc,
             )})`,
@@ -726,7 +652,7 @@ export async function startGatewayBonjourAdvertiser(
           );
           return;
         }
-        if (stateUnknown === "announced" || isAdvertisingInProgressState(stateUnknown)) {
+        if (activeStates.has(state)) {
           continue;
         }
 

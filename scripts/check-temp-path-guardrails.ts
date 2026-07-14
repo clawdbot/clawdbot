@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import pMap from "p-map";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -225,42 +226,22 @@ async function readRuntimeSourceFiles(
   repoRoot: string,
   absolutePaths: string[],
 ): Promise<RuntimeSourceGuardrailFile[]> {
-  const output: Array<RuntimeSourceGuardrailFile | undefined> = Array.from({
-    length: absolutePaths.length,
-  });
-  let nextIndex = 0;
-
-  const worker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= absolutePaths.length) {
-        return;
-      }
-      const absolutePath = absolutePaths[index];
-      if (!absolutePath) {
-        continue;
-      }
-      let source: string;
+  const output = await pMap(
+    absolutePaths,
+    async (absolutePath): Promise<RuntimeSourceGuardrailFile | null> => {
       try {
-        source = await fs.readFile(absolutePath, "utf8");
+        return {
+          relativePath: path.relative(repoRoot, absolutePath),
+          source: await fs.readFile(absolutePath, "utf8"),
+        };
       } catch {
         // File tracked by git but deleted on disk (e.g. pending deletion).
-        continue;
+        return null;
       }
-      output[index] = {
-        relativePath: path.relative(repoRoot, absolutePath),
-        source,
-      };
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(FILE_READ_CONCURRENCY, Math.max(1, absolutePaths.length)) },
-    () => worker(),
+    },
+    { concurrency: FILE_READ_CONCURRENCY, stopOnError: false },
   );
-  await Promise.all(workers);
-  return output.filter((entry): entry is RuntimeSourceGuardrailFile => entry !== undefined);
+  return output.filter((entry): entry is RuntimeSourceGuardrailFile => entry !== null);
 }
 
 async function main() {

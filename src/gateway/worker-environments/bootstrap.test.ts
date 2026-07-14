@@ -4,13 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import {
-  bootstrapWorker as bootstrapWorkerCore,
-  type WorkerBootstrapCommandRunner,
-  type WorkerBootstrapDependencies,
-  type WorkerBootstrapRequest,
-} from "./bootstrap.js";
+import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
+
+type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
+type WorkerBootstrapDependencies = Parameters<typeof bootstrapWorkerCore>[1];
+type WorkerBootstrapCommandRunner = NonNullable<WorkerBootstrapDependencies["runCommand"]>;
 
 const BUNDLE_HASH = "a".repeat(64);
 const TARBALL_SHA256 = "b".repeat(64);
@@ -199,7 +198,7 @@ describe("bootstrapWorker", () => {
     const runner = fakeRunner([
       result({
         code: 45,
-        stderr: "OPENCLAW_WORKER_NODE_UNSUPPORTED: v22.18.0\n",
+        stderr: "OPENCLAW_WORKER_NODE_UNSUPPORTED: v24.14.1\n",
       }),
     ]);
 
@@ -208,9 +207,10 @@ describe("bootstrapWorker", () => {
         { ssh: SSH, artifact: BUNDLE },
         { resolveIdentity, runCommand: runner.runCommand },
       ),
-    ).rejects.toThrow("Node 22.19+, 23.11+, or 24+");
+    ).rejects.toThrow("Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite");
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]?.options.input).toContain("process.versions.node");
+    expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
   });
 
   it("installs only the exact npm package without transferring a tarball", async () => {
@@ -434,7 +434,8 @@ describe("bootstrapWorker", () => {
             await fs.copyFile(artifact.tarballPath, remoteTarball);
             return result();
           }
-          const isPreflight = options.input?.includes("expected_receipt=$2") ?? false;
+          const isPreflight =
+            typeof options.input === "string" && options.input.includes("expected_receipt=$2");
           const scriptArgs = isPreflight
             ? [artifact.bundleHash, receiptJson, "bundle"]
             : [

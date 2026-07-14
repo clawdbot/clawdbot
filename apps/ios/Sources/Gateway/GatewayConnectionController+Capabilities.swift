@@ -224,20 +224,14 @@ extension GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
+        permissions["calendar"] = Self.hasEventKitReadAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
+        permissions["reminders"] = Self.hasEventKitReadAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
         permissions["motion"] =
             motionStatus == .authorized || pedometerStatus == .authorized
-
-        let watchStatus = WatchMessagingService.currentStatusSnapshot()
-        permissions["watchSupported"] = watchStatus.supported
-        permissions["watchPaired"] = watchStatus.paired
-        permissions["watchAppInstalled"] = watchStatus.appInstalled
-        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
@@ -258,8 +252,8 @@ extension GatewayConnectionController {
         }
     }
 
-    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
-        status == .fullAccess || status == .writeOnly
+    private static func hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
     }
 
     private static func motionAvailable() -> Bool {
@@ -279,6 +273,14 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
+    }
+
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
+    }
+
+    static func _test_hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        self.hasEventKitReadAccess(status)
     }
 
     static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {

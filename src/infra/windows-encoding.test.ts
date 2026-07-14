@@ -6,16 +6,9 @@ import {
   createWindowsOutputDecoder,
   decodeWindowsOutputBuffer,
   decodeWindowsTextFileBuffer,
-  parseWindowsCodePage,
 } from "./windows-encoding.js";
 
 describe("windows output encoding", () => {
-  it("parses code pages from chcp output text", () => {
-    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
-    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
-    expect(parseWindowsCodePage("no code page")).toBeNull();
-  });
-
   it("decodes GBK output on Windows when UTF-8 is invalid and code page is known", () => {
     const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
 

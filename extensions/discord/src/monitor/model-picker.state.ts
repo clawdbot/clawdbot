@@ -12,9 +12,7 @@ import type { ComponentData } from "../internal/discord.js";
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
 export const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
 
-export const DISCORD_COMPONENT_MAX_ROWS = 5;
-export const DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW = 5;
-export const DISCORD_COMPONENT_MAX_SELECT_OPTIONS = 25;
+const DISCORD_COMPONENT_MAX_SELECT_OPTIONS = 25;
 
 export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
@@ -43,8 +41,8 @@ const PICKER_ACTIONS = [
 const PICKER_VIEWS = ["providers", "models", "recents"] as const;
 
 export type DiscordModelPickerCommandContext = (typeof COMMAND_CONTEXTS)[number];
-export type DiscordModelPickerAction = (typeof PICKER_ACTIONS)[number];
-export type DiscordModelPickerView = (typeof PICKER_VIEWS)[number];
+type DiscordModelPickerAction = (typeof PICKER_ACTIONS)[number];
+type DiscordModelPickerView = (typeof PICKER_VIEWS)[number];
 export type DiscordModelPickerLayout = "v2" | "classic";
 
 export type DiscordModelPickerState = {
@@ -75,7 +73,7 @@ export type DiscordModelPickerState = {
  * select cap. Below this threshold the user gets the existing flat list +
  * prev/next behavior unchanged.
  */
-export const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 export const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
@@ -550,7 +548,7 @@ export function findModelBucketId(
   return containing && containing.id !== "all" ? containing.id : undefined;
 }
 
-export function buildDiscordModelPickerProviderItems(
+function buildDiscordModelPickerProviderItems(
   data: ModelsProviderData,
 ): DiscordModelPickerProviderItem[] {
   // Sort lexicographically so the alpha-bucket boundaries are deterministic

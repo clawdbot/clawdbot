@@ -20,10 +20,7 @@ interface BackupMaintenanceFs extends BackupRotationFs {
  * Missing slots are ignored so interrupted writes or first-run configs do not
  * block the next config write.
  */
-export async function rotateConfigBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
@@ -48,10 +45,7 @@ export async function rotateConfigBackups(
  * Backups are copied on mixed filesystems, so copy mode preservation is not a
  * portable security guarantee.
  */
-export async function hardenBackupPermissions(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
@@ -67,10 +61,7 @@ export async function hardenBackupPermissions(
 }
 
 /** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-export async function cleanOrphanBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.readdir) {
     return;
   }
@@ -133,7 +124,7 @@ export async function createPreUpdateConfigSnapshot(params: {
   if (preUpdateConfigSnapshotsWritten.has(snapshotKey)) {
     return;
   }
-  // Mark before I/O so a failed best-effort write cannot loop on every later write.
+  // Mark before I/O so concurrent callers coalesce onto the in-flight snapshot attempt.
   preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
@@ -144,7 +135,8 @@ export async function createPreUpdateConfigSnapshot(params: {
       flag: "w",
     });
   } catch {
-    // best-effort, do not block update
+    // Best-effort: let the update continue, but allow its later snapshot pass to retry.
+    preUpdateConfigSnapshotsWritten.delete(snapshotKey);
   }
 }
 

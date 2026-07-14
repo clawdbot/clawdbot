@@ -1,14 +1,15 @@
-import crypto from "node:crypto";
+import crypto, { type KeyObject } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { publicKeyRawBase64UrlFromEd25519Pem } from "../infra/ed25519-signature.js";
-import {
-  OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
-  createOfficialExternalPluginCatalogEnvelopePayload,
-  createOfficialExternalPluginCatalogEnvelopeSigningInput,
-  verifyOfficialExternalPluginCatalogSignedEnvelope,
-  type OfficialExternalPluginCatalogSignedEnvelope,
-} from "./official-external-plugin-catalog-envelope.js";
+import { verifyOfficialExternalPluginCatalogSignedEnvelope } from "./official-external-plugin-catalog-envelope.js";
 import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.js";
+
+const PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
+
+type SigningKey = {
+  keyId: string;
+  privateKey: KeyObject;
+  publicKey: KeyObject;
+};
 
 function fixtureFeed(): OfficialExternalPluginCatalogFeed {
   return {
@@ -28,344 +29,176 @@ function fixtureFeed(): OfficialExternalPluginCatalogFeed {
   };
 }
 
-function signedEnvelope(params?: {
-  feed?: OfficialExternalPluginCatalogFeed;
-  payload?: string;
-  payloadType?: string;
-  keyId?: string;
-  privateKeyPem?: string;
-}): {
-  envelope: OfficialExternalPluginCatalogSignedEnvelope;
-  publicKeyPem: string;
-  rawPublicKey: string;
-} {
-  const { publicKey, privateKey } =
-    params?.privateKeyPem === undefined
-      ? crypto.generateKeyPairSync("ed25519", {
-          publicKeyEncoding: { type: "spki", format: "pem" },
-          privateKeyEncoding: { type: "pkcs8", format: "pem" },
-        })
-      : {
-          publicKey: crypto
-            .createPublicKey(params.privateKeyPem)
-            .export({ type: "spki", format: "pem" }) as string,
-          privateKey: params.privateKeyPem,
-        };
-  const payloadType = params?.payloadType ?? OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE;
-  const payload =
-    params?.payload ??
-    createOfficialExternalPluginCatalogEnvelopePayload(params?.feed ?? fixtureFeed());
-  const payloadBytes = Buffer.from(payload, "base64");
-  const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
-    payloadType,
+function createSigningKey(keyId: string): SigningKey {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  return { keyId, privateKey, publicKey };
+}
+
+function exportPublicKey(key: SigningKey): string {
+  return key.publicKey.export({ type: "spki", format: "pem" });
+}
+
+function signingInput(payloadType: string, payloadBytes: Buffer): Buffer {
+  const payloadTypeBytes = Buffer.from(payloadType, "utf8");
+  return Buffer.concat([
+    Buffer.from(`DSSEv1 ${payloadTypeBytes.length} ${payloadType} ${payloadBytes.length} `, "utf8"),
     payloadBytes,
-  });
-  const signature = crypto
-    .sign(null, signingInput, crypto.createPrivateKey(privateKey))
-    .toString("base64url");
+  ]);
+}
+
+function signedEnvelope(params: {
+  keys: readonly SigningKey[];
+  feed?: unknown;
+  payloadType?: string;
+  encoding?: "base64" | "base64url";
+}) {
+  const payloadType = params.payloadType ?? PAYLOAD_TYPE;
+  const payloadBytes = Buffer.from(JSON.stringify(params.feed ?? fixtureFeed()), "utf8");
+  const payload = payloadBytes.toString(params.encoding ?? "base64url");
+  const input = signingInput(payloadType, payloadBytes);
   return {
-    envelope: {
-      schemaVersion: 1,
-      payloadType,
-      payload,
-      signatures: [
-        {
-          keyId: params?.keyId ?? "clawhub-root-2026",
-          algorithm: "ed25519",
-          signature,
-        },
-      ],
-    },
-    publicKeyPem: publicKey,
-    rawPublicKey: publicKeyRawBase64UrlFromEd25519Pem(publicKey),
+    schemaVersion: 1,
+    payloadType,
+    payload,
+    signatures: params.keys.map((key) => ({
+      keyId: key.keyId,
+      algorithm: "ed25519",
+      signature: crypto.sign(null, input, key.privateKey).toString("base64url"),
+    })),
   };
 }
 
 describe("official external plugin catalog signed envelopes", () => {
-  it("uses DSSE pre-authentication encoding for signature input", () => {
-    expect(
-      createOfficialExternalPluginCatalogEnvelopeSigningInput({
-        payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
-        payloadBytes: Buffer.from("abc", "utf8"),
-      }).toString("utf8"),
-    ).toBe("DSSEv1 49 openclaw.official-external-plugin-catalog-feed.v1 3 abc");
-  });
+  it.each(["base64", "base64url"] as const)(
+    "verifies decoded payload bytes from %s envelopes",
+    (encoding) => {
+      const key = createSigningKey("catalog-root");
+      const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+        signedEnvelope({ keys: [key], encoding }),
+        { trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }] },
+      );
 
-  it("verifies a signed ClawHub feed envelope with a trusted PEM key", () => {
-    const { envelope, publicKeyPem } = signedEnvelope();
+      expect(result).toMatchObject({ ok: true, feed: fixtureFeed(), signedBy: key.keyId });
+    },
+  );
 
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-      trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      signedBy: "clawhub-root-2026",
-      feed: fixtureFeed(),
-    });
-  });
-
-  it("verifies signatures over decoded payload bytes across base64 encodings", () => {
-    const feedBytes = Buffer.from(JSON.stringify(fixtureFeed()), "utf8");
-    const urlSafePayload = feedBytes.toString("base64url");
-    const standardPayload = feedBytes.toString("base64");
-    const { envelope, publicKeyPem } = signedEnvelope({ payload: urlSafePayload });
-
+  it("enforces distinct trusted key material for signature thresholds", () => {
+    const first = createSigningKey("first");
+    const second = createSigningKey("second");
     const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      signedEnvelope({ keys: [first, second] }),
       {
-        ...envelope,
-        payload: standardPayload,
-      },
-      {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
+        trustedKeys: [
+          { keyId: first.keyId, publicKey: exportPublicKey(first) },
+          { keyId: second.keyId, publicKey: exportPublicKey(second) },
+        ],
+        threshold: 2,
       },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
-      signedBy: "clawhub-root-2026",
-      feed: fixtureFeed(),
-    });
-  });
-
-  it("verifies a signed ClawHub feed envelope with a trusted raw base64url key", () => {
-    const { envelope, rawPublicKey } = signedEnvelope();
-
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-      trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: rawPublicKey }],
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("enforces the configured trusted signature threshold", () => {
-    const first = signedEnvelope({ keyId: "clawhub-root-a" });
-    const second = signedEnvelope({ keyId: "clawhub-root-b" });
-    const firstSignature = first.envelope.signatures?.[0];
-    const secondSignature = second.envelope.signatures?.[0];
-    if (!firstSignature || !secondSignature) {
-      throw new Error("expected signatures");
-    }
-    const envelope = {
-      ...first.envelope,
-      signatures: [firstSignature, secondSignature],
-    };
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-        trustedKeys: [
-          { keyId: "clawhub-root-a", publicKey: first.publicKeyPem },
-          { keyId: "clawhub-root-b", publicKey: second.publicKeyPem },
-        ],
-        threshold: 2,
-      }),
-    ).toMatchObject({
-      ok: true,
-      signedBy: "clawhub-root-a",
-      signedByKeyIds: ["clawhub-root-a", "clawhub-root-b"],
+      signedByKeyIds: ["first", "second"],
       signatureCount: 2,
       threshold: 2,
     });
 
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(first.envelope, {
-        trustedKeys: [
-          { keyId: "clawhub-root-a", publicKey: first.publicKeyPem },
-          { keyId: "clawhub-root-b", publicKey: second.publicKeyPem },
-        ],
-        threshold: 2,
-      }),
-    ).toMatchObject({
-      ok: false,
-      error: "invalid-signature",
-    });
-  });
-
-  it("does not count duplicate trust key material toward the signature threshold", () => {
-    const { envelope, publicKeyPem } = signedEnvelope({ keyId: "clawhub-root-a" });
-    const firstSignature = envelope.signatures?.[0];
-    if (!firstSignature) {
-      throw new Error("expected signature");
-    }
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      {
-        ...envelope,
-        signatures: [
-          firstSignature,
-          {
-            ...firstSignature,
-            keyId: "clawhub-root-b",
-          },
-        ],
-      },
+    const duplicateId = { ...first, keyId: "duplicate-material" };
+    const duplicateMaterial = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      signedEnvelope({ keys: [first, duplicateId] }),
       {
         trustedKeys: [
-          { keyId: "clawhub-root-a", publicKey: publicKeyPem },
-          { keyId: "clawhub-root-b", publicKey: publicKeyPem },
+          { keyId: first.keyId, publicKey: exportPublicKey(first) },
+          { keyId: duplicateId.keyId, publicKey: exportPublicKey(first) },
         ],
         threshold: 2,
       },
     );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-signature",
-    });
+    expect(duplicateMaterial).toMatchObject({ ok: false, error: "invalid-signature" });
   });
 
   it("rejects payload bytes changed after signing", () => {
-    const { envelope, publicKeyPem } = signedEnvelope();
-    const tamperedFeed = { ...fixtureFeed(), sequence: 43 };
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      {
-        ...envelope,
-        payload: createOfficialExternalPluginCatalogEnvelopePayload(tamperedFeed),
-      },
-      {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-      },
-    );
+    const key = createSigningKey("catalog-root");
+    const envelope = signedEnvelope({ keys: [key] });
+    envelope.payload = Buffer.from(
+      JSON.stringify({ ...fixtureFeed(), sequence: 43 }),
+      "utf8",
+    ).toString("base64url");
 
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-signature",
-    });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
+        trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }],
+      }),
+    ).toMatchObject({ ok: false, error: "invalid-signature" });
   });
 
-  it("rejects signatures made by an untrusted key id", () => {
-    const { envelope, publicKeyPem } = signedEnvelope({ keyId: "unknown-key" });
+  it("distinguishes unknown keys from invalid trusted signatures", () => {
+    const signer = createSigningKey("signer");
+    const other = createSigningKey("other");
+    const envelope = signedEnvelope({ keys: [signer] });
 
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-      trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "missing-trust-key",
-    });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
+        trustedKeys: [{ keyId: other.keyId, publicKey: exportPublicKey(other) }],
+      }),
+    ).toMatchObject({ ok: false, error: "missing-trust-key" });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
+        trustedKeys: [{ keyId: signer.keyId, publicKey: exportPublicKey(other) }],
+      }),
+    ).toMatchObject({ ok: false, error: "invalid-signature" });
   });
 
-  it("rejects signatures made by the wrong trusted key", () => {
-    const { envelope } = signedEnvelope();
-    const { publicKeyPem: wrongPublicKey } = signedEnvelope();
+  it("rejects duplicate key ids and excessive signature lists", () => {
+    const key = createSigningKey("catalog-root");
+    const envelope = signedEnvelope({ keys: [key] });
+    const signature = envelope.signatures[0];
+    const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
 
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-      trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: wrongPublicKey }],
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-signature",
-    });
-  });
-
-  it("rejects duplicate key ids before signature verification", () => {
-    const { envelope, publicKeyPem } = signedEnvelope();
-    const [signature] = envelope.signatures ?? [];
-    expect(signature).toBeDefined();
-
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      {
-        ...envelope,
-        signatures: [signature!, signature!],
-      },
-      {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-envelope",
-    });
-  });
-
-  it("rejects excessive signature entries before signature verification", () => {
-    const { envelope, publicKeyPem } = signedEnvelope();
-    const [signature] = envelope.signatures ?? [];
-    expect(signature).toBeDefined();
-
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      {
-        ...envelope,
-        signatures: Array.from({ length: 17 }, (_, index) => ({
-          ...signature!,
-          keyId: `key-${index}`,
-        })),
-      },
-      {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-envelope",
-    });
-  });
-
-  it("rejects excessive raw signature entries before filtering malformed entries", () => {
-    const { envelope, publicKeyPem } = signedEnvelope();
-    const [signature] = envelope.signatures ?? [];
-    expect(signature).toBeDefined();
-
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      {
-        ...envelope,
-        signatures: [
-          ...Array.from({ length: 16 }, () => ({
-            algorithm: "ed25519",
-          })),
-          signature!,
-        ],
-      },
-      {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "invalid-envelope",
-    });
-  });
-
-  it("rejects unsupported payload types before trusting the payload", () => {
-    const { envelope, publicKeyPem } = signedEnvelope({
-      payloadType: "openclaw.other-feed.v1",
-    });
-
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-      trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: publicKeyPem }],
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: "unsupported-payload",
-    });
-  });
-
-  it("rejects malformed envelopes and invalid feed payloads", () => {
     expect(
       verifyOfficialExternalPluginCatalogSignedEnvelope(
-        { schemaVersion: 1, payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE },
+        { ...envelope, signatures: [signature, signature] },
+        { trustedKeys },
+      ),
+    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(
+        {
+          ...envelope,
+          signatures: Array.from({ length: 17 }, (_, index) => ({
+            ...signature,
+            keyId: `key-${index}`,
+          })),
+        },
+        { trustedKeys },
+      ),
+    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+  });
+
+  it("rejects unsupported payload types and signed invalid feeds", () => {
+    const key = createSigningKey("catalog-root");
+    const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
+
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(
+        signedEnvelope({ keys: [key], payloadType: "example.unsupported" }),
+        { trustedKeys },
+      ),
+    ).toMatchObject({ ok: false, error: "unsupported-payload" });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(
+        signedEnvelope({ keys: [key], feed: { entries: [] } }),
+        { trustedKeys },
+      ),
+    ).toMatchObject({ ok: false, error: "invalid-payload" });
+  });
+
+  it("rejects malformed envelopes before verification", () => {
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(
+        { schemaVersion: 1, payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
         { trustedKeys: [] },
       ),
-    ).toMatchObject({
-      ok: false,
-      error: "invalid-envelope",
-    });
-
-    const malformedPayload = signedEnvelope({
-      payload: Buffer.from(JSON.stringify({ schemaVersion: 99 }), "utf8").toString("base64url"),
-    });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(malformedPayload.envelope, {
-        trustedKeys: [{ keyId: "clawhub-root-2026", publicKey: malformedPayload.publicKeyPem }],
-      }),
-    ).toMatchObject({
-      ok: false,
-      error: "invalid-payload",
-    });
+    ).toMatchObject({ ok: false, error: "invalid-envelope" });
   });
 });

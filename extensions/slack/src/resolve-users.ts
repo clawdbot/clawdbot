@@ -1,14 +1,12 @@
 // Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
+import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackWebClient } from "./client.js";
-import {
-  collectSlackCursorItems,
-  resolveSlackAllowlistEntries,
-} from "./resolve-allowlist-common.js";
+import { collectSlackCursorPages } from "./cursor-pages.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -32,23 +30,6 @@ export type SlackUserResolution = {
   note?: string;
 };
 
-type SlackListUsersResponse = {
-  members?: Array<{
-    id?: string;
-    name?: string;
-    deleted?: boolean;
-    is_bot?: boolean;
-    is_app_user?: boolean;
-    real_name?: string;
-    profile?: {
-      display_name?: string;
-      real_name?: string;
-      email?: string;
-    };
-  }>;
-  response_metadata?: { next_cursor?: string };
-};
-
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -70,12 +51,12 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
 }
 
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
-  return collectSlackCursorItems({
-    fetchPage: async (cursor) =>
-      (await client.users.list({
+  return collectSlackCursorPages({
+    fetchPage: (cursor) =>
+      client.users.list({
         limit: 200,
         cursor,
-      })) as SlackListUsersResponse,
+      }),
     collectPageItems: (res) =>
       (res.members ?? [])
         .map((member) => {
@@ -159,7 +140,7 @@ export async function resolveSlackUserAllowlist(params: {
 }): Promise<SlackUserResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
   const users = await listSlackUsers(client);
-  return resolveSlackAllowlistEntries<
+  return resolveDirectoryAllowlistEntries<
     { id?: string; name?: string; email?: string },
     SlackUserLookup,
     SlackUserResolution

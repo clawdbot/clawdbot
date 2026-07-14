@@ -1,5 +1,4 @@
-// Talk session methods manage unified realtime/transcription/handoff sessions,
-// audio appends, tool results, steering, turns, joins, and cleanup.
+// Talk session methods manage realtime, transcription, handoff, turns, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -56,6 +55,7 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "../talk-transcription-relay.js";
 import { formatForLog } from "../ws-log.js";
+import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
@@ -72,7 +72,6 @@ import { assertValidParams } from "./validation.js";
 
 /**
  * Gateway-managed Talk session methods for managed rooms and audio relays.
- *
  * The public `sessionId` is resolved through the unified registry so each RPC
  * can enforce the correct connection ownership for its concrete backend.
  */
@@ -602,6 +601,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respondUnavailable(respond, err);
     }
   },
+  "talk.session.acknowledgeMark": acknowledgeTalkSessionMark,
   "talk.session.submitToolResult": async ({ params, respond, client }) => {
     if (
       !assertValidParams(

@@ -2,7 +2,7 @@
  * Server channel approval bootstrap tests.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   runtimeForLogger,

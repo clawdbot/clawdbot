@@ -8,7 +8,7 @@ import {
 } from "../../infra/net/node-proxy-agent.js";
 
 /** HTTP(S) agent pair for Node fetch/client integrations that accept explicit agents. */
-export interface NodeHttpProxyAgents {
+interface NodeHttpProxyAgents {
   httpAgent: HttpAgent;
   httpsAgent: HttpsAgent;
 }

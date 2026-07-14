@@ -2,10 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { buildSlackBlocksFallbackText, renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
-import {
-  encodeSlackModalPrivateMetadata,
-  parseSlackModalPrivateMetadata,
-} from "./modal-metadata.js";
+import { parseSlackModalPrivateMetadata } from "./modal-metadata.js";
 
 describe("buildSlackBlocksFallbackText", () => {
   it("prefers header text", () => {
@@ -278,34 +275,5 @@ describe("parseSlackModalPrivateMetadata", () => {
       userId: "U123",
       pluginInteractiveData: "dean.contract:confirm",
     });
-  });
-});
-
-describe("encodeSlackModalPrivateMetadata", () => {
-  it("encodes only known non-empty fields", () => {
-    expect(
-      JSON.parse(
-        encodeSlackModalPrivateMetadata({
-          sessionKey: "agent:main:slack:channel:C1",
-          channelId: "",
-          channelType: "im",
-          userId: "U123",
-          pluginInteractiveData: "dean.contract:confirm",
-        }),
-      ),
-    ).toEqual({
-      sessionKey: "agent:main:slack:channel:C1",
-      channelType: "im",
-      userId: "U123",
-      pluginInteractiveData: "dean.contract:confirm",
-    });
-  });
-
-  it("throws when encoded payload exceeds Slack metadata limit", () => {
-    expect(() =>
-      encodeSlackModalPrivateMetadata({
-        sessionKey: `agent:main:${"x".repeat(4000)}`,
-      }),
-    ).toThrow(/cannot exceed 3000 chars/i);
   });
 });

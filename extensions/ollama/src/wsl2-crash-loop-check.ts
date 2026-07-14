@@ -1,11 +1,9 @@
 // Ollama plugin module implements wsl2 crash loop check behavior.
-import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
-import { promisify } from "node:util";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 
-const execFileAsync = promisify(execFile);
 const SYSTEMCTL_TIMEOUT_MS = 5_000;
 const WSL_CUDA_MARKERS = [
   "/dev/dxg",
@@ -28,10 +26,10 @@ export function parseSystemctlShowProperties(stdout: string): Map<string, string
 
 export async function isOllamaEnabledWithRestartAlways(): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await runExec(
       "systemctl",
       ["show", "ollama.service", "--property=UnitFileState,Restart", "--no-pager"],
-      { timeout: SYSTEMCTL_TIMEOUT_MS },
+      { logOutput: false, timeoutMs: SYSTEMCTL_TIMEOUT_MS },
     );
     const properties = parseSystemctlShowProperties(stdout);
     return properties.get("UnitFileState") === "enabled" && properties.get("Restart") === "always";

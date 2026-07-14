@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -35,10 +36,6 @@ type CacheEntry = {
 
 let nextHovercardId = 0;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value !== "string" || !value.trim()) {
@@ -66,7 +63,7 @@ function decodePathSegment(value: string): string | null {
   }
 }
 
-export function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
+function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
     url = new URL(href, globalThis.location?.href ?? "http://localhost/");
@@ -575,8 +572,4 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
     card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
   }
-}
-
-if (!customElements.get("openclaw-github-link-hovercard-provider")) {
-  customElements.define("openclaw-github-link-hovercard-provider", GitHubLinkHovercardProvider);
 }

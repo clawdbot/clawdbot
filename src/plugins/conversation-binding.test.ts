@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resetPluginConversationBindingStateForTest } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -112,7 +113,6 @@ vi.mock("./runtime.js", async () => {
   };
 });
 
-let testing: typeof import("./conversation-binding.js").testing;
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -169,7 +169,6 @@ afterAll(() => {
 
 beforeAll(async () => {
   ({
-    testing,
     buildPluginBindingApprovalCustomId,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
@@ -282,7 +281,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  first.testing.reset();
+  resetPluginConversationBindingStateForTest();
   return { first, second };
 }
 
@@ -466,7 +465,7 @@ describe("plugin conversation binding approvals", () => {
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     clearPluginBindingApprovalRows();
     sessionBindingState.reset();
-    testing.reset();
+    resetPluginConversationBindingStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -633,7 +632,7 @@ describe("plugin conversation binding approvals", () => {
     expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
     expect(approved.binding.conversationId).toBe("-10099:topic:77");
 
-    second.testing.reset();
+    resetPluginConversationBindingStateForTest();
   });
 
   it("shares persistent approvals across duplicate module instances", async () => {
@@ -668,7 +667,7 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    first.testing.reset();
+    resetPluginConversationBindingStateForTest();
     clearPluginBindingApprovalRows();
   });
 

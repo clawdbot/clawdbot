@@ -110,10 +110,7 @@ import { buildTelegramNativeCommandCallbackData } from "./native-command-callbac
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
-export {
-  buildTelegramNativeCommandCallbackData,
-  parseTelegramNativeCommandCallbackData,
-} from "./native-command-callback-data.js";
+export { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();

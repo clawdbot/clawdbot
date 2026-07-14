@@ -12,7 +12,7 @@ import type {
 } from "./subagent-registry.types.js";
 
 /** Legacy flat fields accepted while restoring older subagent registry rows. */
-export type LegacySubagentRunRecord = SubagentRunRecord & {
+type LegacySubagentRunRecord = SubagentRunRecord & {
   announceRetryCount?: number;
   lastAnnounceRetryAt?: number;
   lastAnnounceDeliveryError?: string;

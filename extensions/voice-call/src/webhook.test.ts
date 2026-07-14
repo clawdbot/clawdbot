@@ -353,6 +353,54 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
   });
 });
 
+describe("VoiceCallWebhookServer media stream authorization", () => {
+  it.each(["telnyx", "plivo", "mock"] as const)(
+    "rejects active provider=%s calls before consulting their call id",
+    async (providerName) => {
+      const call = createCall(Date.now());
+      const getCallByProviderCallId = vi.fn(() => call);
+      const manager = {
+        getActiveCalls: () => [call],
+        getCallByProviderCallId,
+        endCall: vi.fn(async () => ({ success: true })),
+        processEvent: vi.fn(),
+        speakInitialMessage: vi.fn(async () => {}),
+      } as unknown as CallManager;
+      const config = createConfig({
+        provider: providerName,
+        streaming: {
+          ...createConfig().streaming,
+          enabled: true,
+        },
+      });
+      const server = new VoiceCallWebhookServer(config, manager, {
+        ...provider,
+        name: providerName,
+      });
+
+      try {
+        await server.start();
+        const handler = server.getMediaStreamHandler() as unknown as {
+          config: {
+            shouldAcceptStream?: (input: { callId: string; streamSid: string }) => boolean;
+          };
+        };
+        const shouldAcceptStream = handler?.config.shouldAcceptStream;
+        if (!shouldAcceptStream) {
+          throw new Error("expected media stream acceptance validator");
+        }
+
+        expect(
+          shouldAcceptStream({ callId: call.providerCallId ?? "", streamSid: "stream-1" }),
+        ).toBe(false);
+        expect(getCallByProviderCallId).not.toHaveBeenCalled();
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+});
+
 describe("VoiceCallWebhookServer media stream client IP resolution", () => {
   type MediaStreamRequestDouble = {
     headers: Record<string, string>;

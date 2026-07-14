@@ -12,6 +12,7 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
@@ -181,6 +182,15 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         offset: 100,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
       }),
     ).toBe(true);
     expect(
@@ -942,6 +952,21 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 

@@ -106,9 +106,24 @@ export function assertSqliteSchemaContains(
         mismatches.push(`missing or drifted index ${expectedIndex.name ?? `on ${tableName}`}`);
       }
     }
+    for (const actualIndex of actualTable.indexes) {
+      if (
+        actualIndex.unique === 1 &&
+        !expectedTable.indexes.some((expectedIndex) => isEqual(actualIndex, expectedIndex))
+      ) {
+        mismatches.push(`unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`);
+      }
+    }
     for (const expectedTrigger of expectedTable.triggers) {
       if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
         mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
+      }
+    }
+    for (const actualTrigger of actualTable.triggers) {
+      if (
+        !expectedTable.triggers.some((expectedTrigger) => isEqual(actualTrigger, expectedTrigger))
+      ) {
+        mismatches.push(`unexpected trigger ${actualTrigger.name}`);
       }
     }
     if (actualTable.virtualTableSql !== expectedTable.virtualTableSql) {

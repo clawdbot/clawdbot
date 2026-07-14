@@ -1,5 +1,6 @@
 // Voice Call plugin module implements tunnel behavior.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendBoundedChildOutput,
@@ -9,6 +10,7 @@ import {
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 
 function listenForChildStreamErrors(
   proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
@@ -217,51 +219,22 @@ export async function startNgrokTunnel(config: {
  * Run an ngrok command and wait for completion.
  */
 async function runNgrokCommand(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("ngrok", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = emptyBoundedChildOutput();
-    let stderr = emptyBoundedChildOutput();
-    let settled = false;
-
-    const rejectIfPending = (error: Error, kill = false) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (kill) {
-        proc.kill("SIGKILL");
-      }
-      reject(error);
-    };
-
-    proc.stdout.on("data", (data) => {
-      stdout = appendBoundedChildOutput(stdout, data.toString());
-    });
-    proc.stderr.on("data", (data) => {
-      stderr = appendBoundedChildOutput(stderr, data.toString());
-    });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(new Error(`ngrok command ${stream} error: ${error.message}`), true);
-    });
-
-    proc.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (code === 0) {
-        resolve(stdout.text);
-      } else {
-        const output = stderr.text ? stderr : stdout;
-        reject(new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`));
-      }
-    });
-
-    proc.on("error", (error) => rejectIfPending(error));
+  const result = await runCommandWithTimeout(["ngrok", ...args], {
+    killProcessTree: true,
+    maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
+    outputCapture: "tail",
+    timeoutMs: 30_000,
   });
+  if (result.termination === "timeout") {
+    throw new Error("ngrok command timed out");
+  }
+  if (result.code === 0) {
+    return result.stdout;
+  }
+  const output = result.stderr
+    ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
+    : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
+  throw new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`);
 }
 
 /**
@@ -281,96 +254,46 @@ export async function startTailscaleTunnel(config: {
   const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
   const localUrl = `http://127.0.0.1:${config.port}${path}`;
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let resolved = false;
-    let stdout = emptyBoundedChildOutput();
-    let stderr = emptyBoundedChildOutput();
+  const result = await runCommandWithTimeout(
+    ["tailscale", config.mode, "--bg", "--yes", "--set-path", path, localUrl],
+    {
+      killProcessTree: true,
+      maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
+      outputCapture: "tail",
+      timeoutMs: 10_000,
+    },
+  );
+  if (result.termination === "timeout") {
+    throw new Error(`Tailscale ${config.mode} timed out`);
+  }
+  if (result.code !== 0) {
+    const output = result.stderr
+      ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
+      : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
+    const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
+    throw new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
+  }
+  const publicUrl = `https://${dnsName}${path}`;
+  console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
 
-    const rejectIfPending = (error: Error, kill = false) => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      clearTimeout(timeout);
-      if (kill) {
-        proc.kill("SIGKILL");
-      }
-      reject(error);
-    };
-
-    const timeout = setTimeout(() => {
-      rejectIfPending(new Error(`Tailscale ${config.mode} timed out`), true);
-    }, 10000);
-
-    proc.stdout.on("data", (data) => {
-      stdout = appendBoundedChildOutput(stdout, data.toString());
-    });
-    proc.stderr.on("data", (data) => {
-      stderr = appendBoundedChildOutput(stderr, data.toString());
-    });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(
-        new Error(`Tailscale ${config.mode} ${stream} error: ${error.message}`),
-        true,
-      );
-    });
-
-    proc.on("close", (code) => {
-      clearTimeout(timeout);
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      if (code === 0) {
-        const publicUrl = `https://${dnsName}${path}`;
-        console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
-
-        resolve({
-          publicUrl,
-          provider: `tailscale-${config.mode}`,
-          stop: async () => {
-            await stopTailscaleTunnel(config.mode, path);
-          },
-        });
-      } else {
-        const output = stderr.text ? stderr : stdout;
-        const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
-        reject(new Error(`Tailscale ${config.mode} failed with code ${code}${detail}`));
-      }
-    });
-
-    proc.on("error", (err) => {
-      rejectIfPending(err);
-    });
-  });
+  return {
+    publicUrl,
+    provider: `tailscale-${config.mode}`,
+    stop: async () => {
+      await stopTailscaleTunnel(config.mode, path);
+    },
+  };
 }
 
 /**
  * Stop a Tailscale serve/funnel tunnel.
  */
 async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Promise<void> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", [mode, "off", path], {
-      stdio: "ignore",
-    });
-
-    const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve();
-    }, 5000);
-
-    proc.on("close", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    proc.on("error", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
+  await runCommandWithTimeout(["tailscale", mode, "off", path], {
+    killProcessTree: true,
+    maxOutputBytes: 1,
+    timeoutMs: 5_000,
+  }).catch(() => {});
 }
 
 /**

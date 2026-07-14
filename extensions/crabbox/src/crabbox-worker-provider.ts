@@ -12,12 +12,14 @@ import {
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
+const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
 const WARMUP_TIMEOUT_MS = 240_000;
 const LIFECYCLE_TIMEOUT_MS = 60_000;
 const PROVISION_TIMEOUT_MS = 290_000;
+// Setup gets its own budget on top of provision so a slow warmup cannot starve it.
+const SETUP_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_DETAIL_CHARS = 512;
 const MAX_HOST_KEY_LENGTH = 16_384;
@@ -38,7 +40,7 @@ const DESTROYED_STATES = new Set([
   "terminated",
 ]);
 const UNUSABLE_PROVISION_STATES = new Set([...DESTROYED_STATES, "deleting", "failed"]);
-const PROFILE_KEYS = new Set(["binary", "class", "idleTimeout", "provider", "ttl"]);
+const PROFILE_KEYS = new Set(["binary", "class", "idleTimeout", "provider", "setup", "ttl"]);
 const CRABBOX_LEASE_TOKEN_PATTERN = /^\S{1,128}$/u;
 const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const LEASE_TOKEN_IN_OUTPUT_PATTERN = /^leased\s+(\S{1,128})(?=\s|$)/mu;
@@ -64,6 +66,7 @@ type CrabboxProfile = {
   idleTimeout: string;
   provider: string;
   ttl: string;
+  setup?: string;
 };
 
 type CrabboxInspect = {
@@ -99,7 +102,7 @@ type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { stat
 
 type IsExecutable = (candidate: string) => boolean;
 
-export type CrabboxWorkerProviderDependencies = {
+type CrabboxWorkerProviderDependencies = {
   isExecutable?: IsExecutable;
   openclawRoot?: string;
   pathEnv?: string;
@@ -178,7 +181,12 @@ function parseProfile(profile: WorkerProfile): CrabboxProfile {
   if (binary && !path.isAbsolute(binary)) {
     throw new WorkerProviderError("Crabbox profile binary must be an absolute path");
   }
-  return { binary, class: machineClass, idleTimeout, provider, ttl };
+  const setupValue = profile.setup;
+  const setup = setupValue === undefined ? undefined : nonEmptyString(setupValue);
+  if (setupValue !== undefined && !setup) {
+    throw new WorkerProviderError("Crabbox profile setup must be a non-empty command string");
+  }
+  return { binary, class: machineClass, idleTimeout, provider, setup, ttl };
 }
 
 function defaultIsExecutable(candidate: string, platform: NodeJS.Platform): boolean {
@@ -579,6 +587,45 @@ async function leaseFromProvisionInspect(params: {
   }
 }
 
+// Setup runs on every provision attempt (including replay adoption), so commands
+// must be idempotent. A failed setup stops the lease before surfacing the error;
+// otherwise the caller cannot release a box it never learned about.
+async function runProvisionSetup(params: {
+  binary: string;
+  deadline: number;
+  inspect: ParsedInspect;
+  provider: string;
+  runCommand: CrabboxCommandRunner;
+  setup: string;
+}): Promise<void> {
+  const result = await runCrabboxCommand({
+    action: "setup",
+    args: [
+      "run",
+      "--provider",
+      params.provider,
+      "--id",
+      params.inspect.id,
+      "--keep=true",
+      // Workspace transfer is owned by the worker tunnel; crabbox run must not
+      // rsync the gateway checkout into the box just to execute setup.
+      "--no-sync",
+      "--",
+      "bash",
+      "-lc",
+      params.setup,
+    ],
+    binary: params.binary,
+    runCommand: params.runCommand,
+    timeoutMs: remainingProvisionTimeout(params.deadline, SETUP_TIMEOUT_MS),
+  });
+  if (result.termination === "exit" && result.code === 0) {
+    return;
+  }
+  await stopProvisionInspect(params);
+  throw commandError("setup", result);
+}
+
 async function stopProvisionInspect(params: {
   binary: string;
   deadline: number;
@@ -629,8 +676,8 @@ export function createCrabboxWorkerProvider(
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
-      const deadline = Date.now() + PROVISION_TIMEOUT_MS;
       const parsed = parseProfile(profile);
+      const deadline = Date.now() + PROVISION_TIMEOUT_MS + (parsed.setup ? SETUP_TIMEOUT_MS : 0);
       if (!operationId.trim()) {
         throw new Error("Crabbox provision requires an operation id");
       }
@@ -664,7 +711,11 @@ export function createCrabboxWorkerProvider(
         if (isUnusableProvisionState(existing.inspect.state)) {
           await stopProvisionInspect(existingParams);
         } else {
-          return await leaseFromProvisionInspect(existingParams);
+          const lease = await leaseFromProvisionInspect(existingParams);
+          if (parsed.setup) {
+            await runProvisionSetup({ ...existingParams, setup: parsed.setup });
+          }
+          return lease;
         }
       }
 
@@ -730,7 +781,11 @@ export function createCrabboxWorkerProvider(
         await stopProvisionInspect(inspectedParams);
         throw new Error("Crabbox warmup lease entered a terminal state");
       }
-      return await leaseFromProvisionInspect(inspectedParams);
+      const lease = await leaseFromProvisionInspect(inspectedParams);
+      if (parsed.setup) {
+        await runProvisionSetup({ ...inspectedParams, setup: parsed.setup });
+      }
+      return lease;
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const context = resolveLeaseContext(lease);

@@ -297,7 +297,7 @@ export function listCrossChannelSchemaSupportedMessageActions(
 /**
  * Lists message capabilities advertised across registered channel plugins.
  */
-export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
     for (const capability of resolveMessageActionDiscoveryForPlugin({
@@ -315,7 +315,7 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
 /**
  * Lists message capabilities advertised by the current channel.
  */
-export function listChannelMessageCapabilitiesForChannel(
+function listChannelMessageCapabilitiesForChannel(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageCapability[] {
   const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);

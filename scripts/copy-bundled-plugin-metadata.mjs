@@ -33,6 +33,7 @@ function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
 
 /**
  * Rewrites package extension entries for bundled metadata output.
+ * @internal Directly tested script implementation detail.
  */
 export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {

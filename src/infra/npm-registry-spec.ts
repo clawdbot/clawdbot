@@ -1,15 +1,12 @@
 // Parses npm registry specs into package, version, and tag references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  parse as parseSemver,
+  prerelease as parseSemverPrerelease,
+  valid as validSemver,
+} from "semver";
 
-const EXACT_SEMVER_VERSION_RE =
-  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
-const OPENCLAW_STABLE_CORRECTION_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
-const OPENCLAW_STABLE_VERSION_RE = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)$/;
-const OPENCLAW_ALPHA_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-alpha\.(?<alpha>[1-9]\d*)$/;
-const OPENCLAW_BETA_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
+const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Parsed monthly patch OpenClaw release version used for channel-aware ordering. */
@@ -91,8 +88,8 @@ function parseRegistryNpmSpecInternal(
   if (/[\\/]/.test(selector)) {
     return { ok: false, error: "unsupported npm spec: invalid version/tag" };
   }
-  const exactVersionMatch = EXACT_SEMVER_VERSION_RE.exec(selector);
-  if (exactVersionMatch) {
+  const exactVersion = validSemver(selector);
+  if (exactVersion) {
     return {
       ok: true,
       parsed: {
@@ -101,7 +98,8 @@ function parseRegistryNpmSpecInternal(
         selector,
         selectorKind: "exact-version",
         selectorIsPrerelease:
-          Boolean(exactVersionMatch[4]) && !isOpenClawStableCorrectionVersion(selector),
+          parseSemverPrerelease(exactVersion) !== null &&
+          !isOpenClawStableCorrectionVersion(selector),
       },
     };
   }
@@ -143,65 +141,52 @@ export function validateRegistryNpmSpec(rawSpec: string): string | null {
 
 /** Returns whether a value is an exact semver selector, with optional leading `v`. */
 export function isExactSemverVersion(value: string): boolean {
-  return EXACT_SEMVER_VERSION_RE.test(value.trim());
+  return validSemver(value.trim()) !== null;
 }
 
 /** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
 function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | null {
   const trimmed = value.trim();
-  const candidates = [
-    { match: OPENCLAW_STABLE_VERSION_RE.exec(trimmed), channel: "stable" as const },
-    { match: OPENCLAW_STABLE_CORRECTION_VERSION_RE.exec(trimmed), channel: "stable" as const },
-    { match: OPENCLAW_ALPHA_VERSION_RE.exec(trimmed), channel: "alpha" as const },
-    { match: OPENCLAW_BETA_VERSION_RE.exec(trimmed), channel: "beta" as const },
-  ];
-  const candidate = candidates.find((entry) => entry.match?.groups);
-  if (!candidate?.match?.groups) {
+  const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parseSemver(trimmed) : null;
+  if (!parsed || parsed.build.length > 0) {
+    return null;
+  }
+  const { major: year, minor: month, patch } = parsed;
+  if (month < 1 || month > 12 || patch < 1) {
     return null;
   }
 
-  const year = Number.parseInt(candidate.match.groups.year ?? "", 10);
-  const month = Number.parseInt(candidate.match.groups.month ?? "", 10);
-  const patch = Number.parseInt(candidate.match.groups.patch ?? "", 10);
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(patch) ||
-    month < 1 ||
-    month > 12 ||
-    patch < 1
-  ) {
+  const [label, sequence] = parsed.prerelease;
+  const isStable = parsed.prerelease.length === 0;
+  const isCorrection = parsed.prerelease.length === 1 && typeof label === "number" && label > 0;
+  const isAlpha =
+    parsed.prerelease.length === 2 &&
+    label === "alpha" &&
+    typeof sequence === "number" &&
+    sequence > 0;
+  const isBeta =
+    parsed.prerelease.length === 2 &&
+    label === "beta" &&
+    typeof sequence === "number" &&
+    sequence > 0;
+  if (!isStable && !isCorrection && !isAlpha && !isBeta) {
     return null;
   }
-
-  const correctionNumber =
-    candidate.channel === "stable" && candidate.match.groups.correction
-      ? Number.parseInt(candidate.match.groups.correction, 10)
-      : undefined;
-  // Stable correction releases share the stable channel rank; the optional
-  // correction number is compared later so base stable sorts before fixes.
-  const alphaNumber =
-    candidate.channel === "alpha"
-      ? Number.parseInt(candidate.match.groups.alpha ?? "", 10)
-      : undefined;
-  const betaNumber =
-    candidate.channel === "beta"
-      ? Number.parseInt(candidate.match.groups.beta ?? "", 10)
-      : undefined;
+  const channel = isAlpha ? "alpha" : isBeta ? "beta" : "stable";
 
   return {
-    channel: candidate.channel,
+    channel,
     year,
     month,
     patch,
-    correctionNumber,
-    alphaNumber,
-    betaNumber,
+    correctionNumber: isCorrection ? label : undefined,
+    alphaNumber: isAlpha ? sequence : undefined,
+    betaNumber: isBeta ? sequence : undefined,
   };
 }
 
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
-export function isOpenClawStableCorrectionVersion(value: string): boolean {
+function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
 }
@@ -238,8 +223,7 @@ export function compareOpenClawReleaseVersions(left: string, right: string): num
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */
 export function isPrereleaseSemverVersion(value: string): boolean {
   const trimmed = value.trim();
-  const match = EXACT_SEMVER_VERSION_RE.exec(trimmed);
-  return Boolean(match?.[4]) && !isOpenClawStableCorrectionVersion(trimmed);
+  return parseSemverPrerelease(trimmed) !== null && !isOpenClawStableCorrectionVersion(trimmed);
 }
 
 /**

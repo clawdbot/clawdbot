@@ -7,7 +7,6 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../infra/net/undici-runtime.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
@@ -15,6 +14,7 @@ import {
 } from "./mcp-http-fetch.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const { lookupMock } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
 }));

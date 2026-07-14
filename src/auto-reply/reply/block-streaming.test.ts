@@ -122,9 +122,10 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
   });
 
-  it("merges flat account block coalescing over channel nested config for flat-canonical channels", () => {
-    // Mattermost's plugin schema still accepts flat blockStreamingCoalesce as
-    // canonical config, so the account-level flat read must keep working.
+  it("merges flat account block coalescing over channel nested config for SDK-plugin configs", () => {
+    // No bundled schema accepts flat blockStreamingCoalesce anymore, but the
+    // resolver keeps the account-level flat read for external SDK plugin
+    // configs until the deprecation window closes.
     const cfg = {
       channels: {
         mattermost: {

@@ -25,6 +25,7 @@ class FakeChildProcess extends EventEmitter {
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   getTailscaleDnsName: vi.fn(),
+  runCommand: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -33,6 +34,10 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("./webhook/tailscale.js", () => ({
   getTailscaleDnsName: mocks.getTailscaleDnsName,
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandWithTimeout: mocks.runCommand,
 }));
 
 import { startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
@@ -47,10 +52,23 @@ function emitNgrokUrl(proc: FakeChildProcess, url: string): void {
   proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ msg: "started tunnel", url })}\n`));
 }
 
+function commandResult(overrides: Record<string, unknown> = {}) {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
+  };
+}
+
 describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getTailscaleDnsName.mockReset();
+    mocks.runCommand.mockResolvedValue(commandResult());
   });
 
   it("starts ngrok and appends the webhook path to the public URL", async () => {
@@ -96,7 +114,6 @@ describe("voice-call tunnels", () => {
   });
 
   it("sets ngrok auth token before starting the tunnel", async () => {
-    const authProc = nextProcess();
     const tunnelProc = nextProcess();
     const result = startNgrokTunnel({
       port: 3334,
@@ -104,32 +121,34 @@ describe("voice-call tunnels", () => {
       authToken: "token",
     });
 
-    authProc.close(0);
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(1));
     emitNgrokUrl(tunnelProc, "https://auth.ngrok.io");
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://auth.ngrok.io/hook");
     expect(tunnel.provider).toBe("ngrok");
-    expect(mocks.spawn).toHaveBeenNthCalledWith(1, "ngrok", ["config", "add-authtoken", "token"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      ["ngrok", "config", "add-authtoken", "token"],
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("bounds ngrok command failure output", async () => {
-    const authProc = nextProcess();
+    mocks.runCommand.mockResolvedValueOnce(
+      commandResult({
+        code: 1,
+        stderr: `${"x".repeat(16_000)}-end`,
+        stderrTruncatedBytes: 4_000,
+      }),
+    );
     const result = startNgrokTunnel({
       port: 3334,
       path: "/hook",
       authToken: "token",
     });
 
-    authProc.stderr.emit("data", Buffer.from(`start-${"x".repeat(20_000)}-end`));
-    authProc.close(1);
-
     await expect(result).rejects.toThrow("[output truncated]");
     await expect(result).rejects.toThrow("-end");
-    await expect(result).rejects.not.toThrow("start-");
   });
 
   it("rejects ngrok startup errors from stderr", async () => {
@@ -143,23 +162,18 @@ describe("voice-call tunnels", () => {
 
   it("starts Tailscale serve using the resolved tailnet DNS name", async () => {
     mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    const proc = nextProcess();
-    const result = startTailscaleTunnel({
+    const tunnel = await startTailscaleTunnel({
       mode: "serve",
       port: 3334,
       path: "voice/webhook",
     });
 
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
-    proc.close(0);
-
-    const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net/voice/webhook");
     expect(tunnel.provider).toBe("tailscale-serve");
     expect(tunnel.stop).toBeTypeOf("function");
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "tailscale",
+    expect(mocks.runCommand).toHaveBeenCalledWith(
       [
+        "tailscale",
         "serve",
         "--bg",
         "--yes",
@@ -167,27 +181,28 @@ describe("voice-call tunnels", () => {
         "/voice/webhook",
         "http://127.0.0.1:3334/voice/webhook",
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      expect.objectContaining({ timeoutMs: 10_000 }),
     );
   });
 
   it("drains and bounds Tailscale startup failure output", async () => {
     mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    const proc = nextProcess();
+    mocks.runCommand.mockResolvedValueOnce(
+      commandResult({
+        code: 1,
+        stderr: `${"x".repeat(16_000)}-end`,
+        stderrTruncatedBytes: 4_000,
+      }),
+    );
     const result = startTailscaleTunnel({
       mode: "funnel",
       port: 3334,
       path: "/voice/webhook",
     });
 
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
-    proc.stderr.emit("data", Buffer.from(`start-${"x".repeat(20_000)}-end`));
-    proc.close(1);
-
     await expect(result).rejects.toThrow("Tailscale funnel failed with code 1");
     await expect(result).rejects.toThrow("[output truncated]");
     await expect(result).rejects.toThrow("-end");
-    await expect(result).rejects.not.toThrow("start-");
   });
 
   it("rejects Tailscale tunnel startup when the DNS name is unavailable", async () => {
@@ -197,6 +212,7 @@ describe("voice-call tunnels", () => {
       startTailscaleTunnel({ mode: "funnel", port: 3334, path: "/hook" }),
     ).rejects.toThrow("Could not get Tailscale DNS name");
     expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.runCommand).not.toHaveBeenCalled();
   });
 
   it("dispatches tunnel providers from config", async () => {
@@ -211,24 +227,16 @@ describe("voice-call tunnels", () => {
     expect(tunnel?.provider).toBe("ngrok");
   });
 
-  it("handles spawn errors on tailscale stop cleanup without crashing", async () => {
+  it("handles wrapper errors on tailscale stop cleanup without crashing", async () => {
     mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    // Start the tunnel — first spawn is tailscale serve (succeeds)
-    const startProc = nextProcess();
-    const result = startTailscaleTunnel({ mode: "serve", port: 3334, path: "/voice/stop" });
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
-    startProc.close(0);
-    const tunnel = await result;
+    const tunnel = await startTailscaleTunnel({
+      mode: "serve",
+      port: 3334,
+      path: "/voice/stop",
+    });
+    mocks.runCommand.mockRejectedValueOnce(new Error("tailscale not found"));
 
-    // Stop the tunnel — second spawn is tailscale stop (errors)
-    const stopProc = nextProcess();
-    const stopPromise = tunnel.stop();
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(2));
-    // Emit error on the stop process — without the fix this crashes
-    stopProc.fail(new Error("tailscale not found"));
-
-    // The stop promise must still resolve despite the error
-    await expect(stopPromise).resolves.toBeUndefined();
+    await expect(tunnel.stop()).resolves.toBeUndefined();
   });
 
   it("rejects when ngrok stdout emits an error before the tunnel is ready", async () => {
@@ -247,12 +255,11 @@ describe("voice-call tunnels", () => {
     expect(proc.killedWith).toBe("SIGKILL");
   });
 
-  it("rejects and stops the ngrok auth command on stream errors", async () => {
-    const proc = nextProcess();
+  it("preserves ngrok auth wrapper errors", async () => {
+    mocks.runCommand.mockRejectedValueOnce(new Error("ngrok auth failed"));
     const result = startNgrokTunnel({ port: 3334, path: "/hook", authToken: "token" });
-    proc.stdout.emit("error", new Error("EPIPE"));
-    await expect(result).rejects.toThrow("ngrok command stdout error: EPIPE");
-    expect(proc.killedWith).toBe("SIGKILL");
+    await expect(result).rejects.toThrow("ngrok auth failed");
+    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
   it("stops immediately when the ngrok process already exited", async () => {
@@ -263,25 +270,5 @@ describe("voice-call tunnels", () => {
     proc.emit("close", 0);
     await expect(tunnel.stop()).resolves.toBeUndefined();
     expect(proc.killedWith).toBeNull();
-  });
-
-  it("rejects when Tailscale stdout emits an error before the tunnel is ready", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    const proc = nextProcess();
-    const result = startTailscaleTunnel({ mode: "serve", port: 3334, path: "/hook" });
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
-    proc.stdout.emit("error", new Error("EPIPE"));
-    await expect(result).rejects.toThrow("Tailscale serve stdout error: EPIPE");
-    expect(proc.killedWith).toBe("SIGKILL");
-  });
-
-  it("rejects and stops Tailscale when stderr emits an error before readiness", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    const proc = nextProcess();
-    const result = startTailscaleTunnel({ mode: "funnel", port: 3334, path: "/hook" });
-    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
-    proc.stderr.emit("error", new Error("EIO"));
-    await expect(result).rejects.toThrow("Tailscale funnel stderr error: EIO");
-    expect(proc.killedWith).toBe("SIGKILL");
   });
 });

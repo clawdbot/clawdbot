@@ -83,7 +83,7 @@ const LEFT_BRACKET = "(?:[<\uff1c\u003c]|&lt;)";
 const RIGHT_BRACKET = "(?:[>\uff1e\u003e]|&gt;)";
 
 /** Match self-closing media-tag syntax with file/src/path/url attributes. */
-export const SELF_CLOSING_TAG_REGEX = new RegExp(
+const SELF_CLOSING_TAG_REGEX = new RegExp(
   "`?" +
     LEFT_BRACKET +
     "\\s*(" +
@@ -103,7 +103,7 @@ export const SELF_CLOSING_TAG_REGEX = new RegExp(
 );
 
 /** Match malformed wrapped media tags that should be normalized. */
-export const FUZZY_MEDIA_TAG_REGEX = new RegExp(
+const FUZZY_MEDIA_TAG_REGEX = new RegExp(
   "`?" +
     LEFT_BRACKET +
     "\\s*(" +

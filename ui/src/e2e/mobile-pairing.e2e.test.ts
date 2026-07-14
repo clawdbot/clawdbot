@@ -1,4 +1,6 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import qrcode from "qrcode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +16,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/mobile-pairing");
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -34,7 +37,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("opens pairing from the app shell and Quick Settings", async () => {
+  it("defaults to full before issuance, supports limited fallback, and resets when reopened", async () => {
     const setupCode = Buffer.from(
       JSON.stringify({
         url: "wss://gateway.example.test",
@@ -43,8 +46,10 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       "utf8",
     ).toString("base64url");
     const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
+    mkdirSync(artifactDir, { recursive: true });
     const context = await browser.newContext({
       locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
@@ -72,6 +77,8 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
+      // Pairing folded into the footer agent-chip menu.
+      await page.locator(".sidebar-agent-chip__main").click();
       const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
@@ -81,26 +88,51 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
       const qr = page.getByAltText("OpenClaw mobile pairing QR code");
       await dialog.waitFor();
-      await qr.waitFor();
       expect(await dialog.isVisible()).toBe(true);
-      expect(await qr.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
-      expect(await page.getByText("wss://gateway.example.test", { exact: true }).isVisible()).toBe(
-        true,
-      );
-      expect(
-        await page.getByText("Official OpenClaw mobile apps connect automatically").isVisible(),
-      ).toBe(true);
+      expect(await qr.count()).toBe(0);
+      expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+      expect(await page.getByRole("button", { name: "Create setup code" }).isVisible()).toBe(true);
       await gateway.resolveDeferred("device.pair.list", {
         paired: [],
         pending: [{ deviceId: "mobile-1", requestId: "request-1" }],
       });
-      expect(await page.getByText("Device requests waiting for review: 1").isVisible()).toBe(true);
-      expect(
-        await page.getByText("Official OpenClaw mobile apps connect automatically").isVisible(),
-      ).toBe(false);
 
+      // modal-dialog renders its content in light DOM outside the native dialog element.
+      const accessRadios = page.locator('input[name="device-pair-access"]');
+      await expect.poll(async () => accessRadios.count()).toBe(2);
+      const fullAccess = accessRadios.nth(0);
+      const limitedAccess = accessRadios.nth(1);
+      expect(await fullAccess.isChecked()).toBe(true);
+      await page.screenshot({ path: path.join(artifactDir, "01-full-access-default.png") });
+
+      await limitedAccess.check();
+      expect(await limitedAccess.isChecked()).toBe(true);
+      await fullAccess.check();
+      expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+
+      await page.getByRole("button", { name: "Create setup code" }).click();
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
       expect(firstRequest.params).toEqual({});
+      await qr.waitFor();
+      expect(await qr.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+      expect(await page.getByText("wss://gateway.example.test", { exact: true }).isVisible()).toBe(
+        true,
+      );
+      expect(await page.getByText("Device requests waiting for review: 1").isVisible()).toBe(true);
+      expect(await fullAccess.isDisabled()).toBe(true);
+      expect(await limitedAccess.isDisabled()).toBe(true);
+      await page.screenshot({ path: path.join(artifactDir, "02-full-access-code.png") });
+
+      const accessSequenceBeforeClose = (await gateway.getRequests("device.pair.setupCode")).map(
+        (request) =>
+          request.params &&
+          typeof request.params === "object" &&
+          "bootstrapProfile" in request.params &&
+          request.params.bootstrapProfile === "limited"
+            ? "limited"
+            : "full",
+      );
+      expect(accessSequenceBeforeClose).toEqual(["full"]);
       await expect.poll(async () => (await gateway.getRequests("device.pair.list")).length).toBe(1);
 
       await gateway.emitGatewayEvent("device.pair.requested", { requestId: "request-2" });
@@ -112,24 +144,61 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const settingsResponse = await page.goto(`${server.baseUrl}config`);
       expect(settingsResponse?.status()).toBe(200);
       const quickSettingsPairingButton = page
-        .locator(".qs-card--security")
+        .locator("#settings-general-security")
         .getByRole("button", { name: "Pair mobile device" });
       await quickSettingsPairingButton.waitFor();
       const setupRequestsBeforeQuickSettings = (await gateway.getRequests("device.pair.setupCode"))
         .length;
       await quickSettingsPairingButton.click();
       await dialog.waitFor();
+      expect((await gateway.getRequests("device.pair.setupCode")).length).toBe(
+        setupRequestsBeforeQuickSettings,
+      );
+      expect(await page.locator('input[name="device-pair-access"]').nth(0).isChecked()).toBe(true);
+      const reopenedLimitedAccess = page.locator('input[name="device-pair-access"]').nth(1);
+      await reopenedLimitedAccess.check();
+      await page.getByRole("button", { name: "Create setup code" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
         .toBe(setupRequestsBeforeQuickSettings + 1);
+      await qr.waitFor();
+      const reopenedAccessSequence = (await gateway.getRequests("device.pair.setupCode"))
+        .slice(setupRequestsBeforeQuickSettings)
+        .map((request) =>
+          request.params &&
+          typeof request.params === "object" &&
+          "bootstrapProfile" in request.params &&
+          request.params.bootstrapProfile === "limited"
+            ? "limited"
+            : "full",
+        );
+      expect(reopenedAccessSequence).toEqual(["limited"]);
+      const accessSequence = [...accessSequenceBeforeClose, ...reopenedAccessSequence];
+      expect(accessSequence).toEqual(["full", "limited"]);
+      await page.screenshot({ path: path.join(artifactDir, "03-limited-access-code.png") });
+      writeFileSync(
+        path.join(artifactDir, "behavior-summary.json"),
+        `${JSON.stringify(
+          {
+            accessSequence,
+            reopenedDefault: "full",
+            setupRequestsIssued: accessSequence.length,
+          },
+          null,
+          2,
+        )}\n`,
+      );
 
       await page.getByRole("button", { name: "New code" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
         .toBe(setupRequestsBeforeQuickSettings + 2);
+      expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
+        bootstrapProfile: "limited",
+      });
 
       await page.getByRole("button", { name: "Manage devices" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/nodes");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");
       expect(pageErrors).toEqual([]);
     } finally {
       await context.close();

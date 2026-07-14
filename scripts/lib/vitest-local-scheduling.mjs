@@ -27,10 +27,12 @@ function isSystemThrottleDisabled(env) {
   return normalized === "1" || normalized === "true";
 }
 
+/** @internal Shared repository-script contract. */
 export function isCiLikeEnv(env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestEnv(env = process.env) {
   const normalizedLocalCheck = env.OPENCLAW_LOCAL_CHECK?.trim().toLowerCase();
   if (isCiLikeEnv(env) || (normalizedLocalCheck !== "0" && normalizedLocalCheck !== "false")) {
@@ -43,6 +45,7 @@ export function resolveLocalVitestEnv(env = process.env) {
   };
 }
 
+/** @internal Directly tested script implementation detail. */
 export function detectVitestHostInfo() {
   return {
     cpuCount:
@@ -67,6 +70,7 @@ function resolveMemoryPressureWorkerLimit(system) {
   return null;
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestMaxWorkers(
   env = process.env,
   system = detectVitestHostInfo(),
@@ -80,6 +84,7 @@ export function resolveLocalVitestMaxWorkers(
  * @param {VitestHostInfo} system
  * @param {"forks" | "threads"} pool
  * @returns {LocalVitestScheduling}
+ * @internal Shared repository-script contract.
  */
 export function resolveLocalVitestScheduling(
   env = process.env,
@@ -186,6 +191,7 @@ export function resolveLocalVitestScheduling(
   };
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveLocalFullSuiteProfile(env = process.env, system = detectVitestHostInfo()) {
   const scheduling = resolveLocalVitestScheduling(env, system, "threads");
   return {

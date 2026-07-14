@@ -3,13 +3,15 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type {
-  DefaultModelAuthStatus,
-  DefaultModelCatalogFacts,
-} from "../commands/auth-choice.model-check.js";
+import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelCatalogFacts = ReturnType<
+  typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
+>;
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());

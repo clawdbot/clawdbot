@@ -194,6 +194,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
       {
+        find: "@openclaw/gateway-client/browser",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "browser.ts"),
+      },
+      {
         find: "@openclaw/gateway-client/readiness",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
       },
@@ -392,6 +396,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/boolean-coercion",
         replacement: path.join(
           repoRoot,
@@ -430,6 +438,10 @@ export const sharedVitestConfig = {
           "src",
           "record-coerce.ts",
         ),
+      },
+      {
+        find: "@openclaw/normalization-core/result",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
       },
       {
         find: "@openclaw/normalization-core/string-coerce",
@@ -471,6 +483,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
+      sourcePackageAlias("retry"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,

@@ -9,7 +9,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
   registerMemoryPromptSection,
-} from "../plugins/memory-state.js";
+} from "../plugins/memory-state.test-fixtures.js";
 import * as memoryCoreAlias from "./memory-core.js";
 import {
   buildActiveMemoryPromptSection,

@@ -70,7 +70,7 @@ function createAgentAccount(
     enabled: true,
     configured: true,
     baseUrl: "http://127.0.0.1:8080",
-    token: "ccb_default",
+    token: "test-token-placeholder",
     workspace: "wsp_1",
     replyMode: "agent",
     toolsAllow: [],
@@ -135,7 +135,7 @@ describe("handleClickClackInbound", () => {
       enabled: true,
       configured: true,
       baseUrl: "http://127.0.0.1:8080",
-      token: "ccb_service",
+      token: "test-auth-token",
       workspace: "wsp_1",
       agentId: "service-bot",
       replyMode: "model",
@@ -177,7 +177,7 @@ describe("handleClickClackInbound", () => {
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
-    expect(completionRequest?.maxTokens).toBe(96);
+    expect(completionRequest).not.toHaveProperty("maxTokens");
     expect(completionRequest?.purpose).toBe("clickclack bot reply");
     expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
 
@@ -187,6 +187,64 @@ describe("handleClickClackInbound", () => {
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
     expect(sendRequest?.correlationId).toBe("fakeco.case_1");
+  });
+
+  it("uses the selected runtime model budget", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const account = createAgentAccount({
+      accountId: "service",
+      agentId: "service-bot",
+      replyMode: "model",
+    });
+
+    await handleClickClackInbound({
+      account,
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        body: "hello without a clickclack cap",
+        author_id: "usr_human",
+      }),
+    });
+
+    const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
+    expect(completionRequest).not.toHaveProperty("maxTokens");
+    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "service", text: "service bot online" }),
+    );
+  });
+
+  it("logs and skips delivery when model mode produces no sendable text", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.llm.complete).mockResolvedValue({
+      text: "   ",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      agentId: "service-bot",
+      usage: {},
+      audit: { caller: { kind: "plugin", id: "clickclack" } },
+    });
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        accountId: "service",
+        agentId: "service-bot",
+        replyMode: "model",
+      }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({ body: "hello bot" }),
+    });
+
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
+    expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
+      plugin: "clickclack",
+      feature: "model-reply",
+    });
+    const logger = vi.mocked(runtime.logging.getChildLogger).mock.results[0]?.value;
+    expect(logger?.warn).toHaveBeenCalledWith(
+      "[service] ClickClack model reply produced no sendable text",
+    );
   });
 
   it("marks agent turns command-authorized for allowlisted senders", async () => {
@@ -329,6 +387,42 @@ describe("handleClickClackInbound", () => {
         text: "correlated reply",
       }),
     );
+  });
+
+  it("routes media replies through required durable delivery", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: {} as CoreConfig,
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
+    });
+
+    const delivery = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0].delivery;
+    if (typeof delivery?.durable !== "function") {
+      throw new Error("expected ClickClack media durable delivery resolver");
+    }
+    const payload = { text: "artifact", mediaUrl: "/workspace/artifact.txt" };
+    expect(delivery.durable(payload, { kind: "final" } as never)).toEqual({
+      to: "channel:chn_1",
+      threadId: undefined,
+      replyToId: VALID_MESSAGE_ID,
+      requiredCapabilities: {
+        text: true,
+        media: true,
+        replyTo: true,
+        messageSendingHooks: true,
+        reconcileUnknownSend: true,
+      },
+    });
+    await expect(delivery?.deliver(payload, { kind: "final" } as never)).rejects.toThrow(
+      "ClickClack media reply requires durable delivery",
+    );
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
   });
 
   it("does not derive a run id from a noncanonical message id", async () => {

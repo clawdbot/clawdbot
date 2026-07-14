@@ -29,7 +29,7 @@ const POWERSHELL_COMMAND_FLAGS = [
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
 
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
   ...POWERSHELL_FILE_FLAGS,
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),

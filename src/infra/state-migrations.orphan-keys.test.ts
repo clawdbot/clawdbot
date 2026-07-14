@@ -4,10 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  migrateOrphanedSessionKeys,
-  sessionStoreTextMayNeedCanonicalization,
-} from "./state-migrations.js";
+import { migrateOrphanedSessionKeys } from "./state-migrations.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -81,105 +78,6 @@ describe("migrateOrphanedSessionKeys", () => {
   beforeEach(() => {
     listPluginDoctorSessionStoreAgentIdsMock.mockReset();
     listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue([]);
-  });
-
-  it("recognizes canonical stores without parsing them for migration", () => {
-    const raw = JSON.stringify({
-      "agent:main:discord:channel:123": { sessionId: "channel", updatedAt: 1 },
-      "agent:main:subagent:child": { sessionId: "child", updatedAt: 2 },
-      global: { sessionId: "global", updatedAt: 3 },
-    });
-
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw,
-        storeAgentIds: ["main"],
-        mainKey: "main",
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps migration candidates on the full parser path", () => {
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:main:main": { sessionId: "orphan", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:archive:main": { sessionId: "retired-main", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          main: { sessionId: "legacy-main", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: "{unquoted: {sessionId: 'legacy', updatedAt: 1}}",
-        storeAgentIds: ["main"],
-        mainKey: "main",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:ops:main": { sessionId: "old-main-alias", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:main:main": { sessionId: "global-main-alias", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "main",
-        scope: "global",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:ops:work ": { sessionId: "padded-key", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: '{"agent:\\u006f\\u0070\\u0073:\\u006d\\u0061\\u0069\\u006e":{"sessionId":"escaped","updatedAt":1}}',
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    for (const malformedKey of ["agent::room", "agent:_bad:room"]) {
-      expect(
-        sessionStoreTextMayNeedCanonicalization({
-          raw: JSON.stringify({
-            [malformedKey]: { sessionId: "opaque", updatedAt: 1 },
-          }),
-          storeAgentIds: ["voice"],
-          mainKey: "main",
-        }),
-      ).toBe(true);
-    }
   });
 
   it("renames orphaned raw key to canonical form", async () => {

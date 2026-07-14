@@ -2,7 +2,7 @@
  * Test: subagent_spawning, subagent_delivery_target, subagent_spawned & subagent_ended hook wiring
  */
 import { describe, expect, it, vi } from "vitest";
-import { addStaticTestHooks, createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { addStaticTestHooks, createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 describe("subagent hook runner methods", () => {
   const baseRequester = {

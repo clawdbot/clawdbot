@@ -4,7 +4,6 @@
  * Tracks draft previews and converts them into finalized message receipts when possible.
  */
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
-export type { LiveMessagePhase, LiveMessageState } from "./types.js";
 
 /** Mutable draft preview handle used before a live message is finalized or discarded. */
 export type LivePreviewFinalizerDraft<TId> = {

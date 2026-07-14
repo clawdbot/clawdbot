@@ -2,15 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import {
-  type MSTeamsActivityHandler,
-  type MSTeamsMessageHandlerDeps,
-  registerMSTeamsHandlers,
-} from "./monitor-handler.js";
+import { type MSTeamsActivityHandler, registerMSTeamsHandlers } from "./monitor-handler.js";
 import {
   createActivityHandler,
   installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = vi.hoisted(() => ({

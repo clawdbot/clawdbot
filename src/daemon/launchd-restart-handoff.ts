@@ -2,21 +2,17 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
-export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 
-type LaunchdRestartHandoffResult = {
-  ok: boolean;
-  pid?: number;
-  detail?: string;
-};
+type LaunchdRestartHandoffResult = Result<number | undefined, string>;
 
 type LaunchdRestartTarget = {
   domain: string;
@@ -249,11 +245,8 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
       },
     );
     child.unref();
-    return { ok: true, pid: child.pid ?? undefined };
-  } catch (err) {
-    return {
-      ok: false,
-      detail: formatErrorMessage(err),
-    };
+    return ok(child.pid ?? undefined);
+  } catch (error) {
+    return err(formatErrorMessage(error));
   }
 }

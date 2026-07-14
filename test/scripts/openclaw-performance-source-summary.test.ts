@@ -84,7 +84,7 @@ function writeSourceFixture(sourceDir: string) {
       agentDatabases: 2,
       channelIngressEvents: 1000,
       cronJobs: 100,
-      cronRunLogs: 1000,
+      cronTaskRuns: 1000,
       deliveryQueueEntries: 1000,
       pluginStateEntries: 1000,
       stateRows: 4100,

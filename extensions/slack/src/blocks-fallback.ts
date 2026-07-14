@@ -9,7 +9,7 @@ import {
 } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
-export type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
+type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
   nativeDataFormat?: SlackNativeDataFallbackFormat;

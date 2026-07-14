@@ -134,12 +134,12 @@ internal fun historyResponse(
     )
   }.toString()
 
-/** Protocol-valid gateway delta carrying both the incremental chunk and accumulated snapshot. */
+/** Gateway delta carrying the accumulated snapshot plus the v4 incremental chunk when present. */
 internal fun chatDeltaPayload(
   sessionKey: String,
   runId: String,
   seq: Int,
-  deltaText: String,
+  deltaText: String?,
   accumulatedText: String,
 ): String =
   buildJsonObject {
@@ -147,7 +147,7 @@ internal fun chatDeltaPayload(
     put("runId", JsonPrimitive(runId))
     put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive("delta"))
-    put("deltaText", JsonPrimitive(deltaText))
+    if (deltaText != null) put("deltaText", JsonPrimitive(deltaText))
     put(
       "message",
       buildJsonObject {

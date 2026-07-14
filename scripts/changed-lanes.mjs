@@ -5,7 +5,6 @@ import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
-export { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -15,6 +14,7 @@ const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 const TEST_ROOT_TYPECHECK_PATH_RE =
   /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
+/** @internal Shared repository-script contract. */
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/lib/live-docker-auth.sh",
   "scripts/test-live-acp-bind-docker.sh",
@@ -35,6 +35,7 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
 /**
  * Files whose changes are treated as release metadata only.
+ * @internal Shared repository-script contract.
  */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
@@ -63,6 +64,7 @@ export const RELEASE_METADATA_PATHS = new Set([
 
 /**
  * Creates the default changed-lanes result object.
+ * @internal Directly tested script implementation detail.
  */
 export function createEmptyChangedLanes() {
   return {
@@ -82,6 +84,7 @@ export function createEmptyChangedLanes() {
   };
 }
 
+/** @internal Shared repository-script contract. */
 export function isChangedLaneTestPath(changedPath) {
   return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
 }
@@ -93,6 +96,7 @@ export function isChangedLaneTestPath(changedPath) {
  */
 /**
  * Classifies a list of changed paths into docs, app, extension, core, and tooling lanes.
+ * @internal Shared repository-script contract.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
   const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
@@ -257,6 +261,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
  */
 /**
  * Classifies changed paths with optional package.json before/after contents.
+ * @internal Shared repository-script contract.
  */
 export function detectChangedLanesForPaths(params) {
   const base = params.staged
@@ -394,6 +399,7 @@ function classifyPackageJsonChangeFromGit(params) {
 
 /**
  * Checks whether package scripts changed only live Docker script entries.
+ * @internal Directly tested script implementation detail.
  */
 export function isLiveDockerPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
@@ -411,6 +417,7 @@ export function isLiveDockerPackageScriptOnlyChange(before, after) {
 
 /**
  * Checks whether package.json changes are limited to scripts.
+ * @internal Directly tested script implementation detail.
  */
 export function isPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);

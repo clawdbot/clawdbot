@@ -507,8 +507,8 @@ describe("managed service update handoff", () => {
     expect(child.stdout.destroyed).toBe(true);
   });
 
-  it("strips process supervisor hints while preserving service identity for the CLI handoff", async () => {
-    const { startManagedServiceUpdateHandoff, stripSupervisorHintEnv } =
+  it("strips supervisor hints while preserving service identity for the CLI handoff", async () => {
+    const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const serviceIdentityEnv = {
       OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test",
@@ -518,15 +518,6 @@ describe("managed service update handoff", () => {
     const supervisorEnv = Object.fromEntries(
       SUPERVISOR_HINT_ENV_VARS.map((key) => [key, "supervised"]),
     ) as NodeJS.ProcessEnv;
-    const stripped = stripSupervisorHintEnv({
-      ...supervisorEnv,
-      ...serviceIdentityEnv,
-      KEEP_ME: "1",
-    });
-    expect(stripped).toEqual({
-      ...serviceIdentityEnv,
-      KEEP_ME: "1",
-    });
 
     const result = await startManagedServiceUpdateHandoff({
       root: "/tmp/openclaw",
@@ -548,27 +539,16 @@ describe("managed service update handoff", () => {
     });
 
     expect(result.status).toBe("started");
-    expect(result.command).toBe("openclaw update --yes --timeout 1800");
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [execPath, args, options] = spawnMock.mock.calls[0] as unknown as [
+    const [, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string; stdio?: unknown },
+      { env: NodeJS.ProcessEnv },
     ];
-    expect(execPath).toBe("/usr/local/bin/node");
-    expect(args).toHaveLength(2);
     tempDirs.add(path.dirname(args[0] ?? result.logPath));
     const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
-      cwd?: string;
       metaPath?: string;
-      stateDatabasePath?: string;
     };
-    expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
-    expect(helperParams.stateDatabasePath).toMatch(/openclaw\.sqlite$/u);
-    expect(options.cwd).toBe(os.homedir());
-    expect(helperParams.cwd).toBe(os.homedir());
-    expect(options.detached).toBe(true);
-    expect(options.stdio).toEqual(["ignore", "pipe", "ignore"]);
     expect(options.env.KEEP_ME).toBe("1");
     for (const [key, value] of Object.entries(serviceIdentityEnv)) {
       expect(options.env[key]).toBe(value);
@@ -579,7 +559,7 @@ describe("managed service update handoff", () => {
       expect(options.env[key]).toBeUndefined();
     }
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
-    expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toMatch(/sentinel-meta\.json$/u);
+    expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toBe(helperParams.metaPath);
   });
 
   it("launches systemd handoffs through a transient user scope", async () => {

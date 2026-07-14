@@ -30,7 +30,7 @@ export function startGatewayChannelHealthMonitor(params: {
     channelManager: params.channelManager,
     checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
     ...(staleEventThresholdMinutes != null && {
-      staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
+      timing: { staleEventThresholdMs: staleEventThresholdMinutes * 60_000 },
     }),
     ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
   });

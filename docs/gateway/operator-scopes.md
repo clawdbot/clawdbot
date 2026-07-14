@@ -98,11 +98,11 @@ stores relate.
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
 
-| Declared commands                                     | Required scopes                       |
-| ----------------------------------------------------- | ------------------------------------- |
-| none                                                  | `operator.pairing`                    |
-| non-exec node commands                                | `operator.pairing` + `operator.write` |
-| `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                    | Required scopes                       |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                 | `operator.pairing`                    |
+| ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 Approving a node declaration does not enable commands that have a separate
 runtime allowlist gate. For example, approving a node that declares

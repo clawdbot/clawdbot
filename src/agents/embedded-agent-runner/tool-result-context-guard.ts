@@ -28,7 +28,7 @@ import {
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
-export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
+const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
@@ -53,11 +53,6 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
-
-export {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {

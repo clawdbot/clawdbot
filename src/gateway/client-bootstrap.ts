@@ -8,7 +8,7 @@ import type { ExplicitGatewayAuth } from "./credentials.js";
 /**
  * Maps connection-detail source labels to the override kinds that affect auth fallback.
  */
-export function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
+function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
   if (urlSource === "cli --url") {
     return "cli";
   }

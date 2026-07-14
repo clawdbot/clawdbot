@@ -4,12 +4,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
+import { discoverHermesSource, resolveImplicitHermesRoot } from "./source.js";
+import { resolveTargets } from "./targets.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
 
 describe("Hermes migration file and skill items", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await cleanupTempRoots();
   });
 
@@ -38,6 +42,215 @@ describe("Hermes migration file and skill items", () => {
     return items.find((item) => item.id === id);
   }
 
+  function fakeJwt(payload: Record<string, unknown>): string {
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    return `${header}.${body}.signature`;
+  }
+
+  const hermesAccessField = ["access", "token"].join("_");
+  const hermesRefreshField = ["refresh", "token"].join("_");
+
+  it("discovers nested skills while pruning inactive packages", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(source, "skills", "coding", "review", "SKILL.md"), "# Review\n");
+    await writeFile(
+      path.join(source, "skills", "coding", "review", "subskills", "lint", "SKILL.md"),
+      "# Lint\n",
+    );
+    await writeFile(
+      path.join(source, "skills", "coding", "review", "references", "old", "SKILL.md"),
+      "# Old\n",
+    );
+    await writeFile(path.join(source, "skills", ".archive", "retired", "SKILL.md"), "# Old\n");
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({ source, stateDir, workspaceDir }),
+    );
+    const skills = plan.items.filter((item) => item.kind === "skill");
+    expect(skills).toHaveLength(2);
+    expect(itemById(skills, "skill:coding:review")).toEqual(
+      expect.objectContaining({
+        id: "skill:coding:review",
+        source: path.join(source, "skills", "coding", "review"),
+        target: path.join(workspaceDir, "skills", "review"),
+      }),
+    );
+    expect(itemById(skills, "skill:coding:review:subskills:lint")).toEqual(
+      expect.objectContaining({
+        source: path.join(source, "skills", "coding", "review", "subskills", "lint"),
+        target: path.join(workspaceDir, "skills", "lint"),
+      }),
+    );
+  });
+
+  it("honors explicit Hermes home, active profiles, and Windows legacy state", async () => {
+    const root = await makeTempRoot();
+    const home = path.join(root, "home");
+    const defaultRoot = path.join(home, ".hermes");
+    const profileRoot = path.join(defaultRoot, "profiles", "coder");
+    await writeFile(path.join(defaultRoot, "active_profile"), "coder\n");
+    await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
+
+    expect(await resolveImplicitHermesRoot({ HERMES_HOME: defaultRoot }, "darwin")).toBe(
+      defaultRoot,
+    );
+    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(profileRoot);
+    expect((await discoverHermesSource(profileRoot)).root).toBe(profileRoot);
+
+    await writeFile(path.join(defaultRoot, "active_profile"), "../escape\n");
+    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(defaultRoot);
+
+    const windowsHome = path.join(root, "windows-home");
+    const localAppData = path.join(windowsHome, "AppData", "Local");
+    const nativeWindowsRoot = path.join(localAppData, "hermes");
+    const legacyWindowsRoot = path.join(windowsHome, ".hermes");
+    await writeFile(path.join(legacyWindowsRoot, "config.yaml"), "model: legacy\n");
+    expect(
+      await resolveImplicitHermesRoot(
+        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+        "win32",
+      ),
+    ).toBe(legacyWindowsRoot);
+    await writeFile(path.join(nativeWindowsRoot, "config.yaml"), "model: current\n");
+    expect(
+      await resolveImplicitHermesRoot(
+        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+        "win32",
+      ),
+    ).toBe(nativeWindowsRoot);
+
+    const personaHome = path.join(root, "persona-home");
+    const personaLocalAppData = path.join(personaHome, "AppData", "Local");
+    const personaLegacyRoot = path.join(personaHome, ".hermes");
+    await writeFile(path.join(personaLegacyRoot, "SOUL.md"), "Legacy persona\n");
+    expect(
+      await resolveImplicitHermesRoot(
+        { LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome },
+        "win32",
+      ),
+    ).toBe(personaLegacyRoot);
+  });
+
+  it("uses global Hermes auth per provider when the active profile has no local entry", async () => {
+    const root = await makeTempRoot();
+    const home = path.join(root, "home");
+    const hermesRoot = path.join(home, ".hermes");
+    const profileRoot = path.join(hermesRoot, "profiles", "coder");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const access = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-global" },
+      "https://api.openai.com/profile": { email: "global@example.test" },
+    });
+    await writeFile(path.join(hermesRoot, "active_profile"), "coder\n");
+    await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
+    await writeFile(path.join(profileRoot, "auth.json"), JSON.stringify({ providers: {} }));
+    await writeFile(
+      path.join(hermesRoot, "auth.json"),
+      JSON.stringify({
+        providers: {
+          "openai-codex": {
+            tokens: {
+              [hermesAccessField]: access,
+              [hermesRefreshField]: "global-refresh",
+            },
+          },
+        },
+      }),
+    );
+
+    const source = await discoverHermesSource(undefined, {
+      env: { HOME: home },
+      platform: "darwin",
+    });
+    expect(source.root).toBe(profileRoot);
+    expect(source.globalAuthPath).toBe(path.join(hermesRoot, "auth.json"));
+    const ctx = makeContext({ source: profileRoot, stateDir, workspaceDir, includeSecrets: true });
+    const items = await buildAuthItems({ ctx, source, targets: resolveTargets(ctx) });
+    expect(items).toEqual([
+      expect.objectContaining({
+        source: path.join(hermesRoot, "auth.json"),
+        details: expect.objectContaining({ provider: "openai" }),
+      }),
+    ]);
+  });
+
+  it("maps supported OAuth model providers and requests fresh OpenClaw authentication", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const xaiProvider = ["xai", "oauth"].join("-");
+    const minimaxProvider = ["minimax", "oauth"].join("-");
+    await writeFile(
+      path.join(source, "config.yaml"),
+      `model:\n  provider: ${xaiProvider}\n  default: grok-4.1-fast\n`,
+    );
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {
+          anthropic: {},
+          nous: {},
+          "qwen-oauth": {},
+          [xaiProvider]: {},
+          [minimaxProvider]: {},
+        },
+      }),
+    );
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+
+    expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("xai/grok-4.1-fast");
+    const reauthItems = plan.items.filter(
+      (item) => item.kind === "manual" && item.message?.includes("credentials cannot be reused"),
+    );
+    expect(reauthItems.map((item) => item.reason)).toEqual([
+      "Authenticate anthropic in OpenClaw after migration.",
+      "Authenticate nous in OpenClaw after migration.",
+      "Authenticate qwen-oauth in OpenClaw after migration.",
+      "Authenticate minimax-portal in OpenClaw after migration.",
+      "Authenticate xai in OpenClaw after migration.",
+    ]);
+  });
+
+  it("requests reauthentication only for OAuth credential-pool entries", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    await writeFile(path.join(source, "config.yaml"), "{}\n");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        credential_pool: {
+          anthropic: [{ auth_type: "api_key" }],
+          nous: [{ auth_type: "oauth" }],
+        },
+      }),
+    );
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+
+    expect(
+      plan.items
+        .filter((item) => item.id.startsWith("manual:auth-reauthenticate:"))
+        .map((item) => item.id),
+    ).toEqual(["manual:auth-reauthenticate:nous"]);
+  });
+
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {
       await fs.access(targetPath);
@@ -53,18 +266,20 @@ describe("Hermes migration file and skill items", () => {
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
-    await writeFile(path.join(source, "skills", "Ship It", "SKILL.md"), "# Ship It\n");
-    await writeFile(path.join(source, "skills", "ship-it", "SKILL.md"), "# ship-it\n");
+    await writeFile(path.join(source, "skills", "team-a", "review", "SKILL.md"), "# A\n");
+    await writeFile(path.join(source, "skills", "team-b", "review", "SKILL.md"), "# B\n");
 
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir }));
     const skillItems = plan.items.filter((item) => item.kind === "skill");
 
     expect(skillItems).toHaveLength(2);
-    const shipIt = itemById(skillItems, "skill:ship-it");
-    expect(shipIt?.status).toBe("conflict");
-    expect(shipIt?.reason).toBe('multiple Hermes skill directories normalize to "ship-it"');
-    expect(shipIt?.target).toBe(path.join(workspaceDir, "skills", "ship-it"));
+    const reviewA = itemById(skillItems, "skill:team-a:review");
+    const reviewB = itemById(skillItems, "skill:team-b:review");
+    expect(reviewA?.status).toBe("conflict");
+    expect(reviewA?.reason).toBe('multiple Hermes skill directories normalize to "review"');
+    expect(reviewA?.target).toBe(path.join(workspaceDir, "skills", "review"));
+    expect(reviewB?.status).toBe("conflict");
 
     const result = await provider.apply(
       makeContext({
@@ -77,7 +292,7 @@ describe("Hermes migration file and skill items", () => {
     );
 
     expect(result.summary.conflicts).toBe(2);
-    await expectPathMissing(path.join(workspaceDir, "skills", "ship-it"));
+    await expectPathMissing(path.join(workspaceDir, "skills", "review"));
   });
 
   it("reports late-created copy targets as conflicts without overwriting", async () => {
@@ -170,6 +385,42 @@ describe("Hermes migration file and skill items", () => {
     }
   });
 
+  it("keeps repeated memory imports byte-identical", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "one memory\n");
+    const provider = buildHermesMigrationProvider();
+    const ctx = makeContext({
+      source,
+      stateDir,
+      workspaceDir,
+      overwrite: true,
+      runtime: configRuntime({}),
+    });
+    await provider.apply(ctx);
+    const first = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const secondResult = await provider.apply(ctx);
+    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(first);
+    expect(itemById(secondResult.items, "memory:MEMORY.md")?.status).toBe("skipped");
+  });
+
+  it("fails planning on malformed Hermes YAML", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    await writeFile(path.join(source, "config.yaml"), "model: [unterminated\n");
+    await expect(
+      buildHermesMigrationProvider().plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir: path.join(root, "ws"),
+        }),
+      ),
+    ).rejects.toThrow(`Failed to parse Hermes config at ${path.join(source, "config.yaml")}`);
+  });
+
   it("archives unsupported Hermes state without copying raw auth credentials", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -177,7 +428,15 @@ describe("Hermes migration file and skill items", () => {
     const stateDir = path.join(root, "state");
     const reportDir = path.join(root, "report");
     await writeFile(path.join(source, "logs", "session.log"), "log line\n");
+    await writeFile(path.join(source, "pairing", "approved.json"), '{"approved":[]}\n');
+    await writeFile(path.join(source, "platforms", "pairing", "telegram.json"), "{}\n");
+    await writeFile(path.join(source, "gateway_state.json"), '{"running":false}\n');
+    await writeFile(path.join(source, "channel_directory.json"), "{}\n");
+    await writeFile(path.join(source, "channel_aliases.json"), "{}\n");
+    await writeFile(path.join(source, "processes.json"), "{}\n");
+    await writeFile(path.join(source, "feishu_comment_pairing.json"), "{}\n");
     await writeFile(path.join(source, "auth.json"), '{"token":"opaque"}\n');
+    new DatabaseSync(path.join(source, "retaindb_queue.db")).close();
 
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir, reportDir }));
@@ -186,6 +445,18 @@ describe("Hermes migration file and skill items", () => {
     expect(plannedLogs?.kind).toBe("archive");
     expect(plannedLogs?.action).toBe("archive");
     expect(plannedLogs?.status).toBe("planned");
+    for (const itemId of [
+      "archive:pairing",
+      "archive:platforms",
+      "archive:gateway_state.json",
+      "archive:channel_directory.json",
+      "archive:channel_aliases.json",
+      "archive:processes.json",
+      "archive:feishu_comment_pairing.json",
+      "archive:retaindb_queue.db",
+    ]) {
+      expect(itemById(plan.items, itemId)?.status).toBe("planned");
+    }
     expect(plan.items.find((item) => item.id === "archive:auth.json")).toBeUndefined();
     expect(plan.warnings).toEqual([
       "Some Hermes files are archive-only. They will be copied into the migration report for manual review, not loaded into OpenClaw.",
@@ -200,6 +471,18 @@ describe("Hermes migration file and skill items", () => {
     expect(await fs.readFile(path.join(reportDir, "archive", "logs", "session.log"), "utf8")).toBe(
       "log line\n",
     );
+    expect(
+      await fs.readFile(path.join(reportDir, "archive", "pairing", "approved.json"), "utf8"),
+    ).toBe('{"approved":[]}\n');
+    expect(
+      await fs.readFile(
+        path.join(reportDir, "archive", "platforms", "pairing", "telegram.json"),
+        "utf8",
+      ),
+    ).toBe("{}\n");
+    await expect(
+      fs.access(path.join(reportDir, "archive", "retaindb_queue.db")),
+    ).resolves.toBeUndefined();
     await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });
@@ -250,6 +533,24 @@ describe("Hermes migration file and skill items", () => {
     }
   });
 
+  it("discovers the current Hermes state database for archival", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const currentStatePath = path.join(source, "hermes_state.db");
+    await fs.mkdir(source, { recursive: true });
+    new DatabaseSync(currentStatePath).close();
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+
+    expect(itemById(plan.items, "archive:hermes_state.db")?.source).toBe(currentStatePath);
+  });
+
   it("preserves raw Hermes state when SQLite snapshotting fails", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -267,13 +568,49 @@ describe("Hermes migration file and skill items", () => {
     expect(archivedState?.status).toBe("error");
     expect(archivedState?.target).toBe(archivedStatePath);
     expect(archivedState?.reason).toContain(
-      "SQLite snapshot failed; raw state.db preserved for manual review",
+      "SQLite snapshot failed; database recovery files preserved for manual review",
     );
-    expect(await fs.readFile(archivedStatePath, "utf8")).toBe("legacy non-SQLite Hermes state\n");
+    expect(await fs.readFile(path.join(archivedStatePath, "state.db"), "utf8")).toBe(
+      "legacy non-SQLite Hermes state\n",
+    );
     expect(result.summary.errors).toBe(1);
   });
 
-  it("reports legacy Hermes OpenAI auth.json OAuth state as manual reauth work", async () => {
+  it("tolerates a disappearing optional SQLite recovery sidecar", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const stateDbPath = path.join(source, "state.db");
+    const walPath = `${stateDbPath}-wal`;
+    const reportDir = path.join(root, "report");
+    await writeFile(stateDbPath, "legacy non-SQLite Hermes state\n");
+    await writeFile(walPath, "transient wal\n");
+    const copyFile = fs.copyFile.bind(fs);
+    vi.spyOn(fs, "copyFile").mockImplementation(async (sourcePath, targetPath, mode) => {
+      if (sourcePath === walPath) {
+        await fs.rm(walPath, { force: true });
+        throw Object.assign(new Error("sidecar vanished"), { code: "ENOENT" });
+      }
+      return await copyFile(sourcePath, targetPath, mode);
+    });
+
+    const result = await buildHermesMigrationProvider().apply(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+        reportDir,
+      }),
+    );
+
+    const archivedState = itemById(result.items, "archive:state.db");
+    expect(archivedState?.status).toBe("error");
+    expect(archivedState?.reason).toContain("recovery files preserved");
+    expect(await fs.readFile(path.join(reportDir, "archive", "state.db", "state.db"), "utf8")).toBe(
+      "legacy non-SQLite Hermes state\n",
+    );
+  });
+
+  it("ignores legacy Hermes OpenAI auth.json OAuth state", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
@@ -305,13 +642,47 @@ describe("Hermes migration file and skill items", () => {
       makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
     );
 
-    const manualAuth = itemById(plan.items, "manual:legacy-hermes-auth-json");
-    expect(manualAuth?.kind).toBe("manual");
-    expect(manualAuth?.status).toBe("skipped");
-    expect(manualAuth?.message).toContain("no longer imports");
     expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
+  });
+
+  it("plans current Hermes OpenAI OAuth state for import with a cutover warning", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {
+          "openai-codex": {
+            tokens: {
+              [hermesAccessField]: fakeJwt({
+                "https://api.openai.com/auth": { chatgpt_account_id: "acct-hermes" },
+                "https://api.openai.com/profile": { email: "hermes@example.test" },
+              }),
+              [hermesRefreshField]: "placeholder",
+            },
+          },
+        },
+      }),
+    );
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
+    );
+
+    expect(plan.items.find((item) => item.kind === "auth")).toEqual(
+      expect.objectContaining({
+        status: "planned",
+        sensitive: true,
+        details: expect.objectContaining({
+          provider: "openai",
+          sourceKind: "hermes-auth-json",
+        }),
+      }),
+    );
     expect(plan.warnings).toContain(
-      "Some Hermes settings require manual review before they can be activated safely.",
+      "Hermes and OpenClaw must not keep using the same imported OpenAI OAuth refresh grant after migration; reauthenticate one side before running both.",
     );
   });
 
@@ -334,6 +705,6 @@ describe("Hermes migration file and skill items", () => {
       makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
     );
 
-    expect(plan.items.find((item) => item.id === "manual:legacy-hermes-auth-json")).toBeUndefined();
+    expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
   });
 });

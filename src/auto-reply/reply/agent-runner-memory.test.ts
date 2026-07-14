@@ -12,7 +12,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {

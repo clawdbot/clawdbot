@@ -4,7 +4,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../../../src/channels/plugins/types.js";
+} from "../../../src/channels/plugins/types.public.js";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,

@@ -1,10 +1,10 @@
 // Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it } from "vitest";
-import { ExtensionRelayBridge, type BridgeSocket } from "./relay-bridge.js";
+import { ExtensionRelayBridge } from "./relay-bridge.js";
 import type { ExtensionToRelayMessage, RelayToExtensionMessage } from "./relay-protocol.js";
 
 /** In-memory socket capturing every frame the bridge sends. */
-class FakeSocket implements BridgeSocket {
+class FakeSocket {
   readonly sent: unknown[] = [];
   closed = false;
   closeCode?: number;

@@ -59,7 +59,10 @@ function extractNonrootNodePreflight(): string {
   return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
-function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } = {}) {
+function runNonrootNodePreflight(
+  version: string,
+  options: { sqlite?: boolean; sqliteVersion?: string } = {},
+) {
   const stderr: string[] = [];
   try {
     runInNewContext(extractNonrootNodePreflight(), {
@@ -78,7 +81,17 @@ function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } 
         if (specifier === "node:sqlite" && options.sqlite === false) {
           throw new Error("missing node:sqlite");
         }
-        return {};
+        return {
+          DatabaseSync: class {
+            prepare() {
+              return {
+                get: () => ({ version: options.sqliteVersion ?? "3.51.3" }),
+              };
+            }
+
+            close() {}
+          },
+        };
       },
     });
     return { status: 0, stderr: stderr.join("") };
@@ -630,22 +643,30 @@ printf 'status=%s\\n' "$status"
   });
 
   it("rejects stale non-root smoke Node runtimes below the runtime floor", () => {
-    const result = runNonrootNodePreflight("22.18.0");
+    const result = runNonrootNodePreflight("22.22.2");
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.18.0");
+    expect(result.stderr).toContain("unsupported node 22.22.2");
   });
 
   it("rejects non-root smoke Node runtimes without node:sqlite", () => {
-    const result = runNonrootNodePreflight("22.19.0", { sqlite: false });
+    const result = runNonrootNodePreflight("22.22.3", { sqlite: false });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.19.0: missing node:sqlite");
+    expect(result.stderr).toContain("unsupported node 22.22.3: missing node:sqlite");
+  });
+
+  it("rejects non-root smoke Node runtimes with vulnerable system SQLite", () => {
+    const result = runNonrootNodePreflight("24.17.0", { sqliteVersion: "3.51.2" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unsupported node 24.17.0: unsafe SQLite 3.51.2");
   });
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
-    expect(runNonrootNodePreflight("22.19.0").status).toBe(0);
+    expect(runNonrootNodePreflight("22.22.3").status).toBe(0);
     expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+    expect(runNonrootNodePreflight("25.9.0").status).toBe(0);
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {

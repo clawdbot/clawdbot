@@ -189,14 +189,16 @@ describe("managed-child-process", () => {
   it("shares process signal listeners across parallel managed commands", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+    const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
     let readyCount = 0;
     const commands = Array.from({ length: 12 }, () =>
       runManagedCommand({
-        args: ["-e", "setTimeout(() => {}, 500)"],
+        args: ["-e", "setTimeout(() => {}, 10_000)"],
         bin: process.execPath,
         shell: false,
         stdio: "ignore",
-        onReady: () => {
+        onReady: (child) => {
+          children.push(child);
           readyCount += 1;
         },
       }),
@@ -208,6 +210,9 @@ describe("managed-child-process", () => {
         expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
       }
     } finally {
+      for (const child of children) {
+        terminateManagedChild(child, "SIGTERM");
+      }
       await Promise.all(commands);
     }
 

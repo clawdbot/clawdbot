@@ -77,7 +77,7 @@ type QaRuntimeParityScenarioReport = {
   codexToolCalls: number;
 };
 
-export type QaRuntimeParityReport = {
+type QaRuntimeParityReport = {
   runtimePair: [RuntimeId, RuntimeId];
   comparedAt: string;
   providerMode?: string;

@@ -18,15 +18,15 @@ and what the automatic resume looks like.
 
 ## What survives a restart
 
-| State                         | Storage                                             | Behavior across restart                                                 |
-| ----------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
-| Conversation history          | JSONL transcripts + per-agent session store on disk | Untouched; sessions continue from the stored transcript                 |
-| Interrupted main-session turn | Recovery markers in the session store               | Automatically resumed a few seconds after startup                       |
-| Subagent runs                 | SQLite (shared state database)                      | Registry restored on boot; interrupted runs resumed                     |
-| Background tasks              | SQLite (shared state database)                      | Reconciled on boot; orphaned runs recovered or marked lost              |
-| Queued outbound deliveries    | SQLite delivery queue                               | Drained after restart; undelivered replies are retried                  |
-| Scheduled (cron) jobs         | SQLite cron store                                   | Schedules persist; the scheduler re-arms on boot                        |
-| Restart continuation          | SQLite restart sentinel                             | One-shot follow-up dispatched to the session that asked for the restart |
+| State                         | Storage                                     | Behavior across restart                                                 |
+| ----------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                 |
+| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed a few seconds after startup                       |
+| Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                     |
+| Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost              |
+| Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
+| Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                        |
+| Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
 
 ## Graceful restarts drain first
 
@@ -42,8 +42,15 @@ affected session is marked for recovery.
 
 ## How interrupted work is detected
 
-Two complementary mechanisms mark sessions whose turn did not finish:
+Three complementary mechanisms mark sessions whose turn did not finish:
 
+- **At Control UI admission:** for an ordinary text turn on an existing main
+  session, the gateway appends the user message, marks the session running, and
+  records its transcript-only delivery claim in one SQLite transaction before
+  returning the `started` acknowledgement.
+  Commands, attachments, per-turn overrides, pending deliveries, prior abort
+  hints, plugin-owned sessions, and turns with execution hooks keep their
+  specialized admission paths.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
@@ -59,12 +66,17 @@ with a synthetic system message telling the agent its previous turn was
 interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work. Recovery retries up
-to 3 times with exponential backoff.
+to 3 times with exponential backoff. Every retry reuses one durable dispatch
+identifier, so an ambiguous connection failure cannot start the same recovery
+twice. Completed and unresumable Control UI turns also retain bounded durable
+idempotency tombstones, allowing a reconnecting outbox to retire them without
+re-executing the request.
 
 Before resuming, the gateway checks that the transcript tail is safe to
 continue from. If it is not (for example, the turn ended on a stale pending
 approval), the session is not blindly re-run; the agent instead posts a short
-notice asking the user to resend the last request.
+notice asking the user to resend the last request. For WebChat, that notice is
+written directly to the session history so it remains visible after reconnect.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/reference/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting

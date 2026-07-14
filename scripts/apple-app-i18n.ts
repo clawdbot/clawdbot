@@ -245,11 +245,17 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "title: LocalizedStringResource",
-    "status: PrivacyPermissionStatus",
     "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource? = nil",
     "actionTitle: LocalizedStringResource?",
-    "String(localized: status.resource)",
+  ],
+  "apps/ios/Sources/Permissions/DevicePermissionRow.swift": [
+    "title: LocalizedStringResource",
+    "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource?",
+    "actionTitle: LocalizedStringResource?",
+    "Text(self.title)",
+    "Text(actionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
@@ -281,8 +287,10 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
     "func aboutLinkRow(title: String",
     "func toggleCard(title: String",
+    "func gatewayActionButton(\n        title: String",
     "func gatewaySecureField(_ placeholder: String",
     "func settingsToggle(\n        _ title: String",
+    ".accessibilityLabel(title)",
   ],
   "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift": [
     'helperText: "Secure connection is required for this host."',

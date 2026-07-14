@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { createProfileRuntimeState } from "./server-context.lifecycle.js";
+import { getOrCreateProfileRuntime } from "./server-context.lifecycle.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type { BrowserServerState } from "./server-context.types.js";
@@ -110,8 +110,7 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
     const profile = resolveProfileForTest(state, profileName ?? state.resolved.defaultProfile);
     let runtime = state.profiles.get(profile.name);
     if (!runtime) {
-      runtime = createProfileRuntimeState(profile);
-      state.profiles.set(profile.name, runtime);
+      runtime = getOrCreateProfileRuntime(state, profile);
     }
     const tabOps = createProfileTabOps({
       profile,

@@ -45,7 +45,7 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
-export type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
+type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
   revision?: string;
 };
 

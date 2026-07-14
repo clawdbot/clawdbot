@@ -6,18 +6,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
+import type { SessionEntry, SessionSkillSnapshot } from "./types.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
 
-import {
-  getSessionSkillPromptRefCacheStatsForTest,
-  getValidSessionSkillPromptBlobCacheStatsForTest,
-  isSessionSkillPromptBlobReadable,
-} from "./skill-prompt-blobs.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -184,29 +179,29 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(stat.size).toBeLessThan(2 * 1024 * 1024);
   });
 
-  it("stores duplicate large skills prompts as content-addressed blobs", async () => {
+  it("stores duplicate large skills prompts as one content-addressed blob", async () => {
     const prompt = `<available_skills>\n${"skill prompt body\n".repeat(200)}</available_skills>`;
-    const store = {
-      "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
-      "agent:main:test:2": makeEntry("session-2", makeSnapshotWithPrompt(prompt)),
-    };
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+        "agent:main:test:2": makeEntry("session-2", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
 
-    await saveSessionStore(storePath, store, { skipMaintenance: true });
-
-    const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw).not.toContain("skill prompt body");
-    const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
-    const firstRef = parsed["agent:main:test:1"]?.skillsSnapshot
-      ?.promptRef as SessionSkillPromptRef;
-    const secondRef = parsed["agent:main:test:2"]?.skillsSnapshot
-      ?.promptRef as SessionSkillPromptRef;
-    expect(firstRef).toMatchObject({
-      version: 1,
-      algorithm: "sha256",
-      bytes: Buffer.byteLength(prompt, "utf8"),
-    });
+    const parsed = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const firstRef = parsed["agent:main:test:1"]?.skillsSnapshot?.promptRef;
+    const secondRef = parsed["agent:main:test:2"]?.skillsSnapshot?.promptRef;
+    expect(firstRef).toBeDefined();
     expect(secondRef).toEqual(firstRef);
     expect(parsed["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
+    if (!firstRef) {
+      throw new Error("expected prompt ref");
+    }
 
     const blobPath = path.join(
       testDir,
@@ -216,40 +211,6 @@ describe("session store strips resolvedSkills from persistence", () => {
       `${firstRef.hash}.txt`,
     );
     expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
-    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(1);
-  });
-
-  it("clears cached prompt refs with the session store caches", async () => {
-    const prompt = `<available_skills>\n${"clear cache prompt\n".repeat(200)}</available_skills>`;
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
-      },
-      { skipMaintenance: true },
-    );
-    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(1);
-
-    clearSessionStoreCacheForTest();
-
-    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(0);
-  });
-
-  it("bounds cached prompt refs for distinct large skills prompts", async () => {
-    const entries = Object.fromEntries(
-      Array.from({ length: 260 }, (_, index) => {
-        const prompt = `<available_skills>\n${`bounded prompt ${index}\n`.repeat(200)}</available_skills>`;
-        return [
-          `agent:main:test:${index}`,
-          makeEntry(`session-${index}`, makeSnapshotWithPrompt(prompt)),
-        ];
-      }),
-    );
-
-    await saveSessionStore(storePath, entries, { skipMaintenance: true });
-
-    const stats = getSessionSkillPromptRefCacheStatsForTest();
-    expect(stats.entries).toBe(stats.maxEntries);
   });
 
   it("hydrates content-addressed skills prompt blobs on load", async () => {
@@ -320,42 +281,6 @@ describe("session store strips resolvedSkills from persistence", () => {
     const refreshed = await fs.stat(blobPath);
     expect(refreshed.mtimeMs).toBeGreaterThan(oldTime.getTime());
     expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
-  });
-
-  it("caches validated prompt blobs but still notices deletion", async () => {
-    const prompt = `<available_skills>\n${"cached prompt\n".repeat(200)}</available_skills>`;
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
-      },
-      { skipMaintenance: true },
-    );
-    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
-    const ref = raw["agent:main:test:1"]?.skillsSnapshot?.promptRef;
-    if (!ref) {
-      throw new Error("expected prompt ref");
-    }
-
-    clearSessionStoreCacheForTest();
-
-    expect(getValidSessionSkillPromptBlobCacheStatsForTest().entries).toBe(0);
-    expect(isSessionSkillPromptBlobReadable(storePath, ref)).toBe(true);
-    expect(getValidSessionSkillPromptBlobCacheStatsForTest().entries).toBe(1);
-    expect(isSessionSkillPromptBlobReadable(storePath, ref)).toBe(true);
-    expect(getValidSessionSkillPromptBlobCacheStatsForTest().entries).toBe(1);
-
-    const blobPath = path.join(
-      testDir,
-      "skills-prompts",
-      "sha256",
-      ref.hash.slice(0, 2),
-      `${ref.hash}.txt`,
-    );
-    await fs.rm(blobPath);
-
-    expect(isSessionSkillPromptBlobReadable(storePath, ref)).toBe(false);
-    expect(getValidSessionSkillPromptBlobCacheStatsForTest().entries).toBe(0);
   });
 
   it("rewrites prompt blobs when the session dir is recreated before store commit", async () => {

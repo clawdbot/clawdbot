@@ -15,7 +15,7 @@ const HUB_TABS: readonly PluginsHubTab[] = ["installed", "discover", "skills", "
 const PENDING_FOCUS_WINDOW_MS = 2000;
 let pendingFocus: { tab: PluginsHubTab; at: number } | null = null;
 
-export type PluginsHubTabsProps = {
+type PluginsHubTabsProps = {
   active: PluginsHubTab;
   /** Installed-plugin count badge; omit on pages without catalog data. */
   installedCount?: number | null;
@@ -105,10 +105,16 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
 /**
  * Every hub page marks its main content container with
  * id="plugins-hub-panel" so aria-controls stays valid on each route.
+ * Styled through the settings design language's segmented control
+ * (ui/src/styles/settings.css) while keeping tablist semantics.
  */
 export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
   return html`
-    <div class="plugins-tabs" role="tablist" aria-label=${t("pluginsPage.hubTablistLabel")}>
+    <div
+      class="settings-segmented plugins-hub-tabs"
+      role="tablist"
+      aria-label=${t("pluginsPage.hubTablistLabel")}
+    >
       ${HUB_TABS.map((tab) => {
         const selected = props.active === tab;
         const count = tab === "installed" ? (props.installedCount ?? null) : null;
@@ -120,12 +126,13 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
             aria-selected=${selected ? "true" : "false"}
             aria-controls="plugins-hub-panel"
             .tabIndex=${selected ? 0 : -1}
-            class=${selected ? "active" : ""}
+            class="settings-segmented__btn ${selected ? "settings-segmented__btn--active" : ""}"
             ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
             @click=${(event: MouseEvent) => selectHubTab(event, tab, props)}
             @keydown=${(event: KeyboardEvent) => handleHubTabKeydown(event, tab)}
           >
-            ${hubTabLabel(tab)} ${count === null ? nothing : html`<span>${count}</span>`}
+            ${hubTabLabel(tab)}
+            ${count === null ? nothing : html`<span class="settings-count">${count}</span>`}
           </button>
         `;
       })}

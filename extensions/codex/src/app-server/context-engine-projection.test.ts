@@ -2,12 +2,13 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
-  CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   return {

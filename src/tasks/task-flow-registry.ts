@@ -85,7 +85,7 @@ type FlowRecordCreateFields = {
   endedAt?: number | null;
 };
 
-export type CreateFlowRecordParams = FlowRecordCreateFields & {
+type CreateFlowRecordParams = FlowRecordCreateFields & {
   syncMode?: TaskFlowSyncMode;
   controllerId?: string | null;
   revision?: number;
@@ -102,7 +102,7 @@ export type TaskFlowUpdateResult =
       current?: TaskFlowRecord;
     };
 
-export type TaskFlowSyncResult =
+type TaskFlowSyncResult =
   | {
       ok: true;
       flow: TaskFlowRecord | null;

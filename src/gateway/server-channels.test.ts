@@ -2,7 +2,11 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelGatewayContext,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -17,7 +21,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
-  const computeBackoff = vi.fn(() => 10);
   const sleepWithAbort = vi.fn((ms: number, abortSignal?: AbortSignal) => {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => resolve(), ms);
@@ -32,13 +35,32 @@ const hoisted = vi.hoisted(() => {
     });
   });
   const startChannelApprovalHandlerBootstrap = vi.fn(async () => async () => {});
-  return { computeBackoff, sleepWithAbort, startChannelApprovalHandlerBootstrap };
+  return { sleepWithAbort, startChannelApprovalHandlerBootstrap };
 });
 
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: hoisted.computeBackoff,
-  sleepWithAbort: hoisted.sleepWithAbort,
-}));
+vi.mock("../../packages/retry/src/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/retry/src/index.js")>();
+  class TestRetrySupervisor extends actual.RetrySupervisor {
+    constructor(
+      _policy: ConstructorParameters<typeof actual.RetrySupervisor>[0],
+      maxAttempts?: number,
+    ) {
+      super({ initialMs: 10, maxMs: 10, factor: 1, jitter: 0 }, maxAttempts);
+    }
+  }
+  return {
+    ...actual,
+    RetrySupervisor: TestRetrySupervisor,
+  };
+});
+
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  return {
+    ...actual,
+    sleepWithAbort: hoisted.sleepWithAbort,
+  };
+});
 
 vi.mock("../infra/approval-handler-bootstrap.js", () => ({
   startChannelApprovalHandlerBootstrap: hoisted.startChannelApprovalHandlerBootstrap,
@@ -230,7 +252,6 @@ describe("server-channels auto restart", () => {
     previousRegistry = getActivePluginRegistry();
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    hoisted.computeBackoff.mockClear();
     hoisted.sleepWithAbort.mockClear();
     hoisted.startChannelApprovalHandlerBootstrap.mockReset();
     hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});

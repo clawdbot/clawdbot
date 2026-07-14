@@ -57,8 +57,8 @@ const state = vi.hoisted(() => ({
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
-    (_params: unknown) => { ok: boolean; pid?: number; detail?: string }
-  >(() => ({ ok: true, pid: 7331 })),
+    (_params: unknown) => { ok: true; value: number | undefined } | { ok: false; error: string }
+  >(() => ({ ok: true, value: 7331 })),
 }));
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
@@ -422,7 +422,7 @@ beforeEach(() => {
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
-    pid: 7331,
+    value: 7331,
   });
   vi.clearAllMocks();
 });
@@ -2301,7 +2301,7 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
       ok: false,
-      detail: "spawn failed",
+      error: "spawn failed",
     });
 
     await expect(

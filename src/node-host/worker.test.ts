@@ -7,10 +7,15 @@ describe("NodeHostWorkerBridgeClient", () => {
     const client = new NodeHostWorkerBridgeClient((message) => messages.push(message));
 
     await client.request("node.invoke.result", { id: "invoke-1", ok: true });
+    await client.request("node.invoke.progress", { invokeId: "invoke-1", seq: 0, chunk: "a" });
     await client.request("node.event", { event: "exec.started", payloadJSON: "{}" });
 
     expect(messages).toEqual([
       { type: "invoke-result", result: { id: "invoke-1", ok: true } },
+      {
+        type: "invoke-progress",
+        progress: { invokeId: "invoke-1", seq: 0, chunk: "a" },
+      },
       { type: "node-event", event: { event: "exec.started", payloadJSON: "{}" } },
     ]);
   });

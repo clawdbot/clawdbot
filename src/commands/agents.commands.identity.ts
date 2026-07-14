@@ -85,6 +85,7 @@ export async function agentsSetIdentityCommand(
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
+  let agentId = agentRaw ? normalizeAgentId(agentRaw) : undefined;
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;
@@ -94,11 +95,12 @@ export async function agentsSetIdentityCommand(
     workspaceDir = path.dirname(identityFilePath);
   } else if (workspaceRaw) {
     workspaceDir = normalizeWorkspacePath(workspaceRaw);
-  } else if (wantsIdentityFile || !agentRaw) {
+  } else if (agentId && wantsIdentityFile) {
+    workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  } else if (wantsIdentityFile || !agentId) {
     workspaceDir = path.resolve(process.cwd());
   }
 
-  let agentId = agentRaw ? normalizeAgentId(agentRaw) : undefined;
   if (!agentId) {
     if (!workspaceDir) {
       runtime.error("Select an agent with --agent or provide a workspace via --workspace.");

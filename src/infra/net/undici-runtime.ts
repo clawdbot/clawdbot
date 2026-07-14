@@ -6,7 +6,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 
-export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 /** Runtime-loaded undici constructors/functions used where static imports would affect globals. */
 export type UndiciRuntimeDeps = {

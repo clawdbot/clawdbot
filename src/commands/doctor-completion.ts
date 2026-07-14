@@ -23,7 +23,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 
-export type ShellCompletionStatusOptions = {
+type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
@@ -203,7 +203,7 @@ export function shellCompletionStatusToRepairEffects(
   return effects;
 }
 
-export type DoctorCompletionOptions = {
+type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
 

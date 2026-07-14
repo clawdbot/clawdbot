@@ -28,6 +28,8 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "packages/memory-host-sdk/src/host/session-files.ts",
+        "src/acp/control-plane/manager.background-task.ts",
+        "src/acp/control-plane/manager.core.ts",
         "src/acp/runtime/session-meta.ts",
         "src/agents/acp-spawn.ts",
         "src/agents/auth-profiles/session-override.ts",
@@ -125,6 +127,7 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
         "src/agents/main-session-restart-recovery.ts",
+        "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
         "src/agents/subagent-control.ts",
         "src/agents/subagent-registry-helpers.ts",

@@ -5635,6 +5635,103 @@ describe("DiscordVoiceManager", () => {
     });
     const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+      expect.anything(),
+    );
+  });
+
+  it("uses commands.ownerAllowFrom for voice speakers when Discord DMs are disabled", async () => {
+    const ownerId = "100000000000000001";
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: ownerId,
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open", dmPolicy: "disabled" }, client, {
+      commands: { ownerAllowFrom: [`discord:${ownerId}`] },
+    });
+
+    await processVoiceSegment(manager, ownerId);
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+      expect.anything(),
+    );
+  });
+
+  it("supports the Discord command-owner wildcard for voice speakers", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open", dmPolicy: "disabled" }, client, {
+      commands: { ownerAllowFrom: ["discord:*"] },
+    });
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+      expect.anything(),
+    );
+  });
+
+  it("does not use another provider's command owners for Discord voice", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open", dmPolicy: "disabled" }, client, {
+      commands: { ownerAllowFrom: ["telegram:u-guest"] },
+    });
+
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat followed voice users as owners", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Followed Guest",
+      user: {
+        id: "u-followed",
+        username: "followed",
+        globalName: "Followed",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        dmPolicy: "disabled",
+        voice: { enabled: true, followUsers: ["u-followed"] },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-followed");
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
   it("accepts open-policy voice speakers", async () => {
@@ -5974,6 +6071,10 @@ describe("DiscordVoiceManager", () => {
 
     expect(cached?.id).toBe("u-role");
     expect(cached?.label).toBe("Role Speaker");
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+      expect.anything(),
+    );
   });
 
   it("re-fetches member roles for repeated voice auth checks", async () => {

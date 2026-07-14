@@ -4,11 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  openGatewayAssistantAvatar,
-  resolveGatewayAssistantAvatar,
-  type GatewayAssistantAvatarProjection,
-} from "./assistant-avatar.js";
+import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 
 const REAL_PNG = Buffer.from(
@@ -17,6 +13,7 @@ const REAL_PNG = Buffer.from(
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+type GatewayAssistantAvatarProjection = ReturnType<typeof resolveGatewayAssistantAvatar>;
 
 function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   const root = tempRoots.make("openclaw-gateway-avatar-");

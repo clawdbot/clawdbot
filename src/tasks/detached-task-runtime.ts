@@ -58,8 +58,6 @@ function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined
   );
 }
 
-export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
-
 // Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunFromExecutor,

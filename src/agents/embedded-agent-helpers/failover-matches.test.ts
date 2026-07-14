@@ -1,6 +1,6 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason, classifyFailoverReasonFromHttpStatus } from "./errors.js";
+import { classifyFailoverReason } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -218,7 +218,7 @@ describe("HTTP 429 overload wording (#98101)", () => {
       "429 status code (exceeded limit)\n" +
       '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
     expect(classifyFailoverReason(message)).toBe("rate_limit");
-    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("rate_limit");
+    expect(classifyFailoverReason(`HTTP 429: ${message}`)).toBe("rate_limit");
     expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );

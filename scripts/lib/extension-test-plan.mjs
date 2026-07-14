@@ -31,6 +31,10 @@ import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
+const TRACKED_EXTENSION_TEST_PATHSPECS = [
+  `:(glob)${BUNDLED_PLUGIN_ROOT_DIR}/**/*.test.ts`,
+  `:(glob)${BUNDLED_PLUGIN_ROOT_DIR}/**/*.test.tsx`,
+];
 /** Default number of shards for broad bundled extension test batches. */
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
@@ -104,18 +108,24 @@ function isSkippedTrackedTestFile(relativePath) {
 }
 
 let trackedRepoTestFiles;
+// Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
+// ENOBUFS would otherwise trigger expensive extension-directory walks.
+const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 function loadTrackedRepoTestFiles() {
   if (trackedRepoTestFiles !== undefined) {
     return trackedRepoTestFiles;
   }
 
-  const result = spawnSync("git", ["ls-files"], {
+  // Query only the planner-owned tree: a full-repo inventory can overflow
+  // spawnSync's buffer and either truncate the plan or force directory walks.
+  const result = spawnSync("git", ["ls-files", "--", ...TRACKED_EXTENSION_TEST_PATHSPECS], {
     cwd: repoRoot,
     encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
   });
-  if (result.status !== 0) {
+  if (result.status !== 0 || result.error) {
     trackedRepoTestFiles = null;
     return trackedRepoTestFiles;
   }

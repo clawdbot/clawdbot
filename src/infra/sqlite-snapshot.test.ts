@@ -4,13 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { createPrivateSqliteDirectory, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-snapshot-"));
   tempDirs.push(tempDir);
+  if (process.platform === "win32") {
+    const privateTempDir = path.join(tempDir, "private");
+    await createPrivateSqliteDirectory(privateTempDir);
+    return privateTempDir;
+  }
   return tempDir;
 }
 
@@ -49,6 +54,24 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
 }
 
 describe("createVerifiedSqliteSnapshot", () => {
+  it.runIf(process.platform === "win32")(
+    "creates private staging directories exclusively under races",
+    async () => {
+      const tempDir = await createTempDir();
+      const directoryPath = path.join(tempDir, "private");
+      const results = await Promise.allSettled([
+        createPrivateSqliteDirectory(directoryPath),
+        createPrivateSqliteDirectory(directoryPath),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected).toBeDefined();
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "EEXIST" });
+      await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");

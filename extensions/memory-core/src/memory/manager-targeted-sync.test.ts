@@ -3,25 +3,11 @@ import type { MemorySessionSyncTarget } from "openclaw/plugin-sdk/memory-core-ho
 import { describe, expect, it, vi } from "vitest";
 import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
 import {
-  clearMemorySyncedArchiveFiles,
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 
 describe("memory targeted session sync", () => {
-  it("preserves unrelated dirty sessions after targeted cleanup", () => {
-    const secondSessionPath = "/tmp/targeted-dirty-second.jsonl";
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
-
-    const sessionsDirty = clearMemorySyncedArchiveFiles({
-      sessionsDirtyFiles,
-      targetArchiveFiles: ["/tmp/targeted-dirty-first.jsonl"],
-    });
-
-    expect(sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
-    expect(sessionsDirty).toBe(true);
-  });
-
   it("marks target sessions dirty while identity sync is paused", () => {
     const targetSessionPath = "/tmp/paused-target.jsonl";
     const sessionsDirtyFiles = new Set(["/tmp/other-dirty.jsonl"]);

@@ -1,13 +1,9 @@
 // Feishu tests cover bot.helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildFeishuAgentBody } from "./bot-agent-body.js";
+import { buildBroadcastSessionKey, resolveBroadcastAgents } from "./bot-broadcast.js";
 import { parseMessageContent, resolveFeishuMediaFailurePresentation } from "./bot-content.js";
-import {
-  buildBroadcastSessionKey,
-  buildFeishuAgentBody,
-  resolveBroadcastAgents,
-  toMessageResourceType,
-} from "./bot.js";
 
 describe("buildFeishuAgentBody", () => {
   it("builds message id, speaker, quoted content, mention context, and permission notice in order", () => {
@@ -64,22 +60,6 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain(`${"A".repeat(76)}...`);
     expect(body).not.toContain("\ud83d");
     expect(body).not.toContain("\ude00");
-  });
-});
-
-describe("toMessageResourceType", () => {
-  it("maps image to image", () => {
-    expect(toMessageResourceType("image")).toBe("image");
-  });
-
-  it("maps audio to file", () => {
-    expect(toMessageResourceType("audio")).toBe("file");
-  });
-
-  it("maps video/file/sticker to file", () => {
-    expect(toMessageResourceType("video")).toBe("file");
-    expect(toMessageResourceType("file")).toBe("file");
-    expect(toMessageResourceType("sticker")).toBe("file");
   });
 });
 

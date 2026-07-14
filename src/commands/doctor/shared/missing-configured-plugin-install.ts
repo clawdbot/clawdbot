@@ -995,7 +995,7 @@ function recordClawHubPackageName(value: string | undefined): string | undefined
 
 type InstallCandidateRepairReason = "stale-version-bound-runtime";
 
-export type ConfiguredPluginInstallHealthIssue =
+type ConfiguredPluginInstallHealthIssue =
   | {
       kind: "missing-install-record";
       pluginId: string;
@@ -1775,7 +1775,7 @@ function assertNeverConfiguredPluginInstallIssue(issue: never): never {
   );
 }
 
-export type RepairMissingPluginInstallsResult = {
+type RepairMissingPluginInstallsResult = {
   /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
   /** User-facing warnings for failed or skipped plugin install repairs. */

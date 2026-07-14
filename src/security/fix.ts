@@ -12,7 +12,7 @@ import { runExec } from "../process/exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
-export type SecurityFixChmodAction = {
+type SecurityFixChmodAction = {
   kind: "chmod";
   path: string;
   mode: number;
@@ -21,7 +21,7 @@ export type SecurityFixChmodAction = {
   error?: string;
 };
 
-export type SecurityFixIcaclsAction = {
+type SecurityFixIcaclsAction = {
   kind: "icacls";
   path: string;
   command: string;
@@ -30,9 +30,9 @@ export type SecurityFixIcaclsAction = {
   error?: string;
 };
 
-export type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
+type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
 
-export type SecurityFixResult = {
+type SecurityFixResult = {
   ok: boolean;
   stateDir: string;
   configPath: string;
@@ -42,7 +42,7 @@ export type SecurityFixResult = {
   errors: string[];
 };
 
-export type SecurityPermissionTarget = {
+type SecurityPermissionTarget = {
   path: string;
   mode: number;
   require: "dir" | "file";

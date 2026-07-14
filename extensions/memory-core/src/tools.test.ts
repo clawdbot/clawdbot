@@ -1,5 +1,9 @@
-// Memory Core tests cover tools plugin behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+// Memory Core tests cover tools plugin behavior.
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -9,10 +13,16 @@ import {
   getMemorySyncMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
+  setMemoryCloseImpl,
   setMemoryCustomStatus,
+  setResolvedMemoryBackend,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineAction,
+} from "./memory/search-deadline.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import {
   buildMemorySearchUnavailableResult,
@@ -32,6 +42,51 @@ const sessionStore = vi.hoisted(() => ({
     sessionFile: "/tmp/sessions/thread-1.jsonl",
   },
 }));
+
+const QMD_SEARCH_TIMEOUT_MS = 45_000;
+
+function createQmdTimeoutSearchTool(options?: { oneShotCliRun?: boolean }) {
+  return createMemorySearchToolOrThrow({
+    config: asOpenClawConfig({
+      agents: { list: [{ id: "main", default: true }] },
+      memory: {
+        backend: "qmd",
+        qmd: { limits: { timeoutMs: QMD_SEARCH_TIMEOUT_MS } },
+      },
+    }),
+    ...(options?.oneShotCliRun ? { oneShotCliRun: true } : {}),
+  });
+}
+
+function expectMemorySearchTimeout(details: unknown, seconds: number): void {
+  expectUnavailableMemorySearchDetails(details, {
+    error: `memory_search timed out after ${seconds}s`,
+    warning: "Memory search is unavailable due to an embedding/provider error.",
+    action: "Check embedding provider configuration and retry memory_search.",
+  });
+}
+
+type TestSearchOptions = {
+  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+  signal?: AbortSignal;
+  [MEMORY_SEARCH_DEADLINE_CONTROL]?: (action: MemorySearchDeadlineAction) => void;
+};
+
+function createTestSearchManager(params: {
+  backend: "builtin" | "qmd";
+  search: (opts?: TestSearchOptions) => Promise<unknown[]>;
+}) {
+  return {
+    search: vi.fn(async (_query: string, opts?: TestSearchOptions) => await params.search(opts)),
+    status: () => ({
+      backend: params.backend,
+      provider: params.backend,
+      workspaceDir: "/workspace",
+    }),
+    sync: vi.fn(),
+    close: vi.fn(async () => {}),
+  };
+}
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
   const actual =
@@ -65,6 +120,7 @@ describe("memory tool schemas", () => {
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
+    clearMemoryPluginState();
     resetMemoryToolMockState({ searchImpl: async () => [] });
     memoryToolsTesting.resetMemorySearchToolCooldowns();
   });
@@ -247,21 +303,31 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
-  it("returns unavailable metadata when manager setup does not settle", async () => {
+  it("keeps qmd setup on the default deadline and closes a late one-shot manager", async () => {
     vi.useFakeTimers();
     try {
-      setMemorySearchManagerImpl(async () => await new Promise(() => {}));
-      const tool = createMemorySearchToolOrThrow();
+      setMemoryBackend("qmd");
+      let resolveManager!: (result: { manager: { close: () => Promise<void> } }) => void;
+      const close = vi.fn(async () => {});
+      setMemorySearchManagerImpl(
+        async () =>
+          await new Promise((resolve) => {
+            resolveManager = resolve;
+          }),
+      );
+      const tool = createQmdTimeoutSearchTool({ oneShotCliRun: true });
 
-      const resultPromise = tool.execute("manager-timeout", { query: "hello" });
+      const resultPromise = tool.execute("late-manager", { query: "hello" });
       await vi.advanceTimersByTimeAsync(15_000);
 
       const result = await resultPromise;
-      expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
+      expectMemorySearchTimeout(result.details, 15);
+      expect(close).not.toHaveBeenCalled();
+
+      resolveManager({ manager: { close } });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(close).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -331,6 +397,292 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("propagates caller cancellation without entering cooldown", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent run cancelled");
+    let searchCalls = 0;
+    let firstSignal: AbortSignal | undefined;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        firstSignal = opts?.signal;
+        return await new Promise(() => {});
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "retry after cancellation",
+          source: "memory",
+        },
+      ];
+    });
+    const tool = createMemorySearchToolOrThrow();
+
+    const cancelled = tool.execute("caller-abort", { query: "hello" }, controller.signal);
+    await vi.waitFor(() => expect(firstSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(abortError);
+
+    await expect(cancelled).rejects.toBe(abortError);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(firstSignal?.reason).toBe(abortError);
+
+    const retry = await tool.execute("caller-abort-retry", { query: "hello again" });
+    expect((retry.details as { results?: unknown[] }).results).toHaveLength(1);
+    expect(searchCalls).toBe(2);
+  });
+
+  it("propagates caller cancellation that arrives during one-shot cleanup", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent run cancelled during cleanup");
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "result before cleanup",
+        source: "memory",
+      },
+    ]);
+    setMemoryCloseImpl(async () => await new Promise(() => {}));
+    const tool = createMemorySearchToolOrThrow({ oneShotCliRun: true });
+
+    const cancelled = tool.execute("cleanup-abort", { query: "hello" }, controller.signal);
+    await vi.waitFor(() => expect(getMemoryCloseMockCalls()).toBe(1));
+    controller.abort(abortError);
+
+    await expect(cancelled).rejects.toBe(abortError);
+
+    setMemoryCloseImpl(async () => {});
+    const retry = await tool.execute("cleanup-abort-retry", { query: "hello again" });
+    expect((retry.details as { results?: unknown[] }).results).toHaveLength(1);
+  });
+
+  it("allows qmd search to complete after the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("pause");
+        try {
+          return await new Promise<unknown[]>((resolve) => {
+            setTimeout(
+              () =>
+                resolve([
+                  {
+                    path: "MEMORY.md",
+                    startLine: 1,
+                    endLine: 1,
+                    score: 0.9,
+                    snippet: "slow qmd result",
+                    source: "memory",
+                  },
+                ]),
+              16_000,
+            );
+          });
+        } finally {
+          opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("resume");
+        }
+      });
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool.execute("slow-qmd", { query: "hello" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(false);
+      expect(searchSignal).toBeInstanceOf(AbortSignal);
+      expect(searchSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const result = await resultPromise;
+      expect((result.details as { results?: unknown[] }).results).toHaveLength(1);
+      expect(searchSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts qmd maintenance against the default deadline around the command phase", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(
+        async (opts) =>
+          await new Promise<unknown[]>(() => {
+            searchSignal = opts?.signal;
+            setTimeout(() => {
+              opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("pause");
+              setTimeout(() => {
+                opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("resume");
+              }, 16_000);
+            }, 10_000);
+          }),
+      );
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-maintenance-timeout", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(4_999);
+
+      expect(settled).toBe(false);
+      expect(searchSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+      expectMemorySearchTimeout(result.details, 15);
+      expect(searchSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds one-shot qmd cleanup with the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("pause");
+        try {
+          return await new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error("qmd query timed out after 45s")), 45_000);
+          });
+        } finally {
+          opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("resume");
+        }
+      });
+      setMemoryCloseImpl(async () => await new Promise(() => {}));
+      const tool = createQmdTimeoutSearchTool({ oneShotCliRun: true });
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-cli-cleanup-timeout", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(searchSignal).toBeInstanceOf(AbortSignal);
+      expect(searchSignal?.aborted).toBe(false);
+      expect(getMemoryCloseMockCalls()).toBe(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "qmd query timed out after 45s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps qmd-configured wiki-only searches on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => await new Promise(() => {}),
+        get: async () => null,
+      });
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-wiki-timeout", { query: "hello", corpus: "wiki" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(true);
+      const result = await resultPromise;
+      expectMemorySearchTimeout(result.details, 15);
+      expect(getMemorySearchManagerMockCalls()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps qmd-to-builtin fallback searches on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setResolvedMemoryBackend("qmd");
+      setMemoryBackend("builtin");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-fallback-timeout", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(true);
+      const result = await resultPromise;
+      expectMemorySearchTimeout(result.details, 15);
+      expect(searchSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps zero-hit one-shot qmd sync on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createTestSearchManager({ backend: "qmd", search: async () => [] });
+      manager.sync.mockImplementation(async () => await new Promise(() => {}));
+      setMemorySearchManagerImpl(async () => ({ manager }));
+      const tool = createQmdTimeoutSearchTool({ oneShotCliRun: true });
+
+      const resultPromise = tool
+        .execute("qmd-zero-hit-sync-timeout", { query: "hello" })
+        .then((result) => result);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectMemorySearchTimeout(result.details, 15);
+      expect(manager.search).toHaveBeenCalledTimes(1);
+      expect(manager.sync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
@@ -376,6 +728,109 @@ describe("memory_search unavailable payloads", () => {
       expect.objectContaining({ purpose: undefined }),
     ]);
     expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("keeps closed qmd manager reacquisition on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setResolvedMemoryBackend("qmd");
+      const initial = createTestSearchManager({
+        backend: "qmd",
+        search: async () => {
+          throw new Error("database is not open");
+        },
+      });
+      let managerCalls = 0;
+      setMemorySearchManagerImpl(async () => {
+        managerCalls += 1;
+        if (managerCalls === 1) {
+          return { manager: initial };
+        }
+        return await new Promise(() => {});
+      });
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool.execute("closed-qmd-setup", { query: "hello" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+      expectMemorySearchTimeout(result.details, 15);
+      expect(managerCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves refreshed qmd search on the qmd-owned deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setResolvedMemoryBackend("qmd");
+      const initial = createTestSearchManager({
+        backend: "builtin",
+        search: async () => {
+          throw new Error("database is not open");
+        },
+      });
+      let replacementSignal: AbortSignal | undefined;
+      const replacement = createTestSearchManager({
+        backend: "qmd",
+        search: async (opts) => {
+          replacementSignal = opts?.signal;
+          opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("pause");
+          try {
+            return await new Promise((resolve) => {
+              setTimeout(
+                () =>
+                  resolve([
+                    {
+                      path: "MEMORY.md",
+                      startLine: 1,
+                      endLine: 1,
+                      score: 0.9,
+                      snippet: "reacquired qmd result",
+                      source: "memory",
+                    },
+                  ]),
+                16_000,
+              );
+            });
+          } finally {
+            opts?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.("resume");
+          }
+        },
+      });
+      let managerCalls = 0;
+      setMemorySearchManagerImpl(async () => ({
+        manager: managerCalls++ === 0 ? initial : replacement,
+      }));
+      const tool = createQmdTimeoutSearchTool();
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("closed-builtin-to-qmd", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(false);
+      expect(replacementSignal).toBeInstanceOf(AbortSignal);
+      expect(replacementSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await resultPromise;
+      expect((result.details as { results?: unknown[] }).results).toHaveLength(1);
+      expect(replacementSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("re-resolves and closes one-shot CLI managers when a cached sqlite handle was closed", async () => {
@@ -699,46 +1154,43 @@ describe("memory_search unavailable payloads", () => {
   });
 
   it("includes manager acquisition timing and cache-state debug payload", async () => {
-    setMemorySearchManagerImpl(
-      async () =>
-        ({
-          manager: {
-            search: vi.fn(async () => {
-              return [
-                {
-                  path: "MEMORY.md",
-                  startLine: 1,
-                  endLine: 2,
-                  score: 0.9,
-                  snippet: "ramen",
-                  source: "memory",
-                },
-              ];
-            }),
-            readFile: vi.fn(),
-            status: vi.fn(() => ({
-              backend: "qmd",
-              provider: "qmd",
-              model: "qmd",
-              requestedProvider: "qmd",
-              files: 0,
-              chunks: 0,
-              dirty: false,
-              workspaceDir: "/tmp/workspace",
-              dbPath: "/tmp/workspace/index.sqlite",
-              sources: ["memory"],
-              sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
-            })),
-            sync: vi.fn(async () => {}),
-            probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
-            probeVectorAvailability: vi.fn(async () => true),
-          },
-          debug: {
-            managerMs: 17,
-            managerCacheState: "cached-full-hit",
-          },
-        }) as any,
-    );
+    setMemorySearchManagerImpl(async () => ({
+      manager: {
+        search: vi.fn(async () => {
+          return [
+            {
+              path: "MEMORY.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.9,
+              snippet: "ramen",
+              source: "memory",
+            },
+          ];
+        }),
+        readFile: vi.fn(),
+        status: vi.fn(() => ({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          files: 0,
+          chunks: 0,
+          dirty: false,
+          workspaceDir: "/tmp/workspace",
+          dbPath: "/tmp/workspace/index.sqlite",
+          sources: ["memory"],
+          sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+        })),
+        sync: vi.fn(async () => {}),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+      },
+      debug: {
+        managerMs: 17,
+        managerCacheState: "cached-full-hit",
+      },
+    }));
     setMemorySearchImpl(async () => [
       {
         path: "MEMORY.md",

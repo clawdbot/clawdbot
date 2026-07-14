@@ -7,6 +7,7 @@ import type {
   ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
 type ThinkingProviderPlugin = {
   id: string;
@@ -21,8 +22,6 @@ type ThinkingProviderPlugin = {
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
 };
-
-const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type ThinkingRegistryState = {
   activeRegistry?: {

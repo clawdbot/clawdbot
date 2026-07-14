@@ -23,7 +23,7 @@ import {
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
-import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
+import { compareValidSemver } from "../infra/semver.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
@@ -72,7 +72,7 @@ import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 /** Logger surface used by plugin update flows. */
-export type PluginUpdateLogger = {
+type PluginUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
   error?: (message: string) => void;
@@ -80,7 +80,7 @@ export type PluginUpdateLogger = {
 };
 
 /** Outcome status for one plugin update attempt. */
-export type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
+type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
 type PluginUpdateChannelFallback = {
   requestedSpec: string;
@@ -110,7 +110,7 @@ export type PluginUpdateOutcome =
       code?: string;
     });
 
-export type PluginUpdateSummary = {
+type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: PluginUpdateOutcome[];
@@ -126,7 +126,7 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
-export type PluginChannelSyncSummary = {
+type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToClawHub: string[];
   switchedToNpm: string[];
@@ -134,7 +134,7 @@ export type PluginChannelSyncSummary = {
   errors: string[];
 };
 
-export type PluginChannelSyncResult = {
+type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;
@@ -397,7 +397,7 @@ function compareNpmSemverForUpdate(left: string, right: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right)) ?? 0;
+  return compareValidSemver(left, right) ?? 0;
 }
 
 async function resolveNewerExactPinnedNpmDefaultLine(params: {
@@ -584,10 +584,7 @@ function isBundledVersionNewer(bundledVersion: string, installedVersion: string)
   if (releaseCmp !== null) {
     return releaseCmp > 0;
   }
-  const bundled = parseComparableSemver(bundledVersion);
-  const installed = parseComparableSemver(installedVersion);
-  const cmp = compareComparableSemver(bundled, installed);
-  return cmp !== null && cmp > 0;
+  return (compareValidSemver(bundledVersion, installedVersion) ?? 0) > 0;
 }
 
 function pathsEqual(

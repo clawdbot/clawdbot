@@ -1,6 +1,7 @@
 // Line tests cover webhook node plugin behavior.
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { NextFunction, Request, Response } from "express";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
@@ -68,14 +69,22 @@ function createRuntimeMock(): RuntimeEnvMock {
 }
 
 function createMiddlewareRes() {
+  const status = vi.fn<Response["status"]>();
+  const json = vi.fn<Response["json"]>();
   const res = {
-    status: vi.fn(),
-    json: vi.fn(),
+    status,
+    json,
     headersSent: false,
-  } as any;
-  res.status.mockReturnValue(res);
-  res.json.mockReturnValue(res);
+  } as unknown as Response & { status: typeof status; json: typeof json };
+  status.mockReturnValue(res);
+  json.mockReturnValue(res);
   return res;
+}
+
+function createMiddlewareRequest(
+  request: Pick<Request, "body" | "headers"> & { rawBody?: string | Buffer },
+): Request {
+  return request as unknown as Request;
 }
 
 function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
@@ -128,12 +137,12 @@ async function invokeWebhook(params: {
     }
   }
 
-  const req = {
+  const req = createMiddlewareRequest({
     headers,
     body: params.body,
-  } as any;
+  });
   const res = createMiddlewareRes();
-  await middleware(req, res, {} as any);
+  await middleware(req, res, vi.fn() as NextFunction);
   return { res, onEvents: onEventsMock };
 }
 
@@ -242,14 +251,14 @@ async function expectSignedRawBodyWins(params: { rawBody: string | Buffer; signe
   });
   const rawBodyText =
     typeof params.rawBody === "string" ? params.rawBody : params.rawBody.toString("utf-8");
-  const req = {
+  const req = createMiddlewareRequest({
     headers: { "x-line-signature": sign(rawBodyText, SECRET) },
     rawBody: params.rawBody,
     body: reqBody,
-  } as any;
+  });
   const res = createMiddlewareRes();
 
-  await middleware(req, res, {} as any);
+  await middleware(req, res, vi.fn() as NextFunction);
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(onEvents).toHaveBeenCalledTimes(1);
@@ -583,14 +592,14 @@ describe("createLineWebhookMiddleware", () => {
       onEvents,
     });
 
-    const req = {
+    const req = createMiddlewareRequest({
       headers: { "x-line-signature": sign(rawBody, SECRET) },
       rawBody,
       body: { events: [{ type: "message" }] },
-    } as any;
+    });
     const res = createMiddlewareRes();
 
-    await middleware(req, res, {} as any);
+    await middleware(req, res, vi.fn() as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid webhook payload" });

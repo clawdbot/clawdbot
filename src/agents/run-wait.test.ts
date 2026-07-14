@@ -1069,3 +1069,27 @@ describe("waitForAgentRunsToDrain", () => {
     }
   });
 });
+
+describe("isRecoverableAgentWaitError", () => {
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+  ])("recovers from %s connection failures", (code) => {
+    expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    "",
+    "gateway timeout",
+    "ENOENT: no such file",
+    "getaddrinfo ENOTFOUND gateway.example.com",
+  ])("does not recover from %s", (error) => {
+    expect(isRecoverableAgentWaitError(error)).toBe(false);
+  });
+});

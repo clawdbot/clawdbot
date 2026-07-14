@@ -40,7 +40,6 @@ vi.mock("./relay-auth.js", async (importOriginal) => {
 });
 
 import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
-import { extensionRelayTokenMatches } from "./relay-auth.js";
 
 const TOKEN = "a".repeat(64);
 const ROTATED_TOKEN = "b".repeat(64);
@@ -141,7 +140,7 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(writes.join("")).toContain("403");
   });
 
-  it("401s a missing or wrong token", async () => {
+  it("401s a missing, wrong, or length-mismatched token", async () => {
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
     primeProfile();
     const missing = fakeSocket();
@@ -155,6 +154,14 @@ describe("handleGatewayExtensionUpgrade", () => {
       Buffer.alloc(0),
     );
     expect(wrong.writes.join("")).toContain("401");
+
+    const short = fakeSocket();
+    await handleGatewayExtensionUpgrade(
+      relayReq("/browser/extension", "short"),
+      short.socket,
+      Buffer.alloc(0),
+    );
+    expect(short.writes.join("")).toContain("401");
     expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
   });
 
@@ -237,10 +244,5 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
     expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(bridge, { readyState: 1 });
-  });
-
-  it("uses the real host-local token matcher (sanity)", () => {
-    expect(extensionRelayTokenMatches(TOKEN, TOKEN)).toBe(true);
-    expect(extensionRelayTokenMatches(TOKEN, "b".repeat(64))).toBe(false);
   });
 });

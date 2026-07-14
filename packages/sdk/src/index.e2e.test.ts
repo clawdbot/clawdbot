@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
+import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
 type JsonObject = Record<string, unknown>;
@@ -53,22 +54,6 @@ async function reservePort(): Promise<number> {
     server.close((error) => (error ? reject(error) : resolve()));
   });
   return port;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
@@ -410,7 +395,7 @@ describe("OpenClaw SDK websocket e2e", () => {
       })();
 
       const [seen, result] = await Promise.all([
-        withTimeout(seenPromise, 2_000, "timed out waiting for SDK run events"),
+        withTimeout(seenPromise, 2_000, { message: "timed out waiting for SDK run events" }),
         run.wait({ timeoutMs: 2_000 }),
       ]);
 
@@ -635,11 +620,9 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         data: { phase: "end", endedAt: 222 },
       });
 
-      const { seen, sessionKeys } = await withTimeout(
-        eventsPromise,
-        2_000,
-        "timed out waiting for real Gateway SDK events",
-      );
+      const { seen, sessionKeys } = await withTimeout(eventsPromise, 2_000, {
+        message: "timed out waiting for real Gateway SDK events",
+      });
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
       expect(sessionKeys).toEqual([
         "agent:main:dashboard:sdk-real-gateway",
@@ -721,11 +704,9 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
       })();
 
       const result = await run.wait({ timeoutMs: 180_000 });
-      const events = await withTimeout(
-        eventsPromise,
-        5_000,
-        "timed out waiting for live SDK run events",
-      );
+      const events = await withTimeout(eventsPromise, 5_000, {
+        message: "timed out waiting for live SDK run events",
+      });
 
       expect(result.status).toBe("completed");
       expect(events.terminal).toBe("run.completed");

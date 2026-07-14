@@ -5,7 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -25,6 +25,17 @@ const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
 const linkedSessionName = "Implementation session";
+const WORKBOARD_STATUSES: readonly WorkboardStatus[] = [
+  "triage",
+  "backlog",
+  "todo",
+  "scheduled",
+  "ready",
+  "running",
+  "review",
+  "blocked",
+  "done",
+];
 
 let server: ControlUiE2eServer;
 

@@ -926,4 +926,3 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
-export { testing as __testing };

@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillsChangeEvent } from "./refresh.js";
+import {
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+  type SkillsChangeEvent,
+} from "./refresh-state.js";
 
 type WatchEvent = "add" | "addDir" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
 type WatchCallback = (...args: unknown[]) => void;
@@ -862,9 +866,9 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { watch: false } } },
     });
 
-    const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
+    const nextVersion = getSkillsSnapshotVersion(workspaceDir);
     expect(nextVersion).toBeGreaterThan(firstVersion);
-    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
+    expect(shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
     vi.setSystemTime(new Date(nextVersion));
     const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
       workspaceDir,
@@ -898,9 +902,9 @@ describe("ensureSkillsWatcher", () => {
     });
 
     expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
-    const evictedVersion = refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir);
+    const evictedVersion = getSkillsSnapshotVersion(idleWorkspaceDir);
     expect(evictedVersion).toBeGreaterThan(firstVersion);
-    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
+    expect(shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
     vi.setSystemTime(new Date(evictedVersion));
     const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
       workspaceDir: idleWorkspaceDir,

@@ -2,13 +2,20 @@
  * Tests chat abort authorization checks for gateway clients and session owners.
  */
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 import { chatHandlers } from "./chat.js";
+
+vi.mock("../session-utils.js", async () => {
+  return {
+    ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
+    loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+  };
+});
 
 type AbortResponsePayload = {
   aborted?: boolean;
@@ -78,6 +85,62 @@ function expectAbortPayload(
 }
 
 describe("chat.abort authorization", () => {
+  it("rejects non-admin worker-only inference aborts", async () => {
+    const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
+    const context = createChatAbortContext({
+      workerEnvironmentService: {
+        cancelInferenceForSession,
+        hasInferenceForSession: () => true,
+        resolveInferenceSessionForRunId: () => "main-session",
+      },
+    });
+    for (const runId of [undefined, "worker-run"]) {
+      const respond = await invokeAbort({
+        context,
+        runId,
+        connId: "conn-other",
+        deviceId: "dev-other",
+      });
+      expect(requireLastRespondCall(respond)[2]?.message).toBe("unauthorized");
+    }
+    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+
+    const admin = await invokeAbort({
+      context,
+      runId: "worker-run",
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(admin)[1], {
+      aborted: true,
+      runIds: ["worker-run"],
+    });
+    expect(cancelInferenceForSession).toHaveBeenCalledWith({
+      sessionId: "main-session",
+      runId: "worker-run",
+    });
+  });
+
+  it("does not let a local run owner cancel worker inference", async () => {
+    for (const runId of [undefined, "run-1"]) {
+      const cancelInferenceForSession = vi.fn(() => ["run-1"]);
+      const context = createSingleAbortContext();
+      context.workerEnvironmentService = { cancelInferenceForSession } as never;
+      const respond = await invokeAbort({
+        context,
+        ...(runId ? { runId } : {}),
+        connId: "conn-owner",
+        deviceId: "dev-owner",
+      });
+      expectAbortPayload(requireLastRespondCall(respond)[1], {
+        aborted: true,
+        runIds: ["run-1"],
+      });
+      expect(cancelInferenceForSession).not.toHaveBeenCalled();
+    }
+  });
+
   it("rejects explicit run aborts from other clients", async () => {
     const context = createSingleAbortContext();
 

@@ -140,7 +140,7 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 const EXTENSION_RELAY_CDP_USER = "openclaw";
 const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 /** Environment variable that overrides managed Chrome headless mode. */
-export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
 /** Source that determined managed Chrome headless mode. */
 export type ManagedBrowserHeadlessSource =
@@ -156,7 +156,7 @@ type ManagedBrowserHeadlessMode = {
   source: ManagedBrowserHeadlessSource;
 };
 
-export type ManagedBrowserMissingDisplayError = {
+type ManagedBrowserMissingDisplayError = {
   message: string;
   headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
 };

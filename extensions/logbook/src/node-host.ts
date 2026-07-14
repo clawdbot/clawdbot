@@ -1,14 +1,11 @@
 // Logbook node-host command: screen capture for headless node hosts (macOS).
 // Nodes without the OpenClaw app (plain `openclaw node host run`) advertise
 // logbook.snapshot so capture works anywhere the plugin is enabled.
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-
-const execFileAsync = promisify(execFile);
 
 type LogbookSnapshotParams = {
   screenIndex?: number;
@@ -57,26 +54,26 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
     // the capture never becomes world-readable even if the dir mode drifts.
     await writeFile(filePath, "", { mode: 0o600 });
     // -x: no capture sound; -C: include cursor; -D is 1-based display index.
-    await execFileAsync("screencapture", [
-      "-x",
-      "-C",
-      "-D",
-      String(screenIndex + 1),
-      "-t",
-      "jpg",
-      filePath,
-    ]);
-    await execFileAsync("sips", [
-      "--resampleHeightWidthMax",
-      String(maxWidth),
-      "-s",
-      "format",
-      "jpeg",
-      "-s",
-      "formatOptions",
-      String(qualityPct),
-      filePath,
-    ]);
+    await runExec(
+      "screencapture",
+      ["-x", "-C", "-D", String(screenIndex + 1), "-t", "jpg", filePath],
+      { logOutput: false },
+    );
+    await runExec(
+      "sips",
+      [
+        "--resampleHeightWidthMax",
+        String(maxWidth),
+        "-s",
+        "format",
+        "jpeg",
+        "-s",
+        "formatOptions",
+        String(qualityPct),
+        filePath,
+      ],
+      { logOutput: false },
+    );
     const buffer = await readFile(filePath);
     return { format: "jpeg", base64: buffer.toString("base64") };
   } catch (err) {

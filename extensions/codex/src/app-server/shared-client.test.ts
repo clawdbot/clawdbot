@@ -4,10 +4,10 @@ import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
-import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
-import { CodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -255,9 +255,7 @@ describe("shared Codex app-server client", () => {
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
-    await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
+    await expect(listPromise).rejects.toThrow("Codex app-server 0.143.0 or newer is required");
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
   });
@@ -1572,7 +1570,7 @@ describe("shared Codex app-server client", () => {
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
     };
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
-    const monitor = new CodexNativeSubagentMonitor(
+    const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
       client,
       {
         createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),

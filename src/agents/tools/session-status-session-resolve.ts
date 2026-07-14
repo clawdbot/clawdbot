@@ -9,7 +9,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
 
-export type ResolvedStatusSessionEntry = {
+type ResolvedStatusSessionEntry = {
   entry: SessionEntry;
   key: string;
   persisted: boolean;

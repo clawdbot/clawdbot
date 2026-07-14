@@ -235,6 +235,10 @@ final class DashboardManager {
         self.controller?.closeDashboard()
     }
 
+    func handleOnboardingCompletion() {
+        self.controller?.handleOnboardingCompletion()
+    }
+
     func navigateBack() {
         guard self.controller?.window?.isKeyWindow == true else { return }
         self.controller?.navigateBack()

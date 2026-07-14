@@ -3,7 +3,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {

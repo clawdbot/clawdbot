@@ -2,7 +2,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import type { SessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-types.js";
 
-export type SessionSqliteGithubIssueCreateResult =
+type SessionSqliteGithubIssueCreateResult =
   | { ok: true; url: string }
   | { fallbackUrl: string; message: string; ok: false };
 

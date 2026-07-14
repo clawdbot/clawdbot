@@ -60,7 +60,8 @@ function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown
 }
 
 async function writeTuiPtyFixtureScript(dir: string) {
-  const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
+  // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
+  const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
   const payloadsModuleUrl = pathToFileURL(
     path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),

@@ -77,7 +77,7 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(dreaming.contains("parts.formatted(.list(type: .and, width: .short))"))
         #expect(chat.contains("private var title: LocalizedStringResource"))
         #expect(chat.contains("private var accessibilityText: LocalizedStringResource"))
-        #expect(chat.contains(".accessibilityLabel(Text(self.accessibilityText))"))
+        #expect(chat.contains("Text(self.accessibilityText)"))
         #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))

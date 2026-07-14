@@ -34,10 +34,10 @@ import {
   type WorkerEnvironmentUnleasedState,
 } from "./state.js";
 
-export type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-export type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-export type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
-export type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
+type WorkerEnvironmentProfileSnapshot = WorkerProfile;
+type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;

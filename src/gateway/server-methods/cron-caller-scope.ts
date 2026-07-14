@@ -53,6 +53,10 @@ function resolveCronJobOwnerAgentId(job: CronJob): string | undefined {
   return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
 }
 
+function isOperatorCommandCronJob(job: CronJob): boolean {
+  return job.payload.kind === "command" || job.schedule.kind === "on-exit";
+}
+
 export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
@@ -60,6 +64,12 @@ export function cronJobMatchesCallerScope(params: {
 }): boolean {
   if (!params.callerScope) {
     return true;
+  }
+  // Command cron is an operator-admin automation surface, not a model-visible
+  // agent tool capability. Hide it before owner/routing fallback can expose
+  // payload env, watched commands, or manual force-run controls.
+  if (isOperatorCommandCronJob(params.job)) {
+    return false;
   }
   // Declarative jobs retain their stamped owner when an operator retargets execution.
   // Ownerless jobs predate attribution, so keep their routing-based visibility.

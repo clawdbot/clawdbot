@@ -31,7 +31,6 @@ export type {
   ConversationRef,
   SessionBindingBindInput,
   SessionBindingCapabilities,
-  SessionBindingErrorCode,
   SessionBindingPlacement,
   SessionBindingRecord,
   SessionBindingUnbindInput,

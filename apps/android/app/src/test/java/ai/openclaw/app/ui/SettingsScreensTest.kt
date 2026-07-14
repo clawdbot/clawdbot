@@ -6,6 +6,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.verbatimText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -137,6 +138,17 @@ class SettingsScreensTest {
     assertEquals(true, text.contains("saved setup credentials"))
     assertEquals(true, text.contains("device tokens"))
     assertEquals(true, text.contains("node capability approval"))
+  }
+
+  @Test
+  fun gatewayAccessExplainsLimitedConnectionsAndUpgradePath() {
+    assertEquals("Not available", gatewayAccessLabel(isConnected = false, operatorAdminScopeAvailable = false))
+    assertEquals("Limited", gatewayAccessLabel(isConnected = true, operatorAdminScopeAvailable = false))
+    assertEquals("Full", gatewayAccessLabel(isConnected = true, operatorAdminScopeAvailable = true))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("full-access setup code"))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("wss://"))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("Tailscale Serve"))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("settings and upgrades"))
   }
 
   @Test
@@ -333,6 +345,33 @@ class SettingsScreensTest {
         "contentDescription = nativeString(\"Dismiss approval notice\")",
       ),
     )
+  }
+
+  @Test
+  fun gatewayPairingSurfacesStayProminentUntilPaired() {
+    assertTrue(gatewayShowsScanHero(pairedGatewayCount = 0))
+    assertFalse(gatewayShowsScanHero(pairedGatewayCount = 1))
+
+    val endpoint = GatewayEndpoint(stableId = "gw", name = "Studio", host = "10.0.0.5", port = 18789)
+    assertEquals("10.0.0.5:18789", gatewayDiscoveredRowSubtitle(endpoint))
+  }
+
+  @Test
+  fun gatewayScreenOrdersPairingAheadOfManualSetup() {
+    val source = settingsScreensSource()
+    val screenStart = source.indexOf("private fun GatewaySettingsScreen(")
+    // Pairing stays reachable without scrolling: nav-bar scanner action plus a
+    // hero CTA while nothing is paired, then Add Gateway before manual plumbing.
+    val trailingScan = source.indexOf("trailingAction = {", screenStart)
+    val scanHero = source.indexOf("nativeString(\"Scan QR to Pair\")", screenStart)
+    val addPanel = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
+    val pairedPanel = source.indexOf("nativeString(\"Gateways\")", screenStart)
+    val manualPanel = source.indexOf("nativeString(\"Manual Gateway\")", screenStart)
+    assertTrue(screenStart >= 0 && trailingScan > screenStart && scanHero > trailingScan)
+    assertTrue(addPanel > scanHero && pairedPanel > addPanel && manualPanel > pairedPanel)
+    // Discovered gateways surface inside Add Gateway with a per-row connect.
+    val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
+    assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
   }
 
   private fun settingsScreensSource(): String {

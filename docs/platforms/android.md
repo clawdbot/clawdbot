@@ -150,7 +150,7 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 - Preferred: Tailscale Serve / Funnel with `https://<magicdns>` / `wss://<magicdns>`
 - Also supported: any other `wss://` Gateway URL with a real TLS endpoint
-- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`)
+- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`); non-loopback setup automatically uses limited operator access
 
 ### Prerequisites
 
@@ -217,6 +217,15 @@ In the Android app:
 - If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+Official setup codes connect Android as a node and grant full Gateway operator
+access by default over `wss://`. Plaintext non-loopback `ws://` setup
+automatically uses limited access for bearer-token safety. **Settings → Gateway**
+shows **Full** or **Limited** access. For a limited connection, configure
+`wss://` or Tailscale Serve, generate a new full-access code in Control UI or
+with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
+who want the reduced profile can select **Limited access** in Control UI or run
+`openclaw qr --limited`.
 
 ### Multiple gateways
 

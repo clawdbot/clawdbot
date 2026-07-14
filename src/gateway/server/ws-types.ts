@@ -7,7 +7,7 @@ import type { WorkerConnectionIdentity } from "../worker-environments/connection
 
 export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
 export const GATEWAY_WS_PREAUTH_BUDGET_PROPERTY = "__openclawPreauthBudget";
-export type GatewayWsConnectionKind = "gateway" | "worker";
+type GatewayWsConnectionKind = "gateway" | "worker";
 export type GatewayIngressWebSocket = WebSocket & {
   [GATEWAY_WS_CONNECTION_KIND_PROPERTY]?: GatewayWsConnectionKind;
   [GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]?: {

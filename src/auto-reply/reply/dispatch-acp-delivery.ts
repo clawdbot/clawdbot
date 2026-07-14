@@ -53,7 +53,7 @@ function loadMessageActionRuntime() {
   return messageActionRuntimeLoader.load();
 }
 
-export type AcpDispatchDeliveryMeta = {
+type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
   skipTts?: boolean;

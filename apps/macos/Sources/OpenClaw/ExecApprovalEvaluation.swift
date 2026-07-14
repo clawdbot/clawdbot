@@ -236,16 +236,6 @@ struct ExecApprovalExecutionCommit: Sendable {
     }
 }
 
-struct ExecApprovalStoreMutations: Sendable {
-    let commitExecution: @Sendable (
-        _ commit: ExecApprovalExecutionCommit) -> Result<Void, ExecApprovalsMutationError>
-
-    static let live = ExecApprovalStoreMutations(
-        commitExecution: { commit in
-            ExecApprovalsStore.commitExecution(commit)
-        })
-}
-
 enum ExecApprovalEvaluator {
     static func evaluate(
         command: [String],

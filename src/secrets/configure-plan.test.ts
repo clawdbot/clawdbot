@@ -6,7 +6,6 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import {
-  buildConfigureCandidates,
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
   collectConfigureProviderChanges,
@@ -17,7 +16,7 @@ import { resolveConfigSecretTargetByPath } from "./target-registry.js";
 describe("secrets configure plan helpers", () => {
   beforeAll(() => {
     resolveConfigSecretTargetByPath(["channels", "telegram", "botToken"]);
-    buildConfigureCandidates({} as OpenClawConfig);
+    buildConfigureCandidatesForScope({ config: {} as OpenClawConfig });
   });
 
   it("builds configure candidates from supported configure targets", () => {
@@ -36,7 +35,7 @@ describe("secrets configure plan helpers", () => {
       },
     } as OpenClawConfig;
 
-    const candidates = buildConfigureCandidates(config);
+    const candidates = buildConfigureCandidatesForScope({ config });
     const paths = candidates.map((entry) => entry.path);
     expect(paths).toContain(TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(paths).toContain("channels.telegram.botToken");

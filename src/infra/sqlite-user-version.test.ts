@@ -6,42 +6,42 @@ describe("readSqliteUserVersion", () => {
   it("returns 0 when row is undefined", () => {
     const db = {
       prepare: () => ({ get: () => undefined }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(0);
   });
 
   it("returns 0 when user_version is null", () => {
     const db = {
       prepare: () => ({ get: () => ({ user_version: null }) }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(0);
   });
 
   it("returns numeric user_version", () => {
     const db = {
       prepare: () => ({ get: () => ({ user_version: 5 }) }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(5);
   });
 
   it("returns 0 when user_version is 0", () => {
     const db = {
       prepare: () => ({ get: () => ({ user_version: 0 }) }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(0);
   });
 
   it("converts string user_version to number", () => {
     const db = {
       prepare: () => ({ get: () => ({ user_version: "3" }) }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(3);
   });
 
   it("returns 0 for empty object", () => {
     const db = {
       prepare: () => ({ get: () => ({}) }),
-    } as any;
+    };
     expect(readSqliteUserVersion(db)).toBe(0);
   });
 });

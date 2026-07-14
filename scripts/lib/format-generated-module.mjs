@@ -3,36 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 
 export const GENERATED_MODULE_FORMAT_TIMEOUT_MS = 30_000;
 export const GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024;
 const FORMATTER_OUTPUT_TAIL_BYTES = 16 * 1024;
-
-/** Resolve the fastest available oxfmt command for a generated module path. */
-export function resolveGeneratedModuleFormatter(params) {
-  const platform = params.platform ?? process.platform;
-  const existsSync = params.existsSync ?? fs.existsSync;
-  const directFormatterPath = path.join(params.repoRoot, "node_modules", ".bin", "oxfmt");
-  const useDirectFormatter = platform !== "win32" && existsSync(directFormatterPath);
-  if (useDirectFormatter) {
-    return {
-      command: directFormatterPath,
-      args: ["--write", params.outputPath],
-      shell: false,
-    };
-  }
-
-  return resolvePnpmRunner({
-    comSpec: params.comSpec,
-    cwd: params.repoRoot,
-    env: params.env,
-    npmExecPath: params.npmExecPath,
-    nodeExecPath: params.nodeExecPath,
-    platform,
-    pnpmArgs: ["exec", "oxfmt", "--write", params.outputPath],
-  });
-}
 
 function outputText(value) {
   if (typeof value === "string") {
@@ -86,31 +60,27 @@ function formatterFailureDetails(formatter) {
 /** Format generated source in a temporary file and return the formatter output. */
 export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel }, deps = {}) {
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
-  const resolveFormatter = deps.resolveFormatter ?? resolveGeneratedModuleFormatter;
   const resolvedRepoRoot = path.resolve(repoRoot);
-  const resolvedOutputPath = path.resolve(
-    resolvedRepoRoot,
-    path.isAbsolute(outputPath) ? path.relative(resolvedRepoRoot, outputPath) : outputPath,
-  );
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-generated-format-"));
-  const tempOutputPath = path.join(tempDir, path.basename(resolvedOutputPath));
+  const tempOutputPath = path.join(tempDir, path.basename(outputPath));
 
   try {
     fs.writeFileSync(tempOutputPath, source, "utf8");
-    const command = resolveFormatter({
-      existsSync: fs.existsSync,
-      outputPath: tempOutputPath,
-      repoRoot: resolvedRepoRoot,
-    });
-    const formatter = spawnSyncImpl(command.command, command.args, {
-      cwd: resolvedRepoRoot,
-      encoding: "utf8",
-      env: command.env ?? process.env,
-      maxBuffer: GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
-      shell: command.shell,
-      timeout: GENERATED_MODULE_FORMAT_TIMEOUT_MS,
-      windowsVerbatimArguments: command.windowsVerbatimArguments,
-    });
+    const formatter = spawnSyncImpl(
+      process.execPath,
+      [
+        path.join(resolvedRepoRoot, "node_modules", "oxfmt", "bin", "oxfmt"),
+        "--write",
+        tempOutputPath,
+      ],
+      {
+        cwd: resolvedRepoRoot,
+        encoding: "utf8",
+        maxBuffer: GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
+        shell: false,
+        timeout: GENERATED_MODULE_FORMAT_TIMEOUT_MS,
+      },
+    );
     if (formatter.error || formatter.status !== 0) {
       const details = formatterFailureDetails(formatter);
       throw new Error(`failed to format generated ${errorLabel}: ${details}`);

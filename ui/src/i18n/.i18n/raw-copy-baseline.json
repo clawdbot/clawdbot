@@ -3,6 +3,27 @@
   "entries": [
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "browser panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "command palette"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "terminal panel"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/app-sidebar.ts",
@@ -304,6 +325,41 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "@BotFather"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "api.slack.com/apps"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "Developer Portal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "signal-cli"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/channels/hub-meta.ts",
+      "text": "web.telegram.org"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
@@ -336,76 +392,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message.ts",
       "text": "JSON"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Alloy"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Ash"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Ballad"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Cedar"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Coral"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Echo"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Marin"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Shimmer"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Verse"
     },
     {
       "count": 1,

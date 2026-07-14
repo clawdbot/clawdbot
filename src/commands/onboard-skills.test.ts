@@ -11,11 +11,6 @@ const mocks = vi.hoisted(() => ({
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  resolveNodeManagerOptions: vi.fn(() => [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ]),
 }));
 
 // Module under test imports these at module scope.
@@ -35,7 +30,6 @@ vi.mock("../infra/brew.js", () => ({
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
-  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
 import { setupSkills, testing } from "./onboard-skills.js";

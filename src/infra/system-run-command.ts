@@ -146,7 +146,7 @@ function normalizeRawCommandText(rawCommand?: unknown): string | null {
   return typeof rawCommand === "string" && rawCommand.trim().length > 0 ? rawCommand.trim() : null;
 }
 
-export function validateSystemRunCommandConsistency(params: {
+function validateSystemRunCommandConsistency(params: {
   argv: string[];
   rawCommand?: string | null;
   allowLegacyShellText?: boolean;

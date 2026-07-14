@@ -1152,6 +1152,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/reef",
                   "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
@@ -1292,6 +1293,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/vault",
+                  "plugins/onepassword",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1317,6 +1319,7 @@
                 "pages": [
                   "tools/skills",
                   "tools/skill-workshop",
+                  "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1544,6 +1547,7 @@
                   "platforms/windows",
                   "platforms/android",
                   "platforms/ios",
+                  "platforms/ios-healthkit",
                   "platforms/easyrunner"
                 ]
               },
@@ -1610,6 +1614,7 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
                     ]
@@ -1802,7 +1807,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/worker"
                     ]
                   },
                   {

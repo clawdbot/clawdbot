@@ -41,8 +41,6 @@ const readSchema = Type.Object({
   offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
   limit: Type.Optional(Type.Number({ description: "Max lines." })),
 });
-export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
-
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
   label: string;

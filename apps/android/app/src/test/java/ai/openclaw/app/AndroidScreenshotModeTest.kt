@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.SettingsRoute
 import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -46,5 +47,20 @@ class AndroidScreenshotModeTest {
     assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Chat.homeDestination)
     assertEquals(HomeDestination.Voice, AndroidScreenshotScene.Voice.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Settings.homeDestination)
+  }
+
+  @Test
+  fun gatewaySceneTargetsSettingsGatewayRoute() {
+    val parsed =
+      parseAndroidScreenshotModeIntent(
+        Intent(Intent.ACTION_MAIN)
+          .putExtra(extraAndroidScreenshotMode, true)
+          .putExtra(extraAndroidScreenshotScene, "gateway"),
+      )
+
+    assertEquals(AndroidScreenshotScene.Gateway, parsed)
+    assertEquals(HomeDestination.Settings, parsed?.homeDestination)
+    assertEquals(SettingsRoute.Gateway, parsed?.settingsRoute)
+    assertNull(AndroidScreenshotScene.Settings.settingsRoute)
   }
 }

@@ -10,6 +10,7 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
@@ -62,41 +63,54 @@ export async function withRetry<T>(
   persistentPolicy?: PersistentRetryPolicy,
   logger?: EngineLogger,
 ): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
-
-      // Check for persistent-retry trigger before standard retry logic.
-      if (persistentPolicy?.shouldPersistRetry(lastError)) {
+  // A persistent loop owns its terminal failure. Mark that Error so the outer
+  // bounded runner does not accidentally restart the completed deadline loop.
+  const persistentFailures = new WeakSet<Error>();
+  return await retryAsync(
+    async () => {
+      try {
+        return await fn();
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+        if (!persistentPolicy?.shouldPersistRetry(error)) {
+          throw error;
+        }
         (logger?.warn ?? logger?.error)?.(
           `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
         );
-        return await persistentRetryLoop(fn, persistentPolicy, logger);
+        try {
+          return await persistentRetryLoop(fn, persistentPolicy, logger);
+        } catch (persistentError) {
+          const terminal =
+            persistentError instanceof Error
+              ? persistentError
+              : new Error(formatErrorMessage(persistentError));
+          persistentFailures.add(terminal);
+          throw terminal;
+        }
       }
-
-      // Check whether this error is retryable under the standard policy.
-      if (policy.shouldRetry?.(lastError, attempt) === false) {
-        throw lastError;
-      }
-
-      // Schedule the next retry with the configured backoff.
-      if (attempt < policy.maxRetries) {
-        const delay =
-          policy.backoff === "exponential" ? policy.baseDelayMs * 2 ** attempt : policy.baseDelayMs;
-
+    },
+    {
+      attempts: policy.maxRetries + 1,
+      minDelayMs: 0,
+      maxDelayMs: 2_147_000_000,
+      delayMs: ({ attempt }) =>
+        policy.backoff === "exponential"
+          ? policy.baseDelayMs * 2 ** (attempt - 1)
+          : policy.baseDelayMs,
+      shouldRetry: (err, attempt) => {
+        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+        return !persistentFailures.has(error) && policy.shouldRetry?.(error, attempt - 1) !== false;
+      },
+      onRetry: ({ attempt, delayMs, err }) => {
+        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
         logger?.debug?.(
-          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${truncateUtf16Safe(lastError.message, 100)}`,
+          `[qqbot:retry] Attempt ${attempt} failed, retrying in ${delayMs}ms: ${truncateUtf16Safe(error.message, 100)}`,
         );
-        await sleep(delay);
-      }
-    }
-  }
-
-  throw lastError!;
+      },
+      sleep,
+    },
+  );
 }
 
 /**

@@ -6,7 +6,6 @@ import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
-import UserNotifications
 
 enum NodePairingReconcilePolicy {
     static let activeIntervalMs: UInt64 = 15000
@@ -330,8 +329,13 @@ final class NodePairingApprovalPrompter {
 
     private func syncCards() {
         guard !self.isStopping else { return }
+        // A pending local decision hides the card immediately (the decision is
+        // optimistic); the failure path re-syncs so the card can come back.
         let cards = self.queue
-            .filter { !self.autoApproveInFlight.contains($0.requestId) }
+            .filter {
+                !self.autoApproveInFlight.contains($0.requestId) &&
+                    !self.pendingLocalDecisionRequestIds.contains($0.requestId)
+            }
             .map { self.card(for: $0) }
         PairingApprovalCenter.shared.sync(kind: .node, cards: cards)
     }
@@ -364,6 +368,9 @@ final class NodePairingApprovalPrompter {
         guard let request = self.queue.first(where: { $0.requestId == card.requestId }) else { return }
 
         self.pendingLocalDecisionRequestIds.insert(request.requestId)
+        // Optimistic dismiss: the card leaves the panel before the RPC
+        // round-trip; the outcome arrives as a notification instead.
+        self.syncCards()
         let expected: PairingResolution = decision == .approve ? .approved : .rejected
         let rpcOk: Bool = switch decision {
         case .approve:
@@ -382,8 +389,16 @@ final class NodePairingApprovalPrompter {
         } else if rpcOk {
             await self.notify(resolution: expected, request: request, via: "local")
         } else {
-            // RPC failed and nothing resolved it elsewhere: keep the card and
+            // RPC failed and nothing resolved it elsewhere: bring the card
+            // back, tell the user the optimistic dismiss did not stick, and
             // re-sync with gateway truth instead of claiming an outcome.
+            self.syncCards()
+            await PairingPromptSupport.notifyDecisionFailed(
+                kind: .node,
+                decision: decision,
+                subject: PairingPromptSupport.subjectLabel(
+                    displayName: request.displayName,
+                    fallback: request.nodeId))
             self.scheduleReconcileOnce(delayMs: 0)
             return
         }
@@ -415,17 +430,12 @@ final class NodePairingApprovalPrompter {
     }
 
     private func notify(resolution: PairingResolution, request: PendingRequest, via: String) async {
-        let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized ||
-            settings.authorizationStatus == .provisional
-        else {
-            return
-        }
+        guard await PairingPromptSupport.notificationsAuthorized() else { return }
 
         let title = resolution == .approved ? "Node pairing approved" : "Node pairing rejected"
-        let name = request.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let device = name?.isEmpty == false ? name! : request.nodeId
+        let device = PairingPromptSupport.subjectLabel(
+            displayName: request.displayName,
+            fallback: request.nodeId)
         let body = "\(device)\n(via \(via))"
 
         _ = await NotificationManager().send(

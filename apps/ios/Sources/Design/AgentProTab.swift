@@ -11,6 +11,7 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
+    @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""

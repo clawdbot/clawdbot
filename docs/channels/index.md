@@ -28,6 +28,7 @@ restart. "External plugin" channels are maintained outside the OpenClaw repo.
 - [Nextcloud Talk](/channels/nextcloud-talk) - Self-hosted chat via Nextcloud Talk (official plugin).
 - [Nostr](/channels/nostr) - Decentralized DMs via NIP-04 (official plugin).
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (official plugin).
+- [Reef](/channels/reef) - Guarded, end-to-end-encrypted claw-to-claw messaging between OpenClaw agents of different people (bundled plugin).
 - [Raft](/channels/raft) - Raft CLI wake bridge for human and agent collaboration (official plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused (official plugin).
 - [Slack](/channels/slack) - Bolt SDK; workspace apps (official plugin).

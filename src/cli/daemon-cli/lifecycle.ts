@@ -313,7 +313,16 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     service,
     opts,
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
-    onNotLoaded: async () => {
+    onNotLoaded: async ({ stdout }) => {
+      if (process.platform === "linux") {
+        const runtime = await service.readRuntime(process.env).catch(() => null);
+        if (runtime?.status === "running") {
+          // systemd can run a disabled unit with Restart=always. Stop it through
+          // systemctl so a process-level SIGTERM cannot trigger a respawn.
+          await service.stop({ env: process.env, stdout });
+          return { result: "stopped" };
+        }
+      }
       gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
         resolveGatewayPortFallback(),
       );

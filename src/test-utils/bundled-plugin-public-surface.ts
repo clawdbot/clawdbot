@@ -8,10 +8,7 @@ import {
   loadBundledPluginPublicSurfaceModuleSync,
 } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import {
-  findBundledPluginMetadataById,
-  type BundledPluginMetadata,
-} from "../plugins/bundled-plugin-metadata.js";
+import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
@@ -25,7 +22,10 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
-type BundledPluginPublicSurfaceMetadata = Pick<BundledPluginMetadata, "dirName">;
+type BundledPluginPublicSurfaceMetadata = Pick<
+  NonNullable<ReturnType<typeof findBundledPluginMetadataById>>,
+  "dirName"
+>;
 const sourceModuleLoaders: PluginModuleLoaderCache = new Map();
 
 function isSafeBundledPluginDirName(pluginId: string): boolean {

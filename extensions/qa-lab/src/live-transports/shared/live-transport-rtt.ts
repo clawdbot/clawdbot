@@ -58,7 +58,7 @@ export function normalizeLiveTransportRttOptions<CheckId extends string>(params:
   };
 }
 
-export function percentile(sortedValues: readonly number[], percentileValue: number) {
+function percentile(sortedValues: readonly number[], percentileValue: number) {
   if (sortedValues.length === 0) {
     return undefined;
   }

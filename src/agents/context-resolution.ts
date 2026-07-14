@@ -23,12 +23,14 @@ export type ContextTokenResolutionParams = {
   cfg?: OpenClawConfig;
   sourceCfg?: OpenClawConfig | null;
   provider?: string;
+  modelProvider?: string;
   model?: string;
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
   modelContextWindow?: number;
   modelContextTokens?: number;
   allowAsyncLoad?: boolean;
+  allowUnscopedModelLookup?: boolean;
 };
 
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
@@ -140,6 +142,43 @@ function resolveConfiguredProviderContextTokens(
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
+function resolveProviderQualifiedModel(provider: string, model: string): string | undefined {
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const prefixedProvider = normalizeProviderId(model.slice(0, slash));
+  const bareModel = model.slice(slash + 1).trim();
+  return prefixedProvider === normalizeProviderId(provider) && bareModel ? bareModel : undefined;
+}
+
+function resolveConfiguredRuntimeContextTokens(
+  cfg: OpenClawConfig | null | undefined,
+  provider: string,
+  modelProvider: string | undefined,
+  model: string,
+): ConfiguredContextTokens | undefined {
+  const explicitResult = resolveConfiguredProviderContextTokens(cfg, provider, model);
+  if (explicitResult) {
+    return explicitResult;
+  }
+  const canonicalProvider = modelProvider?.trim();
+  if (
+    !canonicalProvider ||
+    normalizeProviderId(canonicalProvider) === normalizeProviderId(provider)
+  ) {
+    return undefined;
+  }
+  const canonicalResult = resolveConfiguredProviderContextTokens(cfg, canonicalProvider, model);
+  if (canonicalResult) {
+    return canonicalResult;
+  }
+  const canonicalModel = resolveProviderQualifiedModel(canonicalProvider, model);
+  return canonicalModel
+    ? resolveConfiguredProviderContextTokens(cfg, canonicalProvider, canonicalModel)
+    : undefined;
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -193,15 +232,17 @@ export function resolveContextTokensForModelFromCache(
   const explicitProvider = params.provider?.trim();
 
   if (ref && explicitProvider) {
-    const configuredWindow = resolveConfiguredProviderContextTokens(
+    const configuredWindow = resolveConfiguredRuntimeContextTokens(
       params.cfg,
       explicitProvider,
+      params.modelProvider,
       ref.model,
     );
     const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
-    const sourceConfiguredWindow = resolveConfiguredProviderContextTokens(
+    const sourceConfiguredWindow = resolveConfiguredRuntimeContextTokens(
       sourceConfig,
       explicitProvider,
+      params.modelProvider,
       ref.model,
     );
     const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
@@ -266,6 +307,10 @@ export function resolveContextTokensForModelFromCache(
     if (fixedContextWindow !== undefined) {
       return capOverride(fixedContextWindow);
     }
+  }
+
+  if (params.allowUnscopedModelLookup === false) {
+    return override ?? params.fallbackContextTokens;
   }
 
   // Model-only calls use the raw discovery key. With an explicit provider,

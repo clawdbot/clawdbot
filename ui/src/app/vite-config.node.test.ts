@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -22,6 +24,21 @@ function findStringAlias(key: string) {
 }
 
 describe("Control UI Vite config", () => {
+  it("emits Brotli and gzip variants only for bundled compressible assets", () => {
+    const source = "console.log('precompressed');\n".repeat(200);
+    const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
+
+    expect(variants.map((variant) => variant.fileName)).toEqual([
+      "assets/app-AbCd1234.js.br",
+      "assets/app-AbCd1234.js.gz",
+    ]);
+    expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+  });
+
   it("embeds one canonical artifact identity from explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "f".repeat(40));
     expect(
@@ -190,6 +207,19 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: {
           OPENCLAW_VERSION: "latest",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }).buildId,
+    ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
+  });
+
+  it("ignores a whitespace-only explicit build id", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_BUILD_ID: "   ",
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),

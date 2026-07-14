@@ -34,12 +34,7 @@ export type RealtimeVoiceAgentConsultResult = { text: string };
 /**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
  */
-export type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
-
-export {
-  resolveRealtimeVoiceAgentConsultTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow,
-} from "./agent-consult-tool.js";
+type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
 
 type RealtimeVoiceAgentConsultDeps = {
   randomUUID: typeof randomUUID;

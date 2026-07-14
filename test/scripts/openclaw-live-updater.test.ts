@@ -1813,6 +1813,7 @@ describe("openclaw live updater", () => {
           statePath,
         },
         {
+          sleep() {},
           runCommand(command: string, args: string[]) {
             commands.runCommand(command, args);
             if (command === "pnpm" && args.includes("status")) {

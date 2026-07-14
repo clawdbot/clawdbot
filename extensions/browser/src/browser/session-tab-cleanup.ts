@@ -17,7 +17,7 @@ function minutesToMs(minutes: number): number {
 }
 
 /** Returns true for user-facing sessions whose tabs should be tracked for cleanup. */
-export function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
+function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
   return (
     !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&
@@ -31,7 +31,7 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
 }
 
 /** Runs one Browser tab cleanup sweep from runtime config or injected test config. */
-export async function runTrackedBrowserTabCleanupOnce(params?: {
+async function runTrackedBrowserTabCleanupOnce(params?: {
   now?: number;
   cleanup?: ResolvedBrowserTabCleanupConfig;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;

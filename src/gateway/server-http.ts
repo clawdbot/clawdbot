@@ -331,7 +331,7 @@ type GatewayHttpRequestStage = {
   continueOnError?: boolean;
 };
 
-export async function runGatewayHttpRequestStages(
+async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {

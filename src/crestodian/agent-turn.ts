@@ -27,7 +27,7 @@ import {
  * Turns share one persistent session so the conversation has genuine
  * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
-export const CRESTODIAN_AGENT_ID = "crestodian";
+const CRESTODIAN_AGENT_ID = "crestodian";
 
 const AGENT_TURN_TIMEOUT_MS = 120_000;
 const CRESTODIAN_MCP_TOOL_NAME = "mcp__openclaw__crestodian";
@@ -35,7 +35,7 @@ const CRESTODIAN_MCP_TOOL_NAME = "mcp__openclaw__crestodian";
 export type CrestodianAgentTurnDirective =
   import("../agents/tools/crestodian-tool.js").CrestodianToolDirective;
 
-export type CrestodianAgentTurnReply = {
+type CrestodianAgentTurnReply = {
   text: string;
   modelLabel?: string;
   /** Interactive handoff the tool requested; the host chat executes it. */

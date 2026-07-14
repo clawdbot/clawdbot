@@ -8,14 +8,14 @@ type PluginKindLike = string | readonly string[] | undefined;
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
-export type PluginExplicitSelectionCause =
+type PluginExplicitSelectionCause =
   | "enabled-in-config"
   | "bundled-channel-enabled-in-config"
   | "selected-memory-slot"
   | "selected-context-engine-slot"
   | "selected-in-allowlist";
 
-export type PluginActivationCause =
+type PluginActivationCause =
   | PluginExplicitSelectionCause
   | "plugins-disabled"
   | "blocked-by-denylist"
@@ -35,7 +35,7 @@ export type PluginActivationStateLike = {
   reason?: string;
 };
 
-export type PluginActivationDecision = PluginActivationStateLike & {
+type PluginActivationDecision = PluginActivationStateLike & {
   cause?: PluginActivationCause;
 };
 

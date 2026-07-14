@@ -13,6 +13,8 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -28,8 +30,18 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
-import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
+import {
+  currentLocalDate,
+  selectUsageSessionKeys,
+  toggleUsageRangeSelection,
+  toUsageErrorMessage,
+} from "./helpers.ts";
+import {
+  DEFAULT_VISIBLE_COLUMNS,
+  type SessionLogEntry,
+  type SessionLogRole,
+  type UsageProps,
+} from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
@@ -48,39 +60,6 @@ export type UsageRouteData = {
   providerUsageSummary: ProviderUsageSummary | null;
   error: string | null;
 };
-
-const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
-  "channel",
-  "agent",
-  "provider",
-  "model",
-  "messages",
-  "tools",
-  "errors",
-  "duration",
-];
-
-function currentLocalDate(): string {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  if (error && typeof error === "object") {
-    try {
-      return JSON.stringify(error) || "request failed";
-    } catch {
-      // Fall through to the stable generic message.
-    }
-  }
-  return "request failed";
-}
 
 class UsagePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -137,6 +116,7 @@ class UsagePage extends OpenClawLightDomElement {
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private hasBoundGatewaySource = false;
+  private observedAgentScopeId: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -146,6 +126,24 @@ class UsagePage extends OpenClawLightDomElement {
         const cleanup = gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot));
         this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
         return cleanup;
+      },
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => {
+        const sync = () => {
+          const nextScopeId = selection.state.scopeId;
+          const changed = this.observedAgentScopeId !== nextScopeId;
+          this.observedAgentScopeId = nextScopeId;
+          if (changed && this.routeDataInitialized && this.usageAgentId !== nextScopeId) {
+            this.usageAgentId = nextScopeId;
+            this.clearSelectionsAndDetails();
+            this.reloadUsage();
+          }
+          this.requestUpdate();
+        };
+        sync();
+        return selection.subscribe(sync);
       },
     )
     .watch(
@@ -208,6 +206,15 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageLoading = false;
       return;
     }
+    const currentAgentId = this.context.agentSelection.state.scopeId;
+    if (data.query.agentId !== currentAgentId) {
+      // Route loaders may finish after the page scope changes. Ignore their
+      // stale result and restart from the current scope in one operation.
+      this.usageAgentId = currentAgentId;
+      this.clearSelectionsAndDetails();
+      this.reloadUsage();
+      return;
+    }
 
     this.usageStartDate = data.query.startDate;
     this.usageEndDate = data.query.endDate;
@@ -244,7 +251,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
     this.usageError = null;
-    this.usageAgentId = null;
+    this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
   }
 
@@ -333,7 +340,7 @@ class UsagePage extends OpenClawLightDomElement {
         this.usageCostSummary = null;
         this.usageError = formatMissingOperatorReadScopeMessage("usage");
       } else {
-        this.usageError = toErrorMessage(error);
+        this.usageError = toUsageErrorMessage(error);
       }
     } finally {
       if (this.isCurrentRequest(requestId, client)) {
@@ -536,9 +543,7 @@ class UsagePage extends OpenClawLightDomElement {
             this.reloadUsage();
           },
           onAgentChange: (agentId) => {
-            this.usageAgentId = agentId;
-            this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.context.agentSelection.setScope(agentId);
           },
           onRefresh: () => this.reloadUsage(),
           onTimeZoneChange: (timeZone) => {
@@ -664,8 +669,16 @@ class UsagePage extends OpenClawLightDomElement {
           <div class="page-title">${titleForRoute("usage")}</div>
           <div class="page-sub">${subtitleForRoute("usage")}</div>
         </div>
+        ${renderAgentScopeControl({
+          agents: this.context.agents.state.agentsList?.agents ?? [],
+          additionalAgentIds:
+            this.usageResult?.sessions
+              .map((entry) => entry.agentId)
+              .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
+          selection: this.context.agentSelection,
+        })}
       </section>
-      ${renderUsage(props)}
+      ${renderSettingsWorkspace(renderUsage(props))}
     `;
   }
 }

@@ -124,7 +124,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 }
 
 /** Normalized destination for notifying about cron execution failures. */
-export type CronFailureDeliveryPlan = {
+type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";
   channel?: CronMessageChannel;
   to?: string;
@@ -132,7 +132,7 @@ export type CronFailureDeliveryPlan = {
 };
 
 /** Job-level failure destination override fields before global defaults are merged. */
-export type CronFailureDestinationInput = {
+type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;

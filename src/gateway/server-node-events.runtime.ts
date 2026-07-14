@@ -16,7 +16,7 @@ export { resolveOutboundTarget } from "../infra/outbound/targets.js";
 export { registerApnsRegistration } from "../infra/push-apns.js";
 export { enqueueSystemEvent } from "../infra/system-events.js";
 export { deleteMediaBuffer } from "../media/store.js";
-export { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+export { normalizeMainKey } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";
 export {
   parseMessageWithAttachments,

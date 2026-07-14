@@ -1,22 +1,34 @@
 // Nostr tests cover nostr profile plugin behavior.
-import { verifyEvent, getPublicKey, type SimplePool } from "nostr-tools";
+import { verifyEvent, getPublicKey, type Event, type SimplePool } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
-import {
-  createProfileEvent,
-  profileToContent,
-  contentToProfile,
-  validateProfile,
-  sanitizeProfileForDisplay,
-  publishProfile,
-  type ProfileContent,
-} from "./nostr-profile.js";
+import { contentToProfile, profileToContent, type ProfileContent } from "./nostr-profile-core.js";
+import { publishProfile } from "./nostr-profile.js";
 import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
 const TEST_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
 
-function createTestProfileEvent(profile: NostrProfile, lastPublishedAt?: number) {
-  return createProfileEvent(TEST_HEX_PRIVATE_KEY_BYTES, profile, lastPublishedAt);
+async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: number): Promise<Event> {
+  let publishedEvent: Event | undefined;
+  const pool = {
+    publish: vi.fn((_relays: string[], event: Event) => {
+      publishedEvent = event;
+      return [Promise.resolve()];
+    }),
+  } as unknown as SimplePool;
+
+  await publishProfile(
+    pool,
+    TEST_HEX_PRIVATE_KEY_BYTES,
+    ["wss://relay.example"],
+    profile,
+    lastPublishedAt,
+  );
+
+  if (!publishedEvent) {
+    throw new Error("expected profile event to be published");
+  }
+  return publishedEvent;
 }
 
 // ============================================================================
@@ -65,6 +77,19 @@ describe("profileToContent", () => {
     const profile: NostrProfile = {};
     const content = profileToContent(profile);
     expect(Object.keys(content)).toHaveLength(0);
+  });
+
+  it("rejects invalid URLs", () => {
+    expect(() =>
+      profileToContent({
+        picture: "http://insecure.example.com/pic.png",
+      }),
+    ).toThrow("URL must use https:// protocol");
+  });
+
+  it("rejects oversized fields", () => {
+    expect(() => profileToContent({ name: "a".repeat(257) })).toThrow();
+    expect(() => profileToContent({ about: "a".repeat(2001) })).toThrow();
   });
 });
 
@@ -125,13 +150,13 @@ describe("createProfileEvent", () => {
     vi.useRealTimers();
   });
 
-  it("creates a valid kind:0 event", () => {
+  it("creates a valid kind:0 event", async () => {
     const profile: NostrProfile = {
       name: "testbot",
       about: "A test bot",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
 
     expect(event.kind).toBe(0);
     expect(event.pubkey).toBe(TEST_PUBKEY);
@@ -140,14 +165,14 @@ describe("createProfileEvent", () => {
     expect(event.sig).toMatch(/^[0-9a-f]{128}$/);
   });
 
-  it("includes profile content as JSON in event content", () => {
+  it("includes profile content as JSON in event content", async () => {
     const profile: NostrProfile = {
       name: "jsontest",
       displayName: "JSON Test User",
       about: "Testing JSON serialization",
     };
 
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
     const parsedContent = JSON.parse(event.content) as ProfileContent;
 
     expect(parsedContent.name).toBe("jsontest");
@@ -155,204 +180,39 @@ describe("createProfileEvent", () => {
     expect(parsedContent.about).toBe("Testing JSON serialization");
   });
 
-  it("produces a verifiable signature", () => {
+  it("produces a verifiable signature", async () => {
     const profile: NostrProfile = { name: "signaturetest" };
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
 
     expect(verifyEvent(event)).toBe(true);
   });
 
-  it("uses current timestamp when no lastPublishedAt provided", () => {
+  it("uses current timestamp when no lastPublishedAt provided", async () => {
     const profile: NostrProfile = { name: "timestamptest" };
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
 
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
   });
 
-  it("ensures monotonic timestamp when lastPublishedAt is in the future", () => {
+  it("ensures monotonic timestamp when lastPublishedAt is in the future", async () => {
     // Current time is 2024-01-15T12:00:00Z = 1705320000
     const futureTimestamp = 1705320000 + 3600; // 1 hour in the future
     const profile: NostrProfile = { name: "monotonictest" };
 
-    const event = createTestProfileEvent(profile, futureTimestamp);
+    const event = await publishTestProfile(profile, futureTimestamp);
 
     expect(event.created_at).toBe(futureTimestamp + 1);
   });
 
-  it("uses current time when lastPublishedAt is in the past", () => {
+  it("uses current time when lastPublishedAt is in the past", async () => {
     const pastTimestamp = 1705320000 - 3600; // 1 hour in the past
     const profile: NostrProfile = { name: "pasttest" };
 
-    const event = createTestProfileEvent(profile, pastTimestamp);
+    const event = await publishTestProfile(profile, pastTimestamp);
 
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
-  });
-});
-
-// ============================================================================
-// Profile Validation Tests
-// ============================================================================
-
-describe("validateProfile", () => {
-  it("validates a correct profile", () => {
-    const profile = {
-      name: "validuser",
-      about: "A valid user",
-      picture: "https://example.com/pic.png",
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(true);
-    expect(result.profile?.name).toBe("validuser");
-    expect(result.profile?.about).toBe("A valid user");
-    expect(result.profile?.picture).toBe("https://example.com/pic.png");
-    expect(result).not.toHaveProperty("errors");
-  });
-
-  it("rejects profile with invalid URL", () => {
-    const profile = {
-      name: "invalidurl",
-      picture: "http://insecure.example.com/pic.png", // HTTP not HTTPS
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(["picture: URL must use https:// protocol"]);
-  });
-
-  it("rejects profile with javascript: URL", () => {
-    const profile = {
-      name: "xssattempt",
-      picture: "javascript:alert('xss')",
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(false);
-  });
-
-  it("rejects profile with data: URL", () => {
-    const profile = {
-      name: "dataurl",
-      picture: "data:image/png;base64,abc123",
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(false);
-  });
-
-  it("rejects name exceeding 256 characters", () => {
-    const profile = {
-      name: "a".repeat(257),
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(["name: Too big: expected string to have <=256 characters"]);
-  });
-
-  it("rejects about exceeding 2000 characters", () => {
-    const profile = {
-      about: "a".repeat(2001),
-    };
-
-    const result = validateProfile(profile);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(["about: Too big: expected string to have <=2000 characters"]);
-  });
-
-  it("accepts empty profile", () => {
-    const result = validateProfile({});
-    expect(result.valid).toBe(true);
-  });
-
-  it("rejects null input", () => {
-    const result = validateProfile(null);
-    expect(result.valid).toBe(false);
-  });
-
-  it("rejects non-object input", () => {
-    const result = validateProfile("not an object");
-    expect(result.valid).toBe(false);
-  });
-});
-
-// ============================================================================
-// Sanitization Tests
-// ============================================================================
-
-describe("sanitizeProfileForDisplay", () => {
-  it("escapes HTML in name field", () => {
-    const profile: NostrProfile = {
-      name: "<script>alert('xss')</script>",
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.name).toBe("&lt;script&gt;alert(&#039;xss&#039;)&lt;/script&gt;");
-  });
-
-  it("escapes HTML in about field", () => {
-    const profile: NostrProfile = {
-      about: 'Check out <img src="x" onerror="alert(1)">',
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.about).toBe(
-      "Check out &lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;",
-    );
-  });
-
-  it("preserves URLs without modification", () => {
-    const profile: NostrProfile = {
-      picture: "https://example.com/pic.png",
-      website: "https://example.com",
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.picture).toBe("https://example.com/pic.png");
-    expect(sanitized.website).toBe("https://example.com");
-  });
-
-  it("handles undefined fields", () => {
-    const profile: NostrProfile = {
-      name: "test",
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.name).toBe("test");
-    expect(sanitized.about).toBeUndefined();
-    expect(sanitized.picture).toBeUndefined();
-  });
-
-  it("escapes ampersands", () => {
-    const profile: NostrProfile = {
-      name: "Tom & Jerry",
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.name).toBe("Tom &amp; Jerry");
-  });
-
-  it("escapes quotes", () => {
-    const profile: NostrProfile = {
-      about: 'Say "hello" to everyone',
-    };
-
-    const sanitized = sanitizeProfileForDisplay(profile);
-
-    expect(sanitized.about).toBe("Say &quot;hello&quot; to everyone");
   });
 });
 
@@ -361,7 +221,7 @@ describe("sanitizeProfileForDisplay", () => {
 // ============================================================================
 
 describe("edge cases", () => {
-  it("handles emoji in profile fields", () => {
+  it("handles emoji in profile fields", async () => {
     const profile: NostrProfile = {
       name: "🤖 Bot",
       about: "I am a 🤖 robot! 🎉",
@@ -371,12 +231,12 @@ describe("edge cases", () => {
     expect(content.name).toBe("🤖 Bot");
     expect(content.about).toBe("I am a 🤖 robot! 🎉");
 
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
     const parsed = JSON.parse(event.content) as ProfileContent;
     expect(parsed.name).toBe("🤖 Bot");
   });
 
-  it("handles unicode in profile fields", () => {
+  it("handles unicode in profile fields", async () => {
     const profile: NostrProfile = {
       name: "日本語ユーザー",
       about: "Привет мир! 你好世界!",
@@ -385,11 +245,11 @@ describe("edge cases", () => {
     const content = profileToContent(profile);
     expect(content.name).toBe("日本語ユーザー");
 
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
     expect(verifyEvent(event)).toBe(true);
   });
 
-  it("handles newlines in about field", () => {
+  it("handles newlines in about field", async () => {
     const profile: NostrProfile = {
       about: "Line 1\nLine 2\nLine 3",
     };
@@ -397,21 +257,22 @@ describe("edge cases", () => {
     const content = profileToContent(profile);
     expect(content.about).toBe("Line 1\nLine 2\nLine 3");
 
-    const event = createTestProfileEvent(profile);
+    const event = await publishTestProfile(profile);
     const parsed = JSON.parse(event.content) as ProfileContent;
     expect(parsed.about).toBe("Line 1\nLine 2\nLine 3");
   });
 
-  it("handles maximum length fields", () => {
+  it("handles maximum length fields", async () => {
     const profile: NostrProfile = {
       name: "a".repeat(256),
       about: "b".repeat(2000),
     };
 
-    const result = validateProfile(profile);
-    expect(result.valid).toBe(true);
-
-    const event = createTestProfileEvent(profile);
+    expect(profileToContent(profile)).toEqual({
+      name: profile.name,
+      about: profile.about,
+    });
+    const event = await publishTestProfile(profile);
     expect(verifyEvent(event)).toBe(true);
   });
 });

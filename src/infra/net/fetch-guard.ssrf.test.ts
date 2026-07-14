@@ -11,7 +11,8 @@ import {
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
 } from "./undici-global-dispatcher.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {

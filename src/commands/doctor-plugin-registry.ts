@@ -57,7 +57,7 @@ type PluginRegistryDoctorNoteLogger = {
   warn: (message: string) => void;
 };
 
-export type PluginRegistryHealthIssue =
+type PluginRegistryHealthIssue =
   | {
       kind: "registry-missing-or-stale";
       path: string;

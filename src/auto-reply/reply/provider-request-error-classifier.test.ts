@@ -1,14 +1,19 @@
 /** Tests provider request error classification for retry/fallback decisions. */
 import { describe, expect, it } from "vitest";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   classifyProviderRequestError,
-  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
-  PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE,
-  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
+
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
+const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
+  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
 
 describe("provider request error classifier", () => {
   it("classifies provider HTTP 401 authentication failures", () => {

@@ -1,10 +1,10 @@
 // Control UI tests cover usage metrics behavior.
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { render } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPeakErrorHours,
-  buildUsageMosaicStats,
   formatTokens,
-  getHourAndWeekdayForUtcQuarterBucket,
+  renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import type { UsageSessionEntry } from "./types.ts";
@@ -63,11 +63,11 @@ function peakErrorSummaries(result: ReturnType<typeof buildPeakErrorHours>) {
   return result.map(({ value, sub }) => ({ value, sub }));
 }
 
-describe("buildPeakErrorHours", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
+describe("buildPeakErrorHours", () => {
   it("maps UTC quarter-hour buckets to correct hours in UTC mode", () => {
     // quarterIndex 0  → 00:00-00:14 UTC → hour 0
     // quarterIndex 4  → 01:00-01:14 UTC → hour 1
@@ -308,39 +308,52 @@ describe("usage mosaic token buckets", () => {
       },
     }) as unknown as UsageSessionEntry;
 
-  it("maps UTC quarter-hour buckets and rejects invalid bucket coordinates", () => {
-    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 40, "utc")).toEqual({
-      hour: 10,
-      weekday: 0,
-    });
-    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", -1, "utc")).toBeNull();
-    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 96, "utc")).toBeNull();
-    expect(getHourAndWeekdayForUtcQuarterBucket("2026-13-01", 40, "utc")).toBeNull();
-    expect(getHourAndWeekdayForUtcQuarterBucket("not-a-date", 40, "utc")).toBeNull();
+  it("renders precise quarter-hour buckets in the correct UTC hour", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells).toHaveLength(24);
+    expect(cells[10]?.title).toContain("10.0K");
+    expect(cells[11]?.title).toContain("0");
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
   });
 
-  it("uses local timezone mapping for UTC quarter-hour buckets", () => {
+  it("renders precise UTC buckets in their local hour", () => {
     vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
       return (this.getUTCHours() + 8) % 24;
     });
     vi.spyOn(Date.prototype, "getDay").mockReturnValue(1);
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 68, totalTokens: 10_000 },
+    ]);
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "local", [], vi.fn()), container);
 
-    expect(getHourAndWeekdayForUtcQuarterBucket("2026-02-01", 68, "local")).toEqual({
-      hour: 1,
-      weekday: 1,
-    });
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[1]?.title).toContain("10.0K");
+    expect(cells[17]?.title).toContain("0");
   });
 
-  it("uses precise token buckets instead of spreading session totals across the session span", () => {
+  it("ignores invalid quarter-hour coordinates in the rendered mosaic", () => {
     const session = makeSessionWithTokenBuckets([
       { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+      { date: "2026-13-01", quarterIndex: 40, totalTokens: 90_000 },
+      { date: "2026-02-01", quarterIndex: 96, totalTokens: 80_000 },
     ]);
+    if (session.usage) {
+      session.usage.totalTokens = 10_000;
+    }
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
 
-    const stats = buildUsageMosaicStats([session], "utc");
-
-    expect(stats.totalTokens).toBe(10_000);
-    expect(stats.hourTotals[10]).toBe(10_000);
-    expect(stats.hourTotals[11]).toBe(0);
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[10]?.title).toContain("10.0K");
+    expect([...cells].filter((cell) => !cell.title.includes("0 tokens"))).toHaveLength(1);
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
   });
 
   it("filters selected hours by precise token buckets before falling back to session span", () => {

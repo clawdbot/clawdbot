@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -74,8 +75,7 @@ const {
   dispatchInboundMessageWithBufferedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
-const { clearReplyUsageStateForTest, recordReplyUsageState } =
-  await import("./reply/reply-usage-state.js");
+const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
@@ -113,7 +113,6 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearReplyUsageStateForTest();
     hoisted.finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
     hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
       channelId: "threads",

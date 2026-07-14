@@ -1,9 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes config version metadata and compatibility comparisons.
-import {
-  comparePrereleaseIdentifiers,
-  normalizeLegacyDotBetaVersion,
-} from "../infra/semver-compare.js";
+import { compare as compareSemver, parse as parseSemver } from "semver";
+import { normalizeLegacyDotBetaVersion } from "../infra/semver.js";
 
 type OpenClawVersion = {
   major: number;
@@ -13,26 +10,29 @@ type OpenClawVersion = {
   prerelease: string[] | null;
 };
 
-const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
-
 /** Parses stable, prerelease, and legacy dot-beta OpenClaw versions. */
-export function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
+function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
   if (!raw) {
     return null;
   }
   const normalized = normalizeLegacyDotBetaVersion(raw.trim());
-  const match = normalized.match(VERSION_RE);
-  if (!match) {
+  const parsed = parseSemver(normalized);
+  if (!parsed) {
     return null;
   }
-  const [, major, minor, patch, suffix] = match;
-  const revision = suffix && /^[0-9]+$/.test(suffix) ? Number.parseInt(suffix, 10) : null;
+  const revision =
+    parsed.prerelease.length === 1 && typeof parsed.prerelease[0] === "number"
+      ? parsed.prerelease[0]
+      : null;
   return {
-    major: Number.parseInt(expectDefined(major, "version major"), 10),
-    minor: Number.parseInt(expectDefined(minor, "version minor"), 10),
-    patch: Number.parseInt(expectDefined(patch, "version patch"), 10),
+    major: parsed.major,
+    minor: parsed.minor,
+    patch: parsed.patch,
     revision,
-    prerelease: suffix && revision == null ? suffix.split(".").filter(Boolean) : null,
+    prerelease:
+      parsed.prerelease.length > 0 && revision == null
+        ? parsed.prerelease.map((part) => String(part))
+        : null,
   };
 }
 
@@ -44,7 +44,7 @@ export function normalizeOpenClawVersionBase(raw: string | null | undefined): st
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
-export function isSameOpenClawStableFamily(
+function isSameOpenClawStableFamily(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {
@@ -72,35 +72,26 @@ export function compareOpenClawVersions(
   if (!parsedA || !parsedB) {
     return null;
   }
-  if (parsedA.major !== parsedB.major) {
-    return parsedA.major < parsedB.major ? -1 : 1;
+  const sameCore =
+    parsedA.major === parsedB.major &&
+    parsedA.minor === parsedB.minor &&
+    parsedA.patch === parsedB.patch;
+  // Numeric suffixes are shipped OpenClaw correction releases, ordered after the base stable.
+  if (sameCore && (parsedA.revision != null || parsedB.revision != null)) {
+    const rankA = releaseRank(parsedA);
+    const rankB = releaseRank(parsedB);
+    if (rankA !== rankB) {
+      return rankA < rankB ? -1 : 1;
+    }
+    if (
+      parsedA.revision != null &&
+      parsedB.revision != null &&
+      parsedA.revision !== parsedB.revision
+    ) {
+      return parsedA.revision < parsedB.revision ? -1 : 1;
+    }
   }
-  if (parsedA.minor !== parsedB.minor) {
-    return parsedA.minor < parsedB.minor ? -1 : 1;
-  }
-  if (parsedA.patch !== parsedB.patch) {
-    return parsedA.patch < parsedB.patch ? -1 : 1;
-  }
-
-  const rankA = releaseRank(parsedA);
-  const rankB = releaseRank(parsedB);
-  if (rankA !== rankB) {
-    return rankA < rankB ? -1 : 1;
-  }
-
-  if (
-    parsedA.revision != null &&
-    parsedB.revision != null &&
-    parsedA.revision !== parsedB.revision
-  ) {
-    return parsedA.revision < parsedB.revision ? -1 : 1;
-  }
-
-  if (parsedA.prerelease || parsedB.prerelease) {
-    return comparePrereleaseIdentifiers(parsedA.prerelease, parsedB.prerelease);
-  }
-
-  return 0;
+  return compareSemver(formatComparableVersion(parsedA), formatComparableVersion(parsedB));
 }
 
 export function shouldWarnOnTouchedVersion(
@@ -135,4 +126,12 @@ function releaseRank(version: OpenClawVersion): number {
     return 2;
   }
   return 1;
+}
+
+function formatComparableVersion(version: OpenClawVersion): string {
+  const base = `${version.major}.${version.minor}.${version.patch}`;
+  if (version.revision != null) {
+    return `${base}-${version.revision}`;
+  }
+  return version.prerelease?.length ? `${base}-${version.prerelease.join(".")}` : base;
 }

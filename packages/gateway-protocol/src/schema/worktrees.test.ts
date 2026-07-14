@@ -20,6 +20,7 @@ describe("managed worktree protocol schemas", () => {
     expect(validateWorktreesRemoveParams({ id: "id", force: true })).toBe(true);
     expect(validateWorktreesGcParams({})).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", worktree: true })).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", catalogId: "claude" })).toBe(true);
     expect(
       Value.Check(SessionsCreateResultSchema, {
         ok: true,

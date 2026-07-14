@@ -1,15 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "./message-action-turn-capability.js";
-
-afterEach(() => {
-  resetMessageActionTurnCapabilitiesForTest();
-});
 
 describe("message action turn capability", () => {
   it("admits channel ingress but rejects Gateway and internal run sources", () => {

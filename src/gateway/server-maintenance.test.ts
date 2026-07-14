@@ -207,7 +207,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     await Promise.resolve();
 
-    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function) });
+    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function), limits: {} });
     stopMaintenanceTimers(timers);
   });
 

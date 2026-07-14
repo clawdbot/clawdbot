@@ -93,7 +93,7 @@ actor GatewayConnection {
 
     typealias EndpointProvider = @Sendable () async throws -> EndpointSnapshot
 
-    struct Route: Equatable {
+    struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
         fileprivate let url: URL
@@ -117,15 +117,10 @@ actor GatewayConnection {
 
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
-    struct ServerLease {
+    struct ServerLease: Sendable {
         fileprivate let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
-    }
-
-    struct SessionRoutingIdentity: Equatable {
-        let defaultAgentID: String
-        let contract: String
     }
 
     enum Method: String {
@@ -155,6 +150,8 @@ actor GatewayConnection {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case skillsStatus = "skills.status"
+        case skillsSearch = "skills.search"
+        case skillsDetail = "skills.detail"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
@@ -521,6 +518,30 @@ extension GatewayConnection {
         try await self.request(method: method.rawValue, params: params, timeoutMs: timeoutMs)
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            retryTransportFailures: retryTransportFailures)
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentRoute route: Route,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
     func requestRaw(
         method: String,
         params: [String: AnyCodable]? = nil,
@@ -535,6 +556,25 @@ extension GatewayConnection {
         timeoutMs: Double? = nil) async throws -> T
     {
         let data = try await requestRaw(method: method, params: params, timeoutMs: timeoutMs)
+        do {
+            return try self.decoder.decode(T.self, from: data)
+        } catch {
+            throw GatewayDecodingError(method: method.rawValue, message: error.localizedDescription)
+        }
+    }
+
+    func requestDecoded<T: Decodable>(
+        method: Method,
+        params: [String: AnyCodable]? = nil,
+        timeoutMs: Double? = nil,
+        ifCurrentRoute route: Route) async throws -> T
+    {
+        let data = try await self.request(
+            method: method.rawValue,
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: true)
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {
@@ -597,6 +637,18 @@ extension GatewayConnection {
     /// recover before onboarding freezes the successful physical connection.
     func acquireServerLease() async throws -> ServerLease {
         try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    /// Captures the currently connected physical socket without probing or
+    /// reconnecting. Queued mutations use this so waiting cannot retarget them.
+    func captureServerLease() async -> ServerLease? {
+        guard let route = await self.captureRoute(),
+              let client = self.client,
+              let socketGeneration = self.activeSocketGeneration
+        else { return nil }
+        let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return lease
     }
 
     private func acquireServerLease(
@@ -755,23 +807,13 @@ extension GatewayConnection {
             self.lastSnapshot != nil
     }
 
-    func sessionRoutingIdentity(ifCurrentRoute route: Route) async throws -> SessionRoutingIdentity {
+    func sessionRoutingIdentity(
+        ifCurrentRoute route: Route) async throws -> OpenClawChatSessionRoutingIdentity
+    {
         let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: 15000,
+            OpenClawChatGatewayRequests.agentsList(),
             ifCurrentRoute: route)
-        return try Self.decodeSessionRoutingIdentity(data)
-    }
-
-    static func decodeSessionRoutingIdentity(_ data: Data) throws -> SessionRoutingIdentity {
-        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        guard let contract = OpenClawChatSessionRoutingContract.make(
-            scope: result.scope.value as? String,
-            mainKey: result.mainkey,
-            defaultAgentID: result.defaultid)
-        else { throw CancellationError() }
-        return SessionRoutingIdentity(defaultAgentID: result.defaultid, contract: contract)
+        return try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
     }
 
     func configuredInferenceModel(
@@ -779,9 +821,7 @@ extension GatewayConnection {
         timeoutMs: Double = 15000) async throws -> String?
     {
         let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: timeoutMs,
+            OpenClawChatGatewayRequests.agentsList(timeoutMs: timeoutMs),
             ifCurrentRoute: route)
         guard await self.isCurrentRoute(route) else {
             throw CancellationError()
@@ -1272,6 +1312,10 @@ extension GatewayConnection {
         if let cached = cachedMainSessionKey() {
             return cached
         }
+        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
             let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
@@ -1454,26 +1498,20 @@ extension GatewayConnection {
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
-        if let maxChars {
-            params["maxChars"] = AnyCodable(maxChars)
-        }
-        let timeout = timeoutMs.map { Double($0) }
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            limit: limit,
+            maxChars: maxChars,
+            timeoutMs: timeoutMs)
         if let route {
-            let data = try await request(
-                method: Method.chatHistory.rawValue,
-                params: params,
-                timeoutMs: timeout,
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route)
             return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
         }
-        return try await self.requestDecoded(method: .chatHistory, params: params, timeoutMs: timeout)
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
     }
 
     func chatSend(
@@ -1490,54 +1528,26 @@ extension GatewayConnection {
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(resolvedKey),
-            "message": AnyCodable(message),
-            "idempotencyKey": AnyCodable(idempotencyKey),
-        ]
-        if let runTimeoutMs {
-            params["timeoutMs"] = AnyCodable(runTimeoutMs)
-        }
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let expectedSessionRoutingContract = expectedSessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionRoutingContract.isEmpty
-        {
-            params["expectedSessionRoutingContract"] = AnyCodable(expectedSessionRoutingContract)
-        }
-        if let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !thinking.isEmpty
-        {
-            params["thinking"] = AnyCodable(thinking)
-        }
-
-        if !attachments.isEmpty {
-            let encoded = attachments.map { att in
-                [
-                    "type": att.type,
-                    "mimeType": att.mimeType,
-                    "fileName": att.fileName,
-                    "content": att.content,
-                ]
-            }
-            params["attachments"] = AnyCodable(encoded)
-        }
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            expectedSessionRoutingContract: expectedSessionRoutingContract,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments,
+            runTimeoutMs: runTimeoutMs,
+            requestTimeoutMs: requestTimeoutMs)
 
         if let route {
-            let data = try await request(
-                method: Method.chatSend.rawValue,
-                params: params,
-                timeoutMs: Double(requestTimeoutMs),
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
             return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
         }
-        return try await self.requestDecoded(
-            method: .chatSend,
-            params: params,
-            timeoutMs: Double(requestTimeoutMs))
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {

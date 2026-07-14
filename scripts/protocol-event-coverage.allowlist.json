@@ -20,7 +20,8 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
-    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface."
+    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
+    "node.invoke.cancel": "Cancel targets streaming agent.cli.claude.run.v1 invokes; app nodes never advertise agent runs, so no cancel can address them."
   },
   "android": {
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
@@ -43,6 +44,7 @@
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on Android.",
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
-    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface."
+    "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
+    "node.invoke.cancel": "Cancel targets streaming agent.cli.claude.run.v1 invokes; app nodes never advertise agent runs, so no cancel can address them."
   }
 }

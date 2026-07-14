@@ -198,7 +198,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("sets ReplyToId from the inbound Signal timestamp", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -246,7 +246,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   ])("falls back to $name timestamp for native reply metadata", async ({ envelope }) => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -269,7 +269,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("uses editMessage.targetSentTimestamp as the native reply target", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -319,7 +319,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         cfg: {
           messages: { inbound: { debounceMs: 10 } },
           channels: { signal: { replyToMode: "batched" } },
-        } as any,
+        } as OpenClawConfig,
         deliverReplies: deliverRepliesMock,
         historyLimit: 0,
       }),
@@ -375,7 +375,7 @@ describe("signal createSignalEventHandler inbound context", () => {
           session: { dmScope: "per-channel-peer" },
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -416,7 +416,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("keeps direct chat text in BodyForAgent while Body remains the legacy envelope", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -475,7 +475,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -551,7 +551,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               },
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-          } as any,
+          } as OpenClawConfig,
           historyLimit: 0,
         }),
       );
@@ -626,7 +626,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               },
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-          } as any,
+          } as OpenClawConfig,
           historyLimit: 0,
         }),
       );
@@ -692,7 +692,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -758,7 +758,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -814,7 +814,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         sendReadReceipts: true,
         historyLimit: 0,
       }),
@@ -866,7 +866,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -900,7 +900,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -929,7 +929,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -969,7 +969,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               reactionLevel: "off",
             },
           },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1026,7 +1026,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               reactionLevel: "ack",
             },
           },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1080,7 +1080,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               },
             },
           },
-        } as any,
+        } as OpenClawConfig,
         accountId: "work",
         historyLimit: 0,
       }),
@@ -1114,7 +1114,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1162,7 +1162,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1219,7 +1219,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1272,7 +1272,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               groups: { "*": { requireMention: false } },
             },
           },
-        } as any,
+        } as OpenClawConfig,
         groupPolicy: "allowlist",
         groupAllowFrom: ["g1"],
         historyLimit: 0,
@@ -1328,7 +1328,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               groups: { "*": { requireMention: true } },
             },
           },
-        } as any,
+        } as OpenClawConfig,
         groupPolicy: "allowlist",
         groupAllowFrom: ["g1"],
         historyLimit: 0,
@@ -1380,7 +1380,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1433,7 +1433,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1479,7 +1479,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as any,
+        } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -1523,7 +1523,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     ]);
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         groupHistories,
         historyLimit: 5,
       }),
@@ -1823,7 +1823,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     };
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: cfg as any,
+        cfg: cfg as OpenClawConfig,
         dmPolicy: "allowlist",
         allowFrom: [],
         reactionMode: "all",

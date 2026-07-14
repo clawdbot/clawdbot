@@ -605,7 +605,6 @@ function mergeReplyDirectiveResults(
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    mediaUrl: mediaUrls[0] ?? first.mediaUrl ?? second.mediaUrl,
     replyToId: second.replyToId ?? first.replyToId,
     replyToCurrent: first.replyToCurrent || second.replyToCurrent,
     replyToTag: first.replyToTag || second.replyToTag,

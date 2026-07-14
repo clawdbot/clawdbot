@@ -441,7 +441,7 @@ function describeThemeLabel(value: string | undefined) {
   return truncateUtf16Safe(normalized, 80);
 }
 
-export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
+function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
   const normalized = normalizePastedThemeInput(input);
   let parsed: URL;
   try {
@@ -485,7 +485,7 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
   }
 }
 
-export function normalizeImportedCustomTheme(
+function normalizeImportedCustomTheme(
   payload: unknown,
   resolution: Pick<TweakcnThemeResolution, "sourceUrl" | "themeId">,
 ): ImportedCustomTheme {
@@ -601,7 +601,7 @@ export async function importCustomThemeFromUrl(
   }
 }
 
-export function buildCustomThemeStyles(theme: ImportedCustomTheme) {
+function buildCustomThemeStyles(theme: ImportedCustomTheme) {
   const light = normalizeStoredTokenMap(theme.light);
   const dark = normalizeStoredTokenMap(theme.dark);
   if (!light || !dark) {

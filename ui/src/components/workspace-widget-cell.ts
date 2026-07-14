@@ -51,7 +51,7 @@ export type WorkspaceCustomWidgetContext = {
   onReject: (widget: WorkspaceWidget) => void;
 };
 
-export type WorkspaceWidgetCellProps = {
+type WorkspaceWidgetCellProps = {
   widget: WorkspaceWidget;
   /** Resolved binding value for the primary binding, or an error to surface. */
   binding: WorkspaceBindingResult | null;
@@ -71,7 +71,7 @@ export type WorkspaceWidgetCellProps = {
  * (#8). The suffix is redundant with the AI/provenance chip and only causes
  * truncation; the full title is still exposed via the `title=` attribute.
  */
-export function displayWidgetTitle(title: string): string {
+function displayWidgetTitle(title: string): string {
   return title.replace(/\s*\(custom\)\s*$/iu, "").trim() || title;
 }
 
@@ -135,7 +135,7 @@ function renderMenu(
  * re-thrown so the cell error boundary shows it inline; unknown/custom kinds
  * render a placeholder (L5 replaces custom with the sandboxed iframe host).
  */
-export function renderBuiltinWidget(
+function renderBuiltinWidget(
   widget: WorkspaceWidget,
   binding: WorkspaceBindingResult | null,
   ctx: BuiltinWidgetContext,
@@ -171,7 +171,7 @@ export function renderBuiltinWidget(
  * - `pending`  → a placeholder card with operator-only Approve/Reject.
  * - `rejected` / unknown → a neutral placeholder; NO iframe is constructed.
  */
-export function renderCustomWidget(
+function renderCustomWidget(
   widget: WorkspaceWidget,
   custom: WorkspaceCustomWidgetContext,
 ): TemplateResult {
@@ -238,7 +238,7 @@ export function renderCustomWidget(
  * broken widget, a bad binding) is caught and rendered as an error card in THIS
  * cell — siblings and the shell keep rendering (spec-30 acceptance criterion).
  */
-export function renderWidgetBody(
+function renderWidgetBody(
   widget: WorkspaceWidget,
   binding: WorkspaceBindingResult | null,
   ctx: BuiltinWidgetContext,

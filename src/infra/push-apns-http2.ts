@@ -23,20 +23,20 @@ export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
 const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
 const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
-export type ApnsResponseBodyCapture = {
+type ApnsResponseBodyCapture = {
   text: string;
   bytes: number;
   truncated: boolean;
 };
 
 /** Parameters for opening an APNs HTTP/2 client session. */
-export type ConnectApnsHttp2SessionParams = {
+type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;
 };
 
 /** Parameters for validating APNs reachability through an explicit proxy. */
-export type ProbeApnsHttp2ReachabilityViaProxyParams = {
+type ProbeApnsHttp2ReachabilityViaProxyParams = {
   authority: string;
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
@@ -44,7 +44,7 @@ export type ProbeApnsHttp2ReachabilityViaProxyParams = {
 };
 
 /** APNs probe response used to prove a proxy tunneled to Apple. */
-export type ProbeApnsHttp2ReachabilityViaProxyResult = {
+type ProbeApnsHttp2ReachabilityViaProxyResult = {
   status: number;
   body: string;
   /** Raw response headers from APNs. Includes apns-id when the connection was truly tunneled to Apple. */

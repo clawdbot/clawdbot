@@ -47,7 +47,7 @@ const DISCORD_PRECONNECT_ERROR_CODES = new Set([
 ]);
 const log = createSubsystemLogger("discord/retry");
 
-export type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
+type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
 
 export type DiscordRetryRunner = <T>(
   fn: () => Promise<T>,

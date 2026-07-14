@@ -6,13 +6,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { normalizeMatrixApproverId } from "./approval-ids.js";
 import {
   getMatrixExecApprovalApprovers,
   isMatrixExecApprovalApprover,
   isMatrixExecApprovalAuthorizedSender,
   isMatrixExecApprovalClientEnabled,
   isMatrixExecApprovalTargetRecipient,
-  normalizeMatrixApproverId,
   resolveMatrixExecApprovalTarget,
   shouldHandleMatrixExecApprovalRequest,
   shouldSuppressLocalMatrixExecApprovalPrompt,

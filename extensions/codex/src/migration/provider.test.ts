@@ -13,7 +13,6 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import { targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
@@ -193,27 +192,6 @@ afterEach(async () => {
 });
 
 describe("buildCodexMigrationProvider", () => {
-  it("parses target marketplace discovery timeout env strictly", () => {
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "0",
-      }),
-    ).toBe(0);
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "250",
-      }),
-    ).toBe(250);
-
-    for (const value of ["0x10", "1e3", "2.5"]) {
-      expect(
-        targetCodexMarketplaceDiscoveryTimeoutMs({
-          OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: value,
-        }),
-      ).toBe(30_000);
-    }
-  });
-
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });

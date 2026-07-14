@@ -4,6 +4,7 @@ import {
   bytesToBase64,
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
+  RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
 } from "./realtime-talk-audio.ts";
 import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
@@ -63,7 +64,7 @@ function isGemini31LiveModel(model: string | undefined): boolean {
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
 }
 
-export function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
+function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
   let url: URL;
   try {
     url = new URL(session.websocketUrl);
@@ -93,8 +94,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
-  private inputSource: MediaStreamAudioSourceNode | null = null;
-  private inputProcessor: ScriptProcessorNode | null = null;
+  private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
   private pendingCalls = new Map<string, PendingFunctionCall>();
   private readonly consultAbortControllers = new Set<AbortController>();
@@ -171,10 +171,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     this.consultAbortControllers.clear();
     this.pendingCalls.clear();
-    this.inputProcessor?.disconnect();
-    this.inputProcessor = null;
-    this.inputSource?.disconnect();
-    this.inputSource = null;
+    this.inputPump.stop();
     this.inputMeter?.stop();
     this.inputMeter = null;
     this.media?.getTracks().forEach((track) => track.stop());
@@ -192,13 +189,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed || !this.media || !this.inputContext) {
       return;
     }
-    this.inputSource = this.inputContext.createMediaStreamSource(this.media);
-    this.inputProcessor = this.inputContext.createScriptProcessor(4096, 1, 1);
-    this.inputProcessor.onaudioprocess = (event) => {
+    this.inputPump.start(this.media, this.inputContext, (samples) => {
       if (this.ws?.readyState !== WebSocket.OPEN) {
         return;
       }
-      const samples = event.inputBuffer.getChannelData(0);
       const pcm = floatToPcm16(samples);
       this.send({
         realtimeInput: {
@@ -208,9 +202,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           },
         },
       });
-    };
-    this.inputSource.connect(this.inputProcessor);
-    this.inputProcessor.connect(this.inputContext.destination);
+    });
   }
 
   private send(message: unknown): boolean {

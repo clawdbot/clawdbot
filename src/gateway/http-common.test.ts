@@ -16,7 +16,6 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendText,
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
@@ -120,16 +119,6 @@ describe("sendJson", () => {
     expect(res.statusCode).toBe(201);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
-  });
-});
-
-describe("sendText", () => {
-  it("sets status, content-type and writes plain-text body", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendText(res, 202, "hello");
-    expect(res.statusCode).toBe(202);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-    expect(end).toHaveBeenCalledWith("hello");
   });
 });
 

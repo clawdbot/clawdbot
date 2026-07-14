@@ -194,10 +194,7 @@ function buildSlackRenderOptions() {
   };
 }
 
-export function markdownToSlackMrkdwn(
-  markdown: string,
-  options: SlackMarkdownOptions = {},
-): string {
+function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
   const ir = markdownToIR(markdown ?? "", {
     linkify: false,
     autolink: false,

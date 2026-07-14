@@ -414,7 +414,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames,
-    createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       const agentResult = toAgentToolResult({
@@ -431,13 +431,18 @@ export async function materializeBundleMcpToolsForRun(params: {
           serverName: tool.serverName,
           toolName: tool.toolName,
           uiResourceUri: tool.uiResourceUri,
+          toolCallId,
           toolInput: input,
           toolResult: result,
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
         if (view) {
-          (agentResult.details as Record<string, unknown>).mcpAppPreview =
-            buildMcpAppCanvasPayload(view);
+          (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
+            {
+              ...view,
+              ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
+            },
+          );
         }
       }
       return agentResult;

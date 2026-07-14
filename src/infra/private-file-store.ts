@@ -15,7 +15,7 @@ export function privateFileStore(rootDir: string): FileStore {
   return fileStore({ rootDir, private: true });
 }
 
-export type PrivateFileStoreSync = FileStoreSync;
+type PrivateFileStoreSync = FileStoreSync;
 
 /** Create a sync private file store rooted at `rootDir`. */
 export function privateFileStoreSync(rootDir: string): PrivateFileStoreSync {

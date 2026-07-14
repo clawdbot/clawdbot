@@ -8,7 +8,7 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { loadChannelOutboundAdapter } from "../outbound/load.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.public.js";
 
 const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
 

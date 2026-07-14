@@ -8,42 +8,53 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 19;
-const MIN_NODE_23_MINOR = 11;
+const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
+const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
+const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
 const RECOMMENDED_NODE_MAJOR = 24;
-const SUPPORTED_NODE_RANGE = ">=22.19.0 <23 or >=23.11.0";
-const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
+  const [majorRaw = "0", minorRaw = "0", patchRaw = "0"] = rawVersion.split(".");
   return {
     major: Number(majorRaw),
     minor: Number(minorRaw),
+    patch: Number(patchRaw),
   };
 };
 
+const isAtLeastNodeVersion = (version, minimum) => {
+  if (version.major !== minimum.major) {
+    return version.major > minimum.major;
+  }
+  if (version.minor !== minimum.minor) {
+    return version.minor > minimum.minor;
+  }
+  return version.patch >= minimum.patch;
+};
+
 const isSupportedNodeVersion = (version) => {
-  if (version.major === MIN_NODE_MAJOR) {
-    return version.minor >= MIN_NODE_MINOR;
+  if (version.major === MIN_NODE_22.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_22);
   }
-  if (version.major === 23) {
-    return version.minor >= MIN_NODE_23_MINOR;
+  if (version.major === MIN_NODE_24.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_24);
   }
-  return version.major > 23;
+  if (version.major === MIN_NODE_25.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_25);
+  }
+  return version.major > MIN_NODE_25.major;
 };
 
-const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
-  const version = parseNodeVersion(rawVersion);
-  return version.major === 24 && version.minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
-};
-
-const shouldSkipCompileCacheForWindowsNode24 = () =>
-  process.platform === "win32" &&
-  isNodeVersionAffectedByCompileCacheDeadlock(process.versions.node);
-
-const ensureSupportedNodeVersion = () => {
+const ensureSupportedRuntimeVersion = () => {
+  if (process.versions.bun) {
+    process.stderr.write(
+      "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.\n" +
+        `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
+    );
+    process.exit(1);
+  }
   if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
     return;
   }
@@ -58,7 +69,7 @@ const ensureSupportedNodeVersion = () => {
   process.exit(1);
 };
 
-ensureSupportedNodeVersion();
+ensureSupportedRuntimeVersion();
 
 if (tryOutputLauncherVersion(process.argv)) {
   process.exit(0);
@@ -213,9 +224,7 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  const needsDisabledCompileCacheRespawn =
-    isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
-  if (!needsDisabledCompileCacheRespawn) {
+  if (!isSourceCheckoutLauncher()) {
     return false;
   }
   if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -238,11 +247,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (
-    isSourceCheckoutLauncher() ||
-    isNodeCompileCacheDisabled() ||
-    shouldSkipCompileCacheForWindowsNode24()
-  ) {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
     return false;
   }
   if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
@@ -276,8 +281,7 @@ if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher() &&
-  !shouldSkipCompileCacheForWindowsNode24()
+  !isSourceCheckoutLauncher()
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());

@@ -217,6 +217,8 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
@@ -227,6 +229,8 @@ describe("command-execution-startup", () => {
       loadPlugins: true,
       pluginRegistry: { scope: "all" },
       skipConfigGuard: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
   });
 });

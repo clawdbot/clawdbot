@@ -25,7 +25,7 @@ export type MantisBeforeAfterOptions = {
   transport?: string;
 };
 
-export type MantisBeforeAfterResult = {
+type MantisBeforeAfterResult = {
   comparisonPath: string;
   manifestPath: string;
   outputDir: string;
@@ -453,7 +453,7 @@ async function runLane(params: {
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   await runCommand({
     command: "git",
-    args: ["worktree", "add", "--detach", worktreeDir, params.ref],
+    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
     runner: params.runner,
   });

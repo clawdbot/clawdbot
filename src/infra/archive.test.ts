@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
-import type { ArchiveSecurityError } from "./archive.js";
 import { extractArchive, resolvePackedRootDir } from "./archive.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
@@ -57,7 +56,7 @@ async function expectRejectedCode(promise: Promise<unknown>, expected: string | 
   try {
     await promise;
   } catch (error) {
-    const code = (error as Partial<ArchiveSecurityError>).code;
+    const code = (error as { code?: unknown }).code;
     if (typeof expected === "string") {
       expect(code).toBe(expected);
       return;
@@ -194,7 +193,7 @@ describe("archive utils", () => {
     });
   });
 
-  it("does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract", async () => {
+  it("does not clobber an out-of-destination file during a zip symlink-rebind race", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
       const outsideDir = path.join(workDir, "outside");
       await fs.mkdir(outsideDir, { recursive: true });
@@ -225,7 +224,7 @@ describe("archive utils", () => {
         });
       } catch (error) {
         rejected = true;
-        const code = (error as Partial<ArchiveSecurityError>).code;
+        const code = (error as { code?: unknown }).code;
         expect(String(code)).toMatch(/destination-symlink-traversal|not-file/);
       }
 

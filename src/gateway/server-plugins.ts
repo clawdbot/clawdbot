@@ -31,19 +31,18 @@ import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import { projectGatewayRuntimeNodes } from "./server-plugins-node-runtime.js";
 
 export {
   clearFallbackGatewayContext,
   setFallbackGatewayContext,
   setFallbackGatewayContextResolver,
 } from "./server-plugin-fallback-context.js";
-
-export function hasInProcessGatewayContext(): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
-}
+export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 
 type PluginSubagentOverridePolicy = {
   allowModelOverride: boolean;
+
   allowAnyModel: boolean;
   hasConfiguredAllowlist: boolean;
   allowedModels: Set<string>;
@@ -683,8 +682,9 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
                 (node as { connected?: unknown }).connected === true,
             )
           : nodes;
+      const projectedNodes = projectGatewayRuntimeNodes(filteredNodes);
       return {
-        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+        nodes: projectedNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
       };
     },
     async invoke(params) {

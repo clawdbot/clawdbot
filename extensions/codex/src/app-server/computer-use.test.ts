@@ -29,11 +29,13 @@ import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
-  testing,
   type CodexComputerUseStatus,
-  type CodexComputerUseRequest,
 } from "./computer-use.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+type CodexComputerUseRequest = NonNullable<
+  NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
+>;
 
 function expectStatusFields(
   status: CodexComputerUseStatus,
@@ -545,24 +547,6 @@ describe("Codex Computer Use setup", () => {
         mcpServerAvailable: true,
       },
     );
-  });
-
-  it("parses process trees so repair can stay scoped to the app-server child tree", () => {
-    const processes = testing.parsePsOutput(`
-      100 1 /Applications/Codex.app/Contents/MacOS/Codex app-server
-      101 100 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
-      102 1 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
-      103 101 helper
-    `);
-
-    expect(processes).toContainEqual({
-      pid: 101,
-      ppid: 100,
-      command: "/Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp",
-    });
-    expect(testing.isDescendantOfPid(101, 100, processes)).toBe(true);
-    expect(testing.isDescendantOfPid(103, 100, processes)).toBe(true);
-    expect(testing.isDescendantOfPid(102, 100, processes)).toBe(false);
   });
 
   it("reports an installed but disabled Computer Use plugin separately", async () => {

@@ -45,7 +45,7 @@ type DisabledCodexPluginRouteHit = {
   modelRef: string;
   canonicalModel: string;
 };
-export type DisabledCodexPluginRouteIssue = {
+type DisabledCodexPluginRouteIssue = {
   /** Config path that selects a model requiring the Codex plugin runtime. */
   path: string;
   /** Original model reference from config. */

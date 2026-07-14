@@ -1,7 +1,7 @@
 // Covers TUI Codex CLI lookup command selection.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetWindowsInstallRootsForTests } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
@@ -20,13 +20,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   execFileSyncMock.mockReset();
-  resetWindowsInstallRootsForTests();
 });
 
 describe("resolveCodexCliBin", () => {
   it("uses the trusted Windows where.exe when resolving codex", async () => {
+    const accessSync = fs.accessSync.bind(fs);
+    vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
+      if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
+        throw new Error("registry lookup disabled for test");
+      }
+      return accessSync(filePath, mode);
+    });
     vi.stubEnv("SystemRoot", "D:\\Windows");
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     execFileSyncMock.mockReturnValue("D:\\Tools\\codex.exe\r\n");
 
     await withMockedWindowsPlatform(async () => {

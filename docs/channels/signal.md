@@ -241,8 +241,35 @@ Groups:
 - `channels.signal.groupAllowFrom` controls which groups or senders can trigger group replies when `allowlist` is set; entries can be Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender phone numbers, `uuid:<id>` values, or `*`.
 - `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
-- Allowlisting a group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention: true` is explicitly set.
+- Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
+- With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Configured `mentionPatterns` remain a plain-text fallback.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+Mention-gated group with bounded context:
+
+```json5
+{
+  channels: {
+    signal: {
+      account: "+15551234567",
+      accountUuid: "bot-signal-uuid",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["group:<signal-group-id>"],
+      historyLimit: 8,
+      groups: {
+        "<signal-group-id>": { requireMention: true },
+      },
+    },
+  },
+  messages: {
+    groupChat: {
+      mentionPatterns: ["\\bopenclaw\\b"],
+    },
+  },
+}
+```
+
+Allowed group messages that do not mention the bot stay silent and are kept only in the bounded pending history window. When a later native @mention or fallback text mention triggers the bot, OpenClaw includes that recent context and replies to the same group. Skipped attachment bodies are not downloaded; they may appear only as compact media placeholders in the pending context.
 
 ## How it works (behavior)
 
@@ -256,7 +283,7 @@ Groups:
 ## Media + limits
 
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
-- Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
+- Optional newline chunking: set `channels.signal.streaming.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments are supported (base64 fetched from `signal-cli`).
 - Voice-note attachments use the `signal-cli` filename as a MIME fallback when `contentType` is missing, so audio transcription can still classify AAC voice memos.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
@@ -416,6 +443,7 @@ Provider options:
 - `channels.signal.enabled`: enable/disable channel startup.
 - `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
 - `channels.signal.account`: E.164 for the bot account.
+- `channels.signal.accountUuid`: optional bot account UUID for native @mention detection and loop protection.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.configPath`: optional `signal-cli --config` directory.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
@@ -440,16 +468,16 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).
-- `channels.signal.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.signal.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap in MB (default 8).
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive` (default `minimal`). See [Reactions](#reactions-message-tool).
 - `channels.signal.reactionNotifications`: `off | own | all | allowlist` (default `own`) - when the agent is notified of incoming reactions from others.
 - `channels.signal.reactionAllowlist`: senders whose reactions notify the agent when `reactionNotifications: "allowlist"`.
-- `channels.signal.blockStreaming`, `channels.signal.blockStreamingCoalesce`: block-mode streaming controls shared across channels. See [Streaming](/concepts/streaming).
+- `channels.signal.streaming.block.enabled`, `channels.signal.streaming.block.coalesce`: block-mode streaming controls shared across channels. See [Streaming](/concepts/streaming).
 
 Related global options:
 
-- `agents.list[].groupChat.mentionPatterns` (Signal does not support native mentions).
+- `agents.list[].groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.
 

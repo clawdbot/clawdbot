@@ -1,11 +1,9 @@
 // Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
+import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   collectMacGatewayPlatformWarnings,
-  collectMacLaunchAgentOverrideWarning,
-  collectMacLaunchctlGatewayEnvOverrideWarning,
-  collectMacStaleOpenClawUpdateLaunchdJobsWarning,
   noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs,
 } from "./doctor-platform-notes.js";
@@ -20,6 +18,7 @@ function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): u
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
   it("collects clear unsetenv instructions for token override", async () => {
+    const noteFn = vi.fn();
     const getenv = vi.fn(async (name: string) =>
       name === "OPENCLAW_GATEWAY_TOKEN" ? "launchctl-token" : undefined,
     );
@@ -31,10 +30,8 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     } as OpenClawConfig;
 
-    const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, {
-      platform: "darwin",
-      getenv,
-    });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    const [warning] = requireNoteCall(noteFn);
 
     expect(warning).toContain("Host-wide launchctl gateway auth overrides detected");
     expect(warning).toContain("OPENCLAW_GATEWAY_TOKEN");
@@ -124,35 +121,6 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
 });
 
 describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
-  it("collects stale updater job cleanup guidance on macOS", async () => {
-    const findJobs = vi.fn(async () => [
-      {
-        label: "ai.openclaw.update.2026.5.12",
-        lastExitStatus: 127,
-      },
-      {
-        label: "ai.openclaw.manual-update.1717168800",
-        lastExitStatus: 0,
-      },
-    ]);
-    const env = {
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
-    } as NodeJS.ProcessEnv;
-
-    const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
-      platform: "darwin",
-      findJobs,
-      env,
-    });
-
-    expect(findJobs).toHaveBeenCalledWith(env);
-    expect(warning).toContain("Stale OpenClaw updater launchd job(s) detected");
-    expect(warning).toContain("ai.openclaw.update.2026.5.12");
-    expect(warning).toContain("ai.openclaw.manual-update.1717168800");
-    expect(warning).toContain("launchctl remove <label>");
-    expect(warning).toContain("openclaw gateway restart");
-  });
-
   it("uses service env for gateway platform stale updater warnings", async () => {
     const serviceEnv = {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
@@ -260,26 +228,37 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
   });
 });
 
-describe("collectMacLaunchAgentOverrideWarning", () => {
-  it("collects guidance when launch agent writes are disabled", () => {
-    const warning = collectMacLaunchAgentOverrideWarning({
-      platform: "darwin",
-      homeDir: "/Users/tester",
-      exists: (candidate) => candidate.includes("disable-launchagent"),
-    });
+describe("collectMacGatewayPlatformWarnings", () => {
+  it("collects guidance when launch agent writes are disabled", async () => {
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((candidate) => String(candidate).includes("disable-launchagent"));
+    try {
+      const warnings = await collectMacGatewayPlatformWarnings({} as OpenClawConfig, {
+        platform: "darwin",
+        service: { readCommand: vi.fn(async () => null) },
+        findJobs: vi.fn(async () => []),
+      });
 
-    expect(warning).toContain("LaunchAgent writes are disabled");
-    expect(warning).toContain("rm ");
-    expect(warning).toContain("disable-launchagent");
+      expect(warnings).toEqual([expect.stringContaining("LaunchAgent writes are disabled")]);
+      expect(warnings[0]).toContain("disable-launchagent");
+    } finally {
+      exists.mockRestore();
+    }
   });
 
-  it("does nothing when launch agent writes are not disabled", () => {
-    expect(
-      collectMacLaunchAgentOverrideWarning({
-        platform: "darwin",
-        homeDir: "/Users/tester",
-        exists: () => false,
-      }),
-    ).toBeNull();
+  it("does nothing when launch agent writes are not disabled", async () => {
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    try {
+      await expect(
+        collectMacGatewayPlatformWarnings({} as OpenClawConfig, {
+          platform: "darwin",
+          service: { readCommand: vi.fn(async () => null) },
+          findJobs: vi.fn(async () => []),
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      exists.mockRestore();
+    }
   });
 });

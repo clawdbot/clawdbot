@@ -18,7 +18,7 @@ const CRON_TIME_MARKER = "Current time: ";
  */
 const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 
-export interface TimestampInjectionOptions {
+interface TimestampInjectionOptions {
   timezone?: string;
   now?: Date;
   includeTimestamp?: boolean;

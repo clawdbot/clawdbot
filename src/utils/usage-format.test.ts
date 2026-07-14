@@ -7,8 +7,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  resetGatewayModelPricingCacheForTest,
-  setGatewayModelPricingForTest,
+  clearGatewayModelPricingFailures,
+  replaceGatewayModelPricingCache,
+  type CachedModelPricing,
 } from "../gateway/model-pricing-cache-state.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -23,6 +24,23 @@ import {
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
 type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
+
+function setGatewayModelPricing(
+  entries: Array<{
+    provider: string;
+    model: string;
+    pricing: CachedModelPricing;
+  }>,
+): void {
+  replaceGatewayModelPricingCache(
+    new Map(entries.map((entry) => [`${entry.provider}/${entry.model}`, entry.pricing])),
+  );
+}
+
+function clearGatewayModelPricingState(): void {
+  replaceGatewayModelPricingCache(new Map(), 0);
+  clearGatewayModelPricingFailures();
+}
 
 function requireCostConfig(
   cost: ReturnType<typeof resolveModelCostConfig>,
@@ -57,14 +75,14 @@ describe("usage-format", () => {
     delete process.env.OPENCLAW_AGENT_DIR;
     await fs.mkdir(agentDir, { recursive: true });
     resetUsageFormatCachesForTest();
-    resetGatewayModelPricingCacheForTest();
+    clearGatewayModelPricingState();
   });
 
   afterEach(async () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
     resetUsageFormatCachesForTest();
-    resetGatewayModelPricingCacheForTest();
+    clearGatewayModelPricingState();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -173,7 +191,7 @@ describe("usage-format", () => {
       "utf8",
     );
 
-    setGatewayModelPricingForTest([
+    setGatewayModelPricing([
       {
         provider: "demo-preferred",
         model: "demo-model",
@@ -211,7 +229,7 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    setGatewayModelPricingForTest([
+    setGatewayModelPricing([
       {
         provider: "demo-config-provider",
         model: "demo-model",
@@ -234,7 +252,7 @@ describe("usage-format", () => {
   });
 
   it("falls back to cached gateway pricing when no configured cost exists", () => {
-    setGatewayModelPricingForTest([
+    setGatewayModelPricing([
       {
         provider: "demo-cached-provider",
         model: "demo-model",
@@ -948,7 +966,7 @@ describe("usage-format", () => {
   });
 
   it("resolves tiered pricing from cached gateway (LiteLLM)", () => {
-    setGatewayModelPricingForTest([
+    setGatewayModelPricing([
       {
         provider: "volcengine",
         model: "doubao-seed",

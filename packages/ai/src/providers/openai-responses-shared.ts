@@ -57,7 +57,7 @@ import {
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
-import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -124,7 +124,7 @@ type AzureResponsesOutputItemDoneEvent = Omit<ResponsesOutputItemDoneEvent, "ite
   item: ResponsesStreamOutputMessage;
 };
 
-export type OpenAIResponsesStreamEvent =
+type OpenAIResponsesStreamEvent =
   | ResponseStreamEvent
   | AzureResponsesContentPartAddedEvent
   | AzureResponsesOutputItemDoneEvent
@@ -210,8 +210,7 @@ interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
-export { convertResponsesToolPayload, convertResponsesTools };
-export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
+export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
   signal?: AbortSignal;

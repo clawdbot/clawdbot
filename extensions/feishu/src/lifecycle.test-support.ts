@@ -1,6 +1,6 @@
 // Feishu plugin module implements lifecycle support behavior.
 import { vi, type Mock } from "vitest";
-import { testingHooks as dedupTestingHooks } from "./dedup.js";
+import { feishuDedupeState } from "./dedup-state.js";
 
 type BoundConversation = {
   bindingId: string;
@@ -90,7 +90,7 @@ export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
 }
 
 export function resetFeishuLifecycleTestMocks(): void {
-  dedupTestingHooks.resetFeishuDedupForTests();
+  feishuDedupeState.reset();
   for (const mock of Object.values(feishuLifecycleTestMocks)) {
     mock.mockReset();
   }

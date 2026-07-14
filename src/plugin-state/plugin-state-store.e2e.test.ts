@@ -6,10 +6,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateDatabase,
   createPluginStateKeyedStore,
-  probePluginStateStore,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { probePluginStateStore } from "./plugin-state-store.sqlite.js";
 
 afterEach(() => {
   vi.useRealTimers();

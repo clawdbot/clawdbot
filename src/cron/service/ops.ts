@@ -10,21 +10,14 @@ import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
-  completeTaskRunByRunId,
-  createRunningTaskRun,
-  failTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
-import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { createCronExecutionId } from "../run-id.js";
-import { normalizeCronRunLogJobId } from "../run-log.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -52,6 +45,13 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
+import {
+  type InterruptedStartupRun,
+  markInterruptedStartupRun,
+  mergeManualRunSnapshotAfterReload,
+  restoreFinalizedStartupRun,
+  STARTUP_INTERRUPTED_ERROR,
+} from "./startup-run-repair.js";
 import type {
   CronAddOptions,
   CronEvent,
@@ -68,12 +68,19 @@ import {
   type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
-import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+import {
+  tryCreateCronTaskRun,
+  tryFindCronTaskRunIdForRecovery,
+  tryFindFinalizedCronTaskRun,
+  tryFinishCronTaskRun,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
 import {
   applyJobResult,
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
+  type CronTriggerEvalOutcome,
   executeJobCoreWithTimeout,
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -81,14 +88,6 @@ import {
   stopTimer,
 } from "./timer.js";
 import { wake } from "./wake.js";
-
-const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
-type InterruptedStartupRun = {
-  jobId: string;
-  runAtMs: number;
-  durationMs: number;
-};
 
 function markManualCronJobActive(
   state: CronServiceState,
@@ -129,99 +128,6 @@ function maybeNotifyManualIsolatedSetupTimeout(
   return notified;
 }
 
-function resolveInterruptedStartupFailureNotificationStatus(params: {
-  state: CronServiceState;
-  job: CronJob;
-}) {
-  if (params.job.delivery?.bestEffort === true) {
-    return "not-requested";
-  }
-  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureDestination)) {
-    return "unknown";
-  }
-  const primaryPlan = resolveCronDeliveryPlan(params.job);
-  return primaryPlan.mode === "announce" && primaryPlan.requested ? "unknown" : "not-requested";
-}
-
-function markInterruptedStartupRun(params: {
-  state: CronServiceState;
-  job: CronJob;
-  runningAtMs: number;
-  nowMs: number;
-}): InterruptedStartupRun {
-  const { job, runningAtMs, nowMs } = params;
-  // A persisted running marker means the gateway stopped mid-run; mark it as a
-  // normal failed run so retries, alerts, and run logs all see one outcome.
-  const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
-    state: params.state,
-    job,
-  });
-  const previousErrors =
-    typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
-      ? Math.max(0, Math.floor(job.state.consecutiveErrors))
-      : 0;
-
-  params.state.deps.log.warn(
-    { jobId: job.id, runningAtMs },
-    "cron: marking interrupted running job failed on startup",
-  );
-
-  job.state.runningAtMs = undefined;
-  job.state.lastRunAtMs = runningAtMs;
-  job.state.lastRunStatus = "error";
-  job.state.lastStatus = "error";
-  job.state.lastError = STARTUP_INTERRUPTED_ERROR;
-  job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
-  job.state.consecutiveErrors = previousErrors + 1;
-  job.state.lastDelivered = false;
-  job.state.lastDeliveryStatus = "unknown";
-  job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
-  job.state.lastFailureNotificationDelivered = undefined;
-  job.state.lastFailureNotificationDeliveryStatus = failureNotificationStatus;
-  job.state.lastFailureNotificationDeliveryError = undefined;
-  job.state.nextRunAtMs = undefined;
-  job.updatedAtMs = nowMs;
-
-  if (job.schedule.kind === "at") {
-    job.enabled = false;
-  }
-
-  return {
-    jobId: job.id,
-    runAtMs: runningAtMs,
-    durationMs: job.state.lastDurationMs,
-  };
-}
-
-function mergeManualRunSnapshotAfterReload(params: {
-  state: CronServiceState;
-  jobId: string;
-  snapshot: {
-    enabled: boolean;
-    updatedAtMs: number;
-    state: CronJob["state"];
-  } | null;
-  removed: boolean;
-}) {
-  if (!params.state.store) {
-    return;
-  }
-  if (params.removed) {
-    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
-    return;
-  }
-  if (!params.snapshot) {
-    return;
-  }
-  const reloaded = params.state.store.jobs.find((job) => job.id === params.jobId);
-  if (!reloaded) {
-    return;
-  }
-  reloaded.enabled = params.snapshot.enabled;
-  reloaded.updatedAtMs = params.snapshot.updatedAtMs;
-  reloaded.state = params.snapshot.state;
-}
-
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
   if (!state.store) {
@@ -245,7 +151,8 @@ export async function start(state: CronServiceState) {
 
   const interruptedJobIds = new Set<string>();
   const interruptedRuns: InterruptedStartupRun[] = [];
-  let markedAnyInterruptedRun = false;
+  const completedJobIdsToDelete = new Set<string>();
+  let repairedAnyStartupRun = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped) {
@@ -255,20 +162,43 @@ export async function start(state: CronServiceState) {
     for (const job of jobs) {
       job.state ??= {};
       if (typeof job.state.runningAtMs === "number") {
+        const runningAtMs = job.state.runningAtMs;
+        const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
+        const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
+        if (finalized) {
+          interruptedJobIds.add(job.id);
+          if (
+            restoreFinalizedStartupRun({
+              state,
+              job,
+              runningAtMs,
+              entry: finalized.entry,
+              ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
+            })
+          ) {
+            completedJobIdsToDelete.add(job.id);
+          }
+          repairedAnyStartupRun = true;
+          continue;
+        }
         const nowMs = state.deps.nowMs();
         const interrupted = markInterruptedStartupRun({
           state,
           job,
-          runningAtMs: job.state.runningAtMs,
+          taskRunId,
+          runningAtMs,
           nowMs,
         });
         interruptedJobIds.add(job.id);
         interruptedRuns.push(interrupted);
-        markedAnyInterruptedRun = true;
+        repairedAnyStartupRun = true;
       }
     }
-    if (markedAnyInterruptedRun || jobs.length > 0) {
-      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
+    if (completedJobIdsToDelete.size > 0 && state.store) {
+      state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
+    }
+    if (repairedAnyStartupRun || jobs.length > 0) {
+      await persist(state, repairedAnyStartupRun ? undefined : { stateOnly: true });
     }
   });
 
@@ -294,20 +224,27 @@ export async function start(state: CronServiceState) {
     }
     for (const interrupted of interruptedRuns) {
       const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
-      emit(state, {
-        jobId: interrupted.jobId,
-        action: "finished",
-        job,
-        status: "error",
-        error: STARTUP_INTERRUPTED_ERROR,
-        delivered: false,
-        deliveryStatus: "unknown",
-        deliveryError: STARTUP_INTERRUPTED_ERROR,
-        failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
-        runAtMs: interrupted.runAtMs,
-        durationMs: interrupted.durationMs,
-        nextRunAtMs: job?.state.nextRunAtMs,
-      });
+      emitCronRunFinished(
+        state,
+        {
+          jobId: interrupted.jobId,
+          action: "finished",
+          job,
+          status: "error",
+          error: STARTUP_INTERRUPTED_ERROR,
+          delivered: false,
+          deliveryStatus: "unknown",
+          deliveryError: STARTUP_INTERRUPTED_ERROR,
+          failureNotificationDelivery: job
+            ? failureNotificationDeliveryFromJobState(job)
+            : undefined,
+          runAtMs: interrupted.runAtMs,
+          durationMs: interrupted.durationMs,
+          nextRunAtMs: job?.state.nextRunAtMs,
+        },
+        undefined,
+        interrupted.taskRunId,
+      );
     }
     armTimer(state);
     state.deps.log.info(
@@ -626,7 +563,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error("cron job id must not be blank");
     }
     if (normalizedId) {
-      normalizeCronRunLogJobId(normalizedId);
+      normalizeCronTaskRunJobId(normalizedId);
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
     const declarationKey = normalizeOptionalString(input.declarationKey);
@@ -821,11 +758,19 @@ type ManualRunOptions = {
 
 type ManualRunTerminalTracker = { emitted: boolean };
 
-function emitManualRunFinished(
+function emitCronRunFinished(
   state: CronServiceState,
   evt: CronEvent & { action: "finished" },
   tracker?: ManualRunTerminalTracker,
+  taskRunId?: string,
+  triggerEval?: CronTriggerEvalOutcome,
 ): void {
+  tryFinishCronTaskRun(state, {
+    taskRunId,
+    job: evt.job,
+    event: evt,
+    ...(triggerEval ? { triggerEval } : {}),
+  });
   emit(state, evt);
   if (tracker) {
     tracker.emitted = true;
@@ -875,11 +820,12 @@ async function skipInvalidPersistedManualRun(params: {
     { preserveSchedule: params.mode === "force" },
   );
 
-  emitManualRunFinished(
+  emitCronRunFinished(
     params.state,
     {
       jobId: params.job.id,
       action: "finished",
+      job: params.job,
       status: "skipped",
       error: errorText,
       diagnostics,
@@ -897,91 +843,6 @@ async function skipInvalidPersistedManualRun(params: {
   recomputeNextRunsForMaintenance(params.state, { recomputeExpired: true });
   await persist(params.state);
   armTimer(params.state);
-}
-
-function tryCreateManualTaskRun(params: {
-  state: CronServiceState;
-  job: CronJob;
-  startedAt: number;
-}): string | undefined {
-  const runId = createCronExecutionId(params.job.id, params.startedAt);
-  try {
-    const task = createRunningTaskRun({
-      runtime: "cron",
-      sourceId: params.job.id,
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: params.job.sessionKey,
-      agentId: params.job.agentId,
-      runId,
-      label: params.job.name,
-      task: params.job.name || params.job.id,
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: params.startedAt,
-      lastEventAt: params.startedAt,
-      progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
-    });
-    if (!task) {
-      params.state.deps.log.warn(
-        { jobId: params.job.id },
-        "cron: task ledger record was not persisted",
-      );
-      return undefined;
-    }
-    return runId;
-  } catch (error) {
-    params.state.deps.log.warn(
-      { jobId: params.job.id, error },
-      "cron: failed to create task ledger record",
-    );
-    return undefined;
-  }
-}
-
-function tryFinishManualTaskRun(
-  state: CronServiceState,
-  params: {
-    taskRunId?: string;
-    coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
-    endedAt: number;
-  },
-): void {
-  if (!params.taskRunId) {
-    return;
-  }
-  try {
-    if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
-      completeTaskRunByRunId({
-        runId: params.taskRunId,
-        runtime: "cron",
-        endedAt: params.endedAt,
-        lastEventAt: params.endedAt,
-        terminalSummary: params.coreResult.summary ?? undefined,
-      });
-      return;
-    }
-    failTaskRunByRunId({
-      runId: params.taskRunId,
-      runtime: "cron",
-      status:
-        normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
-          ? "timed_out"
-          : "failed",
-      endedAt: params.endedAt,
-      lastEventAt: params.endedAt,
-      error:
-        params.coreResult.status === "error"
-          ? normalizeCronRunErrorText(params.coreResult.error)
-          : undefined,
-      terminalSummary: params.coreResult.summary ?? undefined,
-    });
-  } catch (error) {
-    state.deps.log.warn(
-      { runId: params.taskRunId, jobStatus: params.coreResult.status, error },
-      "cron: failed to update task ledger record",
-    );
-  }
 }
 
 async function inspectManualRunPreflight(
@@ -1088,10 +949,11 @@ async function prepareManualRun(
       return { ok: true, ran: false, reason: "stopped" as const };
     }
     emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
-    const taskRunId = tryCreateManualTaskRun({
+    const taskRunId = tryCreateCronTaskRun({
       state,
       job,
       startedAt: preflight.now,
+      publicRunId: opts?.runId,
     });
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
@@ -1141,16 +1003,16 @@ async function finishPreparedManualRun(
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
     const endedAt = state.deps.nowMs();
+    const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
     const emitMissingQueuedTerminal = () => {
       const tracker = prepared.terminalTracker;
       if (!tracker || tracker.emitted) {
         return;
       }
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
-      const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
       // enqueueRun acknowledges a concrete run id, so every accepted request
       // needs one terminal event even if the job or service owner changes mid-run.
-      emitManualRunFinished(
+      emitCronRunFinished(
         state,
         {
           jobId,
@@ -1176,13 +1038,22 @@ async function finishPreparedManualRun(
           usage: coreResult.usage,
         },
         tracker,
+        taskRunId,
       );
     };
-    tryFinishManualTaskRun(state, {
-      taskRunId,
-      coreResult,
-      endedAt,
-    });
+    if (!triggerSkipped) {
+      // Terminal state must land even if the store merge below throws; the later
+      // emitCronRunFinished re-finalizes the same row to attach history detail
+      // (same-status terminal updates apply, so this does not race precedence).
+      tryFinishCronTaskRunWithoutHistory(state, {
+        taskRunId,
+        status: coreResult.status,
+        error: coreResult.error,
+        endedAt,
+        summary: coreResult.summary,
+        childSessionKey: coreResult.sessionKey,
+      });
+    }
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
       emitMissingQueuedTerminal();
       return;
@@ -1232,7 +1103,7 @@ async function finishPreparedManualRun(
           triggerEval: coreResult.triggerEval,
         });
 
-        emitManualRunFinished(
+        emitCronRunFinished(
           state,
           {
             jobId: job.id,
@@ -1259,6 +1130,8 @@ async function finishPreparedManualRun(
             usage: coreResult.usage,
           },
           prepared.terminalTracker,
+          taskRunId,
+          coreResult.triggerEval,
         );
       }
 
@@ -1303,6 +1176,16 @@ async function finishPreparedManualRun(
       });
     }
     if (finalized) {
+      if (triggerSkipped) {
+        tryFinishCronTaskRunWithoutHistory(state, {
+          taskRunId,
+          status: coreResult.status,
+          error: coreResult.error,
+          endedAt,
+          summary: coreResult.summary,
+          childSessionKey: coreResult.sessionKey,
+        });
+      }
       armTimer(state);
     }
     emitMissingQueuedTerminal();
@@ -1344,7 +1227,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
           if (result.reason !== "invalid-spec") {
             const finishedAt = state.deps.nowMs();
             const job = state.store?.jobs.find((entry) => entry.id === id);
-            emitManualRunFinished(
+            emitCronRunFinished(
               state,
               {
                 jobId: id,
@@ -1387,7 +1270,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
     }
     const finishedAt = state.deps.nowMs();
     const job = state.store?.jobs.find((entry) => entry.id === id);
-    emitManualRunFinished(
+    emitCronRunFinished(
       state,
       {
         jobId: id,

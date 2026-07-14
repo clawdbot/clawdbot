@@ -34,7 +34,10 @@ export function resolveSkillsInstallPreferences(config?: OpenClawConfig): Skills
   return { preferBrew, nodeManager };
 }
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+export function isSkillConfigPathTruthy(
+  config: OpenClawConfig | undefined,
+  pathStr: string,
+): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
@@ -115,6 +118,6 @@ export function shouldIncludeSkill(params: {
         skillConfig?.env?.[envName] ||
         (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
       ),
-    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+    isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
 }

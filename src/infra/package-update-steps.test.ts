@@ -2,12 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
-  type PackageUpdateStepResult,
 } from "./package-update-steps.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -18,6 +17,10 @@ import {
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+
+type PackageUpdateStepResult = Awaited<
+  ReturnType<typeof runGlobalPackageUpdateSteps>
+>["steps"][number];
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

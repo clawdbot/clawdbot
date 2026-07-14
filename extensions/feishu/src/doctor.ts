@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -170,7 +171,7 @@ function formatFinding(finding: FeishuDoctorFinding): string {
   return exhaustive;
 }
 
-export function isFeishuSessionStoreKey(key: string): boolean {
+function isFeishuSessionStoreKey(key: string): boolean {
   const normalized = key.trim().toLowerCase();
   return /^agent:[^:]+:feishu(?::|$)/.test(normalized) || /^feishu(?::|$)/.test(normalized);
 }
@@ -934,7 +935,7 @@ function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
   return Boolean(cfg.channels?.feishu);
 }
 
-export async function runFeishuDoctorSequence(params: {
+async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
@@ -967,6 +968,8 @@ export async function runFeishuDoctorSequence(params: {
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
 };

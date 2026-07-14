@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../string-coerce.ts";
+import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -21,16 +22,17 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionNavigationInput = {
+type SessionNavigationInput = {
   result: SessionsListResult | null;
   resultAgentId?: string | null;
   sessionKey: string;
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
+  showCron?: boolean;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
-export type SessionNavigation = {
+type SessionNavigation = {
   currentSessionKey: string;
   selectedAgentId: string;
   defaultAgentId: string;
@@ -221,7 +223,7 @@ type VisibleSessionRowOptions = {
   agentId: string;
   defaultAgentId: string;
   filterByAgent?: boolean;
-  hideCron?: boolean;
+  showCron?: boolean;
 };
 
 export function filterVisibleSessionRows(
@@ -236,7 +238,7 @@ export function filterVisibleSessionRows(
       !row.archived &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      (options.hideCron === false || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showCron === true || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||
@@ -276,8 +278,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     areUiSessionKeysEquivalent(row.key, currentSessionKey) ||
     (resultScopeMatches && uiSessionRowMatchesSelectedChat(input, row.key, currentSessionKey));
   const selectedSession = input.result?.sessions.find(matchesCurrentSession);
+  // Catalog sessions select their own sidebar rows; synthesizing a session row
+  // here would surface the raw catalog key as a phantom chat entry.
   const activeSession =
-    currentSessionKey && currentSessionKey.toLowerCase() !== "unknown"
+    currentSessionKey &&
+    currentSessionKey.toLowerCase() !== "unknown" &&
+    !parseCatalogSessionKey(currentSessionKey)
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
   const sortedSessions = getVisibleSessionRows(input.result, {
@@ -285,6 +291,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
+    showCron: input.showCron,
   }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
   // The sidebar is the session list, not a recent-session preview. Keep every
   // active row in its sorted slot so selecting a session never reshuffles or

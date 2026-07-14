@@ -141,8 +141,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.19+** is required (Node 24 recommended). `pnpm` is the repo package manager.
-    Bun is **not recommended** for the Gateway.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 24 recommended). `pnpm` is the repo package manager.
+    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -677,9 +677,9 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    Not recommended - Bun has runtime bugs, especially with WhatsApp and Telegram. Use
-    **Node** for stable gateways. If you still want to experiment, do it on a
-    non-production gateway without WhatsApp/Telegram.
+    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
+    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
+    not provide that API.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

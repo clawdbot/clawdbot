@@ -78,11 +78,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
-            if self.controlChannel.state == .connected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
-                }
-            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -450,12 +445,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
+        AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
         }
 
         #if DEBUG
@@ -763,6 +755,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
         _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,

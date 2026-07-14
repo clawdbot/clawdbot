@@ -51,6 +51,10 @@ class MockChildProcess extends EventEmitter {
   constructor(
     private readonly initializeResponsePrefix = "",
     private readonly respondMethods?: ReadonlySet<string>,
+    private readonly frameResponse: (
+      body: Record<string, unknown>,
+      method: string,
+    ) => string | readonly string[] = encodeLspMessage,
   ) {
     super();
     this.stdin = new Writable({
@@ -78,11 +82,12 @@ class MockChildProcess extends EventEmitter {
     if (typeof body.id !== "number" || typeof body.method !== "string") {
       return;
     }
-    if (this.respondMethods && !this.respondMethods.has(body.method)) {
+    const method = body.method;
+    if (this.respondMethods && !this.respondMethods.has(method)) {
       return;
     }
     const result =
-      body.method === "initialize"
+      method === "initialize"
         ? {
             capabilities: {
               hoverProvider: true,
@@ -92,9 +97,12 @@ class MockChildProcess extends EventEmitter {
           }
         : null;
     queueMicrotask(() => {
-      this.stdout.write(
-        `${this.initializeResponsePrefix}${encodeLspMessage({ jsonrpc: "2.0", id: body.id, result })}`,
-      );
+      const response = { jsonrpc: "2.0", id: body.id, result };
+      const frame = this.frameResponse(response, method);
+      const chunks = typeof frame === "string" ? [frame] : frame;
+      for (const [index, chunk] of chunks.entries()) {
+        this.stdout.write(`${index === 0 ? this.initializeResponsePrefix : ""}${chunk}`);
+      }
     });
   }
 }
@@ -335,6 +343,108 @@ describe("bundle LSP runtime", () => {
     const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
 
     expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    await runtime.dispose();
+  });
+
+  it("accepts a Content-Type header alongside Content-Length", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess("", undefined, (body) => {
+      const json = JSON.stringify(body);
+      return `Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
+    });
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+
+    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    await runtime.dispose();
+  });
+
+  it("accepts a maximum-size header when its separator is split across chunks", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess("", undefined, (body) => {
+      const json = JSON.stringify(body);
+      const headerPrefix = `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\nX-Padding: `;
+      const header = `${headerPrefix}${"x".repeat(8 * 1024 - headerPrefix.length)}`;
+      const frame = `${header}\r\n\r\n${json}`;
+      return [frame.slice(0, header.length + 1), frame.slice(header.length + 1)];
+    });
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+
+    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    await runtime.dispose();
+  });
+
+  it.each([
+    {
+      name: "a suffixed Content-Length value",
+      frame: (body: Record<string, unknown>) => {
+        const json = JSON.stringify(body);
+        return `Content-Length: ${Buffer.byteLength(json, "utf-8")}junk\r\n\r\n${json}`;
+      },
+    },
+    {
+      name: "duplicate Content-Length fields",
+      frame: (body: Record<string, unknown>) => {
+        const json = JSON.stringify(body);
+        const length = Buffer.byteLength(json, "utf-8");
+        return `Content-Length: ${length}\r\nContent-Length: ${length}\r\n\r\n${json}`;
+      },
+    },
+    {
+      name: "a colonless header line",
+      frame: (body: Record<string, unknown>) => {
+        const json = JSON.stringify(body);
+        const length = Buffer.byteLength(json, "utf-8");
+        return `Content-Length: ${length}\r\nbroken\r\n\r\n${json}`;
+      },
+    },
+    {
+      name: "an oversized declared body",
+      frame: () => `Content-Length: ${64 * 1024 * 1024 + 1}\r\n\r\n`,
+    },
+    {
+      name: "an oversized unterminated header",
+      frame: () => `X-Header: ${"x".repeat(8 * 1024)}`,
+    },
+  ])("fails the LSP session immediately for $name", async ({ frame }) => {
+    configureSingleLspServer();
+    const child = new MockChildProcess(
+      "",
+      new Set(["initialize", "textDocument/hover"]),
+      (body, method) => (method === "initialize" ? encodeLspMessage(body) : frame(body)),
+    );
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    const hoverTool = runtime.tools.find((tool) => tool.name === "lsp_hover_typescript");
+    if (!hoverTool) {
+      throw new Error("expected hover tool");
+    }
+
+    const request = hoverTool.execute("call-1", {
+      uri: "file:///tmp/workspace/index.ts",
+      line: 0,
+      character: 0,
+    });
+    const outcome = await Promise.race([
+      request.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("still pending"), 100);
+      }),
+    ]);
+
+    expect(outcome).toMatch(/LSP framing error/i);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+
     await runtime.dispose();
   });
 

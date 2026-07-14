@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -419,19 +420,9 @@ export function createSessionsListTool(opts?: {
       }
 
       if (titleTargets.length > 0) {
-        const maxConcurrent = Math.min(4, titleTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= titleTargets.length) {
-              return;
-            }
-            const target = titleTargets.at(next);
-            if (!target) {
-              return;
-            }
+        await pMap(
+          titleTargets,
+          async (target) => {
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
               sessionEntry: target.sessionEntry,
@@ -448,25 +439,15 @@ export function createSessionsListTool(opts?: {
             if (includeLastMessage && fields.lastMessagePreview) {
               target.row.lastMessagePreview = fields.lastMessagePreview;
             }
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
-        const maxConcurrent = Math.min(4, historyTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= historyTargets.length) {
-              return;
-            }
-            const target = historyTargets.at(next);
-            if (!target) {
-              return;
-            }
+        await pMap(
+          historyTargets,
+          async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
@@ -475,9 +456,9 @@ export function createSessionsListTool(opts?: {
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       const visibilityMetadata =

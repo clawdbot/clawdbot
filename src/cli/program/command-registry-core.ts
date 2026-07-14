@@ -12,7 +12,6 @@ import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNames as getCoreDescriptorNames,
-  getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
 import {
   registerCommandGroupByName,
@@ -20,17 +19,10 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
-
 type CommandRegisterParams = {
   program: Command;
   ctx: ProgramContext;
   argv: string[];
-};
-
-export type CommandRegistration = {
-  id: string;
-  register: (params: CommandRegisterParams) => void;
 };
 
 function withProgramOnlySpecs(

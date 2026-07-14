@@ -1,4 +1,5 @@
 // Discord tests cover command plugin behavior.
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -18,13 +19,20 @@ function findVoiceSubcommand(command: CommandWithSubcommands, name: string) {
   return subcommand;
 }
 
-function createVoiceCommandHarness(manager: DiscordVoiceManager | null = null) {
+function createVoiceCommandHarness(
+  manager: DiscordVoiceManager | null = null,
+  overrides?: {
+    cfg?: OpenClawConfig;
+    discordConfig?: DiscordAccountConfig;
+    useAccessGroups?: boolean;
+  },
+) {
   const command = createDiscordVoiceCommand({
-    cfg: {},
-    discordConfig: {},
+    cfg: overrides?.cfg ?? {},
+    discordConfig: overrides?.discordConfig ?? {},
     accountId: "default",
     groupPolicy: "open",
-    useAccessGroups: false,
+    useAccessGroups: overrides?.useAccessGroups ?? false,
     getManager: () => manager,
     ephemeralDefault: true,
   });
@@ -138,6 +146,31 @@ describe("createDiscordVoiceCommand", () => {
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "No active voice sessions.",
+      ephemeral: true,
+    });
+  });
+
+  it("authorizes vc commands through commands.ownerAllowFrom", async () => {
+    const ownerId = "100000000000000001";
+    const statusSpy = vi.fn(() => []);
+    const manager = {
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { status } = createVoiceCommandHarness(manager, {
+      cfg: { commands: { ownerAllowFrom: [`discord:${ownerId}`] } },
+      discordConfig: { dmPolicy: "disabled" },
+      useAccessGroups: true,
+    });
+    const { interaction, reply } = createInteraction({
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+      user: { id: ownerId, username: "owner" } as CommandInteraction["user"],
+    });
+
+    await status.run(interaction);
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
       content: "No active voice sessions.",
       ephemeral: true,

@@ -17,6 +17,7 @@ import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
+import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
@@ -137,10 +138,7 @@ vi.mock("./streaming-card.js", async (importOriginal) => {
   return { ...actual, FeishuStreamingSession: RecordingFeishuStreamingSession };
 });
 
-import {
-  clearFeishuStreamingStartBackoffForTests,
-  createFeishuReplyDispatcher,
-} from "./reply-dispatcher.js";
+import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -156,7 +154,7 @@ afterEach(() => {
   traceState.cardKitFetch = null;
   traceState.dispatcherOptions = null;
   traceState.wireFaults = [];
-  clearFeishuStreamingStartBackoffForTests();
+  streamingStartBackoffUntilByAccount.clear();
 });
 
 function jsonResponse(payload: unknown, status = 200, headers?: Record<string, string>): Response {
@@ -339,7 +337,9 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
     appId: `app-${scenario}-${traceState.setupCount}`,
     appSecret: "test-secret",
     domain: "feishu",
-    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: true }),
+    // Nested streaming.mode "partial" matches the retired `streaming: true`
+    // boolean, so the recorded wire goldens stay byte-identical.
+    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: { mode: "partial" } }),
   };
 }
 

@@ -41,7 +41,7 @@ export type OutboundChannel = DeliverableMessageChannel;
 type HeartbeatTarget = OutboundChannel;
 
 /** Resolved outbound delivery destination and routing hints. */
-export type OutboundTarget = {
+type OutboundTarget = {
   channel: OutboundChannel;
   to?: string;
   chatType?: ChatType;
@@ -53,7 +53,7 @@ export type OutboundTarget = {
 };
 
 /** Sender identity context used when a heartbeat needs channel-compatible metadata. */
-export type HeartbeatSenderContext = {
+type HeartbeatSenderContext = {
   sender: string;
   provider?: DeliverableMessageChannel;
   allowFrom: string[];

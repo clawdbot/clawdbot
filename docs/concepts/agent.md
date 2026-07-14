@@ -116,7 +116,8 @@ Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults
 800-1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
 single-line spam (idle-based merging before send). Non-Telegram channels require
-explicit `*.blockStreaming: true` to enable block replies.
+explicit `*.streaming.block.enabled: true` to enable block replies (QQ Bot
+instead streams block replies unless `channels.qqbot.streaming.mode` is `"off"`).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).

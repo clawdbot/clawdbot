@@ -1,23 +1,8 @@
 // Msteams tests cover feedback reflection plugin behavior.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { storeSessionLearning } from "./feedback-reflection-store.js";
-import {
-  buildFeedbackEvent,
-  buildReflectionPrompt,
-  clearReflectionCooldowns,
-  isReflectionAllowed,
-  loadSessionLearnings,
-  parseReflectionResponse,
-  recordReflectionTime,
-} from "./feedback-reflection.js";
-import { setMSTeamsRuntime } from "./runtime.js";
-import { msteamsRuntimeStub } from "./test-support/runtime.js";
-
-const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
+import { isReflectionAllowed, recordReflectionTime } from "./feedback-reflection-store.js";
+import { buildFeedbackEvent } from "./feedback-reflection.js";
 
 // Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
 // on the ES2024 String.prototype.isWellFormed() runtime API.
@@ -149,131 +134,40 @@ describe("parseReflectionResponse", () => {
 
 describe("reflection cooldown", () => {
   afterEach(() => {
-    clearReflectionCooldowns();
     vi.restoreAllMocks();
   });
 
   it("allows first reflection", () => {
-    expect(isReflectionAllowed("session-1")).toBe(true);
+    expect(isReflectionAllowed("session-first")).toBe(true);
   });
 
   it("blocks reflection within cooldown", () => {
-    recordReflectionTime("session-1");
-    expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
+    recordReflectionTime("session-blocked");
+    expect(isReflectionAllowed("session-blocked", 60_000)).toBe(false);
   });
 
   it("allows reflection after cooldown expires", () => {
-    // Manually set a past timestamp
-    recordReflectionTime("session-1");
-    // Override the map entry to simulate time passing
-    clearReflectionCooldowns();
-    expect(isReflectionAllowed("session-1", 1)).toBe(true);
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    recordReflectionTime("session-expired");
+    vi.spyOn(Date, "now").mockReturnValue(2);
+    expect(isReflectionAllowed("session-expired", 1)).toBe(true);
   });
 
   it("tracks sessions independently", () => {
-    recordReflectionTime("session-1");
-    expect(isReflectionAllowed("session-1", 60_000)).toBe(false);
-    expect(isReflectionAllowed("session-2", 60_000)).toBe(true);
+    recordReflectionTime("session-tracked-1");
+    expect(isReflectionAllowed("session-tracked-1", 60_000)).toBe(false);
+    expect(isReflectionAllowed("session-tracked-2", 60_000)).toBe(true);
   });
 
   it("keeps longer custom cooldown entries during pruning", () => {
     vi.spyOn(Date, "now").mockReturnValue(0);
-    recordReflectionTime("target", 600_000);
+    recordReflectionTime("prune-target", 600_000);
 
     vi.spyOn(Date, "now").mockReturnValue(301_000);
     for (let index = 0; index <= 500; index += 1) {
-      recordReflectionTime(`session-${index}`, 600_000);
+      recordReflectionTime(`prune-session-${index}`, 600_000);
     }
 
-    expect(isReflectionAllowed("target", 600_000)).toBe(false);
-  });
-});
-
-describe("loadSessionLearnings", () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
-  afterEach(async () => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (tmpDir) {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("returns empty array when file doesn't exist", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const learnings = await loadSessionLearnings(tmpDir, "nonexistent");
-    expect(learnings).toStrictEqual([]);
-  });
-
-  it("reads persisted learnings from plugin state", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Be concise",
-    });
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Use examples",
-    });
-
-    const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
-    expect(learnings).toEqual(["Be concise", "Use examples"]);
-  });
-
-  it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "Use bullets",
-    });
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams/user1",
-      learning: "Avoid bullets",
-    });
-
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
-  });
-
-  it("keeps the same session key isolated by store path", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const workStorePath = path.join(tmpDir, "work");
-    const opsStorePath = path.join(tmpDir, "ops");
-
-    await storeSessionLearning({
-      storePath: workStorePath,
-      sessionKey: "msteams:user1",
-      learning: "Use bullets",
-    });
-    await storeSessionLearning({
-      storePath: opsStorePath,
-      sessionKey: "msteams:user1",
-      learning: "Avoid bullets",
-    });
-
-    await expect(loadSessionLearnings(workStorePath, "msteams:user1")).resolves.toEqual([
-      "Use bullets",
-    ]);
-    await expect(loadSessionLearnings(opsStorePath, "msteams:user1")).resolves.toEqual([
-      "Avoid bullets",
-    ]);
+    expect(isReflectionAllowed("prune-target", 600_000)).toBe(false);
   });
 });

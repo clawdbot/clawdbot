@@ -113,7 +113,7 @@ type TtsUserPrefs = {
   };
 };
 
-export type TtsAttemptReasonCode =
+type TtsAttemptReasonCode =
   | "success"
   | "no_provider_registered"
   | "not_configured"
@@ -122,7 +122,7 @@ export type TtsAttemptReasonCode =
   | "timeout"
   | "provider_error";
 
-export type TtsProviderAttempt = {
+type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
   reasonCode: TtsAttemptReasonCode;
@@ -2136,6 +2136,3 @@ export const testApi = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
-
-/** @deprecated Use `testApi`. */
-export { testApi as _test };

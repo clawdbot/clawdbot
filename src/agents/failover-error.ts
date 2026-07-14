@@ -90,6 +90,34 @@ export function isFailoverError(err: unknown): err is FailoverError {
   );
 }
 
+export function findCliMaxTurnsError(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): FailoverError | undefined {
+  if (isFailoverError(err) && err.code === "cli_max_turns") {
+    return err;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Fork persistence can aggregate a terminal run error with its own failure.
+  // Keep max-turn replay protection intact across those wrapper boundaries.
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
+  const nested = [
+    candidate.error,
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ];
+  for (const value of nested) {
+    const found = findCliMaxTurnsError(value, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
 /** Map a failover reason to the closest HTTP-like status code. */
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {

@@ -15,6 +15,7 @@ export type AgentIdentityCapability = {
   get: (agentId: string | null | undefined) => AgentIdentityResult | null;
   entries: () => AgentIdentityResult[];
   ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
+  invalidate: (agentIds: readonly (string | null | undefined)[]) => void;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -26,6 +27,7 @@ export function createAgentIdentityCapability(
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
   const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
+  const invalidationEpochs = new Map<string, number>();
   const listeners = new Set<() => void>();
 
   const publish = () => {
@@ -44,6 +46,7 @@ export function createAgentIdentityCapability(
     connectionGeneration += 1;
     identities.clear();
     inFlight.clear();
+    invalidationEpochs.clear();
     if (hadIdentities) {
       publish();
     }
@@ -100,7 +103,10 @@ export function createAgentIdentityCapability(
         return;
       }
       const results = await Promise.all(
-        missing.map(async (agentId) => [agentId, await fetchIdentity(client, agentId)] as const),
+        missing.map(async (agentId) => {
+          const invalidationEpoch = invalidationEpochs.get(agentId) ?? 0;
+          return [agentId, invalidationEpoch, await fetchIdentity(client, agentId)] as const;
+        }),
       );
       if (
         connectionGeneration !== generation ||
@@ -110,11 +116,24 @@ export function createAgentIdentityCapability(
         return;
       }
       let changed = false;
-      for (const [agentId, identity] of results) {
-        if (identity) {
+      for (const [agentId, invalidationEpoch, identity] of results) {
+        if (identity && invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)) {
           identities.set(agentId, identity);
           changed = true;
         }
+      }
+      if (changed) {
+        publish();
+      }
+    },
+    invalidate(agentIds) {
+      let changed = false;
+      for (const agentId of normalizeIds(agentIds)) {
+        invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
+        if (identities.delete(agentId)) {
+          changed = true;
+        }
+        inFlight.delete(agentId);
       }
       if (changed) {
         publish();

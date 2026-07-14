@@ -56,7 +56,7 @@ export type AcpAction =
 export type AcpSpawnThreadMode = "auto" | "here" | "off";
 export type AcpSpawnBindMode = "here" | "off";
 
-export type ParsedSpawnInput = {
+type ParsedSpawnInput = {
   agentId: string;
   mode: AcpRuntimeSessionMode;
   thread: AcpSpawnThreadMode;
@@ -65,17 +65,17 @@ export type ParsedSpawnInput = {
   label?: string;
 };
 
-export type ParsedSteerInput = {
+type ParsedSteerInput = {
   sessionToken?: string;
   instruction: string;
 };
 
-export type ParsedSingleValueCommandInput = {
+type ParsedSingleValueCommandInput = {
   value: string;
   sessionToken?: string;
 };
 
-export type ParsedSetCommandInput = {
+type ParsedSetCommandInput = {
   key: string;
   value: string;
   sessionToken?: string;

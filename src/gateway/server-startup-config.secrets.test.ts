@@ -4,16 +4,32 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
+} from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
-import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
+
+const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
+  "change-me-to-a-long-random-token",
+  "change-me-now",
+] as const;
 
 type PrepareRuntimeSecretsSnapshotForTest =
   typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
@@ -37,6 +53,15 @@ type GatewayStartupStateEmitterMock = ReturnType<
 >;
 
 const RESOLVED_GATEWAY_TOKEN = "resolved-gateway-token";
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function activateSecretsRuntimeSnapshotForTest(snapshot: PreparedSecretsRuntimeSnapshot): void {
+  activateSecretsRuntimeSnapshotState({
+    snapshot,
+    refreshContext: null,
+    refreshHandler: null,
+  });
+}
 
 function gatewayTokenConfig(config: OpenClawConfig): OpenClawConfig {
   return {
@@ -75,6 +100,7 @@ function preparedSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapsho
     sourceConfig: config,
     config,
     authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
     warnings: [],
     webTools: {
       search: {
@@ -255,6 +281,25 @@ function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRun
     return {
       prepareSecretsRuntimeSnapshot: runtimeState.prepareRuntimeSecretsSnapshot,
       activateSecretsRuntimeSnapshot: runtimeState.activateRuntimeSecretsSnapshot,
+      preflightActiveSecretsRuntimeSnapshotRefresh: async ({
+        sourceConfig,
+      }: {
+        sourceConfig: OpenClawConfig;
+      }) => await runtimeState.prepareRuntimeSecretsSnapshot({ config: sourceConfig }),
+      refreshActiveSecretsRuntimeSnapshotForConfig: async ({
+        sourceConfig,
+        preflightResult,
+      }: {
+        sourceConfig: OpenClawConfig;
+        preflightResult?: unknown;
+      }) => {
+        const snapshot =
+          preflightResult && typeof preflightResult === "object"
+            ? (preflightResult as PreparedSecretsRuntimeSnapshot)
+            : await runtimeState.prepareRuntimeSecretsSnapshot({ config: sourceConfig });
+        runtimeState.activateRuntimeSecretsSnapshot(snapshot);
+        return true;
+      },
     };
   });
 }
@@ -348,6 +393,7 @@ describe("gateway startup config secret preflight", () => {
   const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
 
   afterEach(() => {
+    clearSecretsRuntimeSnapshot();
     if (previousSkipChannels === undefined) {
       delete process.env.OPENCLAW_SKIP_CHANNELS;
     } else {
@@ -358,6 +404,140 @@ describe("gateway startup config secret preflight", () => {
     } else {
       process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
     }
+  });
+
+  it("activates a prepared snapshot only while its expected predecessor is current", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const refreshed = preparedSnapshotWithGatewayToken(initial.sourceConfig, "refreshed-token");
+    const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+    const activateRuntimeSecretsSnapshot = vi.fn(activateSecretsRuntimeSnapshotForTest);
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    activateSecretsRuntimeSnapshotForTest(refreshed);
+    const refreshedRevision = getActiveSecretsRuntimeSnapshotRevision();
+
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toBeNull();
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, refreshedRevision, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toBe(candidate);
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a managed reload prepared before an OAuth credential mutation", async () => {
+    const agentDir = "/tmp/openclaw-managed-auth-store-cas";
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const candidate: PreparedSecretsRuntimeSnapshot = {
+      ...preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token"),
+      authStores: [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "oauth",
+                provider: "openai",
+                access: "access-old",
+                refresh: "refresh-old",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+        },
+      ],
+    };
+    const activateRuntimeSecretsSnapshot = vi.fn(activateSecretsRuntimeSnapshotForTest);
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    setRuntimeAuthProfileStoreSnapshot(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "access-new",
+            refresh: "refresh-new",
+            expires: Date.now() + 120_000,
+          },
+        },
+      },
+      agentDir,
+    );
+
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toBeNull();
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toMatchObject({
+      access: "access-new",
+      refresh: "refresh-new",
+    });
+  });
+
+  it("holds activation ownership through the accepted publication callback", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+    const later = preparedSnapshotWithGatewayToken(initial.sourceConfig, "later-token");
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot: vi.fn(activateSecretsRuntimeSnapshotForTest),
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    let releasePublication: (() => void) | undefined;
+    const publicationBlocked = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let publicationStarted: (() => void) | undefined;
+    const publicationEntered = new Promise<void>((resolve) => {
+      publicationStarted = resolve;
+    });
+
+    const candidateActivation = activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      candidate,
+      initialRevision,
+      { reason: "reload", activate: true },
+      async () => {
+        publicationStarted?.();
+        await publicationBlocked;
+      },
+    );
+    await publicationEntered;
+    let laterActivated = false;
+    const laterActivation = activateRuntimeSecrets
+      .activatePreparedSnapshot?.(later, { reason: "reload", activate: true })
+      .then(() => {
+        laterActivated = true;
+      });
+    await Promise.resolve();
+    expect(laterActivated).toBe(false);
+
+    releasePublication?.();
+    await candidateActivation;
+    await laterActivation;
+    expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe("later-token");
   });
 
   it("measures startup auth subphases", async () => {
@@ -831,12 +1011,33 @@ describe("gateway startup config secret preflight", () => {
       return {
         prepareSecretsRuntimeSnapshot: state.prepareRuntimeSecretsSnapshot,
         activateSecretsRuntimeSnapshot: state.activateRuntimeSecretsSnapshot,
+        preflightActiveSecretsRuntimeSnapshotRefresh: async ({
+          sourceConfig,
+        }: {
+          sourceConfig: OpenClawConfig;
+        }) => await state.prepareRuntimeSecretsSnapshot({ config: sourceConfig }),
+        refreshActiveSecretsRuntimeSnapshotForConfig: async ({
+          sourceConfig,
+          preflightResult,
+        }: {
+          sourceConfig: OpenClawConfig;
+          preflightResult?: unknown;
+        }) => {
+          const snapshot =
+            preflightResult && typeof preflightResult === "object"
+              ? (preflightResult as PreparedSecretsRuntimeSnapshot)
+              : await state.prepareRuntimeSecretsSnapshot({ config: sourceConfig });
+          state.activateRuntimeSecretsSnapshot(snapshot);
+          return true;
+        },
       };
     });
 
     try {
-      const { clearSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } =
-        await import("../secrets/runtime-state.js");
+      const {
+        clearSecretsRuntimeSnapshot: clearImportedSecretsRuntimeSnapshot,
+        getActiveSecretsRuntimeSnapshot: getImportedSecretsRuntimeSnapshot,
+      } = await import("../secrets/runtime-state.js");
       const { getRuntimeConfigSnapshotRefreshHandler } =
         await import("../config/runtime-snapshot.js");
       const result = await activateImportedStartupConfig(
@@ -852,7 +1053,7 @@ describe("gateway startup config secret preflight", () => {
       expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
       expect(loadAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
       expect(result.config.gateway?.auth?.token).toBe("startup-test-token");
-      expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe(
+      expect(getImportedSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe(
         "startup-test-token",
       );
       const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
@@ -872,7 +1073,7 @@ describe("gateway startup config secret preflight", () => {
         loadAuthStore?: unknown;
       }>(prepareRuntimeSecretsSnapshot);
       expect(refreshInput.loadAuthStore).toBeUndefined();
-      clearSecretsRuntimeSnapshot();
+      clearImportedSecretsRuntimeSnapshot();
     } finally {
       isolatedEnv.cleanup();
       vi.doUnmock("../agents/auth-profiles.js");
@@ -885,6 +1086,127 @@ describe("gateway startup config secret preflight", () => {
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }
+  });
+
+  it("retries a stale startup fast-path preflight against the newer runtime context", async () => {
+    const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-cas-");
+    let clearImportedSecretsRuntimeSnapshot: (() => void) | undefined;
+    const config = (port: number) =>
+      gatewayTokenConfig(
+        asConfig({
+          agents: { list: [{ id: "default", agentDir }] },
+          gateway: { port },
+        }),
+      );
+    try {
+      // A preceding lazy-import test resets Vitest's module cache. Import this
+      // whole runtime graph together so the activator and handler share state.
+      const { createRuntimeSecretsActivator: createImportedRuntimeSecretsActivator } =
+        await import("./server-startup-config.js");
+      const secretsRuntime = await import("../secrets/runtime.js");
+      clearImportedSecretsRuntimeSnapshot = secretsRuntime.clearSecretsRuntimeSnapshot;
+      const activateRuntimeSecrets = createImportedRuntimeSecretsActivator(
+        runtimeSecretsActivatorOptionsForTest(),
+      );
+      await activateRuntimeSecrets(config(19_021), {
+        reason: "startup",
+        activate: true,
+      });
+      const { getRuntimeConfigSnapshotRefreshHandler } =
+        await import("../config/runtime-snapshot.js");
+      const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+      if (!staleRefreshHandler?.preflight) {
+        throw new Error("expected startup fast-path refresh preflight handler");
+      }
+      const desiredConfig = config(19_023);
+      const preflightResult = await staleRefreshHandler.preflight({
+        sourceConfig: desiredConfig,
+      });
+      const concurrent = await secretsRuntime.prepareSecretsRuntimeSnapshot({
+        config: config(19_022),
+        agentDirs: [agentDir],
+        loadAuthStore: () => ({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "newer-context-key",
+            },
+          },
+        }),
+      });
+      secretsRuntime.activateSecretsRuntimeSnapshot(concurrent);
+
+      await expect(
+        staleRefreshHandler.refresh({ sourceConfig: desiredConfig, preflightResult }),
+      ).resolves.toBe(true);
+
+      const active = secretsRuntime.getActiveSecretsRuntimeSnapshot();
+      expect(active?.sourceConfig.gateway?.port).toBe(19_023);
+      expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+        key: "newer-context-key",
+      });
+    } finally {
+      clearImportedSecretsRuntimeSnapshot?.();
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("grafts live auth stores onto one-shot config-write snapshots", async () => {
+    const agentDir = "/tmp/openclaw-managed-write-auth-store";
+    const credential = {
+      type: "api_key" as const,
+      provider: "openai",
+      key: "live-auth-store-key",
+    };
+    setRuntimeAuthProfileStoreSnapshot(
+      { version: 1, profiles: { "openai:default": credential } },
+      agentDir,
+    );
+    const active = preparedSnapshot(gatewayTokenConfig({}));
+    active.authStores = [
+      {
+        agentDir,
+        store: { version: 1, profiles: { "openai:default": credential } },
+      },
+    ];
+    active.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: {
+        env: {},
+        explicitAgentDirs: null,
+        includeAuthStoreRefs: true,
+        loadablePluginOrigins: new Map(),
+      },
+      refreshHandler: null,
+    });
+    const prepareRuntimeSecretsSnapshot = vi.fn(async (params: { config: OpenClawConfig }) =>
+      preparedSnapshot(params.config),
+    );
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+
+    const prepared = await activateRuntimeSecrets(
+      gatewayTokenConfig({ logging: { level: "debug" } }),
+      {
+        reason: "reload",
+        activate: false,
+        includeAuthStoreRefs: false,
+      },
+    );
+    expect(prepared.authStores[0]?.store.profiles["openai:default"]).toEqual(credential);
+    await activateRuntimeSecrets.activatePreparedSnapshot?.(prepared, {
+      reason: "reload",
+      activate: true,
+      includeAuthStoreRefs: false,
+    });
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toEqual(
+      credential,
+    );
   });
 
   it("keeps the full secrets runtime path when startup config has a SecretRef", async () => {

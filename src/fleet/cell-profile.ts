@@ -6,7 +6,7 @@ export type FleetContainerRuntimeName = "docker" | "podman";
 export const DEFAULT_FLEET_IMAGE = "ghcr.io/openclaw/openclaw:latest";
 export const FLEET_BASE_PORT = 19_100;
 export const FLEET_GATEWAY_PORT = 18_789;
-export const FLEET_CONTAINER_HOME = "/home/node";
+const FLEET_CONTAINER_HOME = "/home/node";
 export const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
 export const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
 export const FLEET_TENANT_LABEL = "openclaw.fleet.tenant";
@@ -14,7 +14,7 @@ export const FLEET_OWNER_LABEL = "openclaw.fleet.owner";
 export const FLEET_ATTEMPT_LABEL = "openclaw.fleet.attempt";
 export const FLEET_ENV_KEYS_LABEL = "openclaw.fleet.env-keys";
 export const FLEET_DISK_LIMIT_LABEL = "openclaw.fleet.disk-limit";
-export const FLEET_MANAGED_ENV_KEYS = [
+const FLEET_MANAGED_ENV_KEYS = [
   "HOME",
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -54,7 +54,7 @@ export interface CellContainerProfile {
   selinuxRelabel: boolean;
 }
 
-export type CellContainerArgOptions = {
+type CellContainerArgOptions = {
   environmentFile: string;
 };
 

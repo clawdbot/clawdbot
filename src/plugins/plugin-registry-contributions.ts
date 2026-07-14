@@ -26,22 +26,19 @@ import {
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
 } from "./plugin-registry-snapshot.js";
-export {
-  createPluginRegistryIdNormalizer,
-  type PluginRegistryIdNormalizerOptions,
-} from "./plugin-registry-id-normalizer.js";
+export { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 
-export type PluginLookUpTable = Pick<
+type PluginLookUpTable = Pick<
   PluginMetadataSnapshot,
   "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
 >;
 
-export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
+type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   lookUpTable?: PluginLookUpTable;
 };
 
-export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
+type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
@@ -57,37 +54,36 @@ export type PluginRegistryContributionKey =
   | "commandAliases"
   | "contracts";
 
-export type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
+type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
   matches: string | ((contributionId: string) => boolean);
 };
 
-export type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
+type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
 };
 
-export type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
+type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
   providerId: string;
 };
 
-export type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
+type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 };
 
-export type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
+type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   value: string | undefined;
   origin?: PluginOrigin;
 };
 
-export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
-  LoadPluginRegistryParams & {
-    contract: PluginManifestContractListKey;
-    path: string | undefined;
-    origin?: PluginOrigin;
-  };
+type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams = LoadPluginRegistryParams & {
+  contract: PluginManifestContractListKey;
+  path: string | undefined;
+  origin?: PluginOrigin;
+};
 
 function normalizeContributionId(value: string): string {
   return value.trim();

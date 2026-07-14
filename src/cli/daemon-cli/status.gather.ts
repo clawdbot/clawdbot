@@ -581,7 +581,7 @@ export async function gatherDaemonStatus(
       .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
-  const configAudit = command
+  const configAudit: ServiceConfigAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
         auditGatewayServiceConfig({
           env: process.env,

@@ -1351,6 +1351,34 @@ describe("WorkboardStore", () => {
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
   });
 
+  it("resolves parent dependency status with targeted lookups instead of a full-corpus scan", async () => {
+    const cardStore = createMemoryStore();
+    const entriesSpy = vi.spyOn(cardStore, "entries");
+    const store = new WorkboardStore(cardStore);
+
+    const parent = await store.create({ title: "Parent" });
+    const children = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        store.create({ title: `Child ${i}`, status: "todo", parents: [parent.id] }),
+      ),
+    );
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    entriesSpy.mockClear();
+    const dispatch = await store.dispatch();
+
+    const idComparator = (left: string, right: string) => left.localeCompare(right);
+    expect(dispatch.promoted.map((card) => card.id).toSorted(idComparator)).toEqual(
+      children.map((child) => child.id).toSorted(idComparator),
+    );
+    // Regression guard for the dependencyTargetStatus N+1: before the fix, every
+    // parented card being checked in this pass triggered its own additional
+    // unscoped list() call (an extra full-corpus scan per child, here 8 of them).
+    // Resolving parents via targeted get() calls keeps this flat regardless of
+    // how many dependent cards are promoted together.
+    expect(entriesSpy.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+
   it("rejects terminal children with incomplete dependency parents", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const runningParent = await store.create({ title: "Running parent", status: "running" });

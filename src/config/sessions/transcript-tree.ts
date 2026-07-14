@@ -1,7 +1,7 @@
 // Transcript tree helpers keep append-only leaf controls consistent across readers.
 type TranscriptRecord = Record<string, unknown>;
 
-export type SessionTranscriptTreeEntry = {
+type SessionTranscriptTreeEntry = {
   id: string;
   parentId: string | null;
   leafId: string | null | undefined;
@@ -9,7 +9,7 @@ export type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };

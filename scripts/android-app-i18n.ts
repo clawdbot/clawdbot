@@ -461,6 +461,11 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["$versionName-dev"]),
   ],
   [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+    // Discovered-gateway subtitles are host:port endpoints, not translatable copy.
+    new Set(["${endpoint.host}:${endpoint.port}"]),
+  ],
+  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
     new Set(["${normalized.take(87)}..."]),
   ],

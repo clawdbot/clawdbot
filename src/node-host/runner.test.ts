@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
+import type { ensureNodeHostConfig } from "./config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import {
   resolveNodeHostGatewayDeviceFamily,
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
+  resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
   ensureNodeHostConfig: vi.fn(async () => ({
     version: 1,
@@ -78,6 +80,10 @@ vi.mock("../infra/machine-name.js", () => ({
   getMachineDisplayName: vi.fn(async () => "test-node"),
 }));
 
+vi.mock("../infra/executable-path.js", () => ({
+  resolveExecutableFromPathEnv: vi.fn((bin: string) => mocks.resolvedExecutables.get(bin) ?? null),
+}));
+
 vi.mock("../infra/path-env.js", () => ({
   ensureOpenClawCliOnPath: vi.fn(),
 }));
@@ -130,6 +136,7 @@ describe("runNodeHost", () => {
     mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
     mocks.nodeSkillDescriptors = [];
+    mocks.resolvedExecutables.clear();
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
@@ -248,6 +255,21 @@ describe("runNodeHost", () => {
 
     expect(lastCapturedOptions()?.caps).toContain("mcp");
     expect(lastCapturedOptions()?.commands).toContain("mcp.tools.call.v1");
+    expect(lastCapturedOptions()?.commands).not.toContain("agent.cli.claude.run.v1");
+  });
+
+  it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
+    mocks.resolvedExecutables.set("claude", "/usr/bin/claude");
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { handshakeTimeoutMs: 1_000 },
+      nodeHost: { agentRuns: { claude: { enabled: true } } },
+    } as never);
+
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+
+    expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v1");
   });
 
   it("publishes node plugin tools only after gateway hello succeeds", async () => {
@@ -490,7 +512,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({
@@ -510,7 +532,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({

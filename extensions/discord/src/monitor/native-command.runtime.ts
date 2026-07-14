@@ -56,4 +56,3 @@ export const testing = {
     return previous;
   },
 };
-export { testing as __testing };

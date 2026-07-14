@@ -49,7 +49,7 @@ type CookieSetOptions = {
 };
 
 /** Parse the supported browser storage bucket names. */
-export function parseStorageKind(raw: string): StorageKind | null {
+function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
   }
@@ -57,7 +57,7 @@ export function parseStorageKind(raw: string): StorageKind | null {
 }
 
 /** Parse an optional storage mutation request from a route body. */
-export function parseStorageMutationRequest(
+function parseStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
 ): { kind: StorageKind | null; targetId: string | undefined } {
@@ -68,7 +68,7 @@ export function parseStorageMutationRequest(
 }
 
 /** Parse a required storage mutation request and throw on invalid input. */
-export function parseRequiredStorageMutationRequest(
+function parseRequiredStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
 ): { kind: StorageKind; targetId: string | undefined } | null {
@@ -132,7 +132,7 @@ function readOptionalHttpOrigin(raw: unknown): string | undefined {
 }
 
 /** Parse cookie options accepted by browser storage mutation routes. */
-export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
+function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
     value: toStringOrEmpty(cookie.value),
@@ -150,7 +150,7 @@ export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSe
 }
 
 /** Parse geolocation override options accepted by context mutation routes. */
-export function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
   const clear = toBoolean(body.clear) ?? false;
   if (clear) {
     return { clear };

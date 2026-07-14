@@ -19,6 +19,7 @@ import {
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
+import pMap from "p-map";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
@@ -1449,46 +1450,6 @@ export type SessionListProgress = (loaded: number, total: number) => void;
 
 const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
 
-async function buildSessionInfosWithConcurrency(
-  files: string[],
-  onLoaded: () => void,
-): Promise<(SessionInfo | null)[]> {
-  const results: (SessionInfo | null)[] = Array.from({ length: files.length }, () => null);
-  const inFlight = new Set<Promise<void>>();
-  let nextIndex = 0;
-
-  const startNext = (): void => {
-    const index = nextIndex++;
-    const file = files[index];
-    if (!file) {
-      return;
-    }
-    const task: Promise<void> = buildSessionInfo(file)
-      .then((info) => {
-        results[index] = info;
-      })
-      .catch(() => {
-        results[index] = null;
-      })
-      .finally(() => {
-        inFlight.delete(task);
-        onLoaded();
-      });
-    inFlight.add(task);
-  };
-
-  while (nextIndex < files.length || inFlight.size > 0) {
-    while (nextIndex < files.length && inFlight.size < MAX_CONCURRENT_SESSION_INFO_LOADS) {
-      startNext();
-    }
-    if (inFlight.size > 0) {
-      await Promise.race(inFlight);
-    }
-  }
-
-  return results;
-}
-
 async function listSessionsFromDir(
   dir: string,
   onProgress?: SessionListProgress,
@@ -1507,10 +1468,20 @@ async function listSessionsFromDir(
     const total = progressTotal ?? files.length;
 
     let loaded = 0;
-    const results = await buildSessionInfosWithConcurrency(files, () => {
-      loaded++;
-      onProgress?.(progressOffset + loaded, total);
-    });
+    const results = await pMap(
+      files,
+      async (file) => {
+        try {
+          return await buildSessionInfo(file);
+        } catch {
+          return null;
+        } finally {
+          loaded++;
+          onProgress?.(progressOffset + loaded, total);
+        }
+      },
+      { concurrency: MAX_CONCURRENT_SESSION_INFO_LOADS, stopOnError: false },
+    );
     for (const info of results) {
       if (info && sessionInfoMatchesCwd(info, cwd)) {
         sessions.push(info);
@@ -3322,10 +3293,20 @@ export class SessionManager {
       const sessions: SessionInfo[] = [];
       const allFiles = dirFiles.flat();
 
-      const results = await buildSessionInfosWithConcurrency(allFiles, () => {
-        loaded++;
-        onProgress?.(loaded, totalFiles);
-      });
+      const results = await pMap(
+        allFiles,
+        async (file) => {
+          try {
+            return await buildSessionInfo(file);
+          } catch {
+            return null;
+          } finally {
+            loaded++;
+            onProgress?.(loaded, totalFiles);
+          }
+        },
+        { concurrency: MAX_CONCURRENT_SESSION_INFO_LOADS, stopOnError: false },
+      );
 
       for (const info of results) {
         if (info) {

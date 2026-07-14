@@ -4,7 +4,7 @@ import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
+import { buildMcpToolSchema } from "./mcp-http.schema.js";
 
 type MockGatewayTool = {
   name: string;
@@ -195,23 +195,16 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
-  resetAttachGrantsForTest,
-  resetMcpLoopbackClientGrantsForTest,
   revokeMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
-import {
-  createMcpAttachGrantServerConfig,
-  createMcpLoopbackServerConfig,
-  closeMcpLoopbackServer,
-  getActiveMcpLoopbackRuntime,
-  ensureMcpLoopbackServer,
-  startMcpLoopbackServer,
-} from "./mcp-http.js";
+import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
-  clearMcpLoopbackToolCallCapturesForTest,
+  createMcpAttachGrantServerConfig,
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
@@ -219,7 +212,7 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
-let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
+let server: Awaited<ReturnType<typeof ensureMcpLoopbackServer>> | undefined;
 
 const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
 const ANGLE_NUMBER_PROPERTY = { type: "number" };
@@ -392,6 +385,8 @@ async function sendChunkedOversizedBody(params: {
 async function sendStalledBody(params: {
   port: number;
   token: string;
+  bodyAfterDelay?: string;
+  delayMs?: number;
 }): Promise<{ status: number | undefined; body: string; closed: boolean }> {
   return await new Promise((resolve, reject) => {
     let sawResponse = false;
@@ -454,12 +449,19 @@ async function sendStalledBody(params: {
         reject(error);
       }
     });
-    req.write("{");
+    if (params.bodyAfterDelay === undefined) {
+      req.write("{");
+      return;
+    }
+    req.flushHeaders();
+    setTimeout(() => {
+      req.end(params.bodyAfterDelay);
+    }, params.delayMs ?? 0).unref();
   });
 }
 
 async function startLoopbackServerForTest(port = 0) {
-  server = await startMcpLoopbackServer(port);
+  server = await ensureMcpLoopbackServer(port);
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("expected active MCP loopback runtime");
@@ -666,11 +668,7 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
-  resetAttachGrantsForTest();
-  resetMcpLoopbackClientGrantsForTest();
-  clearMcpToolSchemaWarningsForTest();
   logWarnMock.mockClear();
-  clearMcpLoopbackToolCallCapturesForTest();
   sessionEntries.clear();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -779,7 +777,7 @@ describe("buildMcpToolSchema", () => {
 
   it("warns once for repeated union schema conflicts across loopback schema rebuilds", () => {
     const tool = makeMockTool({
-      name: "mcp_message_send",
+      name: "mcp_message_send_rebuild",
       parameters: {
         anyOf: [
           {
@@ -811,8 +809,8 @@ describe("buildMcpToolSchema", () => {
     }
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_message_send.callId", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
     ]);
   });
 
@@ -824,11 +822,11 @@ describe("buildMcpToolSchema", () => {
       ],
     });
     const messageTool = makeMockTool({
-      name: "mcp_message_send",
+      name: "mcp_message_send_per_tool",
       parameters: conflictingUnion("message"),
     });
     const calendarTool = makeMockTool({
-      name: "mcp_calendar_create",
+      name: "mcp_calendar_create_per_tool",
       parameters: conflictingUnion("calendar"),
     });
 
@@ -837,14 +835,14 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([messageTool, calendarTool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_calendar_create.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
     ]);
   });
 
   it("warns once per tool for repeated malformed variant schemas across rebuilds", () => {
     const tool = makeMockTool({
-      name: "mcp_message_send",
+      name: "mcp_message_send_malformed",
       parameters: {
         anyOf: [
           { type: "object", properties: { action: { type: "string" } } },
@@ -857,7 +855,7 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([tool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: malformed schema definition for "mcp_message_send.action", ignoring that variant',
+      'mcp loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
     ]);
   });
 });
@@ -2431,7 +2429,7 @@ describe("mcp loopback server", () => {
       captureKey,
       onToolCallResult: captured,
     });
-    clearMcpLoopbackToolCallCapturesForTest();
+    clearMcpLoopbackToolCallCapture(captureKey);
     const captureHandle = markMcpLoopbackToolCallStarted({
       captureKey,
       toolName: "message",
@@ -2632,7 +2630,7 @@ describe("mcp loopback server", () => {
   });
 
   it("tracks the active runtime only while the server is running", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const active = getActiveMcpLoopbackRuntime();
     expect(active?.port).toBe(server.port);
     expect(active?.ownerToken).toMatch(/^[0-9a-f]{64}$/);
@@ -2658,7 +2656,7 @@ describe("mcp loopback server", () => {
   });
 
   it("returns 401 when the bearer token is missing", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const response = await sendRaw({
       port: server.port,
       headers: { "content-type": "application/json" },
@@ -2668,7 +2666,7 @@ describe("mcp loopback server", () => {
   });
 
   it("returns 415 when the content type is not JSON", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
@@ -2680,7 +2678,7 @@ describe("mcp loopback server", () => {
   });
 
   it("returns JSON-RPC parse errors only for invalid JSON", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
@@ -2705,7 +2703,7 @@ describe("mcp loopback server", () => {
     resolveGatewayScopedToolsMock.mockImplementationOnce(() => {
       throw new Error("tool resolution exploded");
     });
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
@@ -2727,7 +2725,7 @@ describe("mcp loopback server", () => {
   });
 
   it("returns invalid request errors for malformed batch entries without resetting the request", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
@@ -2755,7 +2753,7 @@ describe("mcp loopback server", () => {
   });
 
   it("returns 413 instead of resetting oversized request bodies", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
@@ -2769,7 +2767,7 @@ describe("mcp loopback server", () => {
   });
 
   it("closes slow oversized request uploads after flushing 413", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
       throw new Error("expected active MCP loopback runtime");
@@ -2791,7 +2789,7 @@ describe("mcp loopback server", () => {
     const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
     process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "20";
     try {
-      server = await startMcpLoopbackServer(0);
+      server = await ensureMcpLoopbackServer(0);
       const runtime = getActiveMcpLoopbackRuntime();
       if (!runtime) {
         throw new Error("expected active MCP loopback runtime");
@@ -2806,6 +2804,37 @@ describe("mcp loopback server", () => {
         status: 408,
         body: '{"error":"request_body_timeout"}',
         closed: true,
+      });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = previousTimeout;
+      }
+    }
+  });
+
+  it("keeps delayed valid MCP request bodies open when timeout config exceeds Node's timer ceiling", async () => {
+    const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+    process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "2147483648";
+    try {
+      server = await ensureMcpLoopbackServer(0);
+      const runtime = getActiveMcpLoopbackRuntime();
+      if (!runtime) {
+        throw new Error("expected active MCP loopback runtime");
+      }
+      const auth = runtime.ownerToken;
+
+      const response = await sendStalledBody({
+        port: server.port,
+        token: auth,
+        bodyAfterDelay: mcpToolsListBody(),
+        delayMs: 25,
+      });
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({
+        result: { tools: [{ name: "message" }] },
       });
     } finally {
       if (previousTimeout === undefined) {
@@ -2889,7 +2918,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
@@ -2947,7 +2976,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("closes active GET notification streams during loopback shutdown", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
@@ -2973,7 +3002,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("withdraws a closing runtime before drain without fencing its successor", async () => {
-    const oldServer = await startMcpLoopbackServer(0);
+    const oldServer = await ensureMcpLoopbackServer(0);
     const oldRuntime = getActiveMcpLoopbackRuntime();
     if (!oldRuntime) {
       throw new Error("expected old MCP loopback runtime");
@@ -3033,7 +3062,7 @@ describe("createMcpLoopbackServerConfig", () => {
       });
 
       let closeSettled = false;
-      oldClose = oldServer.close().finally(() => {
+      oldClose = closeMcpLoopbackServer().finally(() => {
         closeSettled = true;
       });
       expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
@@ -3075,14 +3104,14 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("rejects a GET notification channel without a bearer token (401)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "GET" });
     expect(res.status).toBe(401);
     await res.body?.cancel();
   });
 
   it("rejects a GET notification channel from a browser Origin (403)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
@@ -3096,7 +3125,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("acknowledges DELETE session teardown with 200 (stateless no-op)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "DELETE",
@@ -3106,7 +3135,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("ignores Mcp-Session-Id on DELETE because loopback teardown is stateless", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "DELETE",
@@ -3118,20 +3147,20 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("rejects DELETE without a bearer token (401)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "DELETE" });
     expect(res.status).toBe(401);
   });
 
   it("rejects unsupported methods with 405 advertising GET, POST, DELETE", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "PUT" });
     expect(res.status).toBe(405);
     expect(res.headers.get("allow")).toBe("GET, POST, DELETE");
   });
 
   it("stays stateless: POST responses advertise no Mcp-Session-Id", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await sendRaw({
       port: server.port,
       token: getActiveMcpLoopbackRuntime()?.ownerToken,
@@ -3143,7 +3172,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("rejects a browser-Origin GET before auth (403, no bearer)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
       headers: { origin: "https://evil.example" },
@@ -3153,7 +3182,7 @@ describe("createMcpLoopbackServerConfig", () => {
   });
 
   it("rejects a browser-Origin DELETE before auth (403, no bearer)", async () => {
-    server = await startMcpLoopbackServer(0);
+    server = await ensureMcpLoopbackServer(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "DELETE",
       headers: { origin: "https://evil.example" },

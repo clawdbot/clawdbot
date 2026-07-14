@@ -27,13 +27,12 @@ import {
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
-export const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
+const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 /** Legacy standalone-MCP transcript gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
+const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
   "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
 /** Legacy standalone-MCP write gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV =
-  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
+const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -146,7 +145,7 @@ type EndpointRequest = <T = unknown>(
   requestParams?: unknown,
 ) => Promise<T>;
 
-export type CodexSupervisionToolsOptions = {
+type CodexSupervisionToolsOptions = {
   getPluginConfig: () => unknown;
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
@@ -806,7 +805,7 @@ function redactString(value: string): string {
 }
 
 /** Redacts secret-bearing fields before legacy tool results leave the plugin. */
-export function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
+function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     return /authorization|password|secret|token|api[-_]?key/i.test(key)
       ? "[redacted]"

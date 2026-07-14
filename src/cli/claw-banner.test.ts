@@ -87,6 +87,41 @@ describe("printClawBanner", () => {
     expect(process.listenerCount("SIGINT")).toBe(before);
   });
 
+  it("settles on the static frame when parallel work finishes first", async () => {
+    const staticRows = await runStatic();
+    const chunks: string[] = [];
+    const beforeSigint = process.listenerCount("SIGINT");
+    let settle!: () => void;
+    const settleWhen = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const { runtime } = runtimeStub();
+    const banner = printClawBanner(runtime, {
+      columns: 120,
+      isTty: true,
+      rich: true,
+      env: {},
+      rng: () => 0.99,
+      settleWhen,
+      sleep: () => new Promise<void>(() => {}),
+      write: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks[0]).toBe("\x1b[?25l");
+    expect(process.listenerCount("SIGINT")).toBe(beforeSigint + 1);
+    settle();
+    await expect(banner).resolves.toBe("settled");
+
+    const frames = chunks.filter((chunk) => chunk.includes("\x1b[K"));
+    const finalRows = stripAnsi(frames.at(-1) ?? "")
+      .split("\n")
+      .filter((row) => row.length > 0);
+    expect(finalRows).toEqual(staticRows);
+    expect(chunks.at(-2)).toBe("\x1b[?25h");
+    expect(chunks.at(-1)).toBe("\n");
+    expect(process.listenerCount("SIGINT")).toBe(beforeSigint);
+  });
+
   it("varies snips and shimmer passes with the rng", async () => {
     // rng below the thresholds adds a second shimmer pass and a second snip.
     const maximal = (await runAnimated(() => 0)).filter((c) => c.includes("\x1b[K"));

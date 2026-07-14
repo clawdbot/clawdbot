@@ -11,6 +11,7 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
+import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.ts";
 import {
   die,
   ensureValue,
@@ -506,10 +507,7 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 }
 
 function formatDuration(durationMs: number): string {
-  const seconds = Math.round(durationMs / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+  return formatDurationCompact(durationMs, { spaced: true }) ?? "0ms";
 }
 
 function readHarnessCheckoutVersion(): string {

@@ -742,7 +742,7 @@ async function main() {
       "tsx",
       "--input-type=module",
       "-e",
-      "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
+      "const { writePackageDistInventory } = await import('./scripts/lib/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
     ],
     sourceDir,
     {

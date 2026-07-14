@@ -19,7 +19,7 @@ import type {
 
 const NAME_COMMAND_PREFIX = "/name";
 
-export function parseNameCommand(raw: string): { title: string } | null {
+function parseNameCommand(raw: string): { title: string } | null {
   const trimmed = raw.trim();
   const commandEnd = trimmed.search(/\s/);
   const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);

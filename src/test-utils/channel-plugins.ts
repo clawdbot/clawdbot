@@ -10,7 +10,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
 /** Registry entry shape used by channel tests without loading real plugins. */
-export type TestChannelRegistration = {
+type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
@@ -84,10 +84,7 @@ export const createOutboundTestPlugin = (params: {
   ...(params.messaging ? { messaging: params.messaging } : {}),
 });
 
-export type BindingResolverTestPlugin = Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config"
-> & {
+type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
   setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
 };
 

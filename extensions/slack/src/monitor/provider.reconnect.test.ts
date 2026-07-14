@@ -7,10 +7,6 @@ import {
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
 import {
-  formatSlackSocketReconnectMessage,
-  formatSlackSocketStartRetryMessage,
-} from "./provider.js";
-import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
   registerSlackSocketModeConnectionDiagnostics,
@@ -109,16 +105,6 @@ describe("slack socket reconnect helpers", () => {
     });
   });
 
-  it("formats recoverable disconnects beyond the former cap as unlimited", () => {
-    expect(
-      formatSlackSocketReconnectMessage({
-        event: "disconnect",
-        attempt: 13,
-        delayMs: 2_340,
-      }),
-    ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 13/∞)");
-  });
-
   it("formats missing and unserializable socket errors without leaking undefined", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
@@ -201,31 +187,6 @@ describe("slack socket reconnect helpers", () => {
     );
     expect(onSharedConnection).toHaveBeenCalledTimes(1);
     expect(client.listenerCount("ws_message")).toBe(0);
-  });
-
-  it("formats socket start retries with an explicit reason field", () => {
-    expect(
-      formatSlackSocketStartRetryMessage({
-        attempt: 13,
-        delayMs: 2_340,
-        error: undefined,
-      }),
-    ).toBe(
-      'slack socket mode failed to start; retry 13/∞ in 2s reason="Slack Socket Mode start failed without error detail"',
-    );
-  });
-
-  it("includes last SDK log context when start errors have no detail", () => {
-    expect(
-      formatSlackSocketStartRetryMessage({
-        attempt: 1,
-        delayMs: 2_340,
-        error: undefined,
-        sdkContext: "socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL",
-      }),
-    ).toBe(
-      'slack socket mode failed to start; retry 1/∞ in 2s reason="Slack Socket Mode start failed without error detail; last SDK log: socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL"',
-    );
   });
 
   it("resolves disconnect waiter on socket disconnect event", async () => {

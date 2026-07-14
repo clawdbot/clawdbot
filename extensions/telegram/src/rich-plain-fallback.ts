@@ -65,11 +65,7 @@ export function splitTelegramPlainTextChunks(text: string, limit: number): strin
   return chunks;
 }
 
-export function splitTelegramPlainTextFallback(
-  text: string,
-  chunkCount: number,
-  limit: number,
-): string[] {
+function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
   if (!text) {
     return [];
   }

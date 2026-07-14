@@ -1103,42 +1103,6 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
 
-CREATE TABLE IF NOT EXISTS cron_run_logs (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  ts INTEGER NOT NULL,
-  status TEXT,
-  error TEXT,
-  summary TEXT,
-  diagnostics_summary TEXT,
-  delivery_status TEXT,
-  delivery_error TEXT,
-  delivered INTEGER,
-  session_id TEXT,
-  session_key TEXT,
-  run_id TEXT,
-  run_at_ms INTEGER,
-  duration_ms INTEGER,
-  next_run_at_ms INTEGER,
-  model TEXT,
-  provider TEXT,
-  total_tokens INTEGER,
-  entry_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
-  ON cron_run_logs(store_key, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_job_status
-  ON cron_run_logs(store_key, job_id, status, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
-  ON cron_run_logs(store_key, delivery_status, ts DESC, seq DESC)
-  WHERE delivery_status IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1312,7 +1276,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
   error TEXT,
   progress_summary TEXT,
   terminal_summary TEXT,
-  terminal_outcome TEXT
+  terminal_outcome TEXT,
+  detail_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
@@ -1323,6 +1288,10 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
+  ON task_runs(runtime, source_id, ended_at, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
+  ON task_runs(runtime, ended_at, created_at, task_id);
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
@@ -1587,6 +1556,122 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
 
+-- Session placement lives in the shared state database so local admission,
+-- worker admission, and environment attachment use one durable authority.
+CREATE TABLE IF NOT EXISTS worker_session_placements (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'local',
+      'requested',
+      'provisioning',
+      'syncing',
+      'starting',
+      'active',
+      'draining',
+      'reconciling',
+      'reclaimed',
+      'failed'
+    )
+  ),
+  environment_id TEXT,
+  transition_generation INTEGER NOT NULL DEFAULT 0 CHECK (transition_generation >= 0),
+  active_owner_epoch INTEGER CHECK (active_owner_epoch IS NULL OR active_owner_epoch >= 1),
+  workspace_base_manifest_ref TEXT,
+  remote_workspace_dir TEXT,
+  worker_bundle_hash TEXT,
+  last_transcript_ack_cursor INTEGER CHECK (
+    last_transcript_ack_cursor IS NULL OR last_transcript_ack_cursor >= 0
+  ),
+  last_live_event_ack_cursor INTEGER CHECK (
+    last_live_event_ack_cursor IS NULL OR last_live_event_ack_cursor >= 0
+  ),
+  recovery_error TEXT,
+  turn_claim_owner TEXT CHECK (turn_claim_owner IN ('local', 'worker')),
+  turn_claim_id TEXT,
+  turn_claim_run_id TEXT,
+  turn_claim_generation INTEGER CHECK (
+    turn_claim_generation IS NULL OR turn_claim_generation >= 0
+  ),
+  turn_claim_owner_epoch INTEGER CHECK (
+    turn_claim_owner_epoch IS NULL OR turn_claim_owner_epoch >= 1
+  ),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  state_changed_at_ms INTEGER NOT NULL,
+  CHECK (
+    (state IN ('local', 'requested')
+      AND environment_id IS NULL AND active_owner_epoch IS NULL
+      AND workspace_base_manifest_ref IS NULL AND remote_workspace_dir IS NULL
+      AND worker_bundle_hash IS NULL
+      AND last_transcript_ack_cursor IS NULL AND last_live_event_ack_cursor IS NULL
+      AND recovery_error IS NULL)
+    OR
+    (state IS 'provisioning'
+      AND active_owner_epoch IS NULL
+      AND workspace_base_manifest_ref IS NULL AND remote_workspace_dir IS NULL
+      AND worker_bundle_hash IS NULL
+      AND last_transcript_ack_cursor IS NULL AND last_live_event_ack_cursor IS NULL
+      AND recovery_error IS NULL)
+    OR
+    (state IS 'syncing'
+      AND environment_id IS NOT NULL AND active_owner_epoch IS NULL
+      AND workspace_base_manifest_ref IS NULL AND remote_workspace_dir IS NULL
+      AND worker_bundle_hash IS NOT NULL
+      AND last_transcript_ack_cursor IS NULL AND last_live_event_ack_cursor IS NULL
+      AND recovery_error IS NULL)
+    OR
+    (state IS 'starting'
+      AND environment_id IS NOT NULL AND active_owner_epoch IS NULL
+      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND worker_bundle_hash IS NOT NULL
+      AND last_transcript_ack_cursor IS NULL AND last_live_event_ack_cursor IS NULL
+      AND recovery_error IS NULL)
+    OR
+    (state IN ('active', 'draining', 'reconciling')
+      AND environment_id IS NOT NULL AND active_owner_epoch IS NOT NULL
+      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND worker_bundle_hash IS NOT NULL AND recovery_error IS NULL)
+    OR
+    (state IS 'reclaimed'
+      AND environment_id IS NOT NULL AND active_owner_epoch IS NOT NULL
+      AND workspace_base_manifest_ref IS NOT NULL AND remote_workspace_dir IS NOT NULL
+      AND worker_bundle_hash IS NOT NULL AND recovery_error IS NULL
+      AND turn_claim_owner IS NULL AND turn_claim_id IS NULL AND turn_claim_run_id IS NULL
+      AND turn_claim_generation IS NULL AND turn_claim_owner_epoch IS NULL)
+    OR
+    (state IS 'failed' AND recovery_error IS NOT NULL)
+  ),
+  CHECK (
+    (turn_claim_owner IS NULL AND turn_claim_id IS NULL AND turn_claim_run_id IS NULL
+      AND turn_claim_generation IS NULL AND turn_claim_owner_epoch IS NULL)
+    OR
+    (turn_claim_owner IS 'local' AND turn_claim_id IS NOT NULL
+      AND turn_claim_run_id IS NOT NULL AND turn_claim_generation IS NOT NULL
+      AND turn_claim_owner_epoch IS NULL)
+    OR
+    (turn_claim_owner IS 'worker' AND turn_claim_id IS NOT NULL
+      AND turn_claim_run_id IS NOT NULL AND turn_claim_generation IS NOT NULL
+      AND turn_claim_owner_epoch IS NOT NULL)
+  ),
+  CHECK (
+    turn_claim_owner IS NULL
+    OR
+    (turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))
+    OR
+    (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
+      AND turn_claim_owner_epoch IS active_owner_epoch)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
+  ON worker_session_placements(agent_id, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
+  ON worker_session_placements(updated_at_ms, session_id);
+
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.
 CREATE TABLE IF NOT EXISTS worker_environment_credentials (
@@ -1632,6 +1717,31 @@ CREATE TABLE IF NOT EXISTS worker_transcript_commits (
     (state = 'terminal' AND result_json IS NOT NULL)
   )
 );
+
+-- Pending rows preserve a claimed inference turn across gateway restarts.
+-- Terminal rows cache the exact outcome returned for deterministic replay.
+CREATE TABLE IF NOT EXISTS worker_inference_turns (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  run_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  environment_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')),
+  terminal_json TEXT,
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch, run_id, turn_id),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE,
+  CHECK (
+    (state = 'pending' AND terminal_json IS NULL) OR
+    (state = 'terminal' AND terminal_json IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
+  ON worker_inference_turns(session_id, run_epoch, run_id)
+  WHERE state = 'pending';
 
 CREATE TABLE IF NOT EXISTS fleet_cells (
   tenant_id TEXT NOT NULL PRIMARY KEY,

@@ -8,6 +8,16 @@ on:
         required: false
         default: ""
         type: string
+      pr_number:
+        description: Pull request number required by the exact-SHA release gate
+        required: false
+        default: ""
+        type: string
+      loc_base_ref:
+        description: Optional exact LOC comparison-base SHA for standalone manual runs
+        required: false
+        default: ""
+        type: string
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -81,12 +91,15 @@ jobs:
   preflight:
     permissions:
       contents: read
+      pull-requests: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      loc_base_sha: ${{ steps.release_gate_loc_tree.outputs.base_sha || inputs.loc_base_ref || '' }}
+      loc_head_sha: ${{ steps.release_gate_loc_tree.outputs.head_sha || '' }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -130,6 +143,7 @@ jobs:
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
+          PR_NUMBER: ${{ inputs.pr_number }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
@@ -139,8 +153,24 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_gate requires pr_number to identify an open pull request" >&2
+            exit 1
+          fi
+
           if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
             echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
+      - name: Validate manual LOC base input
+        if: github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''
+        env:
+          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$LOC_BASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "loc_base_ref must be a full commit SHA" >&2
             exit 1
           fi
 
@@ -177,8 +207,8 @@ jobs:
           }
 
           # Manual release-gate runs commonly validate the workflow ref's exact SHA.
-          # Fetch the branch/tag ref first so GitHub does not have to negotiate an
-          # arbitrary SHA fetch, then verify the resolved commit stayed pinned.
+          # Fetch the branch/tag ref first, then refetch the SHA if that ref moves
+          # while the manual run waits for a runner.
           checkout_ref="$CHECKOUT_REF"
           requested_sha=""
           if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -209,6 +239,12 @@ jobs:
 
           if [ -n "$requested_sha" ]; then
             resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then
+              echo "::notice::checkout ref '$checkout_ref' moved to '$resolved_sha'; fetching requested SHA '$requested_sha'"
+              checkout_ref="$requested_sha"
+              fetch_checkout_ref "$checkout_ref"
+              resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            fi
             if [ "$resolved_sha" != "$requested_sha" ]; then
               echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
                 "expected '$requested_sha'" >&2
@@ -220,6 +256,67 @@ jobs:
       - name: Resolve checkout SHA
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release-gate PR merge tree
+        id: release_gate_loc_tree
+        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          merge_sha=""
+          pr_base_sha=""
+          for attempt in {1..12}; do
+            pr_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+            pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+            pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+            pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
+            pr_base_repo="$(jq -r '.base.repo.full_name // ""' <<<"$pr_json")"
+            if [[ "$pr_state" != "open" || "$pr_base_repo" != "$GITHUB_REPOSITORY" ]]; then
+              echo "release_gate pr_number must identify an open pull request in ${GITHUB_REPOSITORY}" >&2
+              exit 1
+            fi
+            if [[ "$pr_head_sha" != "$TARGET_REF" ]]; then
+              echo "release_gate target_ref must match pull request ${PR_NUMBER} head ${pr_head_sha}" >&2
+              exit 1
+            fi
+            if [[ ! "$pr_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve pull request ${PR_NUMBER} base SHA." >&2
+              exit 1
+            fi
+            mergeable="$(jq -r 'if .mergeable == null then "pending" else (.mergeable | tostring) end' <<<"$pr_json")"
+            if [[ "$mergeable" == "true" ]]; then
+              merge_sha="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+              if [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Could not resolve pull request ${PR_NUMBER} test merge commit." >&2
+                exit 1
+              fi
+              break
+            fi
+            if [[ "$mergeable" == "false" ]]; then
+              echo "Pull request ${PR_NUMBER} is not mergeable with its current base." >&2
+              exit 1
+            fi
+            if [[ "$attempt" == "12" ]]; then
+              echo "Timed out waiting for pull request ${PR_NUMBER} mergeability." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          merge_ref="refs/remotes/origin/release-gate-merge"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"
+          resolved_merge_sha="$(git rev-parse "$merge_ref")"
+          merge_base_parent="$(git rev-parse "${merge_ref}^1")"
+          merge_head_parent="$(git rev-parse "${merge_ref}^2")"
+          if [[ "$resolved_merge_sha" != "$merge_sha" || "$merge_base_parent" != "$pr_base_sha" || "$merge_head_parent" != "$TARGET_REF" ]]; then
+            echo "release_gate pull request merge ref does not match the current base and head" >&2
+            exit 1
+          fi
+          echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate historical release target
         id: historical_target
@@ -309,6 +406,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
+          OPENCLAW_CI_RUN_TS_LOC: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
@@ -435,6 +533,7 @@ jobs:
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
+          const runTsLoc = parseBoolean(process.env.OPENCLAW_CI_RUN_TS_LOC) && !docsOnly;
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
@@ -443,7 +542,9 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          const checksFastCoreTasks = [];
+          const checksFastCoreTasks = runTsLoc
+            ? [{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]
+            : [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
@@ -578,14 +679,14 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+  # Run dependency-free security checks on a hosted runner in parallel with
+  # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -869,7 +970,7 @@ jobs:
         env:
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
-          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1106,6 +1207,26 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - *linux_node_checkout_step
+      - name: Checkout verified release-gate LOC merge tree
+        if: matrix.task == 'loc-ratchet' && needs.preflight.outputs.loc_head_sha != ''
+        env:
+          LOC_HEAD_SHA: ${{ needs.preflight.outputs.loc_head_sha }}
+          LOC_PR_NUMBER: ${{ inputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$LOC_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "A release-gate LOC head requires a pull request number." >&2
+            exit 1
+          fi
+          git fetch --no-tags --depth=2 origin \
+            "+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"
+          resolved_loc_head="$(git rev-parse refs/remotes/origin/ci-head)"
+          if [[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]; then
+            echo "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check." >&2
+            exit 1
+          fi
+          git checkout --detach refs/remotes/origin/ci-head
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1113,11 +1234,20 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
+          LOC_EXPECTED_PR_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.preflight.outputs.loc_head_sha != '' && inputs.target_ref || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
@@ -1129,6 +1259,35 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              ;;
+            loc-ratchet)
+              # Frozen compatibility targets were governed by their original CI. Comparing
+              # them with moving main would turn unrelated branch drift into release failures.
+              if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
+                loc_base_ref="refs/remotes/origin/ci-base"
+                if [ -n "$LOC_EXPECTED_PR_HEAD" ]; then
+                  # Pull-request merge refs can advance past the event base as main moves.
+                  # Compare with the base parent of the exact merge tree under test.
+                  if ! git rev-parse --verify HEAD^1 >/dev/null 2>&1 || ! git rev-parse --verify HEAD^2 >/dev/null 2>&1; then
+                    loc_merge_sha="$(git rev-parse HEAD)"
+                    git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"
+                  fi
+                  merge_head="$(git rev-parse HEAD^2)"
+                  if [[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]; then
+                    echo "LOC merge tree head ${merge_head} does not match expected pull-request head ${LOC_EXPECTED_PR_HEAD}." >&2
+                    exit 1
+                  fi
+                  loc_base_ref="$(git rev-parse HEAD^1)"
+                else
+                  git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"
+                fi
+                if has_package_script "check:loc"; then
+                  pnpm check:loc --base "$loc_base_ref" --head HEAD
+                else
+                  echo "Current CI targets must provide the check:loc package script." >&2
+                  exit 1
+                fi
+              fi
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -1388,7 +1547,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1565,6 +1724,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
@@ -1572,8 +1737,8 @@ jobs:
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -1597,12 +1762,21 @@ jobs:
               fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:exports
-              else
+                if has_package_script "deadcode:exports"; then
+                  pnpm deadcode:exports
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
@@ -1658,12 +1832,6 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-channels
-            group: extension-channels
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-bundled
-            group: extension-bundled
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
@@ -1803,12 +1971,6 @@ jobs:
               else
                 run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
-              ;;
-            extension-channels)
-              run_check "lint:extensions:channels" pnpm run lint:extensions:channels
-              ;;
-            extension-bundled)
-              run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile

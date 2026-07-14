@@ -5,7 +5,6 @@ import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import type {
   RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
   RealtimeTalkGatewayRelaySessionResult,
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkSessionResult,
@@ -16,14 +15,9 @@ import type {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
-export type {
-  RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
-  RealtimeTalkSessionResult,
-  RealtimeTalkStatus,
-};
+export type { RealtimeTalkStatus };
 
-export type RealtimeTalkLaunchOptions = {
+type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;

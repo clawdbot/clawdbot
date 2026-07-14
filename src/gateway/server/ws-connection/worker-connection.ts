@@ -9,9 +9,13 @@ import {
   type WorkerHelloOk,
   type WorkerLiveEventErrorDetails,
   type WorkerLiveEventErrorShape,
+  type WorkerLiveEventParams,
+  type WorkerLiveEventResult,
   type WorkerProtocolCloseReason,
   type WorkerTranscriptCommitErrorReason,
   type WorkerTranscriptCommitErrorShape,
+  type WorkerTranscriptCommitParams,
+  type WorkerTranscriptCommitResult,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
@@ -25,27 +29,89 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  type WorkerInferenceCancelParams,
+  type WorkerInferenceCancelResult,
+  type WorkerInferenceErrorReason,
+  type WorkerInferenceErrorShape,
+  type WorkerInferenceEventFrame,
+  type WorkerInferenceStartParams,
+  type WorkerInferenceStartResult,
+  type WorkerInferenceTerminalFrame,
+  WORKER_INFERENCE_METHODS,
+  WORKER_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+  validateWorkerInferenceCancelParams,
+  validateWorkerInferenceStartParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
-import type { WorkerEnvironmentService } from "../../worker-environments/service.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 
-export type WorkerConnectionService = Pick<
-  WorkerEnvironmentService,
-  "admitWorker" | "commitTranscript" | "pushLiveEvent" | "validateWorkerConnection"
->;
+type WorkerServiceResult<TResult, TFailure> =
+  | { ok: true; result: TResult }
+  | ({ ok: false } & (TFailure | { closeReason: WorkerProtocolCloseReason }));
+
+export type WorkerConnectionService = {
+  admitWorker: (
+    admission: WorkerConnectParams["admission"],
+  ) => Promise<
+    | { ok: true; identity: WorkerConnectionIdentity }
+    | { ok: false; reason: WorkerProtocolCloseReason }
+  >;
+  commitTranscript: (
+    identity: WorkerConnectionIdentity,
+    request: WorkerTranscriptCommitParams,
+  ) => Promise<
+    WorkerServiceResult<WorkerTranscriptCommitResult, { reason: WorkerTranscriptCommitErrorReason }>
+  >;
+  pushLiveEvent: (
+    identity: WorkerConnectionIdentity,
+    request: WorkerLiveEventParams,
+  ) => Promise<
+    WorkerServiceResult<WorkerLiveEventResult, { details: WorkerLiveEventErrorDetails }>
+  >;
+  validateWorkerConnection: (
+    identity: WorkerConnectionIdentity,
+  ) => WorkerProtocolCloseReason | null;
+};
+
+type WorkerInferenceConnectionService = WorkerConnectionService & {
+  startInference?: (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams,
+    sink: WorkerInferenceSink,
+  ) =>
+    | { ok: true; result: WorkerInferenceStartResult; launch: () => void }
+    | { ok: false; reason: WorkerInferenceErrorReason }
+    | { ok: false; closeReason: WorkerProtocolCloseReason };
+  cancelInference?: (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceCancelParams,
+  ) => WorkerServiceResult<WorkerInferenceCancelResult, { reason: WorkerInferenceErrorReason }>;
+};
+
+type WorkerInferenceSink = {
+  connectionId: string;
+  send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
+};
 
 type WorkerRespond = (
   ok: boolean,
   payload?: unknown,
-  error?: WorkerErrorShape | WorkerLiveEventErrorShape | WorkerTranscriptCommitErrorShape,
+  error?:
+    | WorkerErrorShape
+    | WorkerInferenceErrorShape
+    | WorkerLiveEventErrorShape
+    | WorkerTranscriptCommitErrorShape,
 ) => void;
 type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
+const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
 
-export type WorkerWsMessageHandlerParams = {
+type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
   connId: string;
   service?: WorkerConnectionService;
@@ -82,6 +148,12 @@ function workerProtocolError(
   };
 }
 
+function workerMaxPayload(identity: WorkerConnectionIdentity): number {
+  return identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)
+    ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
+    : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
+}
+
 function buildWorkerHello(identity: WorkerConnectionIdentity): WorkerHelloOk {
   return {
     type: "worker-hello-ok",
@@ -93,7 +165,7 @@ function buildWorkerHello(identity: WorkerConnectionIdentity): WorkerHelloOk {
     credentialExpiresAtMs: identity.credentialExpiresAtMs,
     policy: {
       heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
-      maxPayload: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+      maxPayload: workerMaxPayload(identity),
     },
   };
 }
@@ -127,11 +199,28 @@ function workerLiveEventError(details: WorkerLiveEventErrorDetails): WorkerLiveE
   };
 }
 
+function workerInferenceError(reason: WorkerInferenceErrorReason): WorkerInferenceErrorShape {
+  return {
+    code: reason === "provider-error" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+    message: "worker inference request rejected",
+    details: { reason },
+  };
+}
+
+function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
+  const receiver = (socket as { _receiver?: { _maxPayload?: number } })["_receiver"];
+  if (receiver) {
+    receiver["_maxPayload"] = maxPayload;
+  }
+}
+
 /** Closed worker dispatcher. It never calls the generic gateway method registry. */
 async function dispatchWorkerRequest(params: {
   request: RequestFrame;
   identity: WorkerConnectionIdentity;
-  service: WorkerConnectionService | undefined;
+  connectionId: string;
+  service: WorkerInferenceConnectionService | undefined;
+  send(frame: unknown): void;
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
@@ -144,6 +233,61 @@ async function dispatchWorkerRequest(params: {
   const ownershipFailure = service.validateWorkerConnection(params.identity);
   if (ownershipFailure) {
     rejectWorkerRequest({ ...params, reason: ownershipFailure });
+    return;
+  }
+  if (params.request.method === WORKER_INFERENCE_METHODS[0]) {
+    if (!params.identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    if (!validateWorkerInferenceStartParams(params.request.params)) {
+      params.respond(false, undefined, workerInferenceError("invalid-context"));
+      return;
+    }
+    if (!service.startInference) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    const outcome = service.startInference(params.identity, params.request.params, {
+      connectionId: params.connectionId,
+      send: (frame) => params.send(frame),
+    });
+    if (outcome.ok) {
+      // Reply before a synchronous provider can emit.
+      params.respond(true, outcome.result);
+      outcome.launch();
+      return;
+    }
+    if ("closeReason" in outcome) {
+      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
+      return;
+    }
+    params.respond(false, undefined, workerInferenceError(outcome.reason));
+    return;
+  }
+  if (params.request.method === WORKER_INFERENCE_METHODS[1]) {
+    if (!params.identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    if (!validateWorkerInferenceCancelParams(params.request.params)) {
+      params.respond(false, undefined, workerInferenceError("invalid-context"));
+      return;
+    }
+    if (!service.cancelInference) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    const outcome = service.cancelInference(params.identity, params.request.params);
+    if (outcome.ok) {
+      params.respond(true, outcome.result);
+      return;
+    }
+    if ("closeReason" in outcome) {
+      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
+      return;
+    }
+    params.respond(false, undefined, workerInferenceError(outcome.reason));
     return;
   }
   if (params.request.method === WORKER_PROTOCOL_METHODS[1]) {
@@ -316,6 +460,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
+    setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
     params.advanceHandshakePhase("ready");
@@ -336,7 +481,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       failFrame(1013, "gateway-unavailable");
       return;
     }
-    if (rawDataByteLength(data) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+    const frameBytes = rawDataByteLength(data);
+    const maxFrameBytes = client?.worker
+      ? workerMaxPayload(client.worker)
+      : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
+    if (frameBytes > maxFrameBytes) {
       if (client) {
         failFrame(1009, "invalid-frame");
       } else {
@@ -374,9 +523,18 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     if (
+      frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES &&
+      parsed.method !== WORKER_INFERENCE_METHODS[0]
+    ) {
+      failFrame(1009, "invalid-frame");
+      return;
+    }
+    if (
       parsed.method === WORKER_PROTOCOL_METHODS[0] ||
       parsed.method === WORKER_PROTOCOL_METHODS[1] ||
-      parsed.method === WORKER_PROTOCOL_METHODS[2]
+      parsed.method === WORKER_PROTOCOL_METHODS[2] ||
+      parsed.method === WORKER_INFERENCE_METHODS[0] ||
+      parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
       params.setLastFrameMeta({ type: "req", method: parsed.method });
     }
@@ -387,7 +545,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     await dispatchWorkerRequest({
       request: parsed,
       identity: client.worker,
+      connectionId: params.connId,
       service: params.service,
+      send: (frame) => params.send(frame),
       respond: (ok, payload, error) =>
         params.send(
           ok
@@ -401,11 +561,16 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
 
   let queue = Promise.resolve();
   let pendingFrames = 0;
+  let pendingBytes = 0;
   function onMessage(data: RawData) {
     if (disposed) {
       return;
     }
-    if (pendingFrames >= MAX_QUEUED_WORKER_FRAMES) {
+    const frameBytes = rawDataByteLength(data);
+    if (
+      pendingFrames >= MAX_QUEUED_WORKER_FRAMES ||
+      pendingBytes + frameBytes > MAX_QUEUED_WORKER_BYTES
+    ) {
       if (params.getClient()) {
         failFrame(1008, "invalid-frame");
       } else {
@@ -414,6 +579,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     pendingFrames += 1;
+    pendingBytes += frameBytes;
     queue = queue
       .then(async () => {
         if (disposed || params.isClosed()) {
@@ -442,6 +608,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       })
       .finally(() => {
         pendingFrames -= 1;
+        pendingBytes -= frameBytes;
       });
   }
   params.socket.on("message", onMessage);

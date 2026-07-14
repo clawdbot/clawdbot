@@ -212,13 +212,14 @@ import {
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { configureMemoryCoreDreamingState } from "../dreaming-state.js";
+import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
 import {
-  configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "../dreaming-state.js";
-import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+} from "../test-helpers.js";
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "./search-deadline.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -478,7 +479,9 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
     spawnMock.mockClear();
     let searchAttempts = 0;
+    const events: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      events.push(`command:${args[0]}${args[1] ? `:${args[1]}` : ""}`);
       if (args[0] === "query" || args[0] === "search" || args[0] === "vsearch") {
         const child = createMockChild({ autoClose: false });
         searchAttempts += 1;
@@ -498,11 +501,38 @@ describe("QmdMemoryManager", () => {
       onDebug: (entry) => {
         debug.push(entry);
       },
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        events.push(`phase:${action}`);
+      },
     });
 
     expect(searchAttempts).toBe(2);
     expect(countQmdCommand((args) => args[0] === "collection" && args[1] === "list")).toBe(1);
     expect(debug.at(-1)?.qmd?.collectionValidation?.cacheState).toBe("bypass-force");
+    expect(events.filter((event) => event.startsWith("phase:"))).toEqual([
+      "phase:pause",
+      "phase:resume",
+      "phase:pause",
+      "phase:resume",
+    ]);
+    const isSearchCommand = (event: string) =>
+      ["command:query:", "command:search:", "command:vsearch:"].some((prefix) =>
+        event.startsWith(prefix),
+      );
+    const firstSearch = events.findIndex(isSearchCommand);
+    const firstSearchEnd = events.indexOf("phase:resume");
+    const collectionRepair = events.findIndex(
+      (event, index) => index > firstSearchEnd && event.startsWith("command:collection:"),
+    );
+    const retryStart = events.indexOf("phase:pause", firstSearchEnd + 1);
+    const retrySearch = events.findIndex(
+      (event, index) => index > firstSearch && isSearchCommand(event),
+    );
+    expect(events.indexOf("phase:pause")).toBeLessThan(firstSearch);
+    expect(firstSearch).toBeLessThan(firstSearchEnd);
+    expect(firstSearchEnd).toBeLessThan(collectionRepair);
+    expect(collectionRepair).toBeLessThan(retryStart);
+    expect(retryStart).toBeLessThan(retrySearch);
   });
 
   it("reuses persisted qmd multi-collection support probe across managers", async () => {
@@ -4057,9 +4087,11 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const commandPhases: string[] = [];
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(commandPhases).toEqual(["pause"]);
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(requireArgAfter(args, "--args"));
@@ -4084,7 +4116,13 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
-    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("hello", {
+      sessionKey: "agent:main:slack:dm:u123",
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        commandPhases.push(action);
+      },
+    });
+    expect(commandPhases).toEqual(["pause", "resume"]);
     await manager.close();
   });
 

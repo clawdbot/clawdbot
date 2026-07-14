@@ -157,10 +157,7 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
   return items;
 }
 
-export function navigateChatInputHistory(
-  state: ChatInputHistoryState,
-  direction: "up" | "down",
-): boolean {
+function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" | "down"): boolean {
   const items = ensureChatInputHistorySnapshot(state);
   if (items.length === 0) {
     return false;

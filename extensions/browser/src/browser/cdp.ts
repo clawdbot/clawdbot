@@ -24,13 +24,7 @@ import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./n
 import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export {
-  appendCdpPath,
-  fetchJson,
-  fetchOk,
-  getHeadersWithAuth,
-  isWebSocketUrl,
-} from "./cdp.helpers.js";
+export { appendCdpPath } from "./cdp.helpers.js";
 
 /** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {

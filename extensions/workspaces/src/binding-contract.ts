@@ -22,7 +22,7 @@ export const DATA_READ_RPC_ALLOWLIST = [
   "cron.runs",
 ] as const;
 
-export type WorkspaceBindingErrorCode =
+type WorkspaceBindingErrorCode =
   | "binding_denied"
   | "binding_not_found"
   | "binding_too_large"

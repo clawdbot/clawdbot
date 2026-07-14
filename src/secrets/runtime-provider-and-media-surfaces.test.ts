@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -21,6 +22,7 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 }
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function envTokenRef(id: string) {
   return { source: "env" as const, provider: "default" as const, id };
@@ -151,6 +153,144 @@ describe("secrets runtime provider and media surfaces", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("refreshes provider auth without resolving or republishing gateway state", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = autoCleanupTempDirs.make("openclaw-provider-auth-refresh-");
+    const secretsPath = path.join(root, "secrets.json");
+    const writeSecrets = async (gatewayToken: string | undefined, modelKey: string) => {
+      await fs.writeFile(
+        secretsPath,
+        JSON.stringify({ ...(gatewayToken ? { gatewayToken } : {}), modelKey }, null, 2),
+        "utf8",
+      );
+      await fs.chmod(secretsPath, 0o600);
+    };
+    try {
+      const config = asConfig({
+        secrets: {
+          providers: {
+            default: { source: "file", path: secretsPath, mode: "json" },
+          },
+          defaults: { file: "default" },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "file", provider: "default", id: "/gatewayToken" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "file", provider: "default", id: "/modelKey" },
+              models: [],
+            },
+          },
+        },
+      });
+      await writeSecrets("gateway-old", "model-old");
+      const initial = await prepareSecretsRuntimeSnapshot({
+        config,
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
+      const {
+        activateSecretsRuntimeSnapshot,
+        getActiveSecretsRuntimeSnapshot,
+        refreshActiveProviderAuthRuntimeSnapshot,
+      } = await import("./runtime.js");
+      const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+        await import("../config/runtime-snapshot.js");
+      activateSecretsRuntimeSnapshot(initial);
+      setRuntimeConfigSnapshot(
+        {
+          ...initial.config,
+          auth: { order: { openai: ["runtime-only-profile"] } },
+          gateway: {
+            ...initial.config.gateway,
+            controlUi: { allowedOrigins: ["https://runtime-only.example"] },
+          },
+          models: {
+            ...initial.config.models,
+            pricing: { enabled: true },
+          },
+        },
+        initial.sourceConfig,
+      );
+
+      await writeSecrets(undefined, "model-new");
+      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+      const active = getActiveSecretsRuntimeSnapshot();
+      expect(active?.config.gateway?.auth?.token).toBe("gateway-old");
+      expect(active?.config.gateway?.controlUi?.allowedOrigins).toEqual([
+        "https://runtime-only.example",
+      ]);
+      expect(active?.config.auth?.order?.openai).toEqual(["runtime-only-profile"]);
+      expect(active?.config.models?.pricing?.enabled).toBe(true);
+      expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
+      expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("patches env shorthand model refs into the pinned runtime config", async () => {
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "$OPENAI_API_KEY",
+            models: [],
+          },
+        },
+      },
+    });
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { OPENAI_API_KEY: "sk-env-current" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      refreshActiveProviderAuthRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+    activateSecretsRuntimeSnapshot(initial);
+    const openaiProvider = initial.config.models?.providers?.openai;
+    if (!openaiProvider) {
+      throw new Error("expected resolved OpenAI provider");
+    }
+    setRuntimeConfigSnapshot(
+      {
+        ...initial.config,
+        models: {
+          ...initial.config.models,
+          providers: {
+            ...initial.config.models?.providers,
+            openai: {
+              ...openaiProvider,
+              apiKey: "sk-stale-pinned",
+            },
+          },
+        },
+      },
+      initial.sourceConfig,
+    );
+
+    await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+    expect(getActiveSecretsRuntimeSnapshot()?.config.models?.providers?.openai?.apiKey).toBe(
+      "sk-env-current",
+    );
   });
 
   it("fails when file provider payload is not a JSON object", async () => {

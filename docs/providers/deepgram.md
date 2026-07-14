@@ -106,15 +106,16 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
 The bundled `deepgram` plugin also registers a realtime transcription provider
 for the Voice Call plugin.
 
-| Setting         | Config path                                                             | Default                          |
-| --------------- | ----------------------------------------------------------------------- | -------------------------------- |
-| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY` |
-| Model           | `...deepgram.model`                                                     | `nova-3`                         |
-| Language        | `...deepgram.language`                                                  | (unset)                          |
-| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                          |
-| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                           |
-| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                            |
-| Interim results | `...deepgram.interimResults`                                            | `true`                           |
+| Setting         | Config path                                                             | Default                                      |
+| --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
+| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`             |
+| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API |
+| Model           | `...deepgram.model`                                                     | `nova-3`                                     |
+| Language        | `...deepgram.language`                                                  | (unset)                                      |
+| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
+| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
+| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
+| Interim results | `...deepgram.interimResults`                                            | `true`                                       |
 
 ```json5
 {
@@ -140,6 +141,12 @@ for the Voice Call plugin.
   },
 }
 ```
+
+For a [Deepgram custom endpoint](https://developers.deepgram.com/reference/custom-endpoints),
+set `baseUrl` to the endpoint root, including any base path but not `/listen`.
+Realtime endpoints accept `http://`, `https://`, `ws://`, and `wss://`. HTTP
+maps to WS, HTTPS maps to WSS, and explicit WebSocket schemes stay unchanged.
+Malformed URLs and other schemes fail during session setup.
 
 <Note>
 Voice Call receives telephony audio as 8 kHz G.711 u-law. The Deepgram

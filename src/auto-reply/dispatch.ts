@@ -467,7 +467,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
   };
 }
 
-export type DispatchInboundResult = DispatchFromConfigResult;
+type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
 function finalizeDispatchResult(

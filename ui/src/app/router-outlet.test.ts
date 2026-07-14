@@ -1,7 +1,6 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetStaleChunkReloadStateForTest } from "./stale-chunk-reload.ts";
 import "./router-outlet.ts";
 
 type RouteId = "page";
@@ -39,18 +38,18 @@ function createOutlet(router: TestRouter, context: TestContext): RouterOutletEle
   return outlet;
 }
 
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await Promise.resolve();
     await outlet.updateComplete;
   }
 }
-
-afterEach(() => {
-  document.body.replaceChildren();
-  resetStaleChunkReloadStateForTest();
-  vi.unstubAllGlobals();
-});
 
 describe("openclaw-router-outlet", () => {
   it("renders route data through the public custom-element boundary", async () => {
@@ -122,8 +121,20 @@ describe("openclaw-router-outlet", () => {
   });
 
   it("schedules stale-chunk recovery and falls back to revalidation while offline", async () => {
+    vi.useFakeTimers();
     let loadCount = 0;
-    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    const fetchMock = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            return;
+          }
+          signal.addEventListener("abort", () => reject(new Error("document probe aborted")), {
+            once: true,
+          });
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -148,14 +159,18 @@ describe("openclaw-router-outlet", () => {
 
     const alert = outlet.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Importing a module script failed.");
-    expect(alert?.textContent).toContain("Reload the page");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(alert?.textContent).toContain("Reload to get the latest panel");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
-
     outlet.querySelector<HTMLButtonElement>("button")?.click();
-    await vi.waitFor(() => expect(loadCount).toBe(2));
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    vi.runAllTicks();
+    await settleOutlet(outlet);
+    expect(loadCount).toBe(2);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     outlet.remove();
     router.stop();
   });

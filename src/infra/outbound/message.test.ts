@@ -69,7 +69,10 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 let sendMessage: typeof import("./message.js").sendMessage;
-let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
+
+beforeAll(async () => {
+  ({ sendMessage } = await import("./message.js"));
+});
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -130,14 +133,8 @@ function readPayloadSummary(
 }
 
 describe("sendMessage", () => {
-  beforeAll(async () => {
-    ({ sendMessage } = await import("./message.js"));
-    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
-  });
-
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    resetOutboundChannelResolutionStateForTest();
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();

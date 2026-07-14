@@ -20,6 +20,7 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -208,7 +209,7 @@ export function emitGatewaySessionStartPluginHook(params: {
 
 const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
 
-export type DrainActiveSessionsForShutdownResult = {
+type DrainActiveSessionsForShutdownResult = {
   emittedSessionIds: string[];
   timedOut: boolean;
 };
@@ -927,6 +928,18 @@ export async function performGatewaySessionReset(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     };
   }
+  const initialPlacementBlock = initialResetEntry?.sessionId
+    ? resolveSessionPlacementResetBlock(initialResetEntry.sessionId)
+    : undefined;
+  if (initialPlacementBlock) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Session ${params.key} cannot reset while ${initialPlacementBlock}.`,
+      ),
+    };
+  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -979,6 +992,18 @@ export async function performGatewaySessionReset(params: {
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
+      const placementBlock = entry?.sessionId
+        ? resolveSessionPlacementResetBlock(entry.sessionId)
+        : undefined;
+      if (placementBlock) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Session ${params.key} cannot reset while ${placementBlock}.`,
+          ),
+        };
+      }
       const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
       if (archivedSessionError) {
         return {

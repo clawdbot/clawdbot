@@ -3,7 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { testApi as backupCreateInternals } from "./backup-create.js";
+import { writeArchiveStreamToFile } from "./backup-create-stream.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -12,7 +12,7 @@ describe("writeArchiveStreamToFile", () => {
     const tempDir = tempDirs.make("openclaw-backup-stream-");
     const archivePath = path.join(tempDir, "partial.tar.gz");
     const archiveStream = new PassThrough();
-    const writePromise = backupCreateInternals.writeArchiveStreamToFile({
+    const writePromise = writeArchiveStreamToFile({
       archivePath,
       archiveStream,
     });

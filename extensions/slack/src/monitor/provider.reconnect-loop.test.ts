@@ -13,6 +13,7 @@ describe("slack socket reconnect loop", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -67,4 +68,42 @@ describe("slack socket reconnect loop", () => {
       expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("retry 13/∞"));
     },
   );
+
+  it("includes the configured Socket Mode logger context in start retry diagnostics", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const controller = new AbortController();
+    const runtimeError = vi.fn();
+    let attempts = 0;
+    slackTestState.appStartMock.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        slackTestState.socketModeLogger?.error("failed to retrieve WSS URL", {
+          data: { error: "missing_scope", needed: "connections:write" },
+        });
+        throw new Error();
+      }
+      controller.abort();
+    });
+
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+      config: slackTestState.config,
+      runtime: {
+        log: vi.fn(),
+        error: runtimeError,
+        exit: vi.fn(),
+      },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(run).resolves.toBeUndefined();
+
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "last SDK log: socket-mode:socket-mode failed to retrieve WSS URL slack error: missing_scope; needed: connections:write",
+      ),
+    );
+  });
 });

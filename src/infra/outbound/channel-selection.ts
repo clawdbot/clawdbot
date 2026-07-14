@@ -20,12 +20,9 @@ import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 /** Deliverable message channel id that can be selected for message actions. */
-export type MessageChannelId = DeliverableMessageChannel;
+type MessageChannelId = DeliverableMessageChannel;
 /** Source that explains how message channel selection chose its result. */
-export type MessageChannelSelectionSource =
-  | "explicit"
-  | "tool-context-fallback"
-  | "single-configured";
+type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
 const getMessageChannels = () => listDeliverableMessageChannels();
 
@@ -297,9 +294,3 @@ export async function resolveMessageChannelSelection(params: {
   }
   throw new Error(formatMultipleConfiguredChannelsMessage(configured));
 }
-
-export const testing = {
-  resetLoggedChannelSelectionErrors() {
-    loggedChannelSelectionErrors.clear();
-  },
-};

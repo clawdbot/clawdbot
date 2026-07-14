@@ -65,7 +65,7 @@ const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
-export type NodeEventHandleResult = {
+type NodeEventHandleResult = {
   ok: true;
   event: string;
   handled: boolean;
@@ -224,16 +224,6 @@ function pruneBoundedTimestampMap(
     }
     map.delete(oldestKey);
   }
-}
-
-export function resetNodeEventDeduplicationForTests() {
-  recentVoiceTranscripts.clear();
-  recentExecFinishedRuns.clear();
-  recentNodePresencePersistAt.clear();
-}
-
-export function getRecentNodePresencePersistCountForTests() {
-  return recentNodePresencePersistAt.size;
 }
 
 function compactExecEventOutput(raw: string) {

@@ -60,6 +60,14 @@ const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
+type StartupCatchupHarnessInternals = {
+  syncArchiveFiles(params: { needsFullReindex: boolean }): Promise<void>;
+  updateSessionDelta(sessionFile: string): Promise<{
+    pendingBytes: number;
+    pendingLines: number;
+    pendingMessages: number;
+  }>;
+};
 
 function setStartupStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -407,7 +415,9 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      await (harness as any).syncArchiveFiles({ needsFullReindex: true });
+      await (harness as unknown as StartupCatchupHarnessInternals).syncArchiveFiles({
+        needsFullReindex: true,
+      });
       expect(attempts).toBe(2);
     } finally {
       openSpy.mockRestore();
@@ -528,7 +538,9 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      const delta = await (harness as any).updateSessionDelta(session.filePath);
+      const delta = await (harness as unknown as StartupCatchupHarnessInternals).updateSessionDelta(
+        session.filePath,
+      );
       expect(delta).toMatchObject({
         pendingBytes: session.size,
         pendingMessages: 1,

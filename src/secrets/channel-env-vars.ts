@@ -3,7 +3,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
-export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
 
 type ChannelEnvVarLookupParams = {
   /** Config snapshot used to discover enabled/installed plugin manifests. */

@@ -107,7 +107,7 @@ Each account opens its own ClickClack realtime connection and uses its own bot t
 ## Reply modes
 
 - `replyMode: "agent"` (default) dispatches inbound messages through the normal agent pipeline, including session recording and tool policy.
-- `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for short direct bot replies (optionally shaped by `model` and `systemPrompt`).
+- `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for direct bot replies, optionally shaped by `model` and `systemPrompt`. The selected provider and model own the completion budget.
 
 Model mode runs completions against the resolved bot agent id, which requires
 the explicit `plugins.entries.clickclack.llm.allowAgentIdOverride: true` trust
@@ -145,6 +145,27 @@ the resulting ClickClack reply requests. Values use ClickClack's safe
 are omitted. These joins contain identifiers only, never message bodies,
 prompts, completions, credentials, or tool output.
 
+## Durable media delivery
+
+Agent replies containing media use required durable delivery. OpenClaw assigns
+stable per-part message and upload nonces before the first ClickClack write, so
+a retry reuses the same upload and message instead of consuming storage quota
+or publishing duplicates. If an upload already exists after a restart,
+OpenClaw does not reread the original local path or remote media URL.
+
+This recovery contract requires a ClickClack server that supports:
+
+- `GET /api/uploads/by-nonce` with
+  `X-ClickClack-Upload-Nonce: supported` on found and missing results.
+- `GET /api/messages/by-nonce` with
+  `X-ClickClack-Message-Nonce: supported` on found and missing results.
+- Idempotent message creation and attachment association for the same
+  owner-scoped nonce and upload.
+
+An older server's generic 404 is not treated as proof that a send is absent.
+OpenClaw leaves the delivery unresolved rather than risking a duplicate; update
+ClickClack before enabling media-producing agent replies.
+
 ## Agent activity rows
 
 By default a ClickClack channel shows nothing while an agent turn runs; only the final reply lands. Set `agentActivity: true` on an account to publish durable `agent_commentary` and `agent_tool` message rows while the turn is in progress:
@@ -177,6 +198,14 @@ Requirements and behavior:
 - `thread:<message_id>` replies in the thread rooted at that message.
 
 Explicit outbound targets may also carry the `clickclack:` or `cc:` provider prefix.
+
+Outbound media uses ClickClack's upload API and then attaches the durable upload
+to the created channel message, thread reply, or DM. Local files and supported
+remote media URLs follow OpenClaw's normal media-access policy, with a 64 MiB
+per-file limit. Durable queued sends use separate owner-scoped nonces for each
+upload and message part, then retry attachment association with those same
+objects. See [Durable media delivery](#durable-media-delivery) for the server
+contract and recovery behavior.
 
 Examples:
 

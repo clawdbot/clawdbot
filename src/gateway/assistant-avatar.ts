@@ -23,12 +23,12 @@ type GatewayAssistantIdentity = {
   emoji?: string;
 };
 
-export type GatewayAssistantAvatarProjection = {
+type GatewayAssistantAvatarProjection = {
   avatar: string;
   resolution: AgentAvatarResolution | null;
 };
 
-export type OpenGatewayAssistantAvatarProjection = {
+type OpenGatewayAssistantAvatarProjection = {
   resolution: AgentAvatarResolution | null;
   openedFile?: OpenedLocalAgentAvatarFile;
 };

@@ -146,6 +146,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},
 		{locale: "nl", wants: []string{"Use informal “je/jouw” consistently", "do not switch to formal “u/uw” except inside protected literal quotations"}},
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
+		{locale: "ru", wants: []string{"generic noun “plugin” as “плагин”", "inflect it for Russian case and number", "Never force English “Plugin” into ordinary prose"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
 		{locale: "th", wants: []string{"Do not insert spaces between every Thai word"}},
 	}

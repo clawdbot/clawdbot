@@ -59,11 +59,6 @@ export function recordReflectionTime(sessionKey: string, cooldownMs?: number): v
   pruneExpiredCooldowns(cooldownMs ?? DEFAULT_COOLDOWN_MS);
 }
 
-/** Clear reflection cooldown tracking (for tests). */
-export function clearReflectionCooldowns(): void {
-  lastReflectionBySession.clear();
-}
-
 /** Store a learning derived from feedback reflection. */
 export async function storeSessionLearning(params: {
   storePath: string;
@@ -83,17 +78,4 @@ export async function storeSessionLearning(params: {
     learnings,
     updatedAt: Date.now(),
   });
-}
-
-/** Load session learnings for injection into extraSystemPrompt. */
-export async function loadSessionLearnings(
-  storePath: string,
-  sessionKey: string,
-): Promise<string[]> {
-  const key = learningStoreKey(storePath, sessionKey);
-  const stored = await openLearningStore().lookup(key);
-  if (stored) {
-    return stored.learnings;
-  }
-  return [];
 }

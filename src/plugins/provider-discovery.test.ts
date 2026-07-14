@@ -1,65 +1,16 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
-import type { PluginCandidate } from "./discovery.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolveInstalledPluginProviderContributionIds,
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
 import * as providerDiscoveryModule from "./provider-discovery.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  cleanupTrackedTempDirs(tempDirs);
-});
-
-function makeTempDir() {
-  return makeTrackedTempDir("openclaw-provider-discovery", tempDirs);
-}
-
-function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_VERSION: "2026.4.25",
-    VITEST: "true",
-    ...overrides,
-  };
-}
-
-function createProviderContributionCandidate(params: {
-  pluginId?: string;
-  providerIds?: readonly string[];
-}): PluginCandidate {
-  const rootDir = makeTempDir();
-  fs.writeFileSync(
-    path.join(rootDir, "index.ts"),
-    "throw new Error('runtime provider entry should not load for cold contribution ids');\n",
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId ?? "demo",
-      configSchema: { type: "object" },
-      providers: params.providerIds ?? ["demo"],
-    }),
-    "utf-8",
-  );
-  return {
-    idHint: params.pluginId ?? "demo",
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "global",
-  };
-}
 
 function makeProvider(params: {
   id: string;
@@ -198,50 +149,6 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
 
   it("does not keep exporting the ambiguous runtime-discovery alias", () => {
     expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-
-  it("reads provider ids from the installed plugin index without importing runtime entries", () => {
-    const candidate = createProviderContributionCandidate({
-      pluginId: "demo",
-      providerIds: ["demo", "demo-alias"],
-    });
-
-    expect(
-      resolveInstalledPluginProviderContributionIds({
-        candidates: [candidate],
-        env: hermeticEnv(),
-        preferPersisted: false,
-      }),
-    ).toEqual(["demo", "demo-alias"]);
-  });
-
-  it("omits disabled plugin provider ids unless explicitly requested", () => {
-    const candidate = createProviderContributionCandidate({
-      pluginId: "demo",
-      providerIds: ["demo"],
-    });
-    const params = {
-      candidates: [candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-      preferPersisted: false,
-    };
-
-    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
-    expect(
-      resolveInstalledPluginProviderContributionIds({
-        ...params,
-        includeDisabled: true,
-      }),
-    ).toEqual(["demo"]);
   });
 });
 

@@ -26,7 +26,7 @@ type SessionWorkStartOptions = {
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;

@@ -4,8 +4,7 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
   detectBrowserOpenSupport,
@@ -15,8 +14,15 @@ import {
 } from "./onboard-helpers.js";
 
 type DashboardOptions = {
+  json?: boolean;
   noOpen?: boolean;
   yes?: boolean;
+};
+
+const quietRuntime: RuntimeEnv = {
+  log: () => {},
+  error: () => {},
+  exit: () => {},
 };
 
 async function resolveDashboardTarget() {
@@ -126,11 +132,59 @@ async function ensureDashboardTargetReady(params: {
   });
 }
 
+function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
+  writeRuntimeJson(runtime, { ok: false, reason }, 0);
+  runtime.exit(1);
+}
+
+async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
+  try {
+    const target = await resolveDashboardTarget();
+    const readiness = await ensureDashboardTargetReady({
+      target,
+      runtime: quietRuntime,
+      allowRecovery: false,
+    });
+    if (!readiness.ready) {
+      dashboardJsonFailure(runtime, readiness.reason);
+      return;
+    }
+    if (!(await hasVerifiedLoopbackAlias(target))) {
+      dashboardJsonFailure(
+        runtime,
+        "Dashboard loopback listener could not be verified as the configured Gateway.",
+      );
+      return;
+    }
+
+    writeRuntimeJson(
+      runtime,
+      {
+        ok: true,
+        url: target.dashboardUrl,
+        httpUrl: target.links.httpUrl,
+        wsUrl: target.links.wsUrl,
+        port: target.port,
+        tokenIncluded: target.includeTokenInUrl,
+      },
+      0,
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
+  }
+}
+
 /** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
 ) {
+  if (options.json) {
+    await dashboardJsonCommand(runtime);
+    return;
+  }
+
   const initialTarget = await resolveDashboardTarget();
   const readiness = await ensureDashboardTargetReady({
     target: initialTarget,

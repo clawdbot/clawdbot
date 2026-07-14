@@ -1,4 +1,6 @@
 // Telegram Mini App bootstrap page.
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+
 export const TELEGRAM_MINIAPP_EXPIRED_MESSAGE =
   "This link expired. Reopen the dashboard from your bot chat.";
 
@@ -61,21 +63,4 @@ export function renderTelegramMiniAppPage(params: {
   </script>
 </body>
 </html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
 }

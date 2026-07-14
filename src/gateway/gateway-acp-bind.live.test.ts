@@ -14,7 +14,7 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,

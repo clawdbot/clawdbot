@@ -11,6 +11,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -97,12 +98,7 @@ type PendingBridgeRequest = {
   args: unknown[];
 };
 
-type SettledBridgeRequest = {
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 
 type PendingBridgeState = PendingBridgeRequest & {
   promise: Promise<SettledBridgeRequest>;

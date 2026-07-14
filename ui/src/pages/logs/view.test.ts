@@ -86,6 +86,16 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("renders the subtitle under the section header", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps()), container);
+
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Gateway file logs (JSONL).",
+    );
+  });
+
   it.each([
     { buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" },
     { buttonText: "Exportar filtrado", expectedLabel: "filtered", filterText: "matched" },

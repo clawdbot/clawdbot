@@ -1,9 +1,7 @@
 // Codex tests cover sandbox exec server.fs plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  closeCodexSandboxExecServersForTests,
-  ensureCodexSandboxExecServerEnvironment,
-} from "./sandbox-exec-server.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   codexFsSandboxContext,
   createClient,
@@ -17,7 +15,7 @@ import {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await closeCodexSandboxExecServersForTests();
+  await sandboxExecServerRegistry.closeAll();
 });
 
 describe("OpenClaw Codex sandbox exec-server filesystem", () => {

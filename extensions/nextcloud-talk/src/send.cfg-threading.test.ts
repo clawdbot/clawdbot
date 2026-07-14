@@ -149,6 +149,28 @@ describe("nextcloud-talk send cfg threading", () => {
     });
   });
 
+  it("strips mixed-case provider and room prefixes before sending", async () => {
+    const cfg = { source: "provided" } as const;
+    mockNextcloudMessageResponse(12344, 1_706_000_000);
+
+    const result = await sendMessageNextcloudTalk("NC-TALK:ROOM:Ops", "hello", {
+      cfg,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/Ops/message",
+      expect.any(Object),
+    );
+    expect(result.roomToken).toBe("Ops");
+    expect(result.receipt.raw).toEqual([
+      {
+        channel: "nextcloud-talk",
+        conversationId: "Ops",
+        messageId: "12344",
+      },
+    ]);
+  });
+
   it("preserves caller-authored text on the low-level send path", async () => {
     const cfg = { source: "provided" } as const;
     const text = "Example:\n⚠️ 🛠️ `search repos (agent)` failed";

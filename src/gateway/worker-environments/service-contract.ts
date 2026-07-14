@@ -1,3 +1,4 @@
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -26,4 +27,19 @@ export type WorkerEnvironmentServiceContract = {
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   startTunnel(request: WorkerTunnelRequest): Promise<WorkerTunnelHandle>;
   stopTunnel(environmentId: string, ownerEpoch?: number): Promise<void>;
+};
+
+export type WorkerPlacementDispatchRequest = {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  profileId: string;
+};
+
+// Leaf dispatch contract: GatewayRequestContext must not import the dispatch
+// runtime (it reaches agents/plugins and closes an import cycle through core).
+export type WorkerPlacementDispatchContract = {
+  dispatch(
+    request: WorkerPlacementDispatchRequest,
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
 };

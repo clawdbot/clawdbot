@@ -1,3 +1,4 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 // Slack helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
@@ -10,42 +11,17 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
-  "dm.policy": {
-    label: "Slack DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
-  },
-  dmPolicy: {
-    label: "Slack DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
-  },
-  configWrites: {
-    label: "Slack Config Writes",
-    help: "Allow Slack to write config in response to channel events/commands (default: true).",
-  },
-  mentionPatterns: {
-    label: "Slack Mention Pattern Policy",
-    help: "Scopes configured groupChat mentionPatterns to selected Slack channel IDs. Native Slack @mentions still trigger even when regex patterns are denied.",
-  },
-  "mentionPatterns.mode": {
-    label: "Slack Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
-  },
-  "mentionPatterns.allowIn": {
-    label: "Slack Mention Pattern Allowlist",
-    help: "Slack channel IDs where configured regex mention patterns are enabled when mode is deny.",
-  },
-  "mentionPatterns.denyIn": {
-    label: "Slack Mention Pattern Denylist",
-    help: "Slack channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
-  },
-  "commands.native": {
-    label: "Slack Native Commands",
-    help: 'Override native commands for Slack (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Slack Native Skill Commands",
-    help: 'Override native skill commands for Slack (bool or "auto").',
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Slack",
+    dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Slack channel IDs",
+      policyNote: "Native Slack @mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native @mentions still trigger.",
+    },
+    nativeCommands: true,
+  }),
   allowBots: {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",

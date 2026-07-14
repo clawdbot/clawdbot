@@ -12,7 +12,6 @@ import {
 } from "../../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
@@ -134,7 +133,6 @@ function captureDiagnosticEvents(
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
-    resetDiagnosticTraceContextForTest();
   });
 
   it("runs a harness attempt without changing attempt params", async () => {

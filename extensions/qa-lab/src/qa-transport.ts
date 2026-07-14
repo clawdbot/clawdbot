@@ -64,7 +64,7 @@ type QaTransportFailureAssertionOptions = {
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportOutboundMatch = {
+type QaTransportOutboundMatch = {
   conversation?: QaBusInboundMessageInput["conversation"];
   senderId?: string;
   sinceIndex?: number;
@@ -73,7 +73,7 @@ export type QaTransportOutboundMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportWaitForNoOutboundInput = {
+type QaTransportWaitForNoOutboundInput = {
   quietMs?: number;
   sinceIndex?: number;
 };
@@ -94,7 +94,7 @@ export type QaTransportOutboundSequenceMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportOutboundSequence = {
+type QaTransportOutboundSequence = {
   events: QaTransportOutboundEvent[];
   final: QaBusMessage;
 };

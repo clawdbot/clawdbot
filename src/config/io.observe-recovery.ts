@@ -27,7 +27,7 @@ import {
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 /** Dependencies injected into config recovery observation for testable filesystem behavior. */
-export type ObserveRecoveryDeps = {
+type ObserveRecoveryDeps = {
   fs: {
     promises: {
       stat(path: string): Promise<{
@@ -570,7 +570,7 @@ function readConfigFingerprintForPathSync(
   }
 }
 
-export function resolveLastKnownGoodConfigPath(configPath: string): string {
+function resolveLastKnownGoodConfigPath(configPath: string): string {
   return `${configPath}.last-good`;
 }
 

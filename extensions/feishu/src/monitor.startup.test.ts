@@ -2,8 +2,9 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
-import { resolveStartupProbeTimeoutMs } from "./monitor.startup.js";
+import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
+import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
+import { monitorFeishuProvider } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -54,8 +55,8 @@ async function waitForStartedAccount(started: string[], accountId: string) {
   );
 }
 
-afterEach(async () => {
-  await stopFeishuMonitor();
+afterEach(() => {
+  cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {

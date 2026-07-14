@@ -2,13 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
-import type { ProviderWizardOption } from "../plugins/provider-wizard.js";
 import {
   buildAuthChoiceGroups,
   buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
 } from "./auth-choice-options.js";
 import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
+
+type ProviderWizardOption = ReturnType<
+  (typeof import("../plugins/provider-wizard.js"))["resolveProviderWizardOptions"]
+>[number];
 
 const resolveManifestProviderAuthChoices = vi.hoisted(() =>
   vi.fn<() => ProviderAuthChoiceMetadata[]>(() => []),

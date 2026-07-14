@@ -26,7 +26,7 @@ import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 /** Machine-readable failure codes for Chrome CDP diagnostics. */
-export type ChromeCdpDiagnosticCode =
+type ChromeCdpDiagnosticCode =
   | "ssrf_blocked"
   | "http_unreachable"
   | "http_status_failed"
@@ -97,7 +97,7 @@ function failureDiagnostic(params: {
 }
 
 /** Read and validate Chrome's /json/version endpoint. */
-export async function readChromeVersion(
+async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,

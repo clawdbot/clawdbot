@@ -2,6 +2,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
   createLocalEmbeddingWorkerFailureError,
@@ -17,7 +18,6 @@ import {
   attachLocalEmbeddingRuntimeFacts,
   type LocalEmbeddingRuntimeFacts,
 } from "./local-embedding-runtime-facts.js";
-import { normalizeOptionalString } from "./string-utils.js";
 
 // Parent-side local embedding worker client for isolating node-llama-cpp state.
 

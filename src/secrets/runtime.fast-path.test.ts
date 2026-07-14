@@ -263,7 +263,7 @@ describe("secrets runtime fast path", () => {
     const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
     const { activateSecretsRuntimeSnapshotState, getActiveSecretsRuntimeSnapshot } =
       await import("./runtime-state.js");
-    const { refreshActiveSecretsRuntimeSnapshot } = await import("./runtime.js");
+    const { refreshActiveProviderAuthRuntimeSnapshot } = await import("./runtime.js");
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-refresh-"));
     const env: NodeJS.ProcessEnv = {
       HOME: root,
@@ -290,7 +290,7 @@ describe("secrets runtime fast path", () => {
       });
       writeAuthProfileStore(agentDir);
 
-      await expect(refreshActiveSecretsRuntimeSnapshot()).resolves.toBe(true);
+      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
       const active = getActiveSecretsRuntimeSnapshot();
       expect(active?.authStores[0]?.agentDir).toBe(agentDir);
       expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
@@ -301,6 +301,145 @@ describe("secrets runtime fast path", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not let an active refresh overwrite a snapshot published during preparation", async () => {
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      prepareSecretsRuntimeSnapshot,
+      refreshActiveProviderAuthRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const agentDir = "/tmp/openclaw-agent-refresh-cas";
+    let publishNewerSnapshot = false;
+    let newerSnapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>> | null = null;
+    const loadInitialAuthStore = () => {
+      if (publishNewerSnapshot && newerSnapshot) {
+        publishNewerSnapshot = false;
+        activateSecretsRuntimeSnapshot(newerSnapshot);
+      }
+      return emptyAuthStore();
+    };
+    const config = (port: number) =>
+      asConfig({
+        agents: { list: [{ id: "default", agentDir }] },
+        gateway: { port },
+      });
+    const initialSnapshot = await prepareSecretsRuntimeSnapshot({
+      config: config(19_001),
+      agentDirs: [agentDir],
+      loadAuthStore: loadInitialAuthStore,
+    });
+    newerSnapshot = await prepareSecretsRuntimeSnapshot({
+      config: config(19_002),
+      agentDirs: [agentDir],
+      loadAuthStore: emptyAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(initialSnapshot);
+
+    publishNewerSnapshot = true;
+    await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig.gateway?.port).toBe(19_002);
+  });
+
+  it("does not let an active refresh overwrite auth stores mutated during preparation", async () => {
+    const { getRuntimeAuthProfileStoreSnapshot, setRuntimeAuthProfileStoreSnapshot } =
+      await import("../agents/auth-profiles/runtime-snapshots.js");
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      prepareSecretsRuntimeSnapshot,
+      refreshActiveProviderAuthRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const agentDir = "/tmp/openclaw-agent-auth-store-refresh-cas";
+    const oldStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-old" },
+      },
+    };
+    const newStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-new" },
+      },
+    };
+    let mutateDuringRefresh = false;
+    const loadAuthStore = () => {
+      if (mutateDuringRefresh) {
+        mutateDuringRefresh = false;
+        setRuntimeAuthProfileStoreSnapshot(newStore, agentDir);
+        return oldStore;
+      }
+      return getRuntimeAuthProfileStoreSnapshot(agentDir) ?? oldStore;
+    };
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({ agents: { list: [{ id: "default", agentDir }] } }),
+      agentDirs: [agentDir],
+      loadAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(initial);
+
+    mutateDuringRefresh = true;
+    await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+
+    expect(
+      getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles["openai:default"],
+    ).toMatchObject({ key: "sk-new" });
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toMatchObject({
+      key: "sk-new",
+    });
+  });
+
+  it("re-prepares a preflighted config refresh after its snapshot revision goes stale", async () => {
+    const { getRuntimeConfigSnapshotRefreshHandler } =
+      await import("../config/runtime-snapshot.js");
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const agentDir = "/tmp/openclaw-agent-preflight-cas";
+    const authStore = (key: string): AuthProfileStore => ({
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key },
+      },
+    });
+    const config = (port: number) =>
+      asConfig({
+        agents: { list: [{ id: "default", agentDir }] },
+        gateway: { port },
+      });
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config: config(19_011),
+      agentDirs: [agentDir],
+      loadAuthStore: () => authStore("old-key"),
+    });
+    activateSecretsRuntimeSnapshot(initial);
+    const concurrent = await prepareSecretsRuntimeSnapshot({
+      config: config(19_012),
+      agentDirs: [agentDir],
+      loadAuthStore: () => authStore("new-key"),
+    });
+    const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+    if (!staleRefreshHandler?.preflight) {
+      throw new Error("expected active runtime refresh preflight handler");
+    }
+    const desiredConfig = config(19_013);
+    const preflightResult = await staleRefreshHandler.preflight({
+      sourceConfig: desiredConfig,
+    });
+    activateSecretsRuntimeSnapshot(concurrent);
+
+    await expect(
+      staleRefreshHandler.refresh({ sourceConfig: desiredConfig, preflightResult }),
+    ).resolves.toBe(true);
+
+    const activeStore = getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store;
+    expect(activeStore?.profiles["openai:default"]).toMatchObject({ key: "new-key" });
+    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig.gateway?.port).toBe(19_013);
   });
 
   it("pins empty auth stores on startup-only fast-path snapshots until refresh", async () => {

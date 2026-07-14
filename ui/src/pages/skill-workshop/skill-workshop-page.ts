@@ -18,6 +18,7 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -30,11 +31,11 @@ import {
   type SkillWorkshopState,
 } from "./proposals.ts";
 import {
-  loadSkillWorkshopMode,
-  loadSkillWorkshopUseCurrentChatForRevisions,
-  saveSkillWorkshopMode,
-  saveSkillWorkshopUseCurrentChatForRevisions,
-} from "./storage.ts";
+  resolveSelfLearning,
+  setSelfLearningEnabled,
+  type SkillWorkshopSelfLearning,
+} from "./self-learning.ts";
+import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
 type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
@@ -49,6 +50,8 @@ type SkillWorkshopRenderContext = {
   context: SkillWorkshopPageContext;
   workshopAgentName: string;
   onRevisionRequest?: SkillWorkshopRevisionRequest;
+  selfLearning: SkillWorkshopSelfLearning | null;
+  onSelfLearningToggle: (enabled: boolean) => void;
 };
 
 type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
@@ -116,95 +119,6 @@ async function resolveRevisionSessionKey(
   return sessionKey;
 }
 
-function setSkillWorkshopUseCurrentChatForRevisions(
-  state: SkillWorkshopState,
-  enabled: boolean,
-  requestUpdate: () => void,
-): void {
-  if (state.skillWorkshopUseCurrentChatForRevisions === enabled) {
-    return;
-  }
-  state.skillWorkshopUseCurrentChatForRevisions = enabled;
-  saveSkillWorkshopUseCurrentChatForRevisions(enabled);
-  requestUpdate();
-}
-
-function setSkillWorkshopMode(
-  state: SkillWorkshopState,
-  mode: SkillWorkshopState["skillWorkshopMode"],
-  requestUpdate: () => void,
-) {
-  if (state.skillWorkshopMode === mode) {
-    return;
-  }
-  state.skillWorkshopMode = mode;
-  saveSkillWorkshopMode(mode);
-  requestUpdate();
-}
-
-function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpdate: () => void) {
-  const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
-  return html`
-    <div class="sw-header-controls">
-      <label
-        class="sw-revision-session-toggle"
-        title=${t("skillWorkshop.header.useCurrentChatTooltip")}
-      >
-        <input
-          type="checkbox"
-          aria-label=${t("skillWorkshop.header.useCurrentChatAria")}
-          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
-          @change=${(event: Event) =>
-            setSkillWorkshopUseCurrentChatForRevisions(
-              state,
-              (event.currentTarget as HTMLInputElement).checked,
-              requestUpdate,
-            )}
-        />
-        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-        <span class="sw-revision-session-toggle__label">${useCurrentChatLabel}</span>
-      </label>
-      <div
-        class="sw-mode-switch"
-        role="tablist"
-        aria-label=${t("skillWorkshop.header.view")}
-        data-mode=${state.skillWorkshopMode}
-      >
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "board", requestUpdate)}
-        >
-          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-            <rect x="3" y="4" width="7" height="16" rx="1.5" />
-            <rect x="14" y="4" width="7" height="9" rx="1.5" />
-            <rect x="14" y="15" width="7" height="5" rx="1.5" />
-          </svg>
-          <span>${t("skillWorkshop.header.board")}</span>
-        </button>
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "today", requestUpdate)}
-        >
-          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-            <circle cx="12" cy="12" r="4" />
-            <path
-              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
-            />
-          </svg>
-          <span>${t("skillWorkshop.header.today")}</span>
-        </button>
-        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
-      </div>
-    </div>
-  `;
-}
-
 function selectPluginsHubTab(context: SkillWorkshopPageContext, tab: PluginsHubTab) {
   if (tab === "workshop") {
     return;
@@ -218,9 +132,11 @@ function selectPluginsHubTab(context: SkillWorkshopPageContext, tab: PluginsHubT
 
 function renderSkillWorkshopPage(
   state: SkillWorkshopState,
-  { context, workshopAgentName, onRevisionRequest }: SkillWorkshopRenderContext,
+  renderContext: SkillWorkshopRenderContext,
   requestUpdate: () => void,
 ) {
+  const { context, workshopAgentName, onRevisionRequest, selfLearning, onSelfLearningToggle } =
+    renderContext;
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -233,12 +149,16 @@ function renderSkillWorkshopPage(
           <h1 class="page-title">${t("tabs.plugins")}</h1>
           <div class="page-sub">${t("subtitles.skillWorkshop")}</div>
         </div>
-        <div class="page-meta">${renderSkillWorkshopHeaderControls(state, requestUpdate)}</div>
+        <div class="page-meta">
+          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
+        </div>
       </section>
-      ${renderPluginsHubTabs({
-        active: "workshop",
-        onSelect: (tab) => selectPluginsHubTab(context, tab),
-      })}
+      <div class="plugins-hub-tabs-row">
+        ${renderPluginsHubTabs({
+          active: "workshop",
+          onSelect: (tab) => selectPluginsHubTab(context, tab),
+        })}
+      </div>
       <div
         id="plugins-hub-panel"
         class="sw-hub-panel"
@@ -302,6 +222,7 @@ function renderSkillWorkshopPage(
             revisionDraft: state.skillWorkshopRevisionDraft,
             assistantName: context.config.current.assistantIdentity.name,
             workshopAgentName,
+            selfLearning,
             counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
             onRetry: () => {
               // Force past the loaded/error latch; the loading guard still
@@ -387,6 +308,7 @@ function renderSkillWorkshopPage(
               state.skillWorkshopFilePreviewQuery = "";
               requestUpdate();
             },
+            onSelfLearningToggle,
           });
         })()}
       </div>
@@ -412,6 +334,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private selectedAgentId?: string | null;
   private hasBoundSessions = false;
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
+  private selfLearningBusy = false;
+  private selfLearningError: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context,
@@ -507,6 +431,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agentIdentity,
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
     );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
@@ -581,6 +509,15 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       this.loadProposals(false);
     }
     this.ensureWorkshopAgentIdentity();
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (
+      runtimeConfig &&
+      this.gatewayConnected &&
+      !runtimeConfig.state.configSnapshot &&
+      !runtimeConfig.state.configLoading
+    ) {
+      void runtimeConfig.ensureLoaded();
+    }
   }
 
   private readonly requestPageUpdate = () => {
@@ -664,6 +601,26 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     void loadSkillWorkshopProposals(state, context, { force }).finally(this.requestPageUpdate);
   }
 
+  private readonly handleSelfLearningToggle = (enabled: boolean) => {
+    void this.applySelfLearningToggle(enabled);
+  };
+
+  private async applySelfLearningToggle(enabled: boolean): Promise<void> {
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig || this.selfLearningBusy) {
+      return;
+    }
+    this.selfLearningBusy = true;
+    this.selfLearningError = null;
+    this.requestPageUpdate();
+    try {
+      this.selfLearningError = await setSelfLearningEnabled(runtimeConfig, enabled);
+    } finally {
+      this.selfLearningBusy = false;
+      this.requestPageUpdate();
+    }
+  }
+
   private ensureWorkshopAgentIdentity(): void {
     const context = this.context;
     const agentId = this.state?.skillWorkshopAgentId;
@@ -688,6 +645,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
             workshopAgentName:
               this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
             onRevisionRequest: this.onRevisionRequest ?? this.handleRevisionRequest,
+            selfLearning: resolveSelfLearning(
+              this.context.runtimeConfig,
+              this.selfLearningBusy,
+              this.selfLearningError,
+            ),
+            onSelfLearningToggle: this.handleSelfLearningToggle,
           },
           this.requestPageUpdate,
         )

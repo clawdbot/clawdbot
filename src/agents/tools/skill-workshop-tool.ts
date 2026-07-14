@@ -17,12 +17,12 @@ import {
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import type {
-  SkillProposalManifestEntry,
   SkillProposalOrigin,
   SkillProposalReadResult,
   SkillProposalRecord,
   SkillProposalStatus,
   SkillProposalSupportFileInput,
+  SkillWorkshopProposalMutationBudget,
 } from "../../skills/workshop/types.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -32,6 +32,11 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
+import {
+  formatProposalInspect,
+  formatProposalList,
+  listProposalEntries,
+} from "./skill-workshop-tool-presentation.js";
 
 const SKILL_WORKSHOP_ACTIONS = [
   "create",
@@ -43,6 +48,8 @@ const SKILL_WORKSHOP_ACTIONS = [
   "reject",
   "quarantine",
 ] as const;
+const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "revise", "list", "inspect"] as const;
+const SKILL_WORKSHOP_MUTATION_ACTIONS = new Set(["create", "update", "revise"]);
 const SKILL_PROPOSAL_STATUSES = [
   "pending",
   "applied",
@@ -51,85 +58,100 @@ const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
-const SkillWorkshopToolSchema = Type.Object(
-  {
-    action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
-      description:
-        "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
-    }),
-    proposal_id: Type.Optional(
-      Type.String({
-        description:
-          "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+function buildSkillWorkshopToolSchema(proposalOnly: boolean) {
+  return Type.Object(
+    {
+      action: stringEnum(proposalOnly ? SKILL_WORKSHOP_PROPOSAL_ACTIONS : SKILL_WORKSHOP_ACTIONS, {
+        description: proposalOnly
+          ? "create = new skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search). Live-skill updates and lifecycle actions are unavailable."
+          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
       }),
-    ),
-    name: Type.Optional(
-      Type.String({
-        description:
-          "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
-      }),
-    ),
-    query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
-    status: Type.Optional(
-      stringEnum(SKILL_PROPOSAL_STATUSES, {
-        description: "Optional proposal status filter for action=list.",
-      }),
-    ),
-    limit: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        maximum: 50,
-        description: "Maximum proposals to return for action=list. Defaults to 20.",
-      }),
-    ),
-    description: Type.Optional(
-      Type.String({
-        maxLength: 160,
-        description:
-          "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
-      }),
-    ),
-    skill_name: Type.Optional(
-      Type.String({ description: "Existing skill name or key for action=update." }),
-    ),
-    proposal_content: Type.Optional(
-      Type.String({
-        description:
-          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
-      }),
-    ),
-    support_files: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            path: Type.String({
-              description:
-                "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
-            }),
-            content: Type.String({ description: "Support file text content." }),
-          },
-          { additionalProperties: false },
-        ),
-        { description: "Optional support files to store with the proposal." },
+      proposal_id: Type.Optional(
+        Type.String({
+          description:
+            "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+        }),
       ),
-    ),
-    goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
-    evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
-    reason: Type.Optional(
-      Type.String({
-        description: "Optional reason for action=apply, action=reject, or action=quarantine.",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+      name: Type.Optional(
+        Type.String({
+          description:
+            "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
+        }),
+      ),
+      query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
+      status: Type.Optional(
+        stringEnum(SKILL_PROPOSAL_STATUSES, {
+          description: "Optional proposal status filter for action=list.",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 50,
+          description: "Maximum proposals to return for action=list. Defaults to 20.",
+        }),
+      ),
+      description: Type.Optional(
+        Type.String({
+          maxLength: 160,
+          description: proposalOnly
+            ? "Skill description for create/revise; max 160 bytes."
+            : "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
+        }),
+      ),
+      skill_name: Type.Optional(
+        Type.String({ description: "Existing skill name or key for action=update." }),
+      ),
+      proposal_content: Type.Optional(
+        Type.String({
+          description: proposalOnly
+            ? "Full proposed procedure markdown for action=create or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
+            : "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+        }),
+      ),
+      support_files: Type.Optional(
+        Type.Array(
+          Type.Object(
+            {
+              path: Type.String({
+                description:
+                  "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
+              }),
+              content: Type.String({ description: "Support file text content." }),
+            },
+            { additionalProperties: false },
+          ),
+          { description: "Optional support files to store with the proposal." },
+        ),
+      ),
+      goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
+      evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
+      reason: Type.Optional(
+        Type.String({
+          description: "Optional reason for action=apply, action=reject, or action=quarantine.",
+        }),
+      ),
+    },
+    { additionalProperties: false },
+  );
+}
 
 type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
   origin?: SkillProposalOrigin;
+  /** Internal reviewers may inspect and draft one pending proposal, never change lifecycle state. */
+  proposalOnly?: boolean;
+  /** Run-scoped budget shared by every tool instance created across retries. */
+  proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
 };
+
+function buildSkillWorkshopToolDescription(proposalOnly: boolean): string {
+  return proposalOnly
+    ? "Inspect reusable-procedure proposals and create or revise pending proposals. Live-skill updates and lifecycle actions are unavailable."
+    : "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.";
+}
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
@@ -137,12 +159,18 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     label: "Skill Workshop",
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
-    description:
-      "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.",
-    parameters: SkillWorkshopToolSchema,
+    description: buildSkillWorkshopToolDescription(options.proposalOnly === true),
+    parameters: buildSkillWorkshopToolSchema(options.proposalOnly === true),
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
       const action = readStringParam(params, "action", { required: true });
+
+      if (
+        options.proposalOnly === true &&
+        !(SKILL_WORKSHOP_PROPOSAL_ACTIONS as readonly string[]).includes(action)
+      ) {
+        throw new ToolInputError("this Skill Workshop session can only inspect or draft proposals");
+      }
 
       if (action === "list") {
         const status = readProposalStatusParam(params);
@@ -217,6 +245,18 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const goal = readStringParam(params, "goal");
       const evidence = readStringParam(params, "evidence");
 
+      const reservesMutation = SKILL_WORKSHOP_MUTATION_ACTIONS.has(action);
+      if (
+        reservesMutation &&
+        options.proposalMutationBudget !== undefined &&
+        options.proposalMutationBudget.remaining <= 0
+      ) {
+        throw new ToolInputError("this Skill Workshop session is limited to one proposal mutation");
+      }
+      if (reservesMutation && options.proposalMutationBudget) {
+        options.proposalMutationBudget.remaining -= 1;
+      }
+
       let proposal: SkillProposalReadResult;
       let contentText: string;
       if (action === "create") {
@@ -266,6 +306,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           description: readStringParam(params, "description"),
+          ...(options.origin ? { origin: options.origin } : {}),
           goal,
           evidence,
         });
@@ -370,92 +411,6 @@ function readProposalStatusParam(params: Record<string, unknown>): SkillProposal
 
 function readListLimitParam(params: Record<string, unknown>): number {
   return readPositiveIntegerParam(params, "limit") ?? 20;
-}
-
-function listProposalEntries(params: {
-  proposals: readonly SkillProposalManifestEntry[];
-  status?: SkillProposalStatus;
-  query?: string;
-  limit: number;
-}): SkillProposalManifestEntry[] {
-  const query = params.query?.trim().toLowerCase();
-  const normalizedQuery = query ? normalizeProposalSearchText(query) : undefined;
-  const limit = Math.min(Math.max(params.limit, 1), 50);
-  // Pending proposals sort first so the model sees actionable work before
-  // historical applied/rejected records.
-  return params.proposals
-    .filter((proposal) => !params.status || proposal.status === params.status)
-    .filter((proposal) => {
-      if (!query) {
-        return true;
-      }
-      return [
-        proposal.id,
-        proposal.title,
-        proposal.description,
-        proposal.skillName,
-        proposal.skillKey,
-      ].some((value) => {
-        const lower = value.toLowerCase();
-        return (
-          lower.includes(query) ||
-          (normalizedQuery !== undefined &&
-            normalizedQuery.length > 0 &&
-            normalizeProposalSearchText(lower).includes(normalizedQuery))
-        );
-      });
-    })
-    .toSorted((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") {
-        return -1;
-      }
-      if (a.status !== "pending" && b.status === "pending") {
-        return 1;
-      }
-      return b.updatedAt.localeCompare(a.updatedAt);
-    })
-    .slice(0, limit);
-}
-
-function normalizeProposalSearchText(value: string): string {
-  return value
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-|-$/g, "");
-}
-
-function formatProposalList(proposals: readonly SkillProposalManifestEntry[]): string {
-  if (proposals.length === 0) {
-    return "No skill proposals matched.";
-  }
-  return proposals
-    .map(
-      (proposal) =>
-        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}] ${proposal.skillKey}: ${proposal.title}`,
-    )
-    .join("\n");
-}
-
-function formatProposalInspect(proposal: SkillProposalReadResult): string {
-  const supportFiles =
-    proposal.supportFiles && proposal.supportFiles.length > 0
-      ? [
-          "",
-          "Support files:",
-          ...proposal.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
-        ]
-      : [];
-  return [
-    `Proposal: ${proposal.record.id}`,
-    `Status: ${proposal.record.status}`,
-    `Kind: ${proposal.record.kind}`,
-    `Skill: ${proposal.record.target.skillKey}`,
-    `Version: ${proposal.record.proposedVersion}`,
-    `Scan: ${proposal.record.scan.state}`,
-    "",
-    proposal.content,
-    ...supportFiles,
-  ].join("\n");
 }
 
 function readSupportFilesParam(

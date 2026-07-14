@@ -45,7 +45,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
-import { drainFormattedSystemEvents } from "./session-updates.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 
@@ -2208,6 +2208,37 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("pins a durably admitted session across an idle reset boundary", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-pinned-admission-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "durably-admitted-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg: {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: existingSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {

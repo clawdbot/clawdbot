@@ -37,7 +37,6 @@ type WebChannelLightRuntimeModule = {
     lid: string | null;
   };
   webAuthExists: (authDir?: string) => Promise<boolean>;
-  formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
   resolveDefaultWebAuthDir?: () => string;
@@ -205,13 +204,6 @@ export function webAuthExists(
   ...args: Parameters<WebChannelLightRuntimeModule["webAuthExists"]>
 ): ReturnType<WebChannelLightRuntimeModule["webAuthExists"]> {
   return getLightExport("webAuthExists")(...args);
-}
-
-/** Formats a web-channel runtime error through the light runtime API. */
-export function formatError(
-  ...args: Parameters<WebChannelLightRuntimeModule["formatError"]>
-): ReturnType<WebChannelLightRuntimeModule["formatError"]> {
-  return getLightExport("formatError")(...args);
 }
 
 /** Reads a web-channel status code from the light runtime API. */

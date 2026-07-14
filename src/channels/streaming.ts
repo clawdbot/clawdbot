@@ -14,6 +14,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { asBoolean } from "../utils/boolean.js";
+import { warnFlatStreamingKeyFallback } from "./streaming-flat-key-deprecation.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -30,8 +31,8 @@ export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 export type StreamingCompatEntry = {
   /**
-   * Canonical nested streaming config. Some channel schemas (for example
-   * Mattermost) also accept a scalar mode string or boolean here.
+   * Canonical nested streaming config. External SDK plugin configs may still
+   * carry a scalar mode string or boolean here; bundled schemas reject those.
    */
   streaming?: unknown;
   chunkMode?: unknown;
@@ -40,15 +41,11 @@ export type StreamingCompatEntry = {
   draftChunk?: unknown;
 };
 
-// Nested streaming config wins. The flat delivery keys (chunkMode,
-// blockStreaming, blockStreamingCoalesce, draftChunk) are still canonical for
-// channels without a nested streaming schema (Mattermost, WhatsApp, Google
-// Chat, IRC, Signal) and for external SDK plugins, so these public resolvers
-// keep reading them; dropping the fallback here silently disables configured
-// chunking/block delivery for those consumers. Remove the flat reads only
-// after the remaining bundled channels migrate to nested schemas + doctor
-// rules and the SDK deprecation window closes. Mode-family aliases
-// (streamMode, scalar/boolean streaming) are doctor-only and stay unread here.
+// Bundled schemas are nested-only; doctor migrates flat delivery keys
+// (chunkMode, blockStreaming, blockStreamingCoalesce, draftChunk) and scalar
+// `streaming`. External SDK fallbacks warn once; remove them, the flat
+// StreamingCompatEntry fields, and scalar support after the next release train.
+// Mode-family aliases (streamMode) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -777,40 +774,63 @@ export function getChannelStreamingConfigObject(
   return streaming ? (streaming as ChannelStreamingConfig) : undefined;
 }
 
+function resolveWithFlatFallback<T>(params: {
+  nested: T | undefined;
+  flat: T | undefined;
+  flatKey: string;
+  nestedPath: string;
+}): T | undefined {
+  if (params.nested !== undefined) {
+    return params.nested;
+  }
+  if (params.flat !== undefined) {
+    warnFlatStreamingKeyFallback(params.flatKey, params.nestedPath);
+  }
+  return params.flat;
+}
+
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
-  return (
-    asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode) ??
-    asTextChunkMode(entry?.chunkMode)
-  );
+  return resolveWithFlatFallback({
+    nested: asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode),
+    flat: asTextChunkMode(entry?.chunkMode),
+    flatKey: "chunkMode",
+    nestedPath: "chunkMode",
+  });
 }
 
 export function resolveChannelStreamingBlockEnabled(
   entry: StreamingCompatEntry | null | undefined,
 ): boolean | undefined {
-  return (
-    asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled) ??
-    asBoolean(entry?.blockStreaming)
-  );
+  return resolveWithFlatFallback({
+    nested: asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled),
+    flat: asBoolean(entry?.blockStreaming),
+    flatKey: "blockStreaming",
+    nestedPath: "block.enabled",
+  });
 }
 
 export function resolveChannelStreamingBlockCoalesce(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return (
-    asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce) ??
-    asBlockStreamingCoalesceConfig(entry?.blockStreamingCoalesce)
-  );
+  return resolveWithFlatFallback({
+    nested: asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce),
+    flat: asBlockStreamingCoalesceConfig(entry?.blockStreamingCoalesce),
+    flatKey: "blockStreamingCoalesce",
+    nestedPath: "block.coalesce",
+  });
 }
 
 export function resolveChannelStreamingPreviewChunk(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingChunkConfig | undefined {
-  return (
-    asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk) ??
-    asBlockStreamingChunkConfig(entry?.draftChunk)
-  );
+  return resolveWithFlatFallback({
+    nested: asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk),
+    flat: asBlockStreamingChunkConfig(entry?.draftChunk),
+    flatKey: "draftChunk",
+    nestedPath: "preview.chunk",
+  });
 }
 
 export function resolveChannelStreamingPreviewToolProgress(
@@ -896,16 +916,19 @@ export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
 ): StreamingMode {
-  // Scalar `streaming` (mode string or boolean) stays supported here: channel
-  // schemas that never adopted the nested-only shape (for example Mattermost)
-  // still accept it as canonical config, not as a legacy alias.
-  const parsedStreaming = parsePreviewStreamingMode(
-    getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
-  );
+  // Scalar `streaming` (mode string or boolean) is rejected by every bundled
+  // channel schema and doctor-migrated to streaming.mode; the read here stays
+  // only for external SDK plugin configs that predate the nested shape.
+  const streamingConfig = getChannelStreamingConfigObject(entry);
+  const parsedStreaming = parsePreviewStreamingMode(streamingConfig?.mode ?? entry?.streaming);
   if (parsedStreaming) {
+    if (!streamingConfig) {
+      warnFlatStreamingKeyFallback("streaming", "mode");
+    }
     return parsedStreaming;
   }
   if (typeof entry?.streaming === "boolean") {
+    warnFlatStreamingKeyFallback("streaming", "mode");
     return entry.streaming ? "partial" : "off";
   }
   return defaultMode;

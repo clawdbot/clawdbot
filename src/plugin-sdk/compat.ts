@@ -81,7 +81,34 @@ export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
 export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
 export * from "./reply-history.js";
-export * from "./directory-runtime.js";
+// Freeze the shipped compat surface so focused directory-runtime additions do
+// not silently become new deprecated root exports.
+export {
+  applyDirectoryQueryAndLimit,
+  type ChannelDirectoryEntry,
+  type ChannelDirectoryEntryKind,
+  collectNormalizedDirectoryIds,
+  createChannelDirectoryAdapter,
+  createEmptyChannelDirectoryAdapter,
+  createInspectedDirectoryEntriesLister,
+  createResolvedDirectoryEntriesLister,
+  createRuntimeDirectoryLiveAdapter,
+  type DirectoryConfigParams,
+  emptyChannelDirectoryList,
+  inspectReadOnlyChannelAccount,
+  listDirectoryEntriesFromSources,
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listDirectoryUserEntriesFromAllowFrom,
+  listDirectoryUserEntriesFromAllowFromAndMapKeys,
+  listInspectedDirectoryEntriesFromSources,
+  listResolvedDirectoryEntriesFromSources,
+  listResolvedDirectoryGroupEntriesFromMapKeys,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
+  nullChannelDirectorySelf,
+  type ReadOnlyInspectedAccount,
+  toDirectoryEntries,
+} from "./directory-runtime.js";
 export { mapAllowlistResolutionInputs } from "./allow-from.js";
 
 /** @deprecated Use `openclaw/plugin-sdk/channel-outbound`. */

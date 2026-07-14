@@ -696,7 +696,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {

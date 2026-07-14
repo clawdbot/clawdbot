@@ -1,32 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Floating approval UI listing every pending pairing request as a card.
-/// Liquid Glass surface on macOS 26+, material fallback on macOS 15.
+/// Approval dialog listing every pending pairing request as a card. The host
+/// panel draws native window chrome; this view only lays out the content.
 struct PairingApprovalPanelView: View {
     let center: PairingApprovalCenter
 
-    /// Transparent margin around the glass so the drawn shadow has room;
-    /// the NSPanel shadow is disabled (it would trace a square window edge).
-    static let shadowMargin: CGFloat = 32
-
     var body: some View {
-        self.surface
+        self.content
             .frame(width: PairingApprovalPanelController.panelWidth)
-            .compositingGroup()
-            .shadow(color: .black.opacity(0.28), radius: 22, x: 0, y: 10)
-            .padding(Self.shadowMargin)
-    }
-
-    @ViewBuilder
-    private var surface: some View {
-        if #available(macOS 26.0, *) {
-            self.content
-                .glassEffect(.regular, in: .rect(cornerRadius: 24))
-        } else {
-            self.content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-        }
     }
 
     private var content: some View {
@@ -40,7 +22,6 @@ struct PairingApprovalPanelView: View {
                     ForEach(cards) { card in
                         PairingRequestCardView(
                             card: card,
-                            isBusy: self.center.decisionsInFlight.contains(card.requestId),
                             isOnlyRequest: cards.count == 1,
                             onDecision: { self.center.decide(card, $0) })
                     }
@@ -61,7 +42,6 @@ struct PairingApprovalPanelView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
         if cards.count > 1 {
-            let allBusy = cards.allSatisfy { self.center.decisionsInFlight.contains($0.id) }
             HStack(spacing: 8) {
                 notNow
                 Spacer()
@@ -85,7 +65,6 @@ struct PairingApprovalPanelView: View {
                 }
                 .pairingActionStyle(prominent: true)
             }
-            .disabled(allBusy)
         } else {
             HStack {
                 Spacer()
@@ -113,7 +92,6 @@ struct PairingApprovalPanelView: View {
 
 struct PairingRequestCardView: View {
     let card: PairingApprovalCenter.Card
-    let isBusy: Bool
     let isOnlyRequest: Bool
     let onDecision: (PairingApprovalCenter.Decision) -> Void
 
@@ -149,8 +127,6 @@ struct PairingRequestCardView: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 16).fill(.quinary))
-        .disabled(self.isBusy)
-        .opacity(self.isBusy ? 0.6 : 1)
     }
 
     private var icon: some View {

@@ -31,7 +31,7 @@ export type MatrixInboundEventDeduper = {
   releaseEvent: (params: { roomId: string; eventId: string }) => void;
 };
 
-export function resolveMatrixInboundDedupeAccountId(accountId: string): string {
+function resolveMatrixInboundDedupeAccountId(accountId: string): string {
   return accountId.trim() || "default";
 }
 

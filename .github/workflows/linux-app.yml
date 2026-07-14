@@ -1,0 +1,87 @@
+name: Linux App
+
+on:
+  pull_request:
+    paths:
+      - "apps/linux/**"
+      - ".github/workflows/linux-app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: linux-app-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Linux companion
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/linux/src-tauri/target
+          key: linux-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            linux-app-${{ runner.os }}-
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Check Rust formatting
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable fmt --check
+
+      - name: Build Linux companion bundles
+        working-directory: apps/linux/src-tauri
+        env:
+          # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
+          NO_STRIP: "true"
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-linux-companion
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            apps/linux/src-tauri/target/release/bundle/deb/*.deb
+            apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage

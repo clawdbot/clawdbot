@@ -134,63 +134,6 @@ describe("getCachedPluginModuleLoader", () => {
     };
   });
 
-  it("resolves deterministic cache entries for equivalent alias maps", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-alias-order");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        alpha: "/repo/alpha.js",
-        zeta: "/repo/zeta.js",
-      },
-      tryNative: false,
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        zeta: "/repo/zeta.js",
-        alpha: "/repo/alpha.js",
-      },
-      tryNative: false,
-    });
-
-    expect(second.cacheKey).toBe(first.cacheKey);
-    expect(second.scopedCacheKey).toBe(first.scopedCacheKey);
-    expect(first.loaderFilename).toBe("/repo/src/plugins/loader.ts");
-  });
-
-  it("keeps explicit shared cache scope keys independent of loader options", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-shared-scope");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-a/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-a.js" },
-      tryNative: true,
-      sharedCacheScopeKey: "bundled:native",
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-b/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-b.js" },
-      tryNative: false,
-      sharedCacheScopeKey: "bundled:native",
-    });
-
-    expect(first.cacheKey).not.toBe(second.cacheKey);
-    expect(first.scopedCacheKey).toBe(second.scopedCacheKey);
-  });
-
   it("reuses cached loaders for the same module config and filename", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("cached-loader");

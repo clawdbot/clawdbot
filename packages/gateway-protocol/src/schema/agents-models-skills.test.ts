@@ -5,6 +5,8 @@ import {
   AgentsListResultSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
@@ -71,6 +73,12 @@ describe("AgentsListResultSchema", () => {
 describe("ModelsListParamsSchema", () => {
   it("accepts the provider-config inventory view", () => {
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(
+      Value.Check(ModelsListParamsSchema, {
+        view: "all",
+        includeProviderCapabilities: true,
+      }),
+    ).toBe(true);
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
   });
 });
@@ -90,6 +98,26 @@ describe("ModelsListResultSchema", () => {
         models: [{ ...model, input: ["text", "binary"] }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("ModelsProbe schemas", () => {
+  it("accepts bounded request and secret-free result shapes", () => {
+    expect(
+      Value.Check(ModelsProbeParamsSchema, {
+        provider: "openai",
+        profileId: "work",
+        timeoutMs: 20_000,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ModelsProbeResultSchema, {
+        provider: "openai",
+        status: "ok",
+        latencyMs: 125,
+        results: [{ profileId: "work", label: "Work", status: "ok", latencyMs: 125 }],
+      }),
+    ).toBe(true);
   });
 });
 

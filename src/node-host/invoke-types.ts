@@ -7,6 +7,16 @@ import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-ap
  * These contracts are consumed by Gateway invoke handling, approval planning,
  * and node-host event emission.
  */
+/** Gateway invoke frame delivered to node-host command handlers. */
+export type NodeInvokeRequestPayload = {
+  id: string;
+  nodeId: string;
+  command: string;
+  paramsJSON?: string | null;
+  timeoutMs?: number | null;
+  idempotencyKey?: string | null;
+};
+
 /** Input payload for a node-host system.run invocation. */
 export type SystemRunParams = {
   command: string[];
@@ -29,6 +39,7 @@ export type SystemRunParams = {
 export type RunResult = {
   exitCode?: number;
   timedOut: boolean;
+  noOutputTimedOut?: boolean;
   success: boolean;
   stdout: string;
   stderr: string;

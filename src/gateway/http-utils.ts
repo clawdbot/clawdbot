@@ -36,15 +36,12 @@ export {
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  isGatewayBearerHttpRequest,
   resolveHttpBrowserOriginPolicy,
-  resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
-  type GatewayHttpRequestAuthCheckResult,
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -58,7 +55,7 @@ class UnknownGatewayAgentError extends Error {
   }
 }
 
-export class GatewaySessionKeyOverrideError extends Error {
+class GatewaySessionKeyOverrideError extends Error {
   constructor() {
     super("`x-openclaw-session-key` cannot use reserved internal session namespaces.");
     this.name = "GatewaySessionKeyOverrideError";

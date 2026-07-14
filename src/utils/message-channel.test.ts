@@ -1,11 +1,10 @@
 // Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  NATIVE_APPROVAL_CHANNELS,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
@@ -93,10 +92,21 @@ describe("message-channel", () => {
   });
 
   it("lists native chat exec approval channels", () => {
-    for (const channel of NATIVE_APPROVAL_CHANNELS) {
+    for (const channel of [
+      "webchat",
+      "discord",
+      "googlechat",
+      "imessage",
+      "matrix",
+      "qqbot",
+      "signal",
+      "slack",
+      "telegram",
+      "whatsapp",
+    ]) {
       expect(isNativeApprovalChannel(channel)).toBe(true);
     }
-    // Channels without a bundled approval-handler.runtime must not claim native approval.
+    // Channels without a bundled exec-capable native approval runtime must not claim it.
     expect(isNativeApprovalChannel("feishu")).toBe(false);
     expect(isNativeApprovalChannel("msteams")).toBe(false);
     expect(isNativeApprovalChannel("line")).toBe(false);

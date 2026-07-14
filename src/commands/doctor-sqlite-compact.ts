@@ -13,7 +13,7 @@ export type DoctorSqliteCompactSnapshot = {
   walSizeBytes: number;
 };
 
-export type DoctorSqliteCompactResult = {
+type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
@@ -23,6 +23,7 @@ export type DoctorSqliteCompactResult = {
 
 type DoctorSqliteCompactOptions = {
   afterMutation?: () => void;
+  busyTimeoutMs?: number;
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
 };
@@ -43,7 +44,9 @@ export function compactDoctorSqliteFile(
   let operationError: unknown;
   let result: DoctorSqliteCompactResult | undefined;
   try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    database.exec(
+      `PRAGMA busy_timeout = ${options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`,
+    );
     database.exec("PRAGMA trusted_schema = OFF;");
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);

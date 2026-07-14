@@ -49,20 +49,20 @@ import type {
   TuiChatSendResult,
 } from "./tui-backend.js";
 
-export type GatewayConnectionOptions = {
+type GatewayConnectionOptions = {
   url?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
 };
 
-export type GatewayEvent = TuiEvent;
+type GatewayEvent = TuiEvent;
 
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
-export type ResolvedGatewayConnection = {
+type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
@@ -117,9 +117,9 @@ function isLegacyPreserveSideRunsError(err: unknown): boolean {
   return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
-export type GatewaySessionList = TuiSessionList;
-export type GatewayAgentsList = TuiAgentsList;
-export type GatewayModelChoice = TuiModelChoice;
+type GatewaySessionList = TuiSessionList;
+type GatewayAgentsList = TuiAgentsList;
+type GatewayModelChoice = TuiModelChoice;
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;

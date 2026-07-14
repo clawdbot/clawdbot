@@ -11,7 +11,7 @@ type SlackThreadAuthorTuple = {
   botId?: string;
 };
 
-export type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
+type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
   text?: string;
   ts?: string;
 };

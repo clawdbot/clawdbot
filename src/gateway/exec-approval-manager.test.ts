@@ -14,12 +14,22 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   ExecApprovalManager,
-  type ExecApprovalManagerOptions,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
-import { getOperatorApproval, resolveOperatorApproval } from "./operator-approval-store.js";
+import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
 
 type TimeoutCallback = Parameters<typeof setTimeout>[0];
+type ExecApprovalManagerOptions<TPayload> = ConstructorParameters<
+  typeof ExecApprovalManager<TPayload>
+>[0] extends infer T
+  ? NonNullable<T>
+  : never;
+type GetOperatorApprovalParams = Parameters<typeof getOperatorApprovalDetailed>[0];
+
+function getOperatorApproval(params: GetOperatorApprovalParams) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 type MockTimerHandle = ReturnType<typeof setTimeout> & {
   unref: ReturnType<typeof vi.fn>;
 };

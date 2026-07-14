@@ -169,7 +169,7 @@ type WikiCommandOptions = {
   agent?: string;
 };
 
-export type MemoryWikiCliRegistration = {
+type MemoryWikiCliRegistration = {
   config: ResolvedMemoryWikiConfig;
   resolveConfig?: MemoryWikiConfigResolver;
   getAppConfig?: () => OpenClawConfig | undefined;

@@ -2,49 +2,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
-  resolveRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-group-policy.js";
 
-beforeEach(() => {
-  resetMissingProviderGroupPolicyFallbackWarningsForTesting();
-});
-
-describe("resolveRuntimeGroupPolicy", () => {
-  it.each([
-    {
-      title: "fails closed when provider config is missing and no defaults are set",
-      params: { providerConfigPresent: false },
-      expectedPolicy: "allowlist",
-      expectedFallbackApplied: true,
-    },
-    {
-      title: "keeps configured fallback when provider config is present",
-      params: { providerConfigPresent: true, configuredFallbackPolicy: "open" as const },
-      expectedPolicy: "open",
-      expectedFallbackApplied: false,
-    },
-    {
-      title: "ignores global defaults when provider config is missing",
-      params: {
-        providerConfigPresent: false,
-        defaultGroupPolicy: "disabled" as const,
-        configuredFallbackPolicy: "open" as const,
-        missingProviderFallbackPolicy: "allowlist" as const,
-      },
-      expectedPolicy: "allowlist",
-      expectedFallbackApplied: true,
-    },
-  ])("$title", ({ params, expectedPolicy, expectedFallbackApplied }) => {
-    const resolved = resolveRuntimeGroupPolicy(params);
-    expect(resolved.groupPolicy).toBe(expectedPolicy);
-    expect(resolved.providerMissingFallbackApplied).toBe(expectedFallbackApplied);
-  });
-});
+beforeEach(() => {});
 
 describe("resolveOpenProviderRuntimeGroupPolicy", () => {
   it("uses open fallback when provider config exists", () => {

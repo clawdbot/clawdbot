@@ -391,7 +391,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
-    - `channels.whatsapp.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+    - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
 
@@ -598,7 +598,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    WhatsApp gateway runtime should use Node. Bun is flagged as incompatible for stable WhatsApp/Telegram gateway operation.
+    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
   </Accordion>
 </AccordionGroup>
 
@@ -677,7 +677,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`                |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |

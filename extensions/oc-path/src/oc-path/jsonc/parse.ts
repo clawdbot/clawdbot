@@ -185,5 +185,3 @@ function createLineMap(raw: string): LineMap {
     },
   };
 }
-
-export type { Diagnostic };

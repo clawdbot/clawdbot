@@ -2,13 +2,13 @@
 import { vi } from "vitest";
 import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
 import {
+  resetTaskFlowRegistryForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
-} from "../../tasks/runtime-internal.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-runtime-internal.js";
+} from "../../tasks/task-runtime.test-helpers.js";
 
 const runtimeTaskMocks = vi.hoisted(() => ({
   sendMessageMock: vi.fn(),
@@ -25,6 +25,7 @@ export function installRuntimeTaskDeliveryMock(): void {
     sendMessage: runtimeTaskMocks.sendMessageMock,
   });
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: runtimeTaskMocks.cancelSessionMock,
     }),

@@ -62,7 +62,7 @@ type IndexedMatrixApprovalReactionTarget = {
   expiresAtMs: number;
 };
 
-export type MatrixApprovalReactionTargetRef = {
+type MatrixApprovalReactionTargetRef = {
   accountId: string;
   roomId: string;
   eventId: string;

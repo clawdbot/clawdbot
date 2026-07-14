@@ -23,12 +23,12 @@ export function formatInvalidConfigDetails(issues: ConfigValidationIssueLike[]):
 }
 
 /** Builds the one-line invalid-config prefix plus preformatted validation details. */
-export function formatInvalidConfigLogMessage(configPath: string, details: string): string {
+function formatInvalidConfigLogMessage(configPath: string, details: string): string {
   return `Invalid config at ${configPath}:\\n${details}`;
 }
 
 /** Logs an invalid config message once per path during a load sequence. */
-export function logInvalidConfigOnce(params: {
+function logInvalidConfigOnce(params: {
   configPath: string;
   details: string;
   logger: Pick<typeof console, "error">;

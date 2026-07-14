@@ -154,6 +154,11 @@ function createLocalGatewayRequestContext(
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
     },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
+    },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),

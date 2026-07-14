@@ -39,7 +39,7 @@ function connectionLabel(node: NodeSession): string {
 }
 
 /** One gateway-runtime router with bounded reconnect suppression and short-lived timers. */
-export class NodeConnectionNotificationRouter {
+class NodeConnectionNotificationRouter {
   private readonly primaryDelayMs: number;
   private readonly fallbackDelayMs: number;
   private readonly reconnectCooldownMs: number;

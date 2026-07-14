@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
   applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
@@ -17,7 +18,6 @@ import {
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
-import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();

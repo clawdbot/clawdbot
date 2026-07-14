@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController } from "lit";
+import { render, type ReactiveController } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -53,6 +53,36 @@ describe("supportsSystemInfo", () => {
     expect(supportsSystemInfo(hello)).toBe(true);
     expect(supportsSystemInfo(unsupportedHello)).toBe(false);
     expect(supportsSystemInfo(null)).toBe(false);
+  });
+});
+
+describe("ConfigPage settings mode tabs", () => {
+  it("moves and activates tabs with arrow keys", () => {
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      pageId: string;
+      settingsMode: "quick" | "advanced";
+      renderSettingsModeToggle: () => unknown;
+    };
+    state.pageId = "config";
+    state.settingsMode = "quick";
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(state.renderSettingsModeToggle(), container);
+    const [quick, advanced] = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    );
+
+    expect(quick?.tabIndex).toBe(0);
+    expect(advanced?.tabIndex).toBe(-1);
+    expect(advanced?.getAttribute("aria-controls")).toBe("config-settings-panel");
+    quick?.focus();
+    quick?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(advanced);
+    expect(state.settingsMode).toBe("advanced");
   });
 });
 

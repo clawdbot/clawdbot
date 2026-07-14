@@ -2,11 +2,9 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
-import {
-  buildInboundDedupeKey,
-  resetInboundDedupe,
-  type InboundDedupeClaimResult,
-} from "./inbound-dedupe.js";
+import { buildInboundDedupeKey, resetInboundDedupe } from "./inbound-dedupe.js";
+
+type InboundDedupeClaimResult = ReturnType<typeof import("./inbound-dedupe.js").claimInboundDedupe>;
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",

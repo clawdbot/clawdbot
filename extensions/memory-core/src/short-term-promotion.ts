@@ -18,6 +18,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -56,6 +57,8 @@ const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+// One recall batch can inspect every retained entry; cap filesystem pressure.
+const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
 export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
   "memory",
@@ -1060,7 +1063,7 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
   ]);
 }
 
-export function isShortTermMemoryPath(filePath: string): boolean {
+function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
@@ -1333,12 +1336,13 @@ export async function filterLiveShortTermRecallEntries(params: {
     return [];
   }
   const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const sourceFileLimit = pLimit(SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY);
   const checkSourceFile = (sourcePath: string): Promise<boolean> => {
     const existing = sourceFileChecks.get(sourcePath);
     if (existing) {
       return existing;
     }
-    const check = shortTermRecallSourceIsFile(sourcePath);
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
     sourceFileChecks.set(sourcePath, check);
     return check;
   };
@@ -2865,65 +2869,3 @@ export async function removeGroundedShortTermCandidates(params: {
 
   return { removed, storePath };
 }
-
-async function writeRawShortTermStoreForTest(
-  workspaceDir: string,
-  raw: unknown,
-  namespace: string,
-  metaKey: "recall" | "phase",
-): Promise<void> {
-  const record = asRecord(raw);
-  const entries = asRecord(record?.entries);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace,
-      workspaceDir,
-      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: metaKey,
-      value: {
-        updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
-      },
-    }),
-  ]);
-}
-
-export const testing = {
-  parseLockOwnerPid,
-  isProcessLikelyAlive,
-  readRecallStore: readStore,
-  readPhaseSignalStore,
-  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
-  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
-  writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  deleteShortTermLock: async (workspaceDir: string) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
-  },
-  deriveConceptTags,
-  calculateConsolidationComponent,
-  calculatePhaseSignalBoost,
-  compareShortTermRecallRetention,
-  buildClaimHash,
-  totalSignalCountForEntry,
-  isContaminatedDreamingSnippet,
-  lineRangeOverlapsDreamingFence,
-  SHORT_TERM_RECALL_MAX_ENTRIES,
-  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
-};
-export { testing as __testing };

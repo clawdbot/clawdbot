@@ -156,9 +156,9 @@ Provider options:
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides keyed by user ID (`historyLimit`).
 - `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size in chars (default: 4000).
-- `channels.nextcloud-talk.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
-- `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
-- `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
+- `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.
 - `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
 - `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).

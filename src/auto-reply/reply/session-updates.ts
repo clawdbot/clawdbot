@@ -22,8 +22,6 @@ import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
-export { drainFormattedSystemEvents } from "./session-system-events.js";
-export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
 async function persistSessionEntryUpdate(params: {
   expectedSessionId: string | undefined;

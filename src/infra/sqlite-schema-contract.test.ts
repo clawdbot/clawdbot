@@ -55,6 +55,51 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it("accepts an extra non-unique index on a canonical table", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec("CREATE INDEX idx_children_value ON children(value);");
+
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects an extra unique index on a canonical table", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec("CREATE UNIQUE INDEX idx_children_value_unique ON children(value);");
+
+      expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
+        "unexpected unique index idx_children_value_unique",
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects an extra trigger on a canonical table", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec(`
+        CREATE TRIGGER children_delete_parent_after_insert
+        AFTER INSERT ON children
+        BEGIN
+          DELETE FROM parents WHERE id = NEW.parent_id;
+        END;
+      `);
+
+      expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
+        "unexpected trigger children_delete_parent_after_insert",
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts canonical columns created in additive-migration order", () => {
     const migratedSchema = CANONICAL_SCHEMA.replace(
       `

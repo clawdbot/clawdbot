@@ -19,10 +19,10 @@ const profileMocks = vi.hoisted(() => ({
 
 vi.mock("./cell-profile.js", () => profileMocks);
 
+import type { CellContainerProfile } from "./cell-profile.js";
+import { createRedactingStreamWriter } from "./containers.redaction.js";
 import {
-  __test as containersTestApi,
   createFleetContainerRuntime,
-  type CellContainerProfile,
   type FleetContainerCommandExecutor,
   type FleetContainerStreamExecutor,
 } from "./containers.runtime.js";
@@ -510,7 +510,7 @@ describe("fleet container runtime", () => {
   it("redacts secrets from streamed log output, including across chunk boundaries", () => {
     const written: string[] = [];
     const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
     writer.write(Buffer.from("boot ok\ntoken=gw-sec"));
     writer.write(Buffer.from("ret-token done\ntail without newline"));
     writer.flush();
@@ -523,7 +523,7 @@ describe("fleet container runtime", () => {
   it("never splits a secret across a forced long-line flush", () => {
     const written: string[] = [];
     const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
     // An unterminated line ending exactly in a secret prefix at the flush point.
     writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
     writer.write(Buffer.from("ret-token trailing"));

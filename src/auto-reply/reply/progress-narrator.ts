@@ -39,7 +39,7 @@ const NARRATION_SYSTEM_PROMPT = [
   "Reply with the status text only.",
 ].join(" ");
 
-export type ProgressNarrationInput = {
+type ProgressNarrationInput = {
   userMessage: string;
   activityNotes: readonly string[];
   previousText: string;

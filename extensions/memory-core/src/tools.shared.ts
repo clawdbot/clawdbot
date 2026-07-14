@@ -107,9 +107,9 @@ export function createMemoryTool(params: {
     name: params.name,
     description: params.description,
     parameters: params.parameters,
-    execute: async (toolCallId, toolParams) => {
+    execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
-      return await params.execute(latestCtx)(toolCallId, toolParams);
+      return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);
     },
   };
 }

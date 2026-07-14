@@ -13,7 +13,6 @@ const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
-  release_profile: "full",
   rerun_group: "all",
   reuse_evidence: "true",
 };
@@ -25,8 +24,10 @@ Creates a temporary remote branch pinned to trusted main release tooling,
 dispatches Full Release Validation with the target commit as its ref input,
 watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes the
-temporary branch by default. Exact-target evidence reuse stays enabled; pass
--f reuse_evidence=false to force a fresh run.`);
+temporary branch by default. Exact-target and changelog-only Release SHA
+evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
+run. The release profile defaults to beta for alpha/beta package versions and
+stable otherwise; pass -f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command, args, options = {}) {
@@ -135,6 +136,12 @@ export function parseArgs(argv) {
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
   }
+  if (
+    args.inputs.release_profile &&
+    !["beta", "stable", "full"].includes(args.inputs.release_profile)
+  ) {
+    throw new Error("release_profile must be beta, stable, or full");
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
@@ -177,6 +184,22 @@ function verifyTargetRef(targetRef, targetSha) {
 function resolveSha(requestedSha) {
   const rev = requestedSha || "HEAD";
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
+}
+
+export function releaseProfileForTarget(
+  targetSha,
+  readPackageJson = (sha) => run("git", ["show", `${sha}:package.json`]),
+) {
+  let version;
+  try {
+    version = JSON.parse(readPackageJson(targetSha)).version;
+  } catch {
+    throw new Error(`Could not read package.json from target SHA ${targetSha}`);
+  }
+  if (typeof version !== "string" || !/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(version)) {
+    throw new Error(`Target SHA ${targetSha} has an invalid package version`);
+  }
+  return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
 }
 
 function resolveTrustedWorkflowSha(requestedSha) {
@@ -276,6 +299,7 @@ function verifyReleaseEvidence(parentRunId, workflowSha) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
+  args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);

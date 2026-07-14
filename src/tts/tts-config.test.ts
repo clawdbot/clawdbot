@@ -165,4 +165,31 @@ describe("shouldAttemptTtsPayload", () => {
     expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
     expect(resolved.providers?.openai?.voice).toBe("shimmer");
   });
+
+  it("preserves null and array override semantics while blocking prototype keys", () => {
+    const agentTts = JSON.parse(
+      '{"providers":{"custom":{"nullable":null,"voices":["override"],"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}}}',
+    );
+    const cfg = {
+      messages: {
+        tts: {
+          providers: {
+            custom: {
+              model: "base",
+              nullable: "base",
+              voices: ["base"],
+            },
+          },
+        },
+      },
+      agents: { list: [{ id: "reader", tts: agentTts }] },
+    } as OpenClawConfig;
+
+    expect(resolveEffectiveTtsConfig(cfg, "reader").providers?.custom).toEqual({
+      model: "base",
+      nullable: null,
+      voices: ["override"],
+    });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
 });

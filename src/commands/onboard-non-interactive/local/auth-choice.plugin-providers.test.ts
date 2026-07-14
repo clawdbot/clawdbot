@@ -1,8 +1,14 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { RuntimePluginInstallResult } from "../../runtime-plugin-install.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
+
+type RuntimePluginInstallResult = {
+  cfg: OpenClawConfig;
+  required: boolean;
+  installed: boolean;
+  status?: "installed" | "skipped" | "failed" | "timed_out";
+};
 
 const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
   vi.fn(
@@ -394,7 +400,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       cfg: installedConfig,
       required: true,
       installed: true,
-      status: "installed",
     });
     resolvePluginProviders.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
     resolveProviderPluginChoice.mockReturnValue({
@@ -445,7 +450,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       cfg: installedConfig,
       required: true,
       installed: true,
-      status: "installed",
     });
     resolvePluginProviders.mockReturnValue([
       { id: "github-copilot", pluginId: "github-copilot" },

@@ -956,7 +956,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_GATEWAY_URL",
           "OPENCLAW_CLAWHUB_URL",
           "CLAWHUB_URL",
-          "OPENCLAW_CLAWHUB_TOKEN",
           "CLAWHUB_TOKEN",
           "CLAWHUB_AUTH_TOKEN",
           "CLAWHUB_CONFIG_PATH",

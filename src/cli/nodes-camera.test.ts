@@ -306,6 +306,15 @@ describe("nodes camera helpers", () => {
       expectedMessage: /exceeds max/i,
     },
     {
+      name: "malformed content-length",
+      url: "https://198.51.100.42/weird.bin",
+      response: new Response("tiny", {
+        status: 200,
+        headers: { "content-length": "0x3" },
+      }),
+      expectedMessage: /invalid content-length header: 0x3/i,
+    },
+    {
       name: "non-ok status",
       url: "https://198.51.100.42/down.bin",
       response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
@@ -343,6 +352,15 @@ describe("nodes camera helpers", () => {
           headers: { "content-length": String(999_999_999) },
         }),
       expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "malformed content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      expectedMessage: /invalid content-length/i,
     },
   ] as const)(
     "cancels rejected url response bodies: $name",

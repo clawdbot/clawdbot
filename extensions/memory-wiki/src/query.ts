@@ -18,6 +18,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -33,6 +34,7 @@ import { initializeMemoryWikiVault } from "./vault.js";
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+const QUERY_PAGE_READ_CONCURRENCY = 16;
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -271,13 +273,15 @@ async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
-  const pages = await Promise.all(
-    files.map(async (relativePath) => {
+  const pages = await pMap(
+    files,
+    async (relativePath) => {
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8");
       const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
       return summary ? { ...summary, raw } : null;
-    }),
+    },
+    { concurrency: QUERY_PAGE_READ_CONCURRENCY, stopOnError: true },
   );
   return pages.flatMap((page) => (page ? [page] : []));
 }

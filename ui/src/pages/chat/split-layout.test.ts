@@ -5,7 +5,6 @@ import {
   createSplitLayout,
   findPane,
   insertPane,
-  nextPaneId,
   normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
@@ -197,7 +196,7 @@ describe("chat split layout", () => {
     ).toBeUndefined();
   });
 
-  it("generates ids after the highest matching numeric suffix", () => {
+  it("inserts after the highest restored pane and column suffix", () => {
     const layout: ChatSplitLayout = {
       columns: [
         {
@@ -212,8 +211,9 @@ describe("chat split layout", () => {
       columnWeights: [1],
       activePaneId: "custom",
     };
-    expect(nextPaneId(layout)).toBe("p15");
+
     const inserted = insertPane(layout, "custom", "c", "right");
+
     expect(inserted.columns.at(1)?.id).toBe("c10");
     expect(inserted.columns.at(1)?.panes.at(0)?.id).toBe("p15");
   });

@@ -11,7 +11,6 @@ export {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   canonicalizeAllowlistWithResolvedIds,
-  formatAllowlistMatchMeta,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";

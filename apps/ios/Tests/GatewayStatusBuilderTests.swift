@@ -19,7 +19,7 @@ struct GatewayStatusBuilderTests {
         #expect(state == .error)
     }
 
-    @Test func `transient problem allows connecting status`() {
+    @Test func `transient problem keeps error status while reconnecting`() {
         let state = GatewayStatusBuilder.build(
             gatewayServerName: nil,
             lastGatewayProblem: GatewayConnectionProblem(
@@ -31,7 +31,7 @@ struct GatewayStatusBuilderTests {
                 pauseReconnect: false),
             gatewayStatusText: "Reconnecting…")
 
-        #expect(state == .connecting)
+        #expect(state == .error)
     }
 
     @Test func `chat gateway pill labels match display state`() {

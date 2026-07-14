@@ -14,7 +14,7 @@ import {
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 
-export type PluginActivationCompatConfig = {
+type PluginActivationCompatConfig = {
   enablementPluginIds?: readonly string[];
   vitestPluginIds?: readonly string[];
 };
@@ -24,7 +24,7 @@ export type PluginActivationBundledCompatMode = {
   vitest?: boolean;
 };
 
-export type PluginActivationInputs = {
+type PluginActivationInputs = {
   rawConfig?: OpenClawConfig;
   config?: OpenClawConfig;
   normalized: NormalizedPluginsConfig;
@@ -33,11 +33,11 @@ export type PluginActivationInputs = {
   autoEnabledReasons: Record<string, string[]>;
 };
 
-export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
+type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
   compatPluginIds: string[];
 };
 
-export type BundledPluginCompatibleLoadValues = Pick<
+type BundledPluginCompatibleLoadValues = Pick<
   BundledPluginCompatibleActivationInputs,
   "rawConfig" | "config" | "activationSourceConfig" | "autoEnabledReasons" | "compatPluginIds"
 >;

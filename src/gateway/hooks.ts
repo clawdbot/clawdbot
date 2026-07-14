@@ -244,7 +244,6 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 /** Channel values accepted by hook agent dispatch. */
-export type { HookMessageChannel } from "./hooks.types.js";
 
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */

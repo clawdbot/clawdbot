@@ -1,0 +1,164 @@
+import { readFileSync } from "node:fs";
+import { compileFunction } from "node:vm";
+import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import {
+  buildSummary,
+  formatAnnotation,
+  intersectFindings,
+  parseRepoLocation,
+  validateFindings,
+} from "../../scripts/periphery-intersection.mjs";
+
+const WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
+
+type WorkflowStep = {
+  id?: string;
+  name?: string;
+  run?: string;
+  with?: { name?: string; path?: string; script?: string };
+};
+
+type Workflow = {
+  jobs?: Record<
+    string,
+    {
+      name?: string;
+      needs?: string[] | string;
+      steps?: WorkflowStep[];
+    }
+  >;
+};
+
+function finding(overrides: Record<string, unknown> = {}) {
+  return {
+    ids: ["s:11OpenClawKit7ExampleV"],
+    kind: "struct",
+    location: "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift:12:8",
+    name: "Example",
+    ...overrides,
+  };
+}
+
+describe("Periphery intersection", () => {
+  it("matches exact Swift USRs instead of declaration names", () => {
+    const sameNameDifferentUsr = finding({ ids: ["s:11OpenClawKit7ExampleV_other"] });
+    expect(intersectFindings([finding()], [sameNameDifferentUsr])).toEqual([]);
+    expect(intersectFindings([finding()], [finding()])).toEqual([finding()]);
+  });
+
+  it("matches any USR emitted for a declaration compiled into multiple iOS modules", () => {
+    const ios = finding({ ids: ["s:16OpenClawWatchApp7ExampleV", "s:11OpenClawKit7ExampleV"] });
+    expect(intersectFindings([ios], [finding()])).toEqual([ios]);
+  });
+
+  it("sorts findings deterministically", () => {
+    const later = finding({
+      ids: ["s:11OpenClawKit5LaterV"],
+      location: "../shared/OpenClawKit/Sources/OpenClawKit/Later.swift:2:1",
+      name: "Later",
+    });
+    expect(intersectFindings([later, finding()], [finding(), later])).toEqual([finding(), later]);
+  });
+
+  it("fails closed when a finding has no USR", () => {
+    expect(() => validateFindings([finding({ ids: [] })], "iOS")).toThrow(
+      "iOS finding 0 has no usable Swift USR",
+    );
+  });
+
+  it("rejects findings outside shared OpenClawKit", () => {
+    expect(() =>
+      validateFindings([finding({ location: "Sources/App.swift:1:1" })], "macOS"),
+    ).toThrow("macOS finding 0 is outside shared OpenClawKit sources");
+  });
+
+  it("maps relative scan locations to repository annotations", () => {
+    expect(parseRepoLocation(finding().location)).toEqual({
+      column: "8",
+      file: "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift",
+      line: "12",
+    });
+    expect(formatAnnotation(finding())).toBe(
+      "::error file=apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift,line=12,col=8,title=Dead shared Swift code::struct Example",
+    );
+  });
+
+  it("reports the zero-findings policy in the summary", () => {
+    expect(buildSummary([])).toContain("No declarations were reported dead by both");
+    expect(buildSummary([finding()])).toContain("Found 1 shared Swift declaration");
+  });
+});
+
+describe("shared OpenClawKit Periphery workflow", () => {
+  const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
+
+  it("runs two consumer scans and a same-run intersection", () => {
+    expect(workflow.jobs?.["scan-ios"]?.name).toBe("Scan shared kit from iOS");
+    expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
+    expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
+
+    const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
+      (step) => step.name === "Upload iOS consumer report",
+    );
+    const macosUpload = workflow.jobs?.["scan-macos"]?.steps?.find(
+      (step) => step.name === "Upload macOS consumer report",
+    );
+    expect(iosUpload?.with?.name).toContain("shared-periphery-ios-");
+    expect(macosUpload?.with?.name).toContain("shared-periphery-macos-");
+  });
+
+  it("retains the generated protocol contract and leaves findings for the intersection", () => {
+    for (const jobName of ["scan-ios", "scan-macos"]) {
+      const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
+      expect(scan?.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
+      expect(scan?.run).toContain(
+        "--retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift'",
+      );
+      expect(scan?.run).not.toContain("--strict");
+    }
+    const macosScan = workflow.jobs?.["scan-macos"]?.steps?.find(
+      (step) => step.name === "Scan shared kit",
+    );
+    expect(macosScan?.run).not.toContain("--exclude-tests");
+  });
+
+  it("scopes native consumer, shared package, and workflow changes", async () => {
+    const script = workflow.jobs?.scope?.steps?.find((step) => step.id === "scope")?.with?.script;
+    expect(script).toBeTruthy();
+    const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
+      "context",
+      "core",
+      "exec",
+    ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+
+    for (const filename of [
+      "apps/ios/Sources/App.swift",
+      "apps/macos/Sources/OpenClaw/App.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift",
+      WORKFLOW_PATH,
+    ]) {
+      const outputs = new Map<string, string>();
+      await execute(
+        {
+          eventName: "pull_request",
+          payload: { pull_request: { base: { sha: "base-sha" }, draft: false, number: 1 } },
+          repo: {},
+        },
+        { setOutput: (name: string, value: string) => outputs.set(name, value) },
+        {
+          async getExecOutput(command: string, args: string[]) {
+            expect(command).toBe("git");
+            expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "base-sha", "HEAD", "--"]);
+            const pathspecs = args.slice(5);
+            const changed = pathspecs.some((pathspec) =>
+              pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
+            );
+            return { exitCode: changed ? 1 : 0 };
+          },
+        },
+      );
+      expect(outputs.get("should-scan"), filename).toBe("true");
+    }
+  });
+});

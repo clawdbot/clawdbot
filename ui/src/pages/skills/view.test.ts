@@ -156,6 +156,23 @@ describe("renderSkills", () => {
     expect(onAgentChange).toHaveBeenCalledWith("main");
   });
 
+  it("renders skill groups as open collapsible sections with heading summaries", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    render(renderSkills(createProps()), container);
+    await Promise.resolve();
+
+    const group = container.querySelector<HTMLDetailsElement>("details.skills-group");
+    expect(expectDefined(group, "skill group details").open).toBe(true);
+    const heading = group?.querySelector("summary h2.settings-section__heading");
+    expect(normalizeText(expectDefined(heading, "group summary heading"))).toContain("1");
+    expect(normalizeText(group!.querySelector(".settings-group .settings-row")!)).toContain(
+      "Repo Skill",
+    );
+  });
+
   it("locks every skill mutation control behind the active mutation", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -208,10 +225,15 @@ describe("renderSkills", () => {
     );
     expect(refresh?.disabled).toBe(true);
     expect(
-      Array.from(container.querySelectorAll<HTMLInputElement>(".skill-toggle")).every(
+      Array.from(container.querySelectorAll<HTMLInputElement>(".settings-toggle input")).every(
         (toggle) => toggle.disabled,
       ),
     ).toBe(true);
+    expect(
+      container.querySelector<HTMLInputElement>(
+        '.settings-toggle input[aria-label="Repo Skill enabled"]',
+      ),
+    ).toBeInstanceOf(HTMLInputElement);
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
@@ -222,7 +244,7 @@ describe("renderSkills", () => {
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
-    for (const toggle of container.querySelectorAll<HTMLInputElement>(".skill-toggle")) {
+    for (const toggle of container.querySelectorAll<HTMLInputElement>(".settings-toggle input")) {
       toggle.click();
     }
     for (const button of mutationButtons) {
@@ -255,7 +277,7 @@ describe("renderSkills", () => {
     render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
     await Promise.resolve();
 
-    const toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    const toggles = container.querySelectorAll<HTMLInputElement>(".settings-toggle input");
     expect(toggles).toHaveLength(2);
     const passwordToggle = expectDefined(toggles[0], "password skill toggle");
     const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
@@ -279,7 +301,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    const updatedToggles = container.querySelectorAll<HTMLInputElement>(".settings-toggle input");
     expect(updatedToggles).toHaveLength(1);
     expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
       false,
@@ -302,9 +324,9 @@ describe("renderSkills", () => {
     render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
     await Promise.resolve();
 
-    expect(container.querySelectorAll(".list-item")).toHaveLength(0);
-    expect(normalizeText(container)).toContain("Ready0");
-    expect(normalizeText(container)).toContain("Needs Setup1");
+    expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
+    expect(normalizeText(container)).toContain("Ready 0");
+    expect(normalizeText(container)).toContain("Needs Setup 1");
 
     render(
       renderSkills(createProps({ report, statusFilter: "needs-setup", detailKey: "repo-skill" })),
@@ -312,7 +334,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".list-item .statusDot")?.classList.contains("warn")).toBe(true);
+    expect(container.querySelector(".plugins-item .settings-status--warn")).not.toBeNull();
     expect(normalizeText(container)).toContain("Reason: blocked by agent filter");
     expect(
       Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
@@ -398,17 +420,21 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const resultItem = container.querySelector<HTMLElement>(".list-item");
-    const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
+    const resultItem = container.querySelector<HTMLElement>(".plugins-item");
+    const detailButton = container.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    const installButton = container.querySelector<HTMLButtonElement>(".plugins-item .btn.btn--sm");
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
-    expect(resultItem?.querySelector(".list-title")?.textContent?.trim()).toBe("GitHub");
-    expect(resultItem?.querySelector(".list-sub")?.textContent?.trim()).toBe(
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.getAttribute("aria-label")).toBe("Open GitHub details");
+    expect(detailButton?.contains(installButton)).toBe(false);
+    expect(resultItem?.querySelector(".settings-row__title")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
       "GitHub integration for OpenClaw",
     );
-    expect(resultItem?.querySelector(".list-meta .muted")?.textContent?.trim()).toBe("v1.2.3");
+    expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
     expect(installButton?.textContent?.trim()).toBe("Install");
-    resultItem!.click();
+    detailButton!.click();
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);

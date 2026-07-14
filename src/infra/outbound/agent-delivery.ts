@@ -29,7 +29,7 @@ import {
   type SessionDeliveryTarget,
 } from "./targets.js";
 
-export type AgentDeliveryPlan = {
+type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
   resolvedChannel: GatewayMessageChannel;
   resolvedTo?: string;

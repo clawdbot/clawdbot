@@ -362,6 +362,31 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun realtimePlaybackMarkAcknowledgesAfterQueuedAudioBarrier() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val dispatcher = StandardTestDispatcher(testScheduler)
+      val manager =
+        createManager(
+          scope = this,
+          realtimePlaybackDispatcher = dispatcher,
+          realtimeMarkAcknowledger = { sessionId, markName ->
+            acknowledgements += sessionId to markName
+          },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
   fun realtimeTranscriptsPopulateVoiceConversation() {
     val manager = createManager()
 
@@ -964,6 +989,8 @@ class TalkModeManagerTest {
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -985,6 +1012,8 @@ class TalkModeManagerTest {
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
+      realtimePlaybackDispatcher = realtimePlaybackDispatcher,
+      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     )
   }
 

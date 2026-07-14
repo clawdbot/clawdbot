@@ -20,7 +20,7 @@ import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 export type { CommandSecretAssignment } from "./command-config.js";
 
 /** Provider selections applied only while resolving command-scoped web secrets. */
-export type CommandSecretProviderOverrides = {
+type CommandSecretProviderOverrides = {
   /** Temporary web-search provider id for this command request. */
   webSearch?: string;
   /** Temporary web-fetch provider id for this command request. */

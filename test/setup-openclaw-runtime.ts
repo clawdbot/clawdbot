@@ -4,7 +4,7 @@ import type {
   ChannelId,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";

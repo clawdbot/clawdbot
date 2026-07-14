@@ -4,7 +4,7 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob } from "../types.js";
 
-export type CronSourceDeliveryResolvedTarget = {
+type CronSourceDeliveryResolvedTarget = {
   channel?: string;
   accountId?: string;
   to?: string;

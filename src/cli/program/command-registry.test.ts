@@ -52,10 +52,10 @@ vi.mock("./register.crestodian.js", () => ({
 
 import {
   getCoreCliCommandNames,
-  getCoreCliCommandsWithSubcommands,
   registerCoreCliByName,
   registerCoreCliCommands,
-} from "./command-registry.js";
+} from "./command-registry-core.js";
+import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",

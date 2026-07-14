@@ -10,7 +10,10 @@ extension SettingsProTab {
         title: OpenClawTextValue,
         detail: OpenClawTextValue,
         value: OpenClawTextValue,
-        color: Color) -> some View
+        color: Color,
+        actionTitle: LocalizedStringKey? = nil,
+        actionSystemImage: String = "arrow.right",
+        action: (() -> Void)? = nil) -> some View
     {
         Section {
             HStack(spacing: 12) {
@@ -27,6 +30,15 @@ extension SettingsProTab {
                 value.text
                     .font(OpenClawType.subheadMedium)
                     .foregroundStyle(color)
+            }
+            if let action, let actionTitle {
+                Button(action: action) {
+                    Label(actionTitle, systemImage: actionSystemImage)
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(OpenClawBrand.accent)
             }
         }
     }
@@ -924,6 +936,7 @@ extension SettingsProTab {
         case .approvals: String(localized: "Approvals")
         case .permissions: String(localized: "Permissions")
         case .channels: String(localized: "Channels")
+        case .skills: String(localized: "Skills")
         case .voice: String(localized: "Voice & Talk")
         case .diagnostics: String(localized: "Diagnostics")
         case .privacy: String(localized: "Privacy")
@@ -1165,6 +1178,12 @@ extension SettingsProTab {
     var gatewayConnected: Bool {
         !self.appModel.isAppleReviewDemoModeEnabled &&
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    /// First-run state: no paired gateways yet (demo mode fakes a pairing), so
+    /// the status card surfaces Scan QR as the primary action.
+    var gatewayNeedsPairing: Bool {
+        self.gatewayRegistry.entries.isEmpty && !self.appModel.isAppleReviewDemoModeEnabled
     }
 
     var gatewayStatusDetail: String {

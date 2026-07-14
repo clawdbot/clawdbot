@@ -44,7 +44,6 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
@@ -216,6 +215,10 @@ export async function monitorMSTeamsProvider(
   });
 
   const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;
+  const ssoConnectionName =
+    msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
+      ? msteamsCfg.sso.connectionName
+      : undefined;
 
   // Lazy-load the SDK and create the App with ExpressAdapter. The SDK
   // registers POST /api/messages (or configured path) and handles JWT
@@ -224,9 +227,7 @@ export async function monitorMSTeamsProvider(
     ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
     messagingEndpoint: configuredPath,
-    ...(msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
-      ? { oauthDefaultConnectionName: msteamsCfg.sso.connectionName }
-      : {}),
+    ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
   });
 
   // Existing Azure Bot registrations may still point at the legacy
@@ -260,19 +261,15 @@ export async function monitorMSTeamsProvider(
   // Build a token provider adapter for Graph API operations
   const tokenProvider = createMSTeamsTokenProvider(app);
 
-  // Build SSO deps when the operator has opted in and a connection name
-  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
-  // (the plugin will still ack signin invokes, but will not attempt a
-  // Bot Framework token exchange or persist anything).
-  let ssoDeps: MSTeamsSsoDeps | undefined;
-  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
-    ssoDeps = {
-      tokenProvider,
-      tokenStore: createMSTeamsSsoTokenStoreFs(),
-      connectionName: msteamsCfg.sso.connectionName,
-    };
+  const ssoDeps = ssoConnectionName
+    ? {
+        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        connectionName: ssoConnectionName,
+      }
+    : undefined;
+  if (ssoDeps) {
     log.debug?.("msteams sso enabled", {
-      connectionName: msteamsCfg.sso.connectionName,
+      connectionName: ssoDeps.connectionName,
     });
   }
 
@@ -291,7 +288,6 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
-    sso: ssoDeps,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
 

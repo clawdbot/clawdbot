@@ -4,7 +4,6 @@ import {
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
-  renderSlackNativeDataFallbackText,
 } from "./native-data-blocks.js";
 
 const chart = {
@@ -51,36 +50,6 @@ describe("Slack native data blocks", () => {
     expect(isSlackInvalidBlocksError({ response: { data: "invalid_blocks" } })).toBe(true);
     expect(isSlackInvalidBlocksError({ error: "INVALID_BLOCKS" })).toBe(true);
     expect(isSlackInvalidBlocksError(new Error("invalid_blocks"))).toBe(false);
-  });
-
-  it("routes supported blocks to their complete fallback renderers", () => {
-    expect(renderSlackNativeDataFallbackText(chart)).toBe(
-      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(renderSlackNativeDataFallbackText(table)).toBe(
-      "Pipeline report (table)\n- Account: Acme; ARR: $125k",
-    );
-    expect(renderSlackNativeDataFallbackText({ type: "section" })).toBeUndefined();
-  });
-
-  it("escapes raw structured-data tokens before rendering mrkdwn fallbacks", () => {
-    expect(
-      renderSlackNativeDataFallbackText({
-        type: "data_table",
-        caption: "<!channel> pipeline",
-        rows: [[{ type: "raw_text", text: "Owner" }], [{ type: "raw_text", text: "<@U123>" }]],
-      }),
-    ).toBe("&lt;!channel&gt; pipeline (table)\n- Owner: &lt;@U123&gt;");
-    expect(
-      renderSlackNativeDataFallbackText({
-        type: "data_visualization",
-        title: "<!here> revenue",
-        chart: {
-          type: "pie",
-          segments: [{ label: "<@U456>", value: 1 }],
-        },
-      }),
-    ).toBe("&lt;!here&gt; revenue (pie chart)\n- &lt;@U456&gt;: 1");
   });
 
   it("appends mixed native data in block order without collapsing repeated blocks", () => {

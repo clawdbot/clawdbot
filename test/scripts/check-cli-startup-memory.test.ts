@@ -53,7 +53,7 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("guards packaged plugin listing startup memory", () => {
-    expect(testing.resolveDefaultLimitsMb("linux").pluginsList).toBe(350);
+    expect(testing.resolveDefaultLimitsMb("linux").pluginsList).toBe(400);
     expect(testing.resolveDefaultLimitsMb("darwin").pluginsList).toBeGreaterThan(350);
     expect(testing.cases).toContainEqual(
       expect.objectContaining({
@@ -61,6 +61,10 @@ describe("check-cli-startup-memory", () => {
         args: ["openclaw.mjs", "plugins", "list", "--json"],
       }),
     );
+  });
+
+  it("keeps status startup headroom above Linux runner RSS variance", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {

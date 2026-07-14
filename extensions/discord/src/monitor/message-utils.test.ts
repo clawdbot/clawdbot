@@ -7,6 +7,7 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
+import { resetDiscordChannelInfoCacheForTest } from "./message-channel-info.js";
 
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -46,7 +47,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").resetDiscordChannelInfoCacheForTest;
 let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
 let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
 let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
@@ -56,7 +56,6 @@ let resolveReferencedReplyMediaList: typeof import("./message-utils.js").resolve
 
 beforeAll(async () => {
   ({
-    resetDiscordChannelInfoCacheForTest,
     resolveDiscordChannelInfo,
     resolveDiscordMessageChannelId,
     resolveDiscordMessageText,

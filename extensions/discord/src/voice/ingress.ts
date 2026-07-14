@@ -68,6 +68,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   ownerAllowFrom?: string[];
+  ownerAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
@@ -88,6 +89,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
     channelLabel: formatMention({ channelId: entry.channelId }),
     memberRoleIds: speakerIdentity.memberRoleIds,
     ownerAllowFrom: params.ownerAllowFrom,
+    ownerAllowAll: params.ownerAllowAll,
     sender: {
       id: speakerIdentity.id,
       name: speakerIdentity.name,
@@ -114,6 +116,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   context?: DiscordVoiceIngressContext;
   toolsAllow?: string[];
   ownerAllowFrom?: string[];
+  ownerAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceAgentTurnResult | null> {
@@ -125,6 +128,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       ownerAllowFrom: params.ownerAllowFrom,
+      ownerAllowAll: params.ownerAllowAll,
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     }));
@@ -140,6 +144,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
       extraSystemPrompt: context.extraSystemPrompt,
+      senderIsOwner: context.senderIsOwner,
       allowModelOverride: Boolean(voiceModel),
       model: voiceModel,
       toolsAllow: params.toolsAllow,

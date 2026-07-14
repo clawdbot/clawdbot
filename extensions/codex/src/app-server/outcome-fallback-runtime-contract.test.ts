@@ -12,10 +12,7 @@ import {
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-outcome-contract";
@@ -24,6 +21,7 @@ const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 type MirrorTaggedMessage = { __openclaw?: { mirrorIdentity?: string } };
 
 async function createParams(): Promise<EmbeddedRunAttemptParams> {

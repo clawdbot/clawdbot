@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
@@ -23,10 +24,12 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   assertSafeSessionSqliteMigrationMove,
   restoreSessionSqliteMigrationRun,
-  type SessionSqliteMigrationManifest,
+  type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
 
 type TestStore = {
   configPath: string;
@@ -44,6 +47,7 @@ const previousEnv = {
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
 };
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const lexicalTempDir = path.resolve(os.tmpdir());
 const realTempDir = fs.realpathSync.native(os.tmpdir());
 const hasPlatformTempAlias = lexicalTempDir !== realTempDir;
@@ -2319,9 +2323,7 @@ function createLegacyStore(
     transcriptLines?: string[];
   } = {},
 ): TestStore {
-  const tempDir = fs.mkdtempSync(
-    path.join(params.tempRoot ?? os.tmpdir(), "openclaw-doctor-session-sqlite-"),
-  );
+  const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-", params.tempRoot);
   const stateDir = path.join(tempDir, "state");
   const configPath = path.join(tempDir, "openclaw.json");
   const sessionDir = params.customStore

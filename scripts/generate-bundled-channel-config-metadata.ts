@@ -253,7 +253,7 @@ async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string 
     if (!modulePath) {
       continue;
     }
-    const surface = await loadChannelConfigSurfaceModule(modulePath, { repoRoot });
+    const surface = await loadChannelConfigSurfaceModule(modulePath);
     if (!surface?.schema) {
       continue;
     }

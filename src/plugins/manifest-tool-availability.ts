@@ -11,8 +11,8 @@ import type {
 } from "./manifest.js";
 
 type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
-export type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
-export type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
+type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
+type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
 
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {

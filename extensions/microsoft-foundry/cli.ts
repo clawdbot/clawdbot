@@ -1,5 +1,6 @@
 // Microsoft Foundry plugin module implements cli behavior.
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -56,24 +57,18 @@ export function execAz(args: string[]): string {
 }
 
 async function execAzAsync(args: string[]): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    execFile(
-      "az",
-      args,
-      {
-        encoding: "utf-8",
-        timeout: 30_000,
-        shell: process.platform === "win32",
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(buildAzCommandError(error, stderr ?? "", stdout ?? ""));
-          return;
-        }
-        resolve(normalizeStringifiedOptionalString(stdout) ?? "");
-      },
+  try {
+    const { stdout } = await runExec("az", args, { logOutput: false, timeoutMs: 30_000 });
+    return normalizeStringifiedOptionalString(stdout) ?? "";
+  } catch (error) {
+    const commandError = error instanceof Error ? error : new Error(String(error));
+    const output = error as { stderr?: unknown; stdout?: unknown };
+    throw buildAzCommandError(
+      commandError,
+      typeof output.stderr === "string" ? output.stderr : "",
+      typeof output.stdout === "string" ? output.stdout : "",
     );
-  });
+  }
 }
 
 export function isAzCliInstalled(): boolean {

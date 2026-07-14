@@ -5,7 +5,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 
 /** Owner responsible for making source delivery visible to the user. */
-export type SourceVisibleDeliveryOwner =
+type SourceVisibleDeliveryOwner =
   | "automatic_source"
   | "message_tool"
   | "message_tool_then_direct_fallback"
@@ -13,7 +13,7 @@ export type SourceVisibleDeliveryOwner =
   | "none";
 
 /** Reason code explaining why source delivery policy took this shape. */
-export type SourceDeliveryPlanReason =
+type SourceDeliveryPlanReason =
   | "config"
   | "room_event"
   | "cron_announce"
@@ -23,7 +23,7 @@ export type SourceDeliveryPlanReason =
   | "subagent_completion";
 
 /** Configured or inferred destination source delivery must satisfy. */
-export type SourceDeliveryTarget = {
+type SourceDeliveryTarget = {
   channel?: string;
   to?: string;
   accountId?: string;
@@ -31,7 +31,7 @@ export type SourceDeliveryTarget = {
 };
 
 /** Message-tool destination observed during a run. */
-export type SourceDeliveryMessageToolTarget = {
+type SourceDeliveryMessageToolTarget = {
   tool?: string;
   provider?: string;
   accountId?: string;

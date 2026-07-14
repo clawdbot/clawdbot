@@ -3,13 +3,12 @@
  */
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
-  GatewaySessionKeyOverrideError,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
-  resolveHttpSenderIsOwner,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 
@@ -99,7 +98,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(GatewaySessionKeyOverrideError);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("preserves an existing unlocked legacy harness-prefixed override", () => {
@@ -131,7 +130,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(GatewaySessionKeyOverrideError);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("does not build session state for explicit unknown agent ids", () => {

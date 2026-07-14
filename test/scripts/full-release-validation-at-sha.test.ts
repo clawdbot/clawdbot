@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseArgs,
+  releaseProfileForTarget,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
@@ -38,6 +39,15 @@ describe("full-release-validation-at-sha", () => {
       targetRef: "release/2026.7.1",
       workflowSha: "origin/main",
     });
+  });
+
+  it("infers the release profile from the target package version", () => {
+    const readVersion = (version: string) => () => JSON.stringify({ version });
+
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toBe("beta");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
   });
 
   it("keeps release context separate from the exact target SHA", () => {
@@ -98,6 +108,9 @@ describe("full-release-validation-at-sha", () => {
     expect(parseArgs(["-f", "reuse_evidence=false"]).inputs.reuse_evidence).toBe("false");
     expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
       "reuse_evidence must be true or false",
+    );
+    expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
+      "release_profile must be beta, stable, or full",
     );
   });
 

@@ -13,9 +13,7 @@ export type BundledPluginSource = {
   requiresConfig?: boolean;
 };
 
-export type BundledPluginLookup =
-  | { kind: "npmSpec"; value: string }
-  | { kind: "pluginId"; value: string };
+type BundledPluginLookup = { kind: "npmSpec"; value: string } | { kind: "pluginId"; value: string };
 
 export function findBundledPluginSourceInMap(params: {
   bundled: ReadonlyMap<string, BundledPluginSource>;

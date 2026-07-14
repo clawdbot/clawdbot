@@ -2,6 +2,7 @@
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -411,10 +412,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
     sleepImpl?: (ms: number) => Promise<unknown>;
   },
 ) {
-  const results = Array.from<U>({ length: items.length });
-  let nextIndex = 0;
   let nextStartGate = Promise.resolve();
-  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
     opts?.sleepImpl ??
@@ -444,20 +442,17 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await waitForStartSlot(nextIndex < items.length);
-      const item = items[index];
-      if (item === undefined) {
-        return;
-      }
-      results[index] = await mapper(item, index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return await pMap(
+    items,
+    async (item, index) => {
+      await waitForStartSlot(index < items.length - 1);
+      return await mapper(item, index);
+    },
+    {
+      concurrency: Math.max(1, Math.floor(concurrency)),
+      stopOnError: true,
+    },
+  );
 }
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {

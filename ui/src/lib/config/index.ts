@@ -2,6 +2,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { copyToClipboard } from "../clipboard.ts";
 import {
   cloneConfigObject,
   removePathValue,
@@ -10,7 +11,7 @@ import {
   setPathValue,
 } from "../config-form-utils.ts";
 
-export type ConfigState = {
+type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   applySessionKey: string;
@@ -78,9 +79,11 @@ type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 
-export type ConfigPatchOptions = {
+type ConfigPatchOptions = {
   raw: string | Record<string, unknown>;
   note: string;
+  /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
+  replacePaths?: string[];
 };
 
 type ConfigGatewayClient = {
@@ -168,7 +171,7 @@ function isCurrentRequest(
   );
 }
 
-export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
+async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
@@ -252,7 +255,7 @@ export function currentConfigObject(
   return state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
 }
 
-export function applyConfigSnapshot(
+function applyConfigSnapshot(
   state: ConfigState,
   snapshot: ConfigSnapshot,
   options: LoadConfigOptions = {},
@@ -327,7 +330,7 @@ function coerceBooleanString(value: string): boolean | string {
   return value;
 }
 
-export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
+function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   if (value === null || value === undefined) {
     return value;
   }
@@ -522,11 +525,11 @@ function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) 
   state.configFormDirty = nextRaw !== originalRaw;
 }
 
-export async function saveConfig(state: ConfigState): Promise<boolean> {
+async function saveConfig(state: ConfigState): Promise<boolean> {
   return submitConfigChange(state, "config.set", "configSaving");
 }
 
-export async function applyConfig(state: ConfigState): Promise<boolean> {
+async function applyConfig(state: ConfigState): Promise<boolean> {
   return submitConfigChange(state, "config.apply", "configApplying", {
     sessionKey: state.applySessionKey,
   });
@@ -554,6 +557,7 @@ async function patchConfig(
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
       note: options.note,
+      ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
     });
     return isCurrentConfigConnection(state, client, connectionEpoch);
   } catch (err) {
@@ -661,11 +665,7 @@ function syncEnabledPluginAllowlist(
   untrackAutoAllowlistedPluginId(state, pluginId);
 }
 
-export function updateConfigFormValue(
-  state: ConfigState,
-  path: Array<string | number>,
-  value: unknown,
-) {
+function updateConfigFormValue(state: ConfigState, path: Array<string | number>, value: unknown) {
   mutateConfigForm(state, (draft) => {
     setPathValue(draft, path, value);
     if (path[0] === "plugins" && path[1] === "allow") {
@@ -676,7 +676,7 @@ export function updateConfigFormValue(
   });
 }
 
-export function updateConfigRawValue(state: ConfigState, value: string) {
+function updateConfigRawValue(state: ConfigState, value: string) {
   state.configRaw = value;
   state.configFormDirty = value !== state.configRawOriginal;
   if (state.configFormDirty) {
@@ -686,7 +686,7 @@ export function updateConfigRawValue(state: ConfigState, value: string) {
   }
 }
 
-export function resetConfigPendingChanges(state: ConfigState) {
+function resetConfigPendingChanges(state: ConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   state.configForm = cloneConfigObject(state.configFormOriginal ?? editableConfig ?? {});
   state.configRaw =
@@ -722,7 +722,7 @@ export function findAgentConfigEntryIndex(
   );
 }
 
-export function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
+function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
   const normalizedAgentId = agentId.trim();
   if (!normalizedAgentId) {
     return -1;
@@ -738,7 +738,7 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   return nextIndex;
 }
 
-export function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string): boolean {
+function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string): boolean {
   const normalizedAgentId = agentId.trim();
   if (!normalizedAgentId) {
     return false;
@@ -769,7 +769,7 @@ export function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string
   return true;
 }
 
-export async function openConfigFile(state: ConfigState): Promise<void> {
+async function openConfigFile(state: ConfigState): Promise<void> {
   const client = state.client;
   if (!client || !state.connected) {
     return;
@@ -790,10 +790,9 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
       let errorMessage = res.error || "Failed to open config file";
       const path = res.path || state.configSnapshot?.path;
       if (path) {
-        try {
-          await navigator.clipboard.writeText(path);
+        if (await copyToClipboard(path)) {
           errorMessage += `\n\nFile path copied to clipboard: ${path}`;
-        } catch {
+        } else {
           errorMessage += `\n\nFile path: ${path}`;
         }
       }
@@ -808,11 +807,7 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
     const errorMessage = String(err);
     const path = state.configSnapshot?.path;
     if (path) {
-      try {
-        await navigator.clipboard.writeText(path);
-      } catch {
-        // ignore
-      }
+      await copyToClipboard(path);
     }
     if (isCurrent()) {
       state.lastError = errorMessage;

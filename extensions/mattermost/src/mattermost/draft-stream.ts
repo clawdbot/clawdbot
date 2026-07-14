@@ -1,8 +1,5 @@
 // Mattermost plugin module implements draft stream behavior.
-import {
-  clearFinalizableDraftMessage,
-  createFinalizableDraftLifecycle,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -165,6 +162,7 @@ export function createMattermostDraftStream(params: {
     update: updateLifecycle,
     stop: stopLifecycle,
     stopForClear,
+    clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
     throttleMs,
@@ -250,15 +248,7 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
   };
   const clear = async () => {
-    await clearFinalizableDraftMessage({
-      stopForClear: discardPending,
-      readMessageId: () => currentGeneration.postId,
-      clearMessageId,
-      isValidMessageId,
-      deleteMessage,
-      warn: params.warn,
-      warnPrefix: "mattermost stream preview cleanup failed",
-    });
+    await clearWithStop(discardPending);
   };
   const seal = async () => {
     await sealLifecycle();

@@ -15,7 +15,10 @@ export function resolveMigrationProvider(
   providerId: string,
   config = getRuntimeConfig(),
 ): MigrationProviderPlugin {
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
+  ensureStandaloneMigrationProviderRegistryLoaded({
+    cfg: config,
+    providerId,
+  });
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
     const available = resolvePluginMigrationProviders({ cfg: config }).map((entry) => entry.id);

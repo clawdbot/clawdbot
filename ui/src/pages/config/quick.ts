@@ -1,8 +1,7 @@
 /**
- * Quick Settings view — opinionated card layout for the most common settings.
+ * Quick Settings view — the default settings experience, built on the shared
+ * settings design language (single column, sections of hairline-divided rows).
  * Replaces the raw schema-driven form as the default settings experience.
- *
- * Each card answers a "what do I want to do?" question with status + actions.
  */
 
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -26,11 +25,25 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsGroup,
+  renderSettingsNavRow,
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsSegmented,
+  renderSettingsStatus,
+  renderSettingsToggleRow,
+  renderSettingsValue,
+  type SettingsSectionProps,
+} from "../../components/settings-ui.ts";
 import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 // ── Types ──
 
@@ -55,7 +68,7 @@ export type QuickSettingsSecurity = {
   toolProfile: string;
 };
 
-export type QuickSettingsProps = {
+type QuickSettingsProps = {
   // General
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -160,6 +173,15 @@ const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
 const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
 const MAX_ASSISTANT_AVATAR_UPLOAD_BYTES = MAX_LOCAL_USER_AVATAR_FILE_BYTES;
 
+/** Section wrapper that keeps the stable settings-search scroll target ids. */
+function renderTargetSection(
+  id: string,
+  props: SettingsSectionProps,
+  rows: unknown,
+): TemplateResult {
+  return html`<div id=${id}>${renderSettingsSection(props, rows)}</div>`;
+}
+
 function renderDefaultUserAvatar() {
   return html`
     <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
@@ -175,15 +197,18 @@ function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
   const avatarText = resolveLocalUserAvatarText(identity);
   const userLabel = t("quickSettings.personal.you");
   if (avatarUrl) {
-    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${userLabel} />`;
+    return html`<img class="config-identity__avatar" src=${avatarUrl} alt=${userLabel} />`;
   }
   if (avatarText) {
-    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${userLabel}>
+    return html`<div
+      class="config-identity__avatar config-identity__avatar--text"
+      aria-label=${userLabel}
+    >
       ${avatarText}
     </div>`;
   }
   return html`
-    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${userLabel}>
+    <div class="config-identity__avatar config-identity__avatar--default" aria-label=${userLabel}>
       ${renderDefaultUserAvatar()}
     </div>
   `;
@@ -258,14 +283,18 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   if (assistantAvatarUrl) {
-    return html`<img class="qs-assistant-avatar" src=${assistantAvatarUrl} alt=${assistantName} />`;
+    return html`<img
+      class="config-identity__avatar"
+      src=${assistantAvatarUrl}
+      alt=${assistantName}
+    />`;
   }
   const assistantAvatarText = resolveAssistantTextAvatar(
     assistantAvatarOverride ?? props.assistantAvatar,
   );
   if (assistantAvatarText) {
     return html`<div
-      class="qs-assistant-avatar qs-assistant-avatar--text"
+      class="config-identity__avatar config-identity__avatar--text"
       aria-label=${assistantName}
     >
       ${assistantAvatarText}
@@ -273,7 +302,7 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   }
   return html`
     <img
-      class="qs-assistant-avatar qs-assistant-avatar--fallback"
+      class="config-identity__avatar config-identity__avatar--fallback"
       src=${controlUiPublicAssetPath("apple-touch-icon.png", props.basePath ?? "")}
       alt=${assistantName}
     />
@@ -327,49 +356,10 @@ function handleAssistantAvatarFileSelect(e: Event, props: QuickSettingsProps) {
   input.value = "";
 }
 
-// ── Card renderers ──
-
-function renderCardHeader(icon: TemplateResult, title: string, action?: TemplateResult) {
-  return html`
-    <div class="qs-card__header">
-      <div class="qs-card__header-left">
-        <span class="qs-card__icon">${icon}</span>
-        <h3 class="qs-card__title">${title}</h3>
-      </div>
-      ${action ? action : nothing}
-    </div>
-  `;
-}
+// ── Section renderers ──
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
-}
-
-function renderGeneralCard(props: QuickSettingsProps) {
-  return html`
-    <div class="qs-card qs-card--general">
-      ${renderCardHeader(icons.globe, t("nav.settingsGeneral"))}
-      <div class="qs-card__body">
-        <label class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.language")}</span>
-          <select
-            class="cfg-select qs-select"
-            .value=${props.locale}
-            @change=${(event: Event) => {
-              props.onLocaleChange((event.target as HTMLSelectElement).value as Locale);
-            }}
-          >
-            ${SUPPORTED_LOCALES.map((locale) => {
-              const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
-              return html`<option value=${locale} ?selected=${props.locale === locale}>
-                ${t(`languages.${key}`)}
-              </option>`;
-            })}
-          </select>
-        </label>
-      </div>
-    </div>
-  `;
 }
 
 function isConfigBusy(props: QuickSettingsProps): boolean {
@@ -381,160 +371,145 @@ function isConfigBusy(props: QuickSettingsProps): boolean {
   );
 }
 
-function renderModelCard(props: QuickSettingsProps) {
+function renderGeneralSection(props: QuickSettingsProps) {
+  return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
+    renderSettingsRow({
+      title: t("quickSettings.language"),
+      control: html`
+        <select
+          class="settings-select"
+          aria-label=${t("quickSettings.language")}
+          .value=${props.locale}
+          @change=${(event: Event) => {
+            props.onLocaleChange((event.target as HTMLSelectElement).value as Locale);
+          }}
+        >
+          ${SUPPORTED_LOCALES.map((locale) => {
+            const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
+            return html`<option value=${locale} ?selected=${props.locale === locale}>
+              ${t(`languages.${key}`)}
+            </option>`;
+          })}
+        </select>
+      `,
+    }),
+  ]);
+}
+
+function renderModelSection(props: QuickSettingsProps) {
   const fastMode = formatFastModeValue(props.fastMode);
   const configBusy = isConfigBusy(props);
-  return html`
-    <div class="qs-card qs-card--model">
-      ${renderCardHeader(icons.brain, t("quickSettings.model.title"))}
-      <div class="qs-card__body">
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.model.model")}</span>
-          <button class="qs-row__value qs-row__value--action" @click=${props.onModelChange}>
-            <code>${props.currentModel || "default"}</code>
-            <span class="qs-row__chevron">${icons.chevronRight}</span>
-          </button>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.model.thinking")}</span>
-          <div class="qs-segmented">
-            ${THINKING_LEVELS.map(
-              (level) => html`
-                <button
-                  class="qs-segmented__btn ${level === props.thinkingLevel
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() => props.onThinkingChange?.(level)}
-                >
-                  ${t(`quickSettings.model.thinkingLevels.${level}`)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.model.fastMode")}</span>
-          <div class="qs-segmented">
-            ${(
-              [
-                ["auto", "quickSettings.model.fastModes.auto"],
-                ["on", "quickSettings.model.fastModes.fast"],
-                ["off", "quickSettings.model.fastModes.standard"],
-              ] as const
-            ).map(
-              ([value, labelKey]) => html`
-                <button
-                  class="qs-segmented__btn ${fastMode === value ? "qs-segmented__btn--active" : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() =>
-                    fastMode === value
-                      ? undefined
-                      : props.onFastModeChange?.(fastModeOptionValue(value))}
-                >
-                  ${t(labelKey)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.model,
+    { title: t("quickSettings.model.title") },
+    [
+      renderSettingsNavRow({
+        title: t("quickSettings.model.model"),
+        control: renderSettingsValue(props.currentModel || "default", { mono: true }),
+        onClick: () => props.onModelChange?.(),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.model.thinking"),
+        control: renderSettingsSegmented({
+          value: props.thinkingLevel,
+          options: THINKING_LEVELS.map((level) => ({
+            value: level,
+            label: t(`quickSettings.model.thinkingLevels.${level}`),
+          })),
+          disabled: configBusy,
+          onChange: (level) => props.onThinkingChange?.(level),
+        }),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.model.fastMode"),
+        control: renderSettingsSegmented<"auto" | "on" | "off">({
+          value: fastMode,
+          options: [
+            { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+            { value: "on", label: t("quickSettings.model.fastModes.fast") },
+            { value: "off", label: t("quickSettings.model.fastModes.standard") },
+          ],
+          disabled: configBusy,
+          onChange: (value) => {
+            if (value !== fastMode) {
+              props.onFastModeChange?.(fastModeOptionValue(value));
+            }
+          },
+        }),
+      }),
+    ],
+  );
 }
 
-function renderChannelsCard(props: QuickSettingsProps) {
-  const connectedCount = props.channels.filter((c) => c.connected).length;
-  const badge =
-    connectedCount > 0
-      ? html`<span class="qs-badge qs-badge--ok"
-          >${t("quickSettings.channels.connectedCount", { count: String(connectedCount) })}</span
-        >`
-      : undefined;
-
-  return html`
-    <div class="qs-card qs-card--channels">
-      ${renderCardHeader(icons.send, t("quickSettings.channels.title"), badge)}
-      <div class="qs-card__body">
-        ${props.channels.length === 0
-          ? html`<div class="qs-empty muted">${t("quickSettings.channels.empty")}</div>`
-          : props.channels.map(
-              (ch) => html`
-                <div class="qs-row">
-                  <span class="qs-row__label">
-                    <span class="qs-status-dot ${ch.connected ? "qs-status-dot--ok" : ""}"></span>
-                    ${ch.label}
-                  </span>
-                  <span class="qs-row__value">
-                    ${ch.connected
-                      ? html`<span class="muted">${ch.detail ?? t("common.connected")}</span>`
-                      : html`<button
-                          class="qs-link-btn"
-                          @click=${() => props.onChannelConfigure?.(ch.id)}
-                        >
-                          ${t("quickSettings.channels.connect")}
-                        </button>`}
-                  </span>
-                </div>
-              `,
-            )}
-      </div>
-    </div>
-  `;
+function renderChannelsSection(props: QuickSettingsProps) {
+  const rows =
+    props.channels.length === 0
+      ? renderSettingsEmpty(t("quickSettings.channels.empty"))
+      : props.channels.map((ch) =>
+          renderSettingsRow({
+            title: ch.label,
+            control: ch.connected
+              ? renderSettingsStatus({ kind: "ok", label: ch.detail ?? t("common.connected") })
+              : html`
+                  <button class="btn" @click=${() => props.onChannelConfigure?.(ch.id)}>
+                    ${t("quickSettings.channels.connect")}
+                  </button>
+                `,
+          }),
+        );
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.channels,
+    { title: t("quickSettings.channels.title") },
+    rows,
+  );
 }
 
-function renderAutomationsCard(props: QuickSettingsProps) {
+function renderAutomationsSection(props: QuickSettingsProps) {
   const { cronJobCount, skillCount, mcpServerCount } = props.automation;
-
-  return html`
-    <div class="qs-card qs-card--automations">
-      ${renderCardHeader(icons.zap, t("quickSettings.automation.title"))}
-      <div class="qs-card__body">
-        <div class="qs-row">
-          <span class="qs-row__label">
-            ${t(
-              cronJobCount === 1
-                ? "quickSettings.automation.scheduledTask"
-                : "quickSettings.automation.scheduledTasks",
-              { count: String(cronJobCount) },
-            )}
-          </span>
-          <button class="qs-link-btn" @click=${props.onManageCron}>
-            ${t("quickSettings.automation.manage")}
-          </button>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">
-            ${t(
-              skillCount === 1
-                ? "quickSettings.automation.installedSkill"
-                : "quickSettings.automation.installedSkills",
-              { count: String(skillCount) },
-            )}
-          </span>
-          <button class="qs-link-btn" @click=${props.onBrowseSkills}>
-            ${t("quickSettings.automation.browse")}
-          </button>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">
-            ${t(
-              mcpServerCount === 1
-                ? "quickSettings.automation.mcpServer"
-                : "quickSettings.automation.mcpServers",
-              { count: String(mcpServerCount) },
-            )}
-          </span>
-          <button class="qs-link-btn" @click=${props.onConfigureMcp}>
-            ${t("quickSettings.automation.configure")}
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
+  const automationRow = (title: string, actionLabel: string, onClick?: () => void) =>
+    renderSettingsRow({
+      title,
+      control: html`<button class="btn" @click=${onClick}>${actionLabel}</button>`,
+    });
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.automations,
+    { title: t("quickSettings.automation.title") },
+    [
+      automationRow(
+        t(
+          cronJobCount === 1
+            ? "quickSettings.automation.scheduledTask"
+            : "quickSettings.automation.scheduledTasks",
+          { count: String(cronJobCount) },
+        ),
+        t("quickSettings.automation.manage"),
+        props.onManageCron,
+      ),
+      automationRow(
+        t(
+          skillCount === 1
+            ? "quickSettings.automation.installedSkill"
+            : "quickSettings.automation.installedSkills",
+          { count: String(skillCount) },
+        ),
+        t("quickSettings.automation.browse"),
+        props.onBrowseSkills,
+      ),
+      automationRow(
+        t(
+          mcpServerCount === 1
+            ? "quickSettings.automation.mcpServer"
+            : "quickSettings.automation.mcpServers",
+          { count: String(mcpServerCount) },
+        ),
+        t("quickSettings.automation.configure"),
+        props.onConfigureMcp,
+      ),
+    ],
+  );
 }
 
-function renderSecurityCard(props: QuickSettingsProps) {
+function renderSecuritySection(props: QuickSettingsProps) {
   const { gatewayAuth, execPolicy, deviceAuth, browserEnabled, toolProfile } = props.security;
   const normalizedToolProfile = toolProfile.trim() || "full";
   const toolProfiles = TOOL_PROFILES.includes(normalizedToolProfile)
@@ -542,85 +517,66 @@ function renderSecurityCard(props: QuickSettingsProps) {
     : [...TOOL_PROFILES, normalizedToolProfile];
   const configBusy = isConfigBusy(props);
 
-  return html`
-    <div class="qs-card qs-card--security">
-      ${renderCardHeader(
-        icons.eye,
-        t("quickSettings.security.title"),
-        html`<button class="qs-link-btn" @click=${props.onSecurityConfigure}>
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.security,
+    {
+      title: t("quickSettings.security.title"),
+      actions: html`
+        <button class="btn" @click=${props.onSecurityConfigure}>
           ${t("quickSettings.security.configure")}
-        </button>`,
-      )}
-      <div class="qs-card__body">
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.security.gatewayAuth")}</span>
-          <span class="qs-row__value">
-            <span class="qs-badge ${gatewayAuth !== "none" ? "qs-badge--ok" : "qs-badge--warn"}"
-              >${gatewayAuth}</span
-            >
-          </span>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.security.execPolicy")}</span>
-          <span class="qs-row__value"><span class="qs-badge">${execPolicy}</span></span>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.security.browserEnabled")}</span>
-          <label class="qs-toggle">
-            <input
-              type="checkbox"
-              .checked=${browserEnabled}
-              ?disabled=${configBusy}
-              @change=${(event: Event) =>
-                props.onBrowserEnabledToggle?.((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span class="qs-toggle__track"></span>
-            <span class="qs-toggle__hint muted"
-              >${browserEnabled ? t("common.enabled") : t("common.disabled")}</span
-            >
-          </label>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">${t("quickSettings.security.toolProfile")}</span>
-          <div class="qs-segmented">
-            ${toolProfiles.map(
-              (profile) => html`
-                <button
-                  class="qs-segmented__btn qs-segmented__btn--compact ${profile ===
-                  normalizedToolProfile
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() => props.onToolProfileChange?.(profile)}
-                >
-                  ${profile}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.security.deviceAuth")}</span>
-          <span class="qs-row__value">
-            <span class="qs-badge ${deviceAuth ? "qs-badge--ok" : "qs-badge--warn"}"
-              >${deviceAuth ? t("common.enabled") : t("common.disabled")}</span
-            >
-          </span>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("nodes.pairing.title")}</span>
+        </button>
+      `,
+    },
+    [
+      renderSettingsRow({
+        title: t("quickSettings.security.gatewayAuth"),
+        control: renderSettingsStatus({
+          kind: gatewayAuth !== "none" ? "ok" : "warn",
+          label: gatewayAuth,
+        }),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.security.execPolicy"),
+        control: renderSettingsValue(execPolicy),
+      }),
+      renderSettingsToggleRow({
+        title: t("quickSettings.security.browserEnabled"),
+        checked: browserEnabled,
+        disabled: configBusy,
+        onChange: (enabled) => props.onBrowserEnabledToggle?.(enabled),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.security.toolProfile"),
+        stacked: true,
+        control: renderSettingsSegmented({
+          value: normalizedToolProfile,
+          options: toolProfiles.map((profile) => ({ value: profile, label: profile })),
+          disabled: configBusy,
+          onChange: (profile) => props.onToolProfileChange?.(profile),
+        }),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.security.deviceAuth"),
+        control: renderSettingsStatus({
+          kind: deviceAuth ? "ok" : "warn",
+          label: deviceAuth ? t("common.enabled") : t("common.disabled"),
+        }),
+      }),
+      renderSettingsRow({
+        title: t("nodes.pairing.title"),
+        control: html`
           <button
-            class="qs-row__value qs-row__value--action"
+            class="btn"
             title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
             ?disabled=${!props.canPairDevice}
             @click=${props.onPairMobile}
           >
             ${icons.smartphone} ${t("nodes.pairing.button")}
           </button>
-        </div>
-      </div>
-    </div>
-  `;
+        `,
+      }),
+    ],
+  );
 }
 
 type SystemStat = {
@@ -633,7 +589,7 @@ type SystemStat = {
   title?: string;
 };
 
-// Meter tones reuse the badge palette: calm until 75%, warn to 92%, critical beyond.
+// Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
 function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
   if (fraction >= 0.92) {
     return "critical";
@@ -649,7 +605,7 @@ function renderSystemMeter(label: string, fraction: number) {
   const percent = Math.round(clamped * 100);
   return html`
     <div
-      class="qs-meter"
+      class="config-host__meter"
       role="meter"
       aria-label=${t("quickSettings.system.usage", { label })}
       aria-valuemin="0"
@@ -657,8 +613,8 @@ function renderSystemMeter(label: string, fraction: number) {
       aria-valuenow=${percent}
     >
       <div
-        class="qs-meter__fill qs-meter__fill--${systemMeterTone(clamped)}"
-        style="--qs-meter-fill: ${percent}%"
+        class="config-host__meter-fill config-host__meter-fill--${systemMeterTone(clamped)}"
+        style="--config-host-meter-fill: ${percent}%"
       ></div>
     </div>
   `;
@@ -666,13 +622,15 @@ function renderSystemMeter(label: string, fraction: number) {
 
 function renderSystemStat(stat: SystemStat) {
   return html`
-    <div class="qs-stat" title=${stat.title ?? ""}>
-      <div class="qs-stat__label">${stat.label}</div>
-      <div class="qs-stat__value">
-        ${stat.value}${stat.unit ? html` <span class="qs-stat__unit">${stat.unit}</span>` : nothing}
+    <div class="config-host__stat" title=${stat.title ?? ""}>
+      <div class="config-host__stat-label">${stat.label}</div>
+      <div class="config-host__stat-value">
+        ${stat.value}${stat.unit
+          ? html` <span class="config-host__stat-unit">${stat.unit}</span>`
+          : nothing}
       </div>
       ${stat.usedFraction == null ? nothing : renderSystemMeter(stat.label, stat.usedFraction)}
-      ${stat.detail ? html`<div class="qs-stat__detail">${stat.detail}</div>` : nothing}
+      ${stat.detail ? html`<div class="config-host__stat-detail">${stat.detail}</div>` : nothing}
     </div>
   `;
 }
@@ -755,7 +713,7 @@ function buildSystemStatsPlaceholder(): SystemStat[] {
   ];
 }
 
-function renderSystemCard(props: QuickSettingsProps) {
+function renderSystemSection(props: QuickSettingsProps) {
   if (props.systemInfoUnavailable) {
     return nothing;
   }
@@ -767,28 +725,29 @@ function renderSystemCard(props: QuickSettingsProps) {
     : undefined;
   const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
 
-  return html`
-    <div class="qs-card qs-card--system">
-      ${renderCardHeader(
-        icons.monitor,
-        t("quickSettings.system.gatewayHost"),
-        info
-          ? html`<span class="qs-badge qs-badge--ok"
-              >${t("quickSettings.system.up", {
-                duration: formatDurationHuman(info.uptimeMs),
-              })}</span
-            >`
-          : undefined,
-      )}
-      <div class="qs-card__body qs-system">
-        <div class="qs-system__identity">
-          <div class="qs-system__name" title=${hostTitle ?? ""}>
+  // Escape hatch: host identity + metered stats are a genuine two-column grid,
+  // kept as custom markup inside the single group with row-matched paddings.
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.system,
+    {
+      title: t("quickSettings.system.gatewayHost"),
+      actions: info
+        ? renderSettingsStatus({
+            kind: "ok",
+            label: t("quickSettings.system.up", { duration: formatDurationHuman(info.uptimeMs) }),
+          })
+        : undefined,
+    },
+    html`
+      <div class="config-host">
+        <div class="config-host__identity">
+          <div class="config-host__name" title=${hostTitle ?? ""}>
             ${info?.machineName ?? placeholder}
           </div>
-          <div class="qs-system__meta">
+          <div class="config-host__meta">
             ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
           </div>
-          <div class="qs-system__meta">
+          <div class="config-host__meta">
             ${info
               ? t("quickSettings.system.runtime", {
                   version: info.nodeVersion,
@@ -796,138 +755,97 @@ function renderSystemCard(props: QuickSettingsProps) {
                 })
               : placeholder}
           </div>
-          ${address ? html`<code class="qs-system__address">${address}</code>` : nothing}
+          ${address ? html`<code class="config-host__address">${address}</code>` : nothing}
         </div>
-        <div class="qs-system__stats">${stats.map(renderSystemStat)}</div>
+        <div class="config-host__stats">${stats.map(renderSystemStat)}</div>
       </div>
-    </div>
-  `;
+    `,
+  );
 }
 
-function renderAppearanceCard(props: QuickSettingsProps) {
+function renderAppearanceSection(props: QuickSettingsProps) {
   const importedThemeName = props.hasCustomTheme
     ? (props.customThemeLabel ?? t("quickSettings.appearance.importedTheme"))
     : t("quickSettings.appearance.import");
-  const themeOptions: Array<{ id: ThemeName; label: string }> = [
-    ...BUILTIN_THEME_OPTIONS.map((option) => ({ id: option.id, label: t(option.labelKey) })),
-    { id: "custom", label: importedThemeName },
+  const themeOptions: Array<{ value: ThemeName; label: string }> = [
+    ...BUILTIN_THEME_OPTIONS.map((option) => ({ value: option.id, label: t(option.labelKey) })),
+    { value: "custom", label: importedThemeName },
   ];
-  return html`
-    <div class="qs-card qs-card--appearance">
-      ${renderCardHeader(icons.spark, t("quickSettings.appearance.title"))}
-      <div class="qs-card__body qs-appearance">
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">${t("quickSettings.appearance.theme")}</span>
-          <div class="qs-segmented">
-            ${themeOptions.map(
-              (opt) => html`
-                <button
-                  class="qs-segmented__btn ${opt.id === props.theme
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${(e: Event) => {
-                    if (opt.id === "custom" && !props.hasCustomTheme) {
-                      props.onOpenCustomThemeImport?.();
-                      return;
-                    }
-                    if (opt.id !== props.theme) {
-                      props.setTheme(opt.id, {
-                        element: (e.currentTarget as HTMLElement) ?? undefined,
-                      });
-                    }
-                  }}
-                >
-                  ${opt.label}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">${t("common.mode")}</span>
-          <div class="qs-segmented">
-            ${(["light", "dark", "system"] as ThemeMode[]).map(
-              (mode) => html`
-                <button
-                  class="qs-segmented__btn ${mode === props.themeMode
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${(e: Event) => {
-                    if (mode !== props.themeMode) {
-                      props.setThemeMode(mode, {
-                        element: (e.currentTarget as HTMLElement) ?? undefined,
-                      });
-                    }
-                  }}
-                >
-                  ${t(`common.${mode}`)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">${t("quickSettings.appearance.textSize")}</span>
-          <div class="qs-segmented">
-            ${TEXT_SCALE_OPTIONS.map(
-              (stop) => html`
-                <button
-                  class="qs-segmented__btn ${stop.value === props.textScale
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  title=${`${stop.value}%`}
-                  @click=${() => props.setTextScale(stop.value)}
-                >
-                  ${t(stop.labelKey)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.appearance.lobsterVisits")}</span>
-          <label class="qs-toggle">
-            <input
-              type="checkbox"
-              .checked=${props.lobsterPetVisits}
-              @change=${(event: Event) =>
-                props.setLobsterPetVisits((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span class="qs-toggle__track"></span>
-            <span class="qs-toggle__hint muted">
-              ${props.lobsterPetVisits
-                ? t("quickSettings.appearance.lobsterVisitsOn")
-                : t("quickSettings.appearance.lobsterVisitsOff")}
-            </span>
-          </label>
-        </div>
-        <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.appearance.lobsterSounds")}</span>
-          <label class="qs-toggle">
-            <input
-              type="checkbox"
-              .checked=${props.lobsterPetSounds}
-              @change=${(event: Event) =>
-                props.setLobsterPetSounds((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span class="qs-toggle__track"></span>
-            <span class="qs-toggle__hint muted">
-              ${props.lobsterPetSounds
-                ? t("quickSettings.appearance.lobsterSoundsOn")
-                : t("quickSettings.appearance.lobsterSoundsOff")}
-            </span>
-          </label>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">
-            ${t("quickSettings.appearance.lobsterdex")}
-            <span class="muted">
-              ${t("quickSettings.appearance.lobsterdexSeen", {
-                seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
-                total: String(LOBSTER_PET_PALETTES.length),
-              })}
-            </span>
-          </span>
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.appearance,
+    { title: t("quickSettings.appearance.title") },
+    [
+      renderSettingsRow({
+        title: t("quickSettings.appearance.theme"),
+        stacked: true,
+        control: renderSettingsSegmented<ThemeName>({
+          value: props.theme,
+          options: themeOptions,
+          onChange: (theme, event) => {
+            if (theme === "custom" && !props.hasCustomTheme) {
+              props.onOpenCustomThemeImport?.();
+              return;
+            }
+            if (theme !== props.theme) {
+              // Anchor the theme transition on the clicked segmented button.
+              props.setTheme(theme, { element: (event.currentTarget as HTMLElement) ?? undefined });
+            }
+          },
+        }),
+      }),
+      renderSettingsRow({
+        title: t("common.mode"),
+        control: renderSettingsSegmented<ThemeMode>({
+          value: props.themeMode,
+          options: (["light", "dark", "system"] as ThemeMode[]).map((mode) => ({
+            value: mode,
+            label: t(`common.${mode}`),
+          })),
+          onChange: (mode, event) => {
+            if (mode !== props.themeMode) {
+              props.setThemeMode(mode, {
+                element: (event.currentTarget as HTMLElement) ?? undefined,
+              });
+            }
+          },
+        }),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.appearance.textSize"),
+        control: renderSettingsSegmented({
+          value: String(props.textScale),
+          options: TEXT_SCALE_OPTIONS.map((stop) => ({
+            value: String(stop.value),
+            label: t(stop.labelKey),
+            title: `${stop.value}%`,
+          })),
+          onChange: (value) => props.setTextScale(Number(value)),
+        }),
+      }),
+      renderSettingsToggleRow({
+        title: t("quickSettings.appearance.lobsterVisits"),
+        description: props.lobsterPetVisits
+          ? t("quickSettings.appearance.lobsterVisitsOn")
+          : t("quickSettings.appearance.lobsterVisitsOff"),
+        checked: props.lobsterPetVisits,
+        onChange: (enabled) => props.setLobsterPetVisits(enabled),
+      }),
+      renderSettingsToggleRow({
+        title: t("quickSettings.appearance.lobsterSounds"),
+        description: props.lobsterPetSounds
+          ? t("quickSettings.appearance.lobsterSoundsOn")
+          : t("quickSettings.appearance.lobsterSoundsOff"),
+        checked: props.lobsterPetSounds,
+        onChange: (enabled) => props.setLobsterPetSounds(enabled),
+      }),
+      renderSettingsRow({
+        title: t("quickSettings.appearance.lobsterdex"),
+        description: t("quickSettings.appearance.lobsterdexSeen", {
+          seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+          total: String(LOBSTER_PET_PALETTES.length),
+        }),
+        stacked: true,
+        control: html`
           <div class="lobsterdex">
             ${LOBSTER_PET_PALETTES.map((palette) => {
               const entry = getLobsterdexEntries().get(palette.id);
@@ -953,13 +871,13 @@ function renderAppearanceCard(props: QuickSettingsProps) {
               `;
             })}
           </div>
-        </div>
-      </div>
-    </div>
-  `;
+        `,
+      }),
+    ],
+  );
 }
 
-function renderPersonalCard(props: QuickSettingsProps) {
+function renderPersonalSection(props: QuickSettingsProps) {
   const identity = normalizeLocalUserIdentity({
     name: null,
     avatar: props.userAvatar ?? null,
@@ -993,127 +911,129 @@ function renderPersonalCard(props: QuickSettingsProps) {
       : assistantAvatarRendered
         ? t("quickSettings.personal.configuredAvatar")
         : t("quickSettings.personal.fallbackLogo");
-  return html`
-    <div class="qs-card qs-card--personal">
-      ${renderCardHeader(icons.image, t("quickSettings.personal.title"))}
-      <div class="qs-card__body">
-        <div class="qs-identity-grid">
-          <section class="qs-identity-card" aria-label=${t("quickSettings.personal.localIdentity")}>
-            ${renderLocalUserAvatarPreview(props.userAvatar)}
-            <div class="qs-identity-card__copy">
-              <div class="qs-identity-card__eyebrow">${t("quickSettings.personal.user")}</div>
-              <div class="qs-identity-card__title">${t("quickSettings.personal.you")}</div>
-              <div class="qs-identity-card__repair">
-                <label class="qs-field">
-                  <span class="qs-row__label">${t("quickSettings.personal.avatarText")}</span>
-                  <input
-                    class="qs-field__input"
-                    type="text"
-                    maxlength="16"
-                    .value=${avatarText}
-                    placeholder=${t("quickSettings.personal.avatarPlaceholder")}
-                    @input=${(e: Event) => {
-                      const value = (e.target as HTMLInputElement).value;
-                      props.onUserAvatarChange?.(value.trim() ? value : null);
-                    }}
-                  />
-                </label>
-                <div class="qs-identity-card__actions">
-                  <label class="btn btn--sm">
-                    ${t("quickSettings.personal.chooseImage")}
-                    <input
-                      type="file"
-                      accept="image/*"
-                      hidden
-                      @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    ?disabled=${!identity.avatar}
-                    @click=${() => {
-                      props.onUserAvatarChange?.(null);
-                    }}
-                  >
-                    ${t("quickSettings.personal.clearAvatar")}
-                  </button>
-                </div>
-                <div class="muted">${t("quickSettings.personal.browserOnly")}</div>
-              </div>
+  // Escape hatch: identity blocks lead with an avatar preview, which the
+  // standard row anatomy (text left, one control right) cannot express.
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.personal,
+    { title: t("quickSettings.personal.title") },
+    html`
+      <section class="config-identity" aria-label=${t("quickSettings.personal.localIdentity")}>
+        ${renderLocalUserAvatarPreview(props.userAvatar)}
+        <div class="config-identity__copy">
+          <div class="config-identity__eyebrow">${t("quickSettings.personal.user")}</div>
+          <div class="config-identity__title">${t("quickSettings.personal.you")}</div>
+          <div class="config-identity__repair">
+            <label class="config-identity__field">
+              <span class="config-identity__field-label">
+                ${t("quickSettings.personal.avatarText")}
+              </span>
+              <input
+                class="settings-input"
+                type="text"
+                maxlength="16"
+                .value=${avatarText}
+                placeholder=${t("quickSettings.personal.avatarPlaceholder")}
+                @input=${(e: Event) => {
+                  const value = (e.target as HTMLInputElement).value;
+                  props.onUserAvatarChange?.(value.trim() ? value : null);
+                }}
+              />
+            </label>
+            <div class="config-identity__actions">
+              <label class="btn btn--sm">
+                ${t("quickSettings.personal.chooseImage")}
+                <input
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
+                />
+              </label>
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost"
+                ?disabled=${!identity.avatar}
+                @click=${() => {
+                  props.onUserAvatarChange?.(null);
+                }}
+              >
+                ${t("quickSettings.personal.clearAvatar")}
+              </button>
             </div>
-          </section>
-          <section
-            class="qs-identity-card qs-identity-card--assistant"
-            aria-label=${t("quickSettings.personal.assistantIdentity")}
-          >
-            ${renderAssistantAvatarPreview(props)}
-            <div class="qs-identity-card__copy">
-              <div class="qs-identity-card__eyebrow">${t("quickSettings.personal.assistant")}</div>
-              <div class="qs-identity-card__title">${assistantName}</div>
-              <div class="qs-identity-card__sub">${assistantAvatarSubtitle}</div>
-              ${assistantAvatarSource
-                ? html`
-                    <div
-                      class="qs-identity-card__source"
-                      title=${props.assistantAvatarSource ?? ""}
-                    >
-                      <span>${assistantAvatarSourceLabel}</span>
-                      <code>${assistantAvatarSource}</code>
-                    </div>
-                  `
-                : nothing}
-              ${assistantAvatarIssue
-                ? html`<div class="qs-identity-card__issue">${assistantAvatarIssue}</div>`
-                : nothing}
-              ${canOverrideAssistantAvatar
-                ? html`
-                    <div class="qs-identity-card__repair">
-                      <div class="qs-identity-card__actions">
-                        <label class="btn btn--sm">
-                          ${props.assistantAvatarUploadBusy
-                            ? t("common.saving")
-                            : assistantAvatarOverride
-                              ? t("quickSettings.personal.replaceImage")
-                              : t("quickSettings.personal.chooseImage")}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            hidden
-                            ?disabled=${props.assistantAvatarUploadBusy === true}
-                            @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
-                          />
-                        </label>
-                        ${assistantAvatarOverride
-                          ? html`
-                              <button
-                                type="button"
-                                class="btn btn--sm btn--ghost"
-                                ?disabled=${props.assistantAvatarUploadBusy === true}
-                                @click=${() => {
-                                  void props.onAssistantAvatarClearOverride?.();
-                                }}
-                              >
-                                ${t("quickSettings.personal.clearOverride")}
-                              </button>
-                            `
-                          : nothing}
-                      </div>
-                      <div class="muted">${t("quickSettings.personal.overrideHint")}</div>
-                    </div>
-                  `
-                : nothing}
-              ${props.assistantAvatarUploadError
-                ? html`<div class="qs-identity-card__error">
-                    ${props.assistantAvatarUploadError}
-                  </div>`
-                : nothing}
+            <div class="config-identity__hint muted">
+              ${t("quickSettings.personal.browserOnly")}
             </div>
-          </section>
+          </div>
         </div>
-      </div>
-    </div>
-  `;
+      </section>
+      <section
+        class="config-identity config-identity--assistant"
+        aria-label=${t("quickSettings.personal.assistantIdentity")}
+      >
+        ${renderAssistantAvatarPreview(props)}
+        <div class="config-identity__copy">
+          <div class="config-identity__eyebrow">${t("quickSettings.personal.assistant")}</div>
+          <div class="config-identity__title">${assistantName}</div>
+          <div class="config-identity__sub">${assistantAvatarSubtitle}</div>
+          ${assistantAvatarSource
+            ? html`
+                <div class="config-identity__source" title=${props.assistantAvatarSource ?? ""}>
+                  <span>${assistantAvatarSourceLabel}</span>
+                  <code>${assistantAvatarSource}</code>
+                </div>
+              `
+            : nothing}
+          ${assistantAvatarIssue
+            ? html`<div class="config-identity__issue">
+                ${renderSettingsStatus({ kind: "warn", label: assistantAvatarIssue })}
+              </div>`
+            : nothing}
+          ${canOverrideAssistantAvatar
+            ? html`
+                <div class="config-identity__repair">
+                  <div class="config-identity__actions">
+                    <label class="btn btn--sm">
+                      ${props.assistantAvatarUploadBusy
+                        ? t("common.saving")
+                        : assistantAvatarOverride
+                          ? t("quickSettings.personal.replaceImage")
+                          : t("quickSettings.personal.chooseImage")}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        ?disabled=${props.assistantAvatarUploadBusy === true}
+                        @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
+                      />
+                    </label>
+                    ${assistantAvatarOverride
+                      ? html`
+                          <button
+                            type="button"
+                            class="btn btn--sm btn--ghost"
+                            ?disabled=${props.assistantAvatarUploadBusy === true}
+                            @click=${() => {
+                              void props.onAssistantAvatarClearOverride?.();
+                            }}
+                          >
+                            ${t("quickSettings.personal.clearOverride")}
+                          </button>
+                        `
+                      : nothing}
+                  </div>
+                  <div class="config-identity__hint muted">
+                    ${t("quickSettings.personal.overrideHint")}
+                  </div>
+                </div>
+              `
+            : nothing}
+          ${props.assistantAvatarUploadError
+            ? html`<div class="config-identity__error">${props.assistantAvatarUploadError}</div>`
+            : nothing}
+        </div>
+      </section>
+    `,
+  );
 }
 
 function renderPendingChangesBar(props: QuickSettingsProps) {
@@ -1124,54 +1044,50 @@ function renderPendingChangesBar(props: QuickSettingsProps) {
   const canCommit = props.connected && props.configReady === true && !configBusy;
 
   return html`
-    <div class="qs-card qs-card--span-all qs-pending" aria-live="polite">
-      <div class="qs-pending__copy">
-        <span class="qs-pending__label">${t("quickSettings.pending.title")}</span>
-        <span class="qs-pending__hint muted">${t("quickSettings.pending.hint")}</span>
-      </div>
-      <div class="qs-pending__actions">
-        <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onResetConfig}>
-          ${t("quickSettings.pending.discard")}
-        </button>
-        <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>
-          ${props.configSaving === true ? t("common.saving") : t("common.save")}
-        </button>
-        <button class="btn btn--sm" ?disabled=${!canCommit} @click=${props.onApplyConfig}>
-          ${props.configApplying === true
-            ? t("quickSettings.pending.applying")
-            : t("quickSettings.pending.applyNow")}
-        </button>
-      </div>
+    <div class="settings-group" aria-live="polite">
+      ${renderSettingsRow({
+        title: t("quickSettings.pending.title"),
+        description: t("quickSettings.pending.hint"),
+        control: html`
+          <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onResetConfig}>
+            ${t("quickSettings.pending.discard")}
+          </button>
+          <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>
+            ${props.configSaving === true ? t("common.saving") : t("common.save")}
+          </button>
+          <button class="btn btn--sm" ?disabled=${!canCommit} @click=${props.onApplyConfig}>
+            ${props.configApplying === true
+              ? t("quickSettings.pending.applying")
+              : t("quickSettings.pending.applyNow")}
+          </button>
+        `,
+      })}
     </div>
   `;
 }
 
 function renderConnectionFooter(props: QuickSettingsProps) {
-  return html`
-    <div class="qs-footer">
-      <div class="qs-footer__row">
-        <span class="qs-status-dot ${props.connected ? "qs-status-dot--ok" : ""}"></span>
-        <span class="muted">${props.connected ? t("common.connected") : t("common.offline")}</span>
-        ${props.assistantName ? html`<span class="muted">· ${props.assistantName}</span>` : nothing}
-        ${props.version ? html`<span class="muted">· v${props.version}</span>` : nothing}
-      </div>
-    </div>
-  `;
+  const detail = [props.assistantName, props.version ? `v${props.version}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  return renderSettingsGroup(
+    renderSettingsRow({
+      title: renderSettingsStatus({
+        kind: props.connected ? "ok" : "muted",
+        label: props.connected ? t("common.connected") : t("common.offline"),
+      }),
+      control: detail ? renderSettingsValue(detail) : nothing,
+    }),
+  );
 }
 
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
-  return html`
-    <div class="qs-container">
-      <div class="qs-grid">
-        ${renderGeneralCard(props)} ${renderModelCard(props)} ${renderChannelsCard(props)}
-        ${renderSecurityCard(props)} ${renderSystemCard(props)} ${renderAppearanceCard(props)}
-        ${renderPersonalCard(props)} ${renderAutomationsCard(props)}
-        ${renderPendingChangesBar(props)}
-      </div>
-
-      ${renderConnectionFooter(props)}
-    </div>
-  `;
+  return renderSettingsPage(html`
+    ${renderModelSection(props)} ${renderChannelsSection(props)} ${renderSecuritySection(props)}
+    ${renderAutomationsSection(props)} ${renderGeneralSection(props)}
+    ${renderAppearanceSection(props)} ${renderPersonalSection(props)} ${renderSystemSection(props)}
+    ${renderPendingChangesBar(props)} ${renderConnectionFooter(props)}
+  `);
 }

@@ -174,7 +174,7 @@ export function normalizeResolvedMaintenanceConfigInput(
   };
 }
 
-export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
   if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
     return 1;
   }
@@ -222,7 +222,7 @@ export function shouldRunModelRunPrune(params: {
   });
 }
 
-export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+function isGatewayModelRunSessionKey(sessionKey: string): boolean {
   const match =
     /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(
       sessionKey,
@@ -321,7 +321,7 @@ export function pruneStaleModelRunEntries(
 const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
-export type QuotaSuspensionEntryMaintenanceResult = {
+type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
   /** Present when the entry transitioned from suspended to resuming. */
@@ -394,7 +394,7 @@ function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
   return /^[^:]+:(?:group|channel):.+$/.test(rest);
 }
 
-export function isProtectedSessionMaintenanceEntry(
+function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
 ): boolean {

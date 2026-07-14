@@ -1219,7 +1219,7 @@ Notes:
 - `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
 - `voice.tts` overrides `messages.tts` for `stt-tts` voice playback only; realtime modes use `voice.realtime.speakerVoice` instead. For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.providers.openai.speakerVoice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
-- Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`) for owner-gated commands and channel actions. Agent tool visibility follows the configured tool policy for the routed session.
+- Voice transcript turns and `/vc` commands derive Discord owner status from Discord entries in `commands.ownerAllowFrom`. When no Discord command owner is configured, OpenClaw falls back to the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`). Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
@@ -1264,6 +1264,7 @@ Behavior:
 
 - `followUsers` accepts raw Discord user IDs and `discord:<id>` values. OpenClaw normalizes both forms before matching voice-state events.
 - `followUsersEnabled` defaults to `true` when `followUsers` is configured. Set it to `false` to keep the saved list but stop automatic voice following.
+- `followUsers` controls voice residency only. It does not grant speaker access or owner authority; configure `commands.ownerAllowFrom` and guild or channel users and roles separately.
 - When a followed user joins an allowed voice channel, OpenClaw joins that channel. When the user moves, OpenClaw moves with them. When the active followed user disconnects, OpenClaw leaves.
 - If multiple followed users are in the same guild and the active followed user leaves, OpenClaw moves to another tracked followed user's channel before leaving the guild. If several followed users move at once, the latest observed voice-state event wins.
 - `allowedChannels` still applies. A followed user in a disallowed channel is ignored, and a follow-owned session moves to another followed user or leaves.

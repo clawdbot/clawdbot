@@ -1,6 +1,7 @@
 // Control UI test helper supports modal dialog setup.
 import { expect } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+
+type OpenClawModalDialog = HTMLElement & { updateComplete: Promise<boolean> };
 
 type DialogMethodName = "showModal" | "close";
 type DialogDescriptorSnapshot = Record<DialogMethodName, PropertyDescriptor | undefined>;

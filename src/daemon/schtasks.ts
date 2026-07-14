@@ -301,7 +301,7 @@ export async function readScheduledTaskCommand(
   }
 }
 
-export type ScheduledTaskInfo = {
+type ScheduledTaskInfo = {
   status?: string;
   lastRunTime?: string;
   lastRunResult?: string;

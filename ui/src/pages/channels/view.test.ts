@@ -29,6 +29,16 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configFormDirty: false,
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
+    selectedChannel: null,
+    wizard: { phase: "idle" },
+    wizardMultiselect: [],
+    setupBlockedByDirtyConfig: false,
+    onShowDetail: () => {},
+    onCloseDetail: () => {},
+    onStartSetup: () => {},
+    onWizardAnswer: () => {},
+    onWizardToggleMultiselect: () => {},
+    onWizardClose: () => {},
     onRefresh: () => {},
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
@@ -76,7 +86,7 @@ function renderWhatsAppButtons(params: {
   }
 
   const container = document.createElement("div");
-  render(renderWhatsAppCard({ props, whatsapp, accountCountLabel: null }), container);
+  render(renderWhatsAppCard({ props, whatsapp }), container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
     buttons,

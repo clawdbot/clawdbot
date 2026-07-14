@@ -18,7 +18,7 @@ const OC_SCHEME = "oc://";
 
 // Hard caps bound resource use under pathological / hostile input.
 export const MAX_PATH_LENGTH = 4096;
-export const MAX_SUB_SEGMENTS_PER_SLOT = 64;
+const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
 const BOM = "﻿";
@@ -378,7 +378,7 @@ export function parseArrayIndexSegment(seg: string, length: number): number | nu
 }
 
 /** Indexable containers provide `size`; keyed containers provide ordered `keys`. */
-export interface PositionalContainer {
+interface PositionalContainer {
   readonly indexable: boolean;
   readonly size: number;
   readonly keys?: readonly string[];
@@ -544,7 +544,7 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
  * so a caller can reconstruct an `OcPath` from a concrete walk by
  * re-packing sub-segments back into their original slots.
  */
-export interface PathSegmentLayout {
+interface PathSegmentLayout {
   readonly subs: readonly string[];
   readonly sectionLen: number;
   readonly itemLen: number;

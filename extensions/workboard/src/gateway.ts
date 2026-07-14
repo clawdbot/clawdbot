@@ -1,46 +1,17 @@
 // Workboard plugin module implements gateway behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import {
+  assertNoCursorAdvance,
+  createWorkboardDispatchHandler,
+  readId,
+  readPatch,
+  respondError,
+} from "./gateway-helpers.js";
 import { WorkboardStore } from "./store.js";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
-
-type GatewayMethodContext = Parameters<
-  Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
->[0];
-type GatewayRespond = GatewayMethodContext["respond"];
-
-function respondError(respond: GatewayRespond, error: unknown) {
-  respond(false, undefined, {
-    code: "workboard_error",
-    message: formatErrorMessage(error),
-  });
-}
-
-function readId(params: Record<string, unknown>): string {
-  const value = params.id;
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  throw new Error("id is required.");
-}
-
-function readPatch(params: Record<string, unknown>): Record<string, unknown> {
-  const patch = params.patch;
-  if (patch && typeof patch === "object" && !Array.isArray(patch)) {
-    return patch as Record<string, unknown>;
-  }
-  return params;
-}
-
-function assertNoCursorAdvance(params: Record<string, unknown>) {
-  if (params.advance === true) {
-    throw new Error("notification cursor advancement requires workboard.notifications.advance.");
-  }
-}
 
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
   const claim = card.metadata?.claim;
@@ -72,6 +43,11 @@ export function registerWorkboardGatewayMethods(params: {
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const dispatchCards = createWorkboardDispatchHandler({
+    api,
+    store,
+    redactCard: redactClaimToken,
+  });
 
   api.registerGatewayMethod(
     "workboard.cards.list",
@@ -383,34 +359,13 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async ({ params: requestParams, respond, client }) => {
-      try {
-        const boardId =
-          requestParams && typeof requestParams === "object" && "boardId" in requestParams
-            ? requestParams.boardId
-            : undefined;
-        const result = await dispatchAndStartWorkboardCards({
-          store,
-          subagent: api.runtime.subagent,
-          worktrees: api.runtime.worktrees,
-          options: {
-            boardId: typeof boardId === "string" ? boardId : undefined,
-            allowManagedWorktrees:
-              Array.isArray(client?.connect?.scopes) &&
-              client.connect.scopes.includes("operator.admin"),
-          },
-        });
-        respond(true, {
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
+    async (context) => await dispatchCards(context, { supportsMaxStarts: false }),
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.dispatchWithOptions",
+    async (context) => await dispatchCards(context, { supportsMaxStarts: true }),
     { scope: WRITE_SCOPE },
   );
 

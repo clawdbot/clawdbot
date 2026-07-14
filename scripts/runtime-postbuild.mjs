@@ -16,7 +16,8 @@ import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mjs";
 
-export { copyStaticExtensionAssets, listStaticExtensionAssetOutputs };
+/** @internal Shared repository-script contract. */
+export { listStaticExtensionAssetOutputs };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
@@ -135,7 +136,7 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
 /** Compatibility chunks kept for live gateways loading old CLI exit modules. */
-export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
@@ -340,6 +341,7 @@ function buildRuntimeAliasSource(params) {
 
 /**
  * Writes stable aliases for current hashed runtime chunks.
+ * @internal Directly tested script implementation detail.
  */
 export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
@@ -368,6 +370,7 @@ export function writeStableRootRuntimeAliases(params = {}) {
 
 /**
  * Rewrites hashed runtime imports to stable aliases so live updates survive swaps.
+ * @internal Directly tested script implementation detail.
  */
 export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
@@ -495,6 +498,7 @@ function resolveLegacyRootRuntimeCompatTarget(params) {
 
 /**
  * Writes compatibility aliases for shipped hashed runtime chunk names.
+ * @internal Directly tested script implementation detail.
  */
 export function writeLegacyRootRuntimeCompatAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
@@ -531,6 +535,7 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
 
 /**
  * Writes small compatibility chunks for old CLI exit imports.
+ * @internal Directly tested script implementation detail.
  */
 export function writeLegacyCliExitCompatChunks(params = {}) {
   const rootDir = params.rootDir ?? ROOT;

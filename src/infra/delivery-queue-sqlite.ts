@@ -22,7 +22,7 @@ export type DeliveryQueueRowMetadata = {
 };
 
 /** Persisted queue entry fields common to all delivery queue payloads. */
-export type DeliveryQueueEntryState = {
+type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
@@ -32,7 +32,7 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
-export type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
+type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
 
 type QueueRow = {
   id: string;
@@ -245,7 +245,7 @@ export function updateDeliveryQueueEntry(
 }
 
 /** Dead-lettered entry counts for one queue namespace. */
-export type FailedDeliveryQueueCount = {
+type FailedDeliveryQueueCount = {
   queueName: string;
   count: number;
   oldestFailedAt: number | null;

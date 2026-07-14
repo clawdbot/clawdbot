@@ -29,11 +29,13 @@ import {
 import {
   findProviderBucketLocation,
   loadDiscordModelPickerData,
-  renderDiscordModelPickerModelsView,
   resolveDiscordModelPickerPageForModel,
-  toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
-} from "./model-picker.js";
+} from "./model-picker.state.js";
+import {
+  renderDiscordModelPickerModelsView,
+  toDiscordModelPickerMessagePayload,
+} from "./model-picker.view.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";

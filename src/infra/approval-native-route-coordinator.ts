@@ -441,12 +441,3 @@ export function createApprovalNativeRouteReporter(params: {
     },
   };
 }
-
-/** Clears in-memory native approval route coordination state between tests. */
-export function clearApprovalNativeRouteStateForTest(): void {
-  for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
-    clearPendingApprovalRouteNotice(approvalId);
-  }
-  activeApprovalRouteRuntimes.clear();
-  approvalRouteRuntimeSeq = 0;
-}

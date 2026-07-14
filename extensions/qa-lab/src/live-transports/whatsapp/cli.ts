@@ -24,9 +24,7 @@ async function runQaWhatsApp(opts: LiveTransportQaCommandOptions) {
   await (await loadWhatsAppQaCliRuntime()).runQaWhatsAppCommand(opts);
 }
 
-export const whatsappQaAdapterFactory: NonNullable<
-  LiveTransportQaCliRegistration["adapterFactory"]
-> = {
+const whatsappQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "whatsapp",
   scenarioIds: [
     "dm-chat-baseline",

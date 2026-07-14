@@ -1,0 +1,95 @@
+{
+  "id": "onepassword",
+  "name": "1Password",
+  "description": "Curated 1Password secrets broker with approval policy and SQLite audit history.",
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["onepassword"],
+    "onConfigPaths": ["plugins.entries.onepassword.config"]
+  },
+  "commandAliases": [
+    {
+      "name": "onepassword",
+      "kind": "cli"
+    }
+  ],
+  "contracts": {
+    "tools": ["onepassword"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["vault", "items"],
+    "properties": {
+      "vault": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!\\s*-)"
+      },
+      "opBin": {
+        "type": "string",
+        "minLength": 1
+      },
+      "defaultPolicy": {
+        "type": "string",
+        "enum": ["auto", "approve", "deny"],
+        "default": "approve"
+      },
+      "cacheTtlSeconds": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 300
+      },
+      "grantTtlHours": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 720
+      },
+      "opTimeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 15000
+      },
+      "items": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 32,
+        "propertyNames": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["item"],
+          "properties": {
+            "item": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\s*-)"
+            },
+            "vault": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\s*-)"
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^,]+$",
+              "default": "credential"
+            },
+            "policy": {
+              "type": "string",
+              "enum": ["auto", "approve", "deny"]
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -366,11 +366,36 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/${ARTIFACT_NAME}"
           rm -rf "${artifact_dir}"
           mkdir -p "${artifact_dir}"
+          pack_output="${RUNNER_TEMP}/${EXTENSION_ID}-npm-pack-output.txt"
           pack_json="${artifact_dir}/npm-pack.json"
 
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
-            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_json}"
+            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
+
+          node - "${pack_output}" "${pack_json}" <<'NODE'
+          const fs = require("node:fs");
+          const raw = fs.readFileSync(process.argv[2], "utf8").trim();
+          let pack;
+          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+            try {
+              const candidate = JSON.parse(raw.slice(index));
+              if (Array.isArray(candidate)) {
+                pack = candidate;
+                break;
+              }
+            } catch {
+              // npm can print bundled-dependency summaries before its JSON result.
+            }
+            if (index === 0) {
+              break;
+            }
+          }
+          if (!pack) {
+            throw new Error("npm pack did not emit a JSON array.");
+          }
+          fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
+          NODE
 
           tarball_name="$(
             node - "${pack_json}" <<'NODE'
@@ -458,8 +483,8 @@ jobs:
           if (repositoryUrl !== "https://github.com/openclaw/openclaw") {
             fail(`Packed repository route mismatch: ${JSON.stringify(repositoryUrl)}.`);
           }
-          if (pluginManifest.id !== process.env.EXTENSION_ID) {
-            fail(`Packed plugin id mismatch: expected ${process.env.EXTENSION_ID}.`);
+          if (typeof pluginManifest.id !== "string" || pluginManifest.id.length === 0) {
+            fail("Packed plugin id is missing.");
           }
           if (packEntry.integrity !== actualIntegrity || packEntry.shasum !== actualShasum) {
             fail("npm pack integrity metadata does not match the prepared tarball.");
@@ -756,9 +781,10 @@ jobs:
             manifest.package.installNpmSpec !== process.env.INSTALL_NPM_SPEC ||
             manifest.package.publishTag !== process.env.PUBLISH_TAG ||
             repositoryUrl !== "https://github.com/openclaw/openclaw" ||
-            manifest.package.pluginId !== process.env.EXTENSION_ID ||
+            typeof pluginManifest.id !== "string" ||
+            pluginManifest.id.length === 0 ||
+            manifest.package.pluginId !== pluginManifest.id ||
             manifest.package.repositoryUrl !== repositoryUrl ||
-            pluginManifest.id !== process.env.EXTENSION_ID ||
             manifest.package.packageJsonSha256 !== packedPackageJsonSha256 ||
             manifest.package.sourcePackageJsonSha256 !== sourcePackageJsonSha256
           ) {

@@ -22,9 +22,9 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
  */
 
 /** Default first CDP port for browser profiles. */
-export const CDP_PORT_RANGE_START = 18800;
+const CDP_PORT_RANGE_START = 18800;
 /** Default last CDP port for browser profiles. */
-export const CDP_PORT_RANGE_END = 18899;
+const CDP_PORT_RANGE_END = 18899;
 const MAX_TCP_PORT = 65_535;
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
@@ -89,7 +89,7 @@ export function getUsedPorts(
 }
 
 /** Default browser profile color palette. */
-export const PROFILE_COLORS = [
+const PROFILE_COLORS = [
   "#FF4500", // Orange-red (openclaw default)
   "#0066CC", // Blue
   "#00AA00", // Green

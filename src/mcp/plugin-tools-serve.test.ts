@@ -12,7 +12,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 

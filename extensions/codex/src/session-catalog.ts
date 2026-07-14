@@ -57,19 +57,8 @@ import type {
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 
-export type {
-  CodexSessionCatalogError,
-  CodexSessionCatalogHost,
-  CodexSessionCatalogPage,
-  CodexSessionCatalogPageParams,
-  CodexSessionCatalogParams,
-  CodexSessionCatalogResult,
-  CodexSessionCatalogSession,
-  CodexSessionTranscriptPage,
-} from "./session-catalog-types.js";
-
-export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
-export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
+const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
 
 const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 const DEFAULT_PAGE_LIMIT = 50;
@@ -102,7 +91,7 @@ type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][
 
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 
-export type CodexSessionCatalogControl = {
+type CodexSessionCatalogControl = {
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
@@ -657,22 +646,6 @@ function parseCatalogSession(
   };
 }
 
-function parseCatalogError(value: unknown): CodexSessionCatalogError | undefined {
-  if (!isRecord(value) || typeof value.code !== "string" || typeof value.message !== "string") {
-    return undefined;
-  }
-  const messages: Record<string, string> = {
-    APP_SERVER_UNAVAILABLE: "Codex app-server is unavailable on this host",
-    NODE_INVOKE_FAILED: "The paired node could not return its Codex session catalog",
-    NODE_LIST_FAILED: "Paired nodes could not be listed",
-    NODE_OFFLINE: "Paired node is offline",
-  };
-  return {
-    code: value.code in messages ? value.code : "CATALOG_FAILED",
-    message: messages[value.code] ?? "Codex session catalog request failed",
-  };
-}
-
 function parseCatalogPage(
   value: unknown,
   options: { allowOpenClawSessionKey?: boolean } = {},
@@ -710,40 +683,6 @@ function filterCatalogPageByTitle(
       session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
     ),
   };
-}
-
-function parseCatalogHost(value: unknown): CodexSessionCatalogHost {
-  if (
-    !isRecord(value) ||
-    typeof value.hostId !== "string" ||
-    typeof value.label !== "string" ||
-    (value.kind !== "gateway" && value.kind !== "node") ||
-    typeof value.connected !== "boolean" ||
-    !Array.isArray(value.sessions)
-  ) {
-    throw new Error("Codex session catalog returned an invalid host");
-  }
-  const page = parseCatalogPage(value, { allowOpenClawSessionKey: value.kind === "gateway" });
-  const error = parseCatalogError(value.error);
-  return {
-    hostId: value.hostId,
-    label: value.label,
-    kind: value.kind,
-    connected: value.connected,
-    sessions: page.sessions,
-    ...(typeof value.nodeId === "string" ? { nodeId: value.nodeId } : {}),
-    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-    ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
-    ...(error ? { error } : {}),
-  };
-}
-
-/** Validates and strips unknown fields from a Gateway catalog response. */
-export function parseCodexSessionCatalogResult(value: unknown): CodexSessionCatalogResult {
-  if (!isRecord(value) || !Array.isArray(value.hosts) || value.hosts.length > MAX_HOST_COUNT) {
-    throw new Error("Codex session catalog returned an invalid result");
-  }
-  return { hosts: value.hosts.map(parseCatalogHost) };
 }
 
 function unwrapNodeInvokePayload(value: unknown): unknown {
@@ -881,7 +820,7 @@ async function listPairedNode(params: {
 }
 
 /** Lists Gateway-local and paired-node Codex sessions with per-host failures. */
-export async function listCodexSessionCatalog(params: {
+async function listCodexSessionCatalog(params: {
   bindingStore: CodexAppServerBindingStore;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
@@ -1056,7 +995,7 @@ function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
 }
 
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
-export async function readCodexSessionTranscript(params: {
+async function readCodexSessionTranscript(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
   hostId: string;
@@ -1632,7 +1571,7 @@ async function continueLocalCodexSessionInner(params: {
 }
 
 /** Creates one locked OpenClaw branch whose first harness run forks the Codex source. */
-export async function continueLocalCodexSession(params: {
+async function continueLocalCodexSession(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
@@ -1697,7 +1636,7 @@ async function assertNoPendingSupervisionBranch(params: {
 }
 
 /** Archives one inactive Gateway-local Codex thread after a fresh status read. */
-export async function archiveLocalCodexSession(params: {
+async function archiveLocalCodexSession(params: {
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
@@ -1827,7 +1766,7 @@ function toGenericTranscriptItem(item: import("./app-server/protocol.js").CodexT
 }
 
 /** Registers the generic session catalog while preserving node command contracts. */
-export function registerCodexSessionCatalog(params: {
+function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControl;
@@ -1900,3 +1839,11 @@ export function registerCodexSessionCatalog(params: {
   };
   params.api.registerSessionCatalog(provider);
 }
+
+export const codexSessionCatalogRuntime = {
+  register: registerCodexSessionCatalog,
+  list: listCodexSessionCatalog,
+  readTranscript: readCodexSessionTranscript,
+  continueLocal: continueLocalCodexSession,
+  archiveLocal: archiveLocalCodexSession,
+};

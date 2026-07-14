@@ -27,7 +27,6 @@
     "gateway.http.endpoints.*.enabled",
     "gateway.mode",
     "gateway.nodes.denyCommands.*",
-    "gateway.remote.enabled",
     "gateway.tailscale.mode",
     "gateway.tailscale.preserveFunnel",
     "logging.redactSensitive",
@@ -379,13 +378,6 @@
       "area": "gateway",
       "policy": "gateway.remote.allow",
       "reason": "Policy observes whether Gateway remote mode is enabled.",
-    },
-    {
-      "pattern": "gateway.remote.enabled",
-      "status": "observed",
-      "area": "gateway",
-      "policy": "gateway.remote.allow",
-      "reason": "Policy observes explicit remote Gateway enablement.",
     },
     {
       "pattern": "gateway.http.endpoints.*.enabled",

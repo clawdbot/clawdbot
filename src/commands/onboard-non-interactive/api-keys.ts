@@ -18,7 +18,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import type { SecretInputMode } from "../onboard-types.js";
 
 /** Source that supplied a non-interactive provider API key. */
-export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
+type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
 function parseEnvVarNameFromSourceLabel(source: string | undefined): string | undefined {
   if (!source) {

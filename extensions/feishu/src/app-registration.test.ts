@@ -11,7 +11,8 @@ import {
   pollAppRegistration,
   printQrCode,
 } from "./app-registration.js";
-import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
+
+const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),

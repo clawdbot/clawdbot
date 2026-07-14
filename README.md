@@ -93,7 +93,7 @@ Model note: while many providers and models are supported, prefer a current flag
 
 ## Install (recommended)
 
-Runtime: **Node 24 (recommended) or Node 22.19+**.
+Runtime: **Node 24.15+ (recommended), Node 22.22.3+, or Node 25.9+**.
 
 ```bash
 npm install -g openclaw@latest
@@ -106,7 +106,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 ## Quick start (TL;DR)
 
-Runtime: **Node 24 (recommended) or Node 22.19+**.
+Runtime: **Node 24.15+ (recommended), Node 22.22.3+, or Node 25.9+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -250,7 +250,7 @@ pnpm build
 pnpm ui:build
 ```
 
-`pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
+`pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` hands the configured Gateway port from the installed service to a durable tmux pane; run `pnpm openclaw gateway start` when you want the installed service back. It does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary, while `pnpm gateway:watch` rebuilds the runtime on demand during the dev loop.
 

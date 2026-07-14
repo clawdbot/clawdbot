@@ -15,6 +15,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
+    find: "@openclaw/gateway-client/browser",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
+  },
+  {
+    find: /^@openclaw\/gateway-protocol\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
+  },
+  {
+    find: /^@openclaw\/(gateway-protocol|retry)$/u,
+    replacement: path.resolve(repoRoot, "packages/$1/src/index.ts"),
+  },
+  {
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },

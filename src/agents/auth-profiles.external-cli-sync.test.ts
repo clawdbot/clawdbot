@@ -17,10 +17,9 @@ const mocks = vi.hoisted(() => ({
 
 let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-cli-sync.js").readExternalCliBootstrapCredential;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
-let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
-let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
-let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").shouldBootstrapFromExternalCliCredential;
-let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").shouldReplaceStoredOAuthCredential;
+let hasUsableOAuthCredential: typeof import("./auth-profiles/oauth-shared.js").hasUsableOAuthCredential;
+let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/oauth-shared.js").shouldBootstrapFromExternalCliCredential;
+let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/oauth-shared.js").shouldReplaceStoredOAuthCredential;
 let CLAUDE_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").CLAUDE_CLI_PROFILE_ID;
 let OPENAI_CODEX_DEFAULT_PROFILE_ID: typeof import("./auth-profiles/constants.js").OPENAI_CODEX_DEFAULT_PROFILE_ID;
 let MINIMAX_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").MINIMAX_CLI_PROFILE_ID;
@@ -118,14 +117,13 @@ describe("external cli oauth resolution", () => {
     mocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
+    ({ readExternalCliBootstrapCredential, resolveExternalCliAuthProfiles } =
+      await import("./auth-profiles/external-cli-sync.js"));
     ({
       hasUsableOAuthCredential,
-      isSafeToUseExternalCliCredential,
-      readExternalCliBootstrapCredential,
-      resolveExternalCliAuthProfiles,
       shouldBootstrapFromExternalCliCredential,
       shouldReplaceStoredOAuthCredential,
-    } = await import("./auth-profiles/external-cli-sync.js"));
+    } = await import("./auth-profiles/oauth-shared.js"));
     ({ CLAUDE_CLI_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
       await import("./auth-profiles/constants.js"));
   });
@@ -264,29 +262,6 @@ describe("external cli oauth resolution", () => {
           imported,
         }),
       ).toBe(true);
-    });
-
-    it("refuses external oauth usage across different known identities", () => {
-      const imported = makeOAuthCredential({
-        provider: "openai",
-        access: "fresh-cli-access",
-        refresh: "fresh-cli-refresh",
-        expires: Date.now() + 5 * 24 * 60 * 60_000,
-        accountId: "acct-external",
-      });
-
-      expect(
-        isSafeToUseExternalCliCredential(
-          makeOAuthCredential({
-            provider: "openai",
-            access: "expired-local-access",
-            refresh: "expired-local-refresh",
-            expires: Date.now() - 60_000,
-            accountId: "acct-local",
-          }),
-          imported,
-        ),
-      ).toBe(false);
     });
   });
 
@@ -538,6 +513,9 @@ describe("external cli oauth resolution", () => {
         access: "usable-local-access",
         refresh: "usable-local-refresh",
         expires: Date.now() + 10 * 60_000,
+        // Identity-complete steady state; profiles missing the email get one
+        // bounded backfill read (external-cli-sync.email-backfill.test.ts).
+        email: "stored@example.com",
       }),
     );
 

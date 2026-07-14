@@ -116,7 +116,3 @@ export function buildNoVncObserverTokenUrl(baseUrl: string, token: string) {
   const query = new URLSearchParams({ token });
   return `${baseUrl}/sandbox/novnc?${query.toString()}`;
 }
-
-export function resetNoVncObserverTokensForTests() {
-  NO_VNC_OBSERVER_TOKENS.clear();
-}

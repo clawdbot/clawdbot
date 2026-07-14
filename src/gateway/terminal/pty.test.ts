@@ -1,41 +1,61 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// vi.mock is hoisted above module scope, so the mock target must be created with
-// vi.hoisted for the factory to reference it.
-const { signalProcessTree } = vi.hoisted(() => ({ signalProcessTree: vi.fn() }));
-vi.mock("../../process/kill-tree.js", () => ({ signalProcessTree }));
+const mocks = vi.hoisted(() => ({
+  signalProcessTree: vi.fn(),
+  spawn: vi.fn(),
+}));
 
-const { killPtyTree } = await import("./pty.js");
+vi.mock("../../process/kill-tree.js", () => ({ signalProcessTree: mocks.signalProcessTree }));
+vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
+
+const { spawnTerminalPty } = await import("./pty.js");
 
 function fakePty(pid = 4321) {
-  return { pid, kill: vi.fn() };
+  return {
+    pid,
+    write: vi.fn(),
+    resize: vi.fn(),
+    onData: vi.fn(),
+    onExit: vi.fn(),
+    kill: vi.fn(),
+  };
 }
 
-describe("killPtyTree", () => {
-  it("tears down the whole process tree on the default (SIGKILL) close", () => {
-    const pty = fakePty();
-    killPtyTree(pty);
-    // Kills the tree, not just the shell — orphaned child commands are reaped.
-    expect(signalProcessTree).toHaveBeenCalledWith(4321, "SIGKILL");
+async function spawnFakePty(pid = 4321) {
+  const pty = fakePty(pid);
+  mocks.spawn.mockReturnValueOnce(pty);
+  const handle = await spawnTerminalPty({
+    file: "/bin/sh",
+    args: [],
+    env: {},
+    cols: 80,
+    rows: 24,
+  });
+  return { handle, pty };
+}
+
+describe("terminal PTY teardown", () => {
+  beforeEach(() => {
+    mocks.signalProcessTree.mockReset();
+    mocks.spawn.mockReset();
+  });
+
+  it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
+    const { handle, pty } = await spawnFakePty();
+    handle.kill(signal);
+    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
     expect(pty.kill).not.toHaveBeenCalled();
   });
 
-  it("uses the process tree for SIGTERM too", () => {
-    const pty = fakePty(999);
-    killPtyTree(pty, "SIGTERM");
-    expect(signalProcessTree).toHaveBeenCalledWith(999, "SIGTERM");
-  });
-
-  it("falls back to a direct pty kill for non-terminating signals", () => {
-    const pty = fakePty();
-    signalProcessTree.mockClear();
-    killPtyTree(pty, "SIGHUP");
-    expect(signalProcessTree).not.toHaveBeenCalled();
+  it("uses the PTY handle for non-terminating signals", async () => {
+    const { handle, pty } = await spawnFakePty();
+    handle.kill("SIGHUP");
+    expect(mocks.signalProcessTree).not.toHaveBeenCalled();
     expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
   });
 
-  it("does not throw when the process is already gone", () => {
-    const pty = { pid: 0, kill: vi.fn() };
-    expect(() => killPtyTree(pty)).not.toThrow();
+  it("tolerates an already-exited process", async () => {
+    const { handle } = await spawnFakePty(0);
+    expect(() => handle.kill()).not.toThrow();
   });
 });

@@ -4,11 +4,98 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "./record-shared.js";
+import type { MatrixStreamingMode } from "./types.js";
+
+function parseMatrixStreamingMode(value: unknown): MatrixStreamingMode | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "partial" ||
+    normalized === "quiet" ||
+    normalized === "progress" ||
+    normalized === "off"
+    ? normalized
+    : null;
+}
+
+// Matrix has a preview stream mode with the channel-local "quiet" value, so it
+// overrides the generic mode parser (which would collapse "quiet" to the
+// default). Runtime defaults to "off" when streaming is absent or the object
+// has no mode (resolveMatrixStreamingMode in matrix/monitor/index.ts), and the
+// account merge replaces the root streaming object wholesale
+// (resolveMergedAccountConfig without a streaming deep-merge), so migration
+// seeds materialized account objects with the inherited root settings.
+// `streamMode` was never a Matrix key (no schema field, no runtime read), so
+// it is stripped as junk below instead of being treated as mode intent.
+const streamingAliasMigration = defineChannelAliasMigration<MatrixStreamingMode>({
+  channelId: "matrix",
+  streaming: {
+    defaultMode: "off",
+    resolveMode: (entry) => {
+      const streaming = isRecord(entry.streaming) ? entry.streaming : null;
+      const parsed = parseMatrixStreamingMode(streaming ? streaming.mode : entry.streaming);
+      if (parsed) {
+        return parsed;
+      }
+      return entry.streaming === true ? "partial" : "off";
+    },
+  },
+  accountStreamingReplacesRoot: true,
+});
+
+// Runs before the alias migration: leaving `streamMode` in place would make
+// the generic migration materialize a streaming.mode from a key Matrix never
+// honored, silently changing the effective (inherited) mode.
+function stripMatrixJunkStreamMode(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  const matrix = isRecord(channels?.matrix) ? channels.matrix : null;
+  if (!matrix) {
+    return cfg;
+  }
+  let updated = matrix;
+  let changed = false;
+  if (updated.streamMode !== undefined) {
+    const { streamMode: _streamMode, ...rest } = updated;
+    updated = rest;
+    changes.push("Removed channels.matrix.streamMode (never read by the Matrix runtime).");
+    changed = true;
+  }
+  const accounts = isRecord(updated.accounts) ? updated.accounts : null;
+  if (accounts) {
+    let accountsChanged = false;
+    const nextAccounts: Record<string, unknown> = { ...accounts };
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      const account = isRecord(accountValue) ? accountValue : null;
+      if (!account || account.streamMode === undefined) {
+        continue;
+      }
+      const { streamMode: _streamMode, ...rest } = account;
+      nextAccounts[accountId] = rest;
+      changes.push(
+        `Removed channels.matrix.accounts.${accountId}.streamMode (never read by the Matrix runtime).`,
+      );
+      accountsChanged = true;
+    }
+    if (accountsChanged) {
+      updated = { ...updated, accounts: nextAccounts };
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    channels: { ...channels, matrix: updated },
+  } as OpenClawConfig;
+}
 
 function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
   const room = isRecord(value) ? value : null;
@@ -120,6 +207,7 @@ function normalizeMatrixRoomAllowAliases(params: {
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...streamingAliasMigration.legacyConfigRules,
   {
     path: ["channels", "matrix"],
     message:
@@ -169,15 +257,20 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  const changes: string[] = [];
+  const withoutJunkStreamMode = stripMatrixJunkStreamMode(cfg, changes);
+  const aliases = streamingAliasMigration.normalizeChannelConfig({
+    cfg: withoutJunkStreamMode,
+    changes,
+  });
+  const channels = isRecord(aliases.config.channels) ? aliases.config.channels : null;
   const matrix = isRecord(channels?.matrix) ? channels.matrix : null;
   if (!matrix) {
     return { config: cfg, changes: [] };
   }
 
-  const changes: string[] = [];
   let updatedMatrix: Record<string, unknown> = matrix;
-  let changed = false;
+  let changed = aliases.config !== cfg;
 
   const topLevelPrivateNetwork = migrateLegacyFlatAllowPrivateNetworkAlias({
     entry: updatedMatrix,
@@ -277,9 +370,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...aliases.config,
       channels: {
-        ...cfg.channels,
+        ...aliases.config.channels,
         matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
       },
     },

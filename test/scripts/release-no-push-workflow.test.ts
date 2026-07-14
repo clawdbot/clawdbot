@@ -325,6 +325,20 @@ describe("release validation no-push transport", () => {
     expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
   });
 
+  it("keeps the Release SHA wrapper as the durable evidence identity", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const dispatch = step(job(full, "summary"), "Request release evidence update");
+
+    expect(verify.run).toContain(
+      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
+    );
+    expect(verify.run).toContain('"ci.yml"');
+    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
+    expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+  });
+
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
     const summary = job(readWorkflow(FULL_RELEASE), "summary");
     expect(step(summary, "Upload release validation manifest").with).toMatchObject({

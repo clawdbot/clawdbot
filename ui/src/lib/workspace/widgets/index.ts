@@ -15,7 +15,7 @@ import { renderTable } from "./table.ts";
 import type { BuiltinWidgetRenderer } from "./types.ts";
 import { renderUsage } from "./usage.ts";
 
-export const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
+const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   "stat-card": (widget, value) => renderStatCard(widget, value),
   markdown: (widget, value) => renderMarkdown(widget, value),
   table: (widget, value) => renderTable(widget, value),
@@ -32,4 +32,4 @@ export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefi
   return BUILTIN_WIDGET_RENDERERS[name];
 }
 
-export type { BuiltinWidgetContext, BuiltinWidgetRenderer } from "./types.ts";
+export type { BuiltinWidgetContext } from "./types.ts";

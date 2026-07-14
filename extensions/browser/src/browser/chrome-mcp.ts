@@ -4,13 +4,11 @@
  * Manages chrome-devtools-mcp processes and sessions, maps Browser actions to
  * MCP tools, and exposes tab/snapshot/action helpers for logged-in browsers.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleepTimeout } from "node:timers/promises";
-import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
@@ -19,6 +17,7 @@ import {
   addTimerTimeoutGraceMs,
   resolveNonNegativeIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -217,7 +216,6 @@ const CHROME_MCP_SNAPSHOT_REF_PREFIX = "mcp-ref:";
 class ChromeMcpReconnectRequiredError extends Error {}
 class ChromeMcpProcessSnapshotError extends Error {}
 
-const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, PendingChromeMcpSession>();
 const retainedCleanupSessions = new Map<string, Set<ChromeMcpSession>>();
@@ -800,7 +798,7 @@ async function listChromeMcpPlatformProcesses(
       return await listChromeMcpLinuxProcesses();
     }
     const windows = platform === "win32";
-    const { stdout } = await execFileAsync(
+    const { stdout } = await runExec(
       windows ? "powershell.exe" : "ps",
       windows
         ? [
@@ -812,9 +810,9 @@ async function listChromeMcpPlatformProcesses(
         : ["-axww", "-o", "pid=,ppid=,lstart=,command="],
       {
         env: windows ? undefined : { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        logOutput: false,
         maxBuffer: 4 * 1024 * 1024,
-        timeout: 2_000,
-        windowsHide: windows,
+        timeoutMs: 2_000,
       },
     );
     if (windows) {
@@ -934,10 +932,10 @@ async function taskkillChromeMcpProcessTree(
     await deps.taskkillProcessTree(rootPid);
     return;
   }
-  await execFileAsync("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+  await runExec("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+    logOutput: false,
     maxBuffer: 64 * 1024,
-    timeout: 2_000,
-    windowsHide: true,
+    timeoutMs: 2_000,
   });
 }
 

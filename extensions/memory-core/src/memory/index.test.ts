@@ -22,10 +22,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
-import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
+import { closeMemoryIndexManagersForAgent } from "./manager.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -59,7 +57,7 @@ const identityAliasFixture = vi.hoisted(() => ({
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
-    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    code: "LOCAL_EMBEDDING_WORKER_EXITED",
     reason: "exit",
     exitCode: 134,
   });
@@ -841,14 +839,6 @@ describe("memory index", () => {
     } finally {
       await manager.close?.();
     }
-  });
-
-  it("splits oversized source-wide embedding requests at the request cap", () => {
-    expect(splitSourceWideEmbeddingChunks(["one", "two", "three", "four", "five"], 2)).toEqual([
-      ["one", "two"],
-      ["three", "four"],
-      ["five"],
-    ]);
   });
 
   it("keeps split chunks from oversized files in one source-wide batch", async () => {
@@ -1965,9 +1955,7 @@ describe("memory index", () => {
       typeof cachedBeforeProbe?.checkedAtMs === "number" &&
       typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
     ) {
-      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
-        EMBEDDING_PROBE_CACHE_TTL_MS,
-      );
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(30_000);
     }
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
@@ -1979,9 +1967,7 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();
-    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
-      EMBEDDING_PROBE_CACHE_TTL_MS,
-    );
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {

@@ -29,7 +29,7 @@ const inboundDedupeInFlight = resolveGlobalSingleton(
   () => new Set<string>(),
 );
 
-export type InboundDedupeClaimResult =
+type InboundDedupeClaimResult =
   | { status: "invalid" }
   | { status: "duplicate"; key: string }
   | { status: "inflight"; key: string }

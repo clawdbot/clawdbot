@@ -5,7 +5,9 @@ import {
   createFakeRestClient,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
+import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 const TEST_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
@@ -109,12 +111,44 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.content).toBe("earlier");
   });
 
-  it("hydrates reply references when Discord omits referenced_message", async () => {
+  it("uses referenced messages supplied by current-message hydration", async () => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient([
       createDefaultReplyPayload({
+        content: "hello <@123>",
+        mentions: [
+          {
+            id: "123",
+            username: "bob",
+            global_name: null,
+            discriminator: "0",
+            avatar: null,
+          },
+        ],
         referenced_message: createReferencedMessagePayload("the replied-to message"),
       }),
+    ]);
+    const message = new Message(
+      client,
+      createDefaultReplyPayload({
+        content: "hello <@123>",
+      }),
+    );
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m1"]);
+    expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
+  });
+
+  it("fetches the referenced message when the hydrated reply still omits it", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient([
+      createReferencedMessagePayload("the directly fetched message"),
     ]);
     const message = new Message(client, createDefaultReplyPayload());
 
@@ -124,8 +158,50 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls).toHaveLength(1);
-    expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m0"]);
+    expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
+
+    const ctx = await createBaseDiscordMessageContext({
+      message: hydrated,
+      author: hydrated.author,
+      baseText: hydrated.content,
+      messageText: hydrated.content,
+    });
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: hydrated.content,
+      mediaList: [],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.ReplyToId).toBe("m0");
+    expect(result.ctxPayload.ReplyToBody).toBe("the directly fetched message");
+  });
+
+  it("uses the referenced channel when directly hydrating a cross-channel reply", async () => {
+    const client = createInternalTestClient();
+    const reply = createDefaultReplyPayload({
+      message_reference: {
+        type: MessageReferenceType.Default,
+        message_id: "m0",
+        channel_id: "c2",
+      },
+    });
+    const rest = createFakeRestClient([
+      createReferencedMessagePayload("the cross-channel message"),
+    ]);
+    const message = new Message(client, reply);
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls[0]?.path).toBe("/channels/c2/messages/m0");
+    expect(hydrated.referencedMessage?.content).toBe("the cross-channel message");
   });
 
   it("keeps the original reply message when hydration fetch fails", async () => {

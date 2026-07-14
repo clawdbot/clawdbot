@@ -37,9 +37,6 @@ import {
   type StructureClient,
 } from "./structures.js";
 
-export { OptionsHandler } from "./interaction-options.js";
-export { ModalFields } from "./modal-fields.js";
-
 type InteractionClient = StructureClient & {
   options: { clientId: string };
   componentHandler: {

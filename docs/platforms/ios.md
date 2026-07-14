@@ -30,6 +30,11 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 
 ## Quick start (pair + connect)
 
+On first launch the app walks through a short pairing explainer and a
+permissions page (notifications, camera, microphone, photos, contacts,
+calendar, reminders, location). Every grant is optional and can be changed
+later in **Settings** -> **Permissions**, or in the iOS Settings app.
+
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
    Serve is the recommended remote path:
 
@@ -43,7 +48,9 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** on the **Devices** page.
+   **Pair mobile device** on the **Devices** page. Full access is recommended
+   and selected by default; choose Limited access only when you want to omit
+   administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
@@ -53,6 +60,12 @@ creation has a token or password auth path.
 
 4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.
+
+   **Settings → Gateway** shows whether the saved operator connection has
+   **Full** or **Limited** access. Plaintext LAN `ws://` setup is automatically
+   limited for bearer-token safety. If it is limited, configure `wss://` or
+   Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
+   then reconnect to enable settings and upgrades.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
@@ -90,32 +103,10 @@ openclaw gateway call node.list --params "{}"
 
 ## Health summaries
 
-The iOS node can return a read-only, on-device aggregate for `today`. The fixed
-summary includes steps, sleep duration, average resting heart rate, and workout
-count/duration. It never returns individual HealthKit
-samples, sources, metadata, clinical records, or write access.
-
-This surface has two independent opt-ins:
-
-1. In the iOS app, open **Settings -> Permissions -> Privacy & Access -> Health Summaries** and
-   tap **Enable & Share Summaries**. The disclosure explains that the requested
-   aggregate leaves the phone through your Gateway, reaches your configured AI
-   provider, and may remain in chat history.
-2. Add `health.summary` to `gateway.nodes.allowCommands`, then reject and
-   re-approve the changed iPhone node command surface. Keep your Gateway local
-   or tailnet-only; the security audit reports this sensitive command when it is
-   enabled.
-
-Models use the existing `nodes` tool with `action: "invoke"`,
-`invokeCommand: "health.summary"`, and `invokeParamsJson` set to
-`{"period":"today"}`.
-
-HealthKit deliberately does not reveal whether read access was denied. Missing
-metrics therefore mean only that no readable value was returned; they do not
-prove either denial or absence of health data. OpenClaw limits summaries to the
-current calendar day so a limited historical-access window cannot make a
-multi-day total look complete. OpenClaw does not ingest Health data in the
-background and does not use summaries for diagnosis or medical advice.
+The iOS node can return an opt-in, read-only HealthKit aggregate for the current
+calendar day. iPhone consent and explicit Gateway command authorization are
+independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
+setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in

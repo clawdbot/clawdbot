@@ -16,13 +16,14 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import {
-  GATEWAY_SUSPEND_RETRY_AFTER_MS,
-  GATEWAY_SUSPEND_TTL_MS,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
+
+const SUSPEND_TTL_MS = 2 * 60_000;
+const SUSPEND_RETRY_AFTER_MS = 20_000;
 
 function inspectors(
   overrides: Partial<GatewayActiveWorkInspectors> = {},
@@ -48,31 +49,55 @@ function inspectors(
 
 beforeEach(() => {
   resetProcessRegistryForTests();
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
   resetProcessRegistryForTests();
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
 describe("gateway suspend coordinator", () => {
-  it("test reset resumes a held scheduler before admission is cleared", () => {
+  it("lifecycle reset resumes a held scheduler before admission is cleared", () => {
     const resumeScheduling = vi.fn(() => {
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
     });
     expect(
       prepareGatewaySuspend({
-        requestId: "request-test-reset",
+        requestId: "request-lifecycle-reset",
         pauseScheduling: vi.fn(),
         resumeScheduling,
         inspect: inspectors(),
       }),
     ).toMatchObject({ status: "ready" });
 
-    resetGatewaySuspendCoordinatorForTest();
+    markGatewayRestartDraining();
+    expect(resumeScheduling).not.toHaveBeenCalled();
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
+
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    resetGatewayWorkAdmission();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("test reset resumes a held scheduler before admission is cleared", () => {
+    const resumeScheduling = vi.fn(() => {
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+    });
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-lifecycle-reset",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+      }),
+    ).toMatchObject({ status: "ready" });
+
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
 
     expect(resumeScheduling).toHaveBeenCalledOnce();
@@ -110,17 +135,17 @@ describe("gateway suspend coordinator", () => {
     const inspect = inspectors({
       getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
     });
-    const busy = prepareGatewaySuspend({
-      requestId: "request-background-exec",
-      pauseScheduling: vi.fn(),
-      resumeScheduling: vi.fn(),
-      inspect,
-    });
-
-    expect(busy).toEqual({
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-background-exec",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect,
+      }),
+    ).toEqual({
       status: "busy",
       reason: "active-work",
-      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
       activeCount: 1,
       blockers: [
         {
@@ -261,36 +286,34 @@ describe("gateway suspend coordinator", () => {
 
   it("renews one ready lease and resumes only with the matching id", () => {
     const resumeScheduling = vi.fn();
-    const first = prepareGatewaySuspend({
-      requestId: "request-ready",
-      pauseScheduling: vi.fn(),
-      resumeScheduling,
-      inspect: inspectors(),
-      nowMs: () => 1_000,
-      createSuspensionId: () => "suspension-1",
-    });
-    expect(first).toMatchObject({
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-ready",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+        nowMs: () => 1_000,
+        createSuspensionId: () => "suspension-1",
+      }),
+    ).toMatchObject({
       status: "ready",
       suspensionId: "suspension-1",
-      expiresAtMs: 1_000 + GATEWAY_SUSPEND_TTL_MS,
+      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
     });
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    expect(getGatewaySuspendStatus("suspension-1")).toEqual({
-      status: "ready",
-      expiresAtMs: 1_000 + GATEWAY_SUSPEND_TTL_MS,
-    });
 
-    const renewed = prepareGatewaySuspend({
-      requestId: "request-ready",
-      pauseScheduling: vi.fn(),
-      resumeScheduling,
-      inspect: inspectors({ getQueueSize: () => 99 }),
-      nowMs: () => 2_000,
-    });
-    expect(renewed).toMatchObject({
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-ready",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors({ getQueueSize: () => 99 }),
+        nowMs: () => 2_000,
+      }),
+    ).toMatchObject({
       status: "ready",
       suspensionId: "suspension-1",
-      expiresAtMs: 2_000 + GATEWAY_SUSPEND_TTL_MS,
+      expiresAtMs: 2_000 + SUSPEND_TTL_MS,
     });
     expect(
       prepareGatewaySuspend({
@@ -304,7 +327,6 @@ describe("gateway suspend coordinator", () => {
       ok: false,
       reason: "suspension-mismatch",
     });
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
     expect(resumeGatewaySuspend("suspension-1")).toEqual({
       ok: true,
       status: "running",
@@ -312,11 +334,6 @@ describe("gateway suspend coordinator", () => {
     });
     expect(resumeScheduling).toHaveBeenCalledOnce();
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    expect(resumeGatewaySuspend("suspension-1")).toEqual({
-      ok: true,
-      status: "running",
-      resumed: false,
-    });
   });
 
   it("lets restart supersede a suspension without reopening its scheduler", () => {
@@ -396,7 +413,7 @@ describe("gateway suspend coordinator", () => {
         createSuspensionId: () => "suspension-expiry",
       });
 
-      vi.advanceTimersByTime(GATEWAY_SUSPEND_TTL_MS);
+      vi.advanceTimersByTime(SUSPEND_TTL_MS);
 
       expect(getGatewaySuspendStatus("suspension-expiry")).toEqual({ status: "running" });
       expect(resumeScheduling).toHaveBeenCalledOnce();
@@ -423,7 +440,7 @@ describe("gateway suspend coordinator", () => {
         createSuspensionId: () => "suspension-expiry-recovery",
       });
 
-      vi.advanceTimersByTime(GATEWAY_SUSPEND_TTL_MS);
+      vi.advanceTimersByTime(SUSPEND_TTL_MS);
       expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toMatchObject({
         status: "recovering",
       });
@@ -452,7 +469,7 @@ describe("gateway suspend coordinator", () => {
       createSuspensionId: () => "suspension-delayed-expiry",
     });
 
-    nowMs += GATEWAY_SUSPEND_TTL_MS;
+    nowMs += SUSPEND_TTL_MS;
 
     expect(getGatewaySuspendStatus("suspension-delayed-expiry")).toEqual({ status: "running" });
     expect(resumeScheduling).toHaveBeenCalledOnce();

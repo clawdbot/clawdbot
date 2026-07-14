@@ -4,18 +4,20 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
+  failPendingDelivery,
+  loadPendingDelivery,
+  loadPendingDeliveries,
+  moveToFailed,
+} from "./delivery-queue-storage.js";
+import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
-  failPendingDelivery,
-  loadPendingDelivery,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
-  moveToFailed,
 } from "./delivery-queue.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 

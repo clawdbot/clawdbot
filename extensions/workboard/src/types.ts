@@ -184,7 +184,7 @@ export type WorkboardWorkerProtocol = {
   detail?: string;
 };
 
-export type WorkboardStaleState = {
+type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
   reason: string;

@@ -26,7 +26,7 @@ import {
 import type { InputProvenance } from "./input-provenance.js";
 
 export type SessionStateActorType = "human" | "agent" | "system";
-export type SessionStateEventKind =
+type SessionStateEventKind =
   | "human_direct_message"
   | "run_completed"
   | "run_failed"
@@ -34,7 +34,7 @@ export type SessionStateEventKind =
   | "goal_changed"
   | "compacted";
 
-export type SessionStateEventInput = {
+type SessionStateEventInput = {
   sessionKey: string;
   sessionId?: string;
   agentId: string;
@@ -48,7 +48,7 @@ export type SessionStateEventInput = {
   watcherSessionKeys?: readonly string[];
 };
 
-export type SessionStateEventRecord = {
+type SessionStateEventRecord = {
   sequence: number;
   sessionKey: string;
   sessionId?: string;

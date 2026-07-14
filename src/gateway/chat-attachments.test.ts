@@ -29,7 +29,6 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
@@ -534,7 +533,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
 describe("resolveChatAttachmentMaxBytes", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+  const DEFAULT_BYTES = 20 * MB;
 
   const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;

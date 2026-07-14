@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
@@ -11,7 +12,7 @@ import {
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
+import { buildConfigSchema } from "./schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 function expectNestedPairValue(

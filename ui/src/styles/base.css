@@ -100,6 +100,16 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Spacing scale - use these instead of hardcoded px for padding/gap */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
   --radius-md: 10px;

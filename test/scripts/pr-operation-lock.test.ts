@@ -498,6 +498,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("serializes the same PR and releases the waiter after SIGTERM", async () => {
     const repoDir = createRepo();
     const held = join(repoDir, "held");
+    const blocked = join(repoDir, "blocked");
     const acquired = join(repoDir, "acquired");
     const holder = spawnHolder(repoDir, held);
     let waiter: ChildProcess | undefined;
@@ -510,6 +511,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "-c",
           [
             ...bashSource(repoDir),
+            `sleep() { printf 'blocked\\n' >'${blocked}'; command sleep 0.01; }`,
             "acquire_pr_operation_lock 42",
             `printf 'acquired\\n' >'${acquired}'`,
             "release_pr_operation_lock",
@@ -517,7 +519,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ],
         { cwd: repoDir, stdio: "ignore" },
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(await waitFor(() => existsSync(blocked))).toBe(true);
       expect(existsSync(acquired)).toBe(false);
 
       await stopChild(holder, "SIGTERM");

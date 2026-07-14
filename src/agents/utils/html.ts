@@ -1,72 +1,38 @@
-/**
- * Minimal HTML entity decoding helpers.
- *
- * Syntax highlighting and terminal renderers use this to decode the small
- * entity subset emitted by trusted HTML producers without parsing full HTML.
- */
-/** Decoded entity text plus the source length consumed from the input. */
-interface DecodedHtmlEntity {
-  text: string;
-  length: number;
+import { decodeHTMLStrict } from "entities";
+
+const HTML_ENTITY_RE = /&(?:#x([0-9a-f]+)|#(\d+)|([a-z][a-z0-9]+));/gi;
+const LEGACY_CASE_INSENSITIVE_ENTITY_NAME_RE = /^(?:amp|quot|apos|lt|gt)$/i;
+
+function isUnicodeScalar(codePoint: number): boolean {
+  return (
+    Number.isInteger(codePoint) &&
+    codePoint >= 0 &&
+    codePoint <= 0x10ffff &&
+    (codePoint < 0xd800 || codePoint > 0xdfff)
+  );
 }
 
-function decodeCodePoint(codePoint: number): string | undefined {
-  if (
-    !Number.isInteger(codePoint) ||
-    codePoint < 0 ||
-    codePoint > 0x10ffff ||
-    (codePoint >= 0xd800 && codePoint <= 0xdfff)
-  ) {
-    return undefined;
-  }
-  return String.fromCodePoint(codePoint);
-}
-
-/** Decodes a named or numeric HTML entity without the surrounding `&`/`;`. */
-function decodeHtmlEntity(entity: string): string | undefined {
-  // Named entities match case-insensitively so callers keep the long-standing
-  // contract of decoding forms like "&AMP;" instead of leaking them as text.
-  switch (entity.toLowerCase()) {
-    case "amp":
-      return "&";
-    case "lt":
-      return "<";
-    case "gt":
-      return ">";
-    case "quot":
-      return '"';
-    case "apos":
-      return "'";
+/** Decodes semicolon-terminated HTML5 named and numeric entities exactly once. */
+export function decodeHtmlEntities(html: string): string {
+  if (!html.includes("&")) {
+    return html;
   }
 
-  // Numeric references must be fully numeric. A bare Number.parseInt is lenient
-  // and would consume a malformed entity such as "&#39x;" as "'" by stopping at
-  // the first non-digit; require the whole token to be valid digits instead.
-  if (entity.startsWith("#x") || entity.startsWith("#X")) {
-    const hex = entity.slice(2);
-    return /^[0-9a-fA-F]+$/.test(hex) ? decodeCodePoint(Number.parseInt(hex, 16)) : undefined;
-  }
+  // Decode only references present in the original input so decoded ampersands cannot trigger a
+  // second pass. Keep OpenClaw's direct numeric scalar mapping and legacy mixed-case XML names.
+  return html.replace(
+    HTML_ENTITY_RE,
+    (entity, hex: string | undefined, decimal: string | undefined, name: string | undefined) => {
+      if (hex === undefined && decimal === undefined) {
+        const decodedEntity = decodeHTMLStrict(entity);
+        return decodedEntity === entity && LEGACY_CASE_INSENSITIVE_ENTITY_NAME_RE.test(name ?? "")
+          ? decodeHTMLStrict(entity.toLowerCase())
+          : decodedEntity;
+      }
 
-  if (entity.startsWith("#")) {
-    const dec = entity.slice(1);
-    return /^[0-9]+$/.test(dec) ? decodeCodePoint(Number.parseInt(dec, 10)) : undefined;
-  }
-
-  return undefined;
-}
-
-/** Decodes an entity starting at `index` in an HTML string. */
-export function decodeHtmlEntityAt(html: string, index: number): DecodedHtmlEntity | undefined {
-  const semicolonIndex = html.indexOf(";", index + 1);
-  if (semicolonIndex === -1 || semicolonIndex - index > 16) {
-    return undefined;
-  }
-
-  const entity = html.slice(index + 1, semicolonIndex);
-  const decoded = decodeHtmlEntity(entity);
-  if (decoded === undefined) {
-    return undefined;
-  }
-
-  return { text: decoded, length: semicolonIndex - index + 1 };
+      const codePoint =
+        hex === undefined ? Number.parseInt(decimal ?? "", 10) : Number.parseInt(hex, 16);
+      return isUnicodeScalar(codePoint) ? String.fromCodePoint(codePoint) : entity;
+    },
+  );
 }

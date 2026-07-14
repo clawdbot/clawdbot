@@ -8,20 +8,18 @@ import {
   type TrustedMessageAuditEvent,
 } from "../../audit/message-audit-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
+import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
   enqueueDelivery,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
-  MAX_RETRIES,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
 import {
@@ -32,6 +30,8 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+const RECOVERY_REPLAY_SPACING_MS = 250;
+const MAX_RETRIES = 5;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-resolution.js", () => ({

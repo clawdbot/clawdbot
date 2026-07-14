@@ -9,15 +9,19 @@ import {
   onAgentEvent,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
-import type {
-  ReasoningProgressPayload,
-  ReasoningTextPayload,
-} from "./agent-runner-cli-dispatch.js";
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+
+type RunCliAgentWithLifecycleParams = Parameters<typeof runCliAgentWithLifecycle>[0];
+type ReasoningTextPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
+>[0];
+type ReasoningProgressPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningProgress"]>
+>[0];
 
 const cliDispatchState = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),

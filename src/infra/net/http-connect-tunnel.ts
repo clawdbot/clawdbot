@@ -6,7 +6,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import type { ManagedProxyTlsOptions } from "./proxy/proxy-tls.js";
 
 /** Parameters for opening an APNs HTTP/2 tunnel through an HTTP(S) forward proxy. */
-export type HttpConnectTunnelParams = {
+type HttpConnectTunnelParams = {
   proxyUrl: URL;
   proxyTls?: ManagedProxyTlsOptions;
   targetHost: string;

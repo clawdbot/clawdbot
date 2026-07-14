@@ -33,7 +33,7 @@ function statusLabel(file: SessionDiffFile): string {
   }
 }
 
-export class SessionDiffPanel extends OpenClawLightDomElement {
+class SessionDiffPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
 
   @state() private result: SessionsDiffResult | null = null;

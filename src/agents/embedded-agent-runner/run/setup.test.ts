@@ -135,6 +135,32 @@ describe("buildBeforeModelResolveAttachments", () => {
 });
 
 describe("resolveHookModelSelection", () => {
+  it("does not expose locked model selection to routing hooks", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforeModelResolve: vi.fn(),
+      runBeforeAgentStart: vi.fn(),
+    };
+
+    await expect(
+      resolveHookModelSelection({
+        prompt: "private review transcript",
+        provider: "foreground-provider",
+        modelId: "foreground-model",
+        modelSelectionLocked: true,
+        hookRunner,
+        hookContext,
+      }),
+    ).resolves.toEqual({
+      provider: "foreground-provider",
+      modelId: "foreground-model",
+      beforeAgentStartResult: undefined,
+    });
+    expect(hookRunner.hasHooks).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
+  });
+
   it("passes attachment metadata to before_model_resolve hooks", async () => {
     const attachments = [{ kind: "image" as const, mimeType: "image/png" }];
     const hookRunner = {

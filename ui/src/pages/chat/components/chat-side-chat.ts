@@ -10,7 +10,7 @@ import { buildSideChatFollowUpCommand } from "../../../lib/chat/side-question.ts
 import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
-export type SideChatPanelProps = {
+type SideChatPanelProps = {
   turns: ChatSideResult[];
   pending: ChatSideResultPending | null;
   hidden: boolean;

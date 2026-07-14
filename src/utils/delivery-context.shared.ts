@@ -14,7 +14,7 @@ import {
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
-export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
+export type { DeliveryContext } from "./delivery-context.types.js";
 
 /**
  * Delivery-context normalization and projection helpers.

@@ -8,7 +8,7 @@ export interface TerminalGatewayClient {
   addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
 }
 
-export type TerminalOpenResult = {
+type TerminalOpenResult = {
   sessionId: string;
   agentId: string;
   shell: string;
@@ -16,12 +16,12 @@ export type TerminalOpenResult = {
   confined: boolean;
 };
 
-export type TerminalAttachResult = TerminalOpenResult & {
+type TerminalAttachResult = TerminalOpenResult & {
   /** Recent output replayed into the emulator before live data resumes. */
   buffer: string;
 };
 
-export type TerminalSessionInfo = {
+type TerminalSessionInfo = {
   sessionId: string;
   agentId: string;
   shell: string;

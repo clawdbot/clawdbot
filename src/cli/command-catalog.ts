@@ -52,6 +52,18 @@ export type CliCommandCatalogEntry = {
   };
 };
 
+function hasCliOption(argv: readonly string[], name: string): boolean {
+  for (const arg of argv.slice(2)) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === name || arg.startsWith(`${name}=`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -285,6 +297,9 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       bypassConfigGuard: true,
       loadPlugins: "never",
+      // Shared-state maintenance must acquire exclusive ownership before any
+      // config-health observation can open the canonical SQLite database.
+      networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
     },
   },
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
@@ -315,6 +330,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node", "run"],
     exact: true,
     policy: { networkProxy: "default" },
+  },
+  {
+    commandPath: ["worker"],
+    exact: true,
+    policy: {
+      bypassConfigGuard: true,
+      hideBanner: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
   },
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },

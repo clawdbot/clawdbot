@@ -16,7 +16,7 @@ import { resolveBundledSkillsContext } from "../loading/bundled-context.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
-  isConfigPathTruthy,
+  isSkillConfigPathTruthy,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
@@ -272,7 +272,7 @@ function buildSkillStatus(
       skillConfig?.env?.[envName] ||
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const isConfigSatisfied = (pathStr: string) => isSkillConfigPathTruthy(config, pathStr);
   const skillSource = indexed.source;
   const bundled = indexed.bundled;
 

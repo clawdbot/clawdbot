@@ -1,5 +1,5 @@
 /** Config paths with user-facing metadata for audio understanding settings. */
-export const MEDIA_AUDIO_FIELD_KEYS = [
+const MEDIA_AUDIO_FIELD_KEYS = [
   "tools.media.audio.enabled",
   "tools.media.audio.maxBytes",
   "tools.media.audio.maxChars",

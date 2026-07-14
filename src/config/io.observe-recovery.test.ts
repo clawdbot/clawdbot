@@ -17,13 +17,16 @@ import {
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";

@@ -94,6 +94,19 @@ openclaw-new-session-page {
   color: var(--muted);
 }
 
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .new-session-page__trigger-label {
   max-width: min(40vw, 260px);
   overflow: hidden;
@@ -104,6 +117,20 @@ openclaw-new-session-page {
 .new-session-page__trigger-chevron {
   display: inline-flex;
   color: inherit;
+}
+
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .new-session-page__trigger-chevron svg {
@@ -179,11 +206,6 @@ openclaw-new-session-page {
   color: var(--muted);
 }
 
-.new-session-page__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 .new-session-page__browser-nav {
   display: inline-flex;
   align-items: center;
@@ -200,11 +222,6 @@ openclaw-new-session-page {
 .new-session-page__browser-nav:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
-}
-
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__browser-nav:disabled {

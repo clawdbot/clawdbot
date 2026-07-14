@@ -18,7 +18,7 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;

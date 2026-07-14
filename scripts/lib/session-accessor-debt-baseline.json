@@ -2,8 +2,6 @@
   "embeddedAgentSessionTarget": {},
   "memoryHostSessionCorpus": {},
   "sessionAccessorRead": {
-    "src/acp/control-plane/manager.background-task.ts": 2,
-    "src/acp/control-plane/manager.core.ts": 1,
     "src/agents/subagent-announce-output.ts": 3,
     "src/agents/subagent-announce.test-support.ts": 2,
     "src/agents/tools/transcripts-tool.ts": 2,
@@ -13,13 +11,12 @@
     "src/commands/doctor/shared/codex-route-warnings.ts": 3,
     "src/config/sessions/session-accessor.sqlite.ts": 2,
     "src/config/sessions/session-accessor.ts": 12,
-    "src/config/sessions/store-load.ts": 5,
-    "src/config/sessions/store.ts": 16,
+    "src/config/sessions/store-load.ts": 3,
+    "src/config/sessions/store.ts": 10,
     "src/config/sessions/test-helpers.ts": 2,
     "src/config/sessions/transcript.ts": 2
   },
   "sessionAccessorWrite": {
-    "src/agents/session-suspension.ts": 2,
     "src/agents/subagent-spawn.test-helpers.ts": 1,
     "src/commands/doctor-heartbeat-main-session-repair.ts": 2,
     "src/commands/doctor-session-snapshots.ts": 2,
@@ -27,14 +24,14 @@
     "src/commands/doctor-state-integrity.ts": 2,
     "src/commands/doctor/shared/codex-route-warnings.ts": 2,
     "src/gateway/test-helpers.mocks.ts": 1,
-    "src/infra/state-migrations.ts": 2,
-    "src/plugins/registry.ts": 1
+    "src/infra/state-migrations.session-store.ts": 2,
+    "src/plugins/registry-runtime.ts": 1
   },
   "sessionCompactManualTrim": {},
   "sessionLifecycleCleanup": {
     "src/config/sessions/session-accessor.sqlite.ts": 2,
     "src/config/sessions/store-maintenance-operations.ts": 2,
-    "src/config/sessions/store.ts": 5
+    "src/config/sessions/store.ts": 2
   },
   "transcriptWriter": {
     "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,
@@ -42,7 +39,6 @@
     "src/agents/embedded-agent-runner/tool-result-truncation.ts": 3,
     "src/agents/embedded-agent-runner/transcript-rewrite.ts": 3,
     "src/config/sessions/session-accessor.sqlite.ts": 3,
-    "src/config/sessions/session-accessor.ts": 2,
-    "src/config/sessions/store.ts": 2
+    "src/config/sessions/session-accessor.ts": 2
   }
 }

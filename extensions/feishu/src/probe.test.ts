@@ -1,6 +1,6 @@
 // Feishu tests cover probe plugin behavior.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearProbeCache, FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu } from "./probe.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeFeishu } from "./probe.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -8,7 +8,9 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const DEFAULT_CREDS = { appId: "cli_123", appSecret: "secret" } as const; // pragma: allowlist secret
+const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_CREDS = { accountId: "probe-0", appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
+let defaultAccountSequence = 0;
 const DEFAULT_SUCCESS_RESPONSE = {
   code: 0,
   data: { pingBotInfo: { botName: "TestBot", botID: "ou_abc123" } },
@@ -105,12 +107,9 @@ async function readSequentialDefaultProbePair() {
 
 describe("probeFeishu", () => {
   beforeEach(() => {
-    clearProbeCache();
+    defaultAccountSequence += 1;
+    DEFAULT_CREDS.accountId = `probe-${defaultAccountSequence}`;
     vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    clearProbeCache();
   });
 
   it("returns error when credentials are missing", async () => {
@@ -285,14 +284,6 @@ describe("probeFeishu", () => {
     // Same accountId should return cached
     await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("clearProbeCache forces fresh API call", async () => {
-    const requestFn = setupSuccessClient();
-
-    await expectFreshDefaultProbeAfter(requestFn, () => {
-      clearProbeCache();
-    });
   });
 
   it("handles response with pingBotInfo in data", async () => {

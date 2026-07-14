@@ -223,12 +223,16 @@ struct TalkProTab: View {
     private var heroSubtitle: some View {
         if self.state.prefersPermissionCopy {
             Text("Gateway approval is required before this phone can capture voice.")
+                .font(OpenClawType.subhead)
         } else if self.appModel.isAppleReviewDemoModeEnabled {
             Text("Voice is disabled in Apple Review demo mode.")
+                .font(OpenClawType.subhead)
         } else if !self.gatewayConnected {
             Text("Connect to your gateway to start a voice conversation.")
+                .font(OpenClawType.subhead)
         } else if !self.appModel.talkMode.gatewayTalkConfigLoaded {
             Text("Open Voice settings after the gateway loads Talk configuration.")
+                .font(OpenClawType.subhead)
         } else {
             let subtitle = (appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -236,8 +240,10 @@ struct TalkProTab: View {
                 Text(verbatim: String(
                     format: String(localized: "Routes voice to %@."),
                     self.appModel.chatAgentName))
+                    .font(OpenClawType.subhead)
             } else {
                 Text(verbatim: subtitle)
+                    .font(OpenClawType.subhead)
             }
         }
     }

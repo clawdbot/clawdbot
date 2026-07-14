@@ -64,6 +64,8 @@ type SlackChannelCacheEntry = {
 
 const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
+const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
+const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,
@@ -266,6 +268,11 @@ export function createSlackMonitorContext(params: {
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
+  const channelDenialWarnings = createDedupeCache({
+    ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
+    maxSize: SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES,
+  });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
 
@@ -660,24 +667,41 @@ export function createSlackMonitorContext(params: {
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
       const channelAllowlistConfigured = hasChannelAllowlistConfig;
-      if (
-        !isSlackChannelAllowedByPolicy({
-          groupPolicy: params.groupPolicy,
-          channelAllowlistConfigured,
-          channelAllowed,
-        })
-      ) {
+      const allowedByPolicy = isSlackChannelAllowedByPolicy({
+        groupPolicy: params.groupPolicy,
+        channelAllowlistConfigured,
+        channelAllowed,
+      });
+      const explicitlyDisabled =
+        params.groupPolicy !== "disabled" &&
+        channelConfig?.allowed === false &&
+        channelConfig.matchSource !== undefined;
+      // Open policy still honors an explicit room disable; unlisted rooms remain open.
+      const shouldDrop = !allowedByPolicy || (params.groupPolicy === "open" && explicitlyDisabled);
+      if (shouldDrop) {
+        if (explicitlyDisabled) {
+          const reason = "channel_not_allowed";
+          const warningKey = `${params.accountId}:${p.channelId}:${reason}`;
+          if (!channelDenialWarnings.peek(warningKey)) {
+            channelDenialWarnings.check(warningKey);
+            logger.warn(
+              {
+                provider: "slack",
+                accountId: params.accountId,
+                channelId: p.channelId,
+                reason,
+                cause: "channel_disabled",
+                groupPolicy: params.groupPolicy,
+                matchSource: channelConfig.matchSource,
+                matchKey: channelConfig.matchKey,
+              },
+              "Slack channel denied by configuration",
+            );
+          }
+        }
         logVerbose(
           `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
         );
-        return false;
-      }
-      // When groupPolicy is "open", only block channels that are EXPLICITLY denied
-      // (i.e., have a matching config entry with allow:false). Channels not in the
-      // config (matchSource undefined) should be allowed under open policy.
-      const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
-        logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
         return false;
       }
       logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);

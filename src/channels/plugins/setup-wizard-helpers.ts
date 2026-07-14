@@ -939,7 +939,7 @@ export function buildSingleChannelSecretPromptState(params: {
   };
 }
 
-export async function promptSingleChannelToken(params: {
+async function promptSingleChannelToken(params: {
   prompter: Pick<WizardPrompter, "confirm" | "text">;
   accountConfigured: boolean;
   canUseEnv: boolean;
@@ -983,7 +983,7 @@ export async function promptSingleChannelToken(params: {
   return { useEnv: false, token: await promptToken() };
 }
 
-export type SingleChannelSecretInputPromptResult =
+type SingleChannelSecretInputPromptResult =
   | { action: "keep" }
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
@@ -1587,7 +1587,5 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
 }
 
 // Backwards-compatible aliases for existing setup SDK consumers.
-export const patchLegacyDmChannelConfig = patchCompatDmChannelConfig;
 export const setLegacyChannelDmPolicyWithAllowFrom = setCompatChannelDmPolicyWithAllowFrom;
-export const setLegacyChannelAllowFrom = setCompatChannelAllowFrom;
 export const createLegacyCompatChannelDmPolicy = createCompatChannelDmPolicy;

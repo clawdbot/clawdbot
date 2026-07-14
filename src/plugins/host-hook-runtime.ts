@@ -41,7 +41,7 @@ type PluginHostRuntimeState = {
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
 const CLOSED_RUN_IDS_MAX = 512;
-export const PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS = 5_000;
+const PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS = 5_000;
 const log = createSubsystemLogger("plugins/host-hooks");
 
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
@@ -618,27 +618,4 @@ export function clearPluginHostRuntimeState(params?: { pluginId?: string; runId?
     state.closedRunIds.clear();
     state.terminalEventCleanupExpiredRunIds.clear();
   }
-}
-
-export function listPluginSessionSchedulerJobs(
-  pluginId?: string,
-): PluginSessionSchedulerJobHandle[] {
-  const state = getPluginHostRuntimeState();
-  const records: PluginSessionSchedulerJobHandle[] = [];
-  const pluginIds = pluginId ? [pluginId] : [...state.schedulerJobsByPlugin.keys()];
-  for (const currentPluginId of pluginIds) {
-    const jobs = state.schedulerJobsByPlugin.get(currentPluginId);
-    if (!jobs) {
-      continue;
-    }
-    for (const record of jobs.values()) {
-      records.push({
-        id: record.job.id,
-        pluginId: currentPluginId,
-        sessionKey: record.job.sessionKey,
-        kind: record.job.kind,
-      });
-    }
-  }
-  return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }

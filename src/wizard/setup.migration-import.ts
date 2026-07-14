@@ -32,14 +32,14 @@ import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 // Onboarding migration import helpers detect existing setups, select a plugin
 // migration provider, preview a plan, back up state, and apply into fresh setup.
-export type SetupMigrationDetection = {
+type SetupMigrationDetection = {
   providerId: string;
   label: string;
   source?: string;
   message?: string;
 };
 
-export type SetupMigrationOption = {
+type SetupMigrationOption = {
   providerId: string;
   label: string;
   hint?: string;

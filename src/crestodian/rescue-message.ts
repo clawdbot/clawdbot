@@ -38,7 +38,7 @@ type RescuePendingOperation = {
 };
 
 /** Input required to process one possible `/crestodian` rescue message. */
-export type CrestodianRescueMessageInput = {
+type CrestodianRescueMessageInput = {
   cfg: OpenClawConfig;
   command: CommandContext;
   commandBody: string;

@@ -57,6 +57,11 @@ describe("parseIdentityMarkdown", () => {
     const parsed = parseIdentityMarkdown(content);
     expect(parsed).toStrictEqual({});
   });
+
+  it("ignores an italic not-set placeholder", () => {
+    const parsed = parseIdentityMarkdown("- **Avatar:** *(not set yet)*");
+    expect(parsed).toStrictEqual({});
+  });
 });
 
 describe("mergeIdentityMarkdownContent", () => {

@@ -6,7 +6,6 @@ import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
 import {
   cancelTalkTranscriptionRelayTurn,
-  clearTalkTranscriptionRelaySessionsForTest,
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
@@ -103,7 +102,6 @@ function expectTalkEventFields(
 describe("talk transcription gateway relay", () => {
   afterEach(() => {
     vi.useRealTimers();
-    clearTalkTranscriptionRelaySessionsForTest();
   });
 
   it("bridges browser audio into a transcription-only Talk event stream", async () => {

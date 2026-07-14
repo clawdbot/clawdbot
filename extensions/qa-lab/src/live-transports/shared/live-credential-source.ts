@@ -1,4 +1,4 @@
-export type QaInferredCredentialSource = "convex" | "env";
+type QaInferredCredentialSource = "convex" | "env";
 
 export function inferQaCredentialSource(
   value: string | undefined,

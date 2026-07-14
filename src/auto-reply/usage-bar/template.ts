@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
 
-export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
+type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();

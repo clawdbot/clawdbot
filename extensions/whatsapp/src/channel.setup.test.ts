@@ -204,6 +204,26 @@ describe("whatsapp setup wizard", () => {
     expect(prompt.validate("+1 (555) 555-0123")).toBeUndefined();
   });
 
+  it("skips interactive linking when the client defers device linking", async () => {
+    hoisted.hasWebCredsSync.mockReturnValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "disabled"],
+    });
+
+    const result = await finalizeWhatsAppSetup({
+      cfg: {} as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      forceAllowFrom: false,
+      prompter: harness.prompter,
+      runtime: createRuntime(),
+      options: { deferDeviceLinkToClient: true },
+    });
+
+    expect(hoisted.loginWeb).not.toHaveBeenCalled();
+    expect(harness.confirm).not.toHaveBeenCalled();
+    expectWhatsAppSeparatePhoneDisabledSetup(result.cfg, harness);
+  });
+
   it("supports disabled DM policy for separate-phone setup", async () => {
     const { harness, result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "disabled"],

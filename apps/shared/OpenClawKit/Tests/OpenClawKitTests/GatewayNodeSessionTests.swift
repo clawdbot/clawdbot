@@ -24,6 +24,18 @@ private final class InvokeCancellationFlag: @unchecked Sendable {
     }
 }
 
+private actor StringCapture {
+    private var value: String?
+
+    func set(_ value: String?) {
+        self.value = value
+    }
+
+    func get() -> String? {
+        self.value
+    }
+}
+
 private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let callbacks: [Error?]
 
@@ -101,6 +113,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
+    private let helloSessionDefaults: [String: Any]?
+    private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -116,11 +130,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     init(
         helloAuth: [String: Any]? = nil,
         helloMethods: [String] = [],
+        helloSessionDefaults: [String: Any]? = nil,
+        helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
+        self.helloSessionDefaults = helloSessionDefaults
+        self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -210,6 +228,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         if phase == 0 {
             return .data(Self.connectChallengeData(nonce: "nonce-1"))
         }
+        if self.helloDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: self.helloDelayNanoseconds)
+        }
         for _ in 0..<50 {
             let id = self.lock.withLock { self.connectRequestId }
             if let id {
@@ -219,7 +240,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 return .data(Self.connectOkData(
                     id: id,
                     auth: self.helloAuth,
-                    methods: self.helloMethods))
+                    methods: self.helloMethods,
+                    sessionDefaults: self.helloSessionDefaults))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -229,7 +251,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return .data(Self.connectOkData(
             id: "connect",
             auth: self.helloAuth,
-            methods: self.helloMethods))
+            methods: self.helloMethods,
+            sessionDefaults: self.helloSessionDefaults))
     }
 
     func receive(
@@ -290,7 +313,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private static func connectOkData(
         id: String,
         auth: [String: Any]? = nil,
-        methods: [String] = []) -> Data
+        methods: [String] = [],
+        sessionDefaults: [String: Any]? = nil) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -321,6 +345,18 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         if let auth {
             payload["auth"] = auth
+        }
+        if let sessionDefaults {
+            payload["snapshot"] = [
+                "presence": [["ts": 1]],
+                "health": [:],
+                "stateVersion": [
+                    "presence": 0,
+                    "health": 0,
+                ],
+                "uptimeMs": 0,
+                "sessionDefaults": sessionDefaults,
+            ]
         }
         let frame: [String: Any] = [
             "type": "res",
@@ -369,6 +405,8 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
+    private let helloSessionDefaults: [String: Any]?
+    private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var tasks: [FakeGatewayWebSocketTask] = []
@@ -378,11 +416,15 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     init(
         helloAuth: [String: Any]? = nil,
         helloMethods: [String] = [],
+        helloSessionDefaults: [String: Any]? = nil,
+        helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
+        self.helloSessionDefaults = helloSessionDefaults
+        self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -410,6 +452,8 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
             let task = FakeGatewayWebSocketTask(
                 helloAuth: self.helloAuth,
                 helloMethods: self.helloMethods,
+                helloSessionDefaults: self.helloSessionDefaults,
+                helloDelayNanoseconds: self.helloDelayNanoseconds,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -543,6 +587,15 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `node connections use the node protocol floor`() {
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "node", clientMode: "node") ==
+                GATEWAY_MIN_NODE_PROTOCOL_VERSION)
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "operator", clientMode: "ui") ==
+                GATEWAY_MIN_PROTOCOL_VERSION)
+    }
+
     @Test
     func `watch approval warning text is optional and round trips`() throws {
         let legacy = try JSONDecoder().decode(
@@ -2569,6 +2622,7 @@ struct GatewayNodeSessionTests {
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "operator-device-token")
         #expect(operatorEntry.scopes == [
+            "operator.admin",
             "operator.approvals",
             "operator.read",
             "operator.talk.secrets",
@@ -3002,6 +3056,51 @@ struct GatewayNodeSessionTests {
         var iterator = stream.makeAsyncIterator()
         let event = await iterator.next()
         #expect(event?.event == "target")
+    }
+
+    @Test
+    func `main session key follows the current node snapshot route`() async throws {
+        let session = FakeGatewayWebSocketSession(
+            helloSessionDefaults: ["mainSessionKey": " agent:main:main "],
+            helloDelayNanoseconds: 750_000_000)
+        let gateway = GatewayNodeSession()
+        let capturedMainSessionKey = StringCapture()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {
+                let route = await gateway.currentRoute()
+                let key: String? = if let route {
+                    await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route)
+                } else {
+                    nil
+                }
+                await capturedMainSessionKey.set(key)
+            },
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let route = try #require(await gateway.currentRoute())
+        #expect(await capturedMainSessionKey.get() == "agent:main:main")
+        #expect(await gateway.currentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
+
+        await gateway.disconnect()
+        #expect(await gateway.currentMainSessionKey(ifCurrentRoute: route) == nil)
     }
 
     @Test

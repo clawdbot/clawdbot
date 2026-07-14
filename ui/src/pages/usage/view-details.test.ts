@@ -1,175 +1,163 @@
-// Control UI tests cover usage render details behavior.
+// Control UI tests cover usage detail behavior through the rendered panel.
 import { render } from "lit";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
-import {
-  computeFilteredUsage,
-  CHART_BAR_WIDTH_RATIO,
-  CHART_MAX_BAR_WIDTH,
-  renderTimeSeriesCompact,
-} from "./view-details.ts";
+import { renderSessionDetailPanel } from "./view-details.ts";
 
-function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
+function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   return {
     timestamp: 1000,
     totalTokens: 100,
-    cost: 0.01,
+    cost: 0.1,
     input: 30,
     output: 40,
     cacheRead: 20,
     cacheWrite: 10,
-    cumulativeTokens: 0,
-    cumulativeCost: 0,
+    cumulativeTokens: 100,
+    cumulativeCost: 0.1,
     ...overrides,
   };
 }
 
-const baseUsage = {
-  totalTokens: 1000,
-  totalCost: 1,
-  input: 300,
-  output: 400,
-  cacheRead: 200,
-  cacheWrite: 100,
-  inputCost: 0.3,
-  outputCost: 0.4,
-  cacheReadCost: 0.2,
-  cacheWriteCost: 0.1,
-  durationMs: 60000,
-  firstActivity: 0,
-  lastActivity: 60000,
-  missingCostEntries: 0,
-  messageCounts: {
-    total: 10,
-    user: 5,
-    assistant: 5,
-    toolCalls: 0,
-    toolResults: 0,
-    errors: 0,
-  },
-} satisfies NonNullable<UsageSessionEntry["usage"]>;
-
-function expectFilteredUsage(
-  result: ReturnType<typeof computeFilteredUsage>,
-): NonNullable<ReturnType<typeof computeFilteredUsage>> {
-  if (!result) {
-    throw new Error("Expected filtered usage result");
-  }
-  return result;
+function session(): UsageSessionEntry {
+  return {
+    key: "agent:main:detail",
+    label: "Detail session",
+    usage: {
+      totalTokens: 1000,
+      totalCost: 1,
+      input: 300,
+      output: 400,
+      cacheRead: 200,
+      cacheWrite: 100,
+      inputCost: 0.3,
+      outputCost: 0.4,
+      cacheReadCost: 0.2,
+      cacheWriteCost: 0.1,
+      durationMs: 60_000,
+      firstActivity: 0,
+      lastActivity: 60_000,
+      missingCostEntries: 0,
+      messageCounts: {
+        total: 10,
+        user: 5,
+        assistant: 5,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      },
+    },
+  } as UsageSessionEntry;
 }
 
-describe("computeFilteredUsage", () => {
-  it("returns undefined when no points match the range", () => {
-    const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 2000 })];
-    const result = computeFilteredUsage(baseUsage, points, 3000, 4000);
-    expect(result).toBeUndefined();
-  });
+function mount(
+  points: TimeSeriesPoint[],
+  start: number | null,
+  end: number | null,
+  breakdownMode: "total" | "by-type" = "total",
+) {
+  const container = document.createElement("div");
+  render(
+    renderSessionDetailPanel(
+      session(),
+      { points },
+      false,
+      "per-turn",
+      vi.fn(),
+      breakdownMode,
+      vi.fn(),
+      start,
+      end,
+      vi.fn(),
+      "",
+      "",
+      [],
+      [],
+      false,
+      false,
+      vi.fn(),
+      { roles: [], tools: [], hasTools: false, query: "" },
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      false,
+      vi.fn(),
+      vi.fn(),
+    ),
+    container,
+  );
+  return container;
+}
 
-  it("aggregates tokens and cost for points within range", () => {
-    const points = [
-      makePoint({ timestamp: 1000, totalTokens: 100, cost: 0.1 }),
-      makePoint({ timestamp: 2000, totalTokens: 200, cost: 0.2 }),
-      makePoint({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
-    ];
-    const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
-    const filtered = expectFilteredUsage(result);
-    expect(filtered.totalTokens).toBe(300); // 100 + 200
-    expect(filtered.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
-  });
-
-  it("handles reversed range (end < start)", () => {
-    const points = [
-      makePoint({ timestamp: 1000, totalTokens: 50 }),
-      makePoint({ timestamp: 2000, totalTokens: 75 }),
-    ];
-    const result = computeFilteredUsage(baseUsage, points, 2000, 1000);
-    expect(expectFilteredUsage(result).totalTokens).toBe(125);
-  });
-
-  it("counts message types based on input/output presence", () => {
-    const points = [
-      makePoint({ timestamp: 1000, input: 10, output: 0 }),
-      makePoint({ timestamp: 2000, input: 0, output: 20 }),
-      makePoint({ timestamp: 3000, input: 5, output: 15 }),
-    ];
-    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 3000));
-    const counts = result.messageCounts;
-    if (!counts) {
-      throw new Error("expected filtered usage to include message counts");
-    }
-    expect(counts.user).toBe(2); // points with input > 0
-    expect(counts.assistant).toBe(2); // points with output > 0
-    expect(counts.total).toBe(3);
-  });
-
-  it("computes duration from first to last filtered point", () => {
-    const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 5000 })];
-    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 5000));
-    expect(result.durationMs).toBe(4000);
-    expect(result.firstActivity).toBe(1000);
-    expect(result.lastActivity).toBe(5000);
-  });
-
-  it("aggregates token types (input, output, cacheRead, cacheWrite)", () => {
-    const points = [
-      makePoint({ timestamp: 1000, input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }),
-      makePoint({ timestamp: 2000, input: 5, output: 15, cacheRead: 25, cacheWrite: 35 }),
-    ];
-    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 2000));
-    expect(result.input).toBe(15);
-    expect(result.output).toBe(35);
-    expect(result.cacheRead).toBe(55);
-    expect(result.cacheWrite).toBe(75);
-  });
-});
-
-describe("chart bar sizing", () => {
-  it("keeps the chart bar sizing constants stable", () => {
-    expect(CHART_BAR_WIDTH_RATIO).toBe(0.75);
-    expect(CHART_MAX_BAR_WIDTH).toBe(8);
-  });
-
-  it("bars fit within chart width for typical point counts", () => {
-    const chartWidth = 366; // typical: 400 - padding.left(30) - padding.right(4)
-    // For reasonable point counts (up to ~300), bars should fit
-    for (const n of [1, 2, 10, 50, 100, 200]) {
-      const slotWidth = chartWidth / n;
-      const barWidth = Math.min(
-        CHART_MAX_BAR_WIDTH,
-        Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO),
-      );
-      const barGap = slotWidth - barWidth;
-      // Slot-based sizing guarantees total = n * slotWidth = chartWidth
-      expect(n * slotWidth).toBeCloseTo(chartWidth);
-      // Bar gap is non-negative when slotWidth >= 1 / CHART_BAR_WIDTH_RATIO
-      if (slotWidth >= 1 / CHART_BAR_WIDTH_RATIO) {
-        expect(barGap).toBeGreaterThanOrEqual(0);
-      }
-    }
-  });
-});
-
-describe("renderTimeSeriesCompact", () => {
-  it("does not render Invalid Date for Date-invalid point timestamps", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderTimeSeriesCompact(
-        {
-          points: [
-            makePoint({ timestamp: 8_640_000_000_000_001, totalTokens: 10 }),
-            makePoint({ timestamp: 8_640_000_000_000_002, totalTokens: 20 }),
-          ],
-        },
-        false,
-        "per-turn",
-        () => undefined,
-        "total",
-        () => undefined,
-      ),
-      container,
+describe("renderSessionDetailPanel filtered usage", () => {
+  it("aggregates token, cost, type, message, and duration data inside the selected range", () => {
+    const container = mount(
+      [
+        point({
+          timestamp: 1000,
+          totalTokens: 100,
+          cost: 0.1,
+          input: 10,
+          output: 0,
+          cacheRead: 5,
+          cacheWrite: 2,
+        }),
+        point({
+          timestamp: 2000,
+          totalTokens: 200,
+          cost: 0.2,
+          input: 0,
+          output: 20,
+          cacheRead: 7,
+          cacheWrite: 3,
+        }),
+        point({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
+      ],
+      1000,
+      2000,
+      "by-type",
     );
 
+    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300");
+    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
+    expect(container.querySelector(".session-detail-indicator")).not.toBeNull();
+    const summary = [...container.querySelectorAll(".session-summary-card")];
+    expect(summary[0]?.textContent).toContain("2");
+    const messageSummary = summary[0]?.textContent?.replaceAll(/\s+/g, " ");
+    expect(messageSummary).toContain("1 user");
+    expect(messageSummary).toContain("1 assistant");
+    expect(summary[3]?.textContent).toContain("1s");
+    expect(
+      [...container.querySelectorAll(".timeseries-breakdown .legend-item")].map((item) =>
+        item.textContent?.replaceAll(/\s+/g, " ").trim(),
+      ),
+    ).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
+    expect(
+      container.querySelector(".timeseries-breakdown .cost-breakdown-total")?.textContent,
+    ).toContain("47");
+  });
+
+  it("accepts a reversed range and falls back to full totals when no points match", () => {
+    const reversed = mount(
+      [point({ timestamp: 1000, totalTokens: 50 }), point({ timestamp: 2000, totalTokens: 75 })],
+      2000,
+      1000,
+    );
+    expect(reversed.querySelector(".session-detail-stats")?.textContent).toContain("125");
+
+    const empty = mount([point({ timestamp: 1000 })], 3000, 4000);
+    expect(empty.querySelector(".session-detail-stats")?.textContent).toContain("1.0K");
+    expect(empty.querySelector(".session-detail-indicator")).toBeNull();
+  });
+
+  it("never renders Invalid Date for out-of-range point timestamps", () => {
+    const container = mount(
+      [point({ timestamp: 8_640_000_000_000_001 }), point({ timestamp: 8_640_000_000_000_002 })],
+      null,
+      null,
+    );
     expect(container.textContent).not.toContain("Invalid Date");
   });
 });

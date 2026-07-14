@@ -259,15 +259,15 @@ export function policyDocumentHash(policy: unknown): string {
   return sha256(stableJson(policy));
 }
 
-export function policyWorkspaceHash(evidence: PolicyEvidence): string {
+function policyWorkspaceHash(evidence: PolicyEvidence): string {
   return sha256(stableJson(evidence));
 }
 
-export function policyFindingsHash(findings: readonly unknown[]): string {
+function policyFindingsHash(findings: readonly unknown[]): string {
   return sha256(stableJson(findings));
 }
 
-export function policyAttestationHash(input: {
+function policyAttestationHash(input: {
   readonly ok: boolean;
   readonly policyHash?: string;
   readonly workspaceHash: string;
@@ -393,7 +393,7 @@ export function collectPolicyEvidence(
   return scanPolicyTools(options.toolsRaw).then((tools) => ({ ...evidence, tools }));
 }
 
-export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
+function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -665,7 +665,7 @@ function execApprovalAllowlistEntries(value: unknown): readonly {
   return entries;
 }
 
-export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
+function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
   return Object.entries(configuredChannels(cfg))
     .filter(([id]) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
     .toSorted(([a], [b]) => a.localeCompare(b))
@@ -687,9 +687,7 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
     });
 }
 
-export function scanPolicyMcpServers(
-  cfg: Record<string, unknown>,
-): readonly PolicyMcpServerEvidence[] {
+function scanPolicyMcpServers(cfg: Record<string, unknown>): readonly PolicyMcpServerEvidence[] {
   return Object.entries(configuredMcpServers(cfg))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
@@ -779,7 +777,7 @@ function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetwork
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
 }
 
-export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
+function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
   const channels = configuredChannels(cfg);
   const channelDefaults = isRecord(channels.defaults) ? channels.defaults : {};
   const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
@@ -2244,7 +2242,7 @@ function isAuthProfileMode(value: unknown): boolean {
   return value === "api_key" || value === "aws-sdk" || value === "oauth" || value === "token";
 }
 
-export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
+function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
   return Promise.resolve(scanPolicyToolHeaders(raw));
 }
 

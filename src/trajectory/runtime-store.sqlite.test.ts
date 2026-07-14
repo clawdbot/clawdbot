@@ -14,7 +14,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   appendSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEvents,
-  readSqliteTrajectoryRuntimeStatsSync,
 } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -85,11 +84,6 @@ describe("SQLite trajectory runtime store", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
-    expect(readSqliteTrajectoryRuntimeStatsSync({ sessionId: "session-1", storePath })).toEqual({
-      eventCount: 2,
-      maxSeq: 3,
-      sizeBytes: expect.any(Number),
-    });
   });
 
   it("cascades trajectory rows when the session row is deleted", async () => {

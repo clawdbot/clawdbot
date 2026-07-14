@@ -102,10 +102,8 @@ vi.mock("./streaming-card.js", () => {
   };
 });
 
-import {
-  clearFeishuStreamingStartBackoffForTests,
-  createFeishuReplyDispatcher,
-} from "./reply-dispatcher.js";
+import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
+import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -138,7 +136,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearFeishuStreamingStartBackoffForTests();
+    streamingStartBackoffUntilByAccount.clear();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
@@ -150,7 +148,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: true,
+        streaming: { mode: "partial" },
         httpTimeoutMs: 45_000,
       },
     });
@@ -191,7 +189,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
   }
@@ -204,8 +202,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
+        streaming: { mode: "off", block: { enabled: true } },
       },
     });
   }
@@ -350,7 +347,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: true,
+        streaming: { mode: "partial" },
         typingIndicator: false,
       },
     });
@@ -626,7 +623,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
 
@@ -671,8 +668,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: true,
-        blockStreaming: true,
+        streaming: { mode: "partial", block: { enabled: true } },
       },
     });
 
@@ -763,8 +759,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: true,
-        blockStreaming: false,
+        streaming: { mode: "partial", block: { enabled: false } },
       },
     });
 
@@ -824,7 +819,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
     const { options: staticOptions } = createDispatcherHarness({
@@ -968,7 +963,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1051,7 +1046,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1153,7 +1148,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1180,7 +1175,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1207,7 +1202,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1239,7 +1234,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1532,7 +1527,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
 
@@ -1614,7 +1609,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "auto",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
 
@@ -1730,7 +1725,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1752,7 +1747,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: false,
+        streaming: { mode: "off" },
       },
     });
 
@@ -1775,7 +1770,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1802,7 +1797,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1830,7 +1825,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -1854,7 +1849,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
@@ -1895,7 +1890,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
 
@@ -2090,7 +2085,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: true,
+        streaming: { mode: "partial" },
       },
     });
     const runtime = createRuntimeLogger();

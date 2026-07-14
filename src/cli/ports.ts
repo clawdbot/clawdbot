@@ -10,9 +10,9 @@ import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
-export type PortProcess = { pid: number; command?: string };
+type PortProcess = { pid: number; command?: string };
 
-export type ForceFreePortResult = {
+type ForceFreePortResult = {
   killed: PortProcess[];
   waitedMs: number;
   escalatedToSigkill: boolean;

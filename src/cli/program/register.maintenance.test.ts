@@ -320,15 +320,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("passes noOpen to dashboard command", async () => {
+  it("passes output options to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["dashboard", "--no-open"]);
+    await runMaintenanceCli(["dashboard", "--no-open", "--json"]);
 
     expect(dashboardCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(dashboardCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.noOpen).toBe(true);
+    expect(options.json).toBe(true);
   });
 
   it("passes reset options to reset command", async () => {

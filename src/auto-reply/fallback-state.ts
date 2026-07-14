@@ -8,11 +8,6 @@ import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
 
-export {
-  resolveActiveFallbackState,
-  type FallbackNoticeState,
-} from "../status/fallback-notice-state.js";
-
 const FALLBACK_REASON_PART_MAX = 80;
 const TRANSIENT_FALLBACK_REASONS = new Set([
   "rate_limit",

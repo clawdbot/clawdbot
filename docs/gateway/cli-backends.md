@@ -260,7 +260,7 @@ For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that ba
 
 Some CLI backends run an agent that compacts its own transcript, so OpenClaw must not run its safeguard summarizer against them — doing so fights the backend's own compaction and can hard-fail the turn.
 
-`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true` and OpenClaw's compaction path returns the session entry unchanged. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
+`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true` and OpenClaw's compaction path returns the session entry unchanged. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
 
 ```typescript
 api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });

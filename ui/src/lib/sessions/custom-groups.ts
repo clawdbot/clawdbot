@@ -2,6 +2,16 @@
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
 
+export function readSessionCustomGroupNames(payload: unknown): string[] {
+  const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
+  if (!Array.isArray(groups)) {
+    return [];
+  }
+  return groups.flatMap((group) =>
+    typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
+  );
+}
+
 /** Move one custom group before another while preserving every other group. */
 export function reorderSessionCustomGroups(
   groups: readonly string[],

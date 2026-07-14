@@ -87,7 +87,7 @@ export class AcpSessionManager {
         sessionKey,
       };
     }
-    const stored = this.deps.readSessionEntry({
+    const stored = this.deps.loadSessionEntry({
       cfg: params.cfg,
       sessionKey,
       clone: false,

@@ -10,33 +10,16 @@ import {
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
-type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];
 type TlsKey = ConnectionOptions["key"];
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-type GoogleAuthModule = typeof import("google-auth-library");
-type GaxiosModule = typeof import("gaxios");
-type GoogleAuthRuntime = {
-  Gaxios: GaxiosModule["Gaxios"];
-  GoogleAuth: GoogleAuthModule["GoogleAuth"];
-  OAuth2Client: GoogleAuthModule["OAuth2Client"];
-};
-type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
-type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
-  headers?: unknown;
-};
-type GoogleAuthResponseWithUnknownHeaders = {
-  headers?: unknown;
-};
-type GuardedGoogleAuthRequestInit = RequestInit & {
-  agent?: unknown;
-  cert?: unknown;
-  dispatcher?: unknown;
-  fetchImplementation?: unknown;
-  key?: unknown;
-  noProxy?: unknown;
-  proxy?: unknown;
-};
+type GoogleAuthRuntime = typeof import("google-auth-library");
+type GoogleAuthTransport = InstanceType<GoogleAuthRuntime["gaxios"]["Gaxios"]>;
+type GoogleAuthTransportOptions = NonNullable<
+  ConstructorParameters<GoogleAuthRuntime["gaxios"]["Gaxios"]>[0]
+>;
+type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
+type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
 type TlsOptions = {
   cert?: TlsCert;
   key?: TlsKey;
@@ -48,16 +31,11 @@ type ProxyAgentLike = {
 type TlsAgentLike = {
   options?: TlsOptions;
 };
-type GoogleChatServiceAccountCredentials = Record<string, unknown> & {
-  auth_provider_x509_cert_url?: string;
-  auth_uri?: string;
-  client_email: string;
-  client_x509_cert_url?: string;
-  private_key: string;
-  token_uri?: string;
-  type?: string;
-  universe_domain?: string;
-};
+type GoogleChatServiceAccountCredentials = Record<string, unknown> &
+  import("google-auth-library").JWTInput & {
+    client_email: string;
+    private_key: string;
+  };
 
 const GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES = ["accounts.google.com", "googleapis.com"];
 const GOOGLE_AUTH_POLICY = buildHostnameAllowlistPolicyFromSuffixAllowlist(
@@ -74,7 +52,7 @@ const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
-function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
+function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
   config: T,
 ): T & { headers: Headers } {
   if (!(config.headers instanceof Headers)) {
@@ -83,7 +61,7 @@ function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWi
   return config as T & { headers: Headers };
 }
 
-function normalizeGoogleAuthResponseHeaders<T extends GoogleAuthResponseWithUnknownHeaders>(
+function normalizeGoogleAuthResponseHeaders<T extends { headers?: unknown }>(
   response: T,
 ): T & { headers: Headers } {
   if (!(response.headers instanceof Headers)) {
@@ -118,7 +96,7 @@ function hasTlsAgentShape(value: unknown): value is TlsAgentLike {
   return record !== null && asNullableObjectRecord(record.options) !== null;
 }
 
-function resolveGoogleAuthAgent(init: GuardedGoogleAuthRequestInit, url: URL): unknown {
+function resolveGoogleAuthAgent(init: GoogleAuthTransportOptions, url: URL): unknown {
   return typeof init.agent === "function" ? init.agent(url) : init.agent;
 }
 
@@ -126,10 +104,10 @@ function hasTlsOptions(options: TlsOptions): boolean {
   return options.cert !== undefined || options.key !== undefined;
 }
 
-function resolveGoogleAuthTlsOptions(init: GuardedGoogleAuthRequestInit, url: URL): TlsOptions {
+function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, url: URL): TlsOptions {
   const explicit = {
-    cert: init.cert as TlsCert | undefined,
-    key: init.key as TlsKey | undefined,
+    cert: init.cert,
+    key: init.key,
   };
   if (hasTlsOptions(explicit)) {
     return explicit;
@@ -305,7 +283,7 @@ function validateGoogleChatServiceAccountCredentials(
   assertExactUrlField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
   assertUrlPrefixField(credentials, "client_x509_cert_url", GOOGLE_CLIENT_CERTS_URL_PREFIX);
 
-  return credentials as GoogleChatServiceAccountCredentials;
+  return credentials as unknown as GoogleChatServiceAccountCredentials;
 }
 
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
@@ -360,11 +338,11 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
   }
 }
 
-function sanitizeGoogleAuthInit(init?: RequestInit): RequestInit | undefined {
+function sanitizeGoogleAuthInit(init?: GoogleAuthTransportInit): RequestInit | undefined {
   if (!init) {
     return undefined;
   }
-  const nextInit = { ...(init as GuardedGoogleAuthRequestInit) };
+  const nextInit = { ...init };
   delete nextInit.agent;
   delete nextInit.cert;
   delete nextInit.dispatcher;
@@ -387,7 +365,7 @@ function resolveGoogleAuthDispatcherPolicy(
       ? new URL(input.url)
       : new URL(typeof input === "string" ? input : input.toString());
   const nextInit = sanitizeGoogleAuthInit(init);
-  const googleAuthInit = (init ?? {}) as GuardedGoogleAuthRequestInit;
+  const googleAuthInit = (init ?? {}) as GoogleAuthTransportInit;
   const tlsOptions = resolveGoogleAuthTlsOptions(googleAuthInit, requestUrl);
   const proxyBypassed = shouldBypassGoogleAuthProxy(
     requestUrl,
@@ -515,31 +493,17 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
 }
 
 export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
-  if (!googleAuthRuntimePromise) {
-    googleAuthRuntimePromise = (async () => {
-      try {
-        const [googleAuthModule, gaxiosModule] = await Promise.all([
-          import("google-auth-library"),
-          import("gaxios"),
-        ]);
-        return {
-          Gaxios: gaxiosModule.Gaxios,
-          GoogleAuth: googleAuthModule.GoogleAuth,
-          OAuth2Client: googleAuthModule.OAuth2Client,
-        };
-      } catch (error) {
-        googleAuthRuntimePromise = null;
-        throw error;
-      }
-    })();
-  }
+  googleAuthRuntimePromise ??= import("google-auth-library").catch((error: unknown) => {
+    googleAuthRuntimePromise = null;
+    throw error;
+  });
   return await googleAuthRuntimePromise;
 }
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
-  const { Gaxios } = await loadGoogleAuthRuntime();
+  const { gaxios } = await loadGoogleAuthRuntime();
   return installGoogleAuthHeaderCompatibilityInterceptor(
-    new Gaxios({
+    new gaxios.Gaxios({
       fetchImplementation: createGoogleAuthFetch(),
     }),
   );

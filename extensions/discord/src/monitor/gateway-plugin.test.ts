@@ -2,6 +2,10 @@
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
+import {
+  parseDiscordGatewayInfoBody,
+  resolveDiscordGatewayInfoTimeoutMs,
+} from "./gateway-metadata.js";
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
   const GatewayIntentsLocal = {
@@ -73,17 +77,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
-  let parseDiscordGatewayInfoBody: typeof import("./gateway-plugin.js").parseDiscordGatewayInfoBody;
   let resolveDiscordGatewayIntents: typeof import("./gateway-plugin.js").resolveDiscordGatewayIntents;
-  let resolveDiscordGatewayInfoTimeoutMs: typeof import("./gateway-plugin.js").resolveDiscordGatewayInfoTimeoutMs;
 
   beforeAll(async () => {
-    ({
-      createDiscordGatewayPlugin,
-      parseDiscordGatewayInfoBody,
-      resolveDiscordGatewayIntents,
-      resolveDiscordGatewayInfoTimeoutMs,
-    } = await import("./gateway-plugin.js"));
+    ({ createDiscordGatewayPlugin, resolveDiscordGatewayIntents } =
+      await import("./gateway-plugin.js"));
   });
 
   function createPlugin(

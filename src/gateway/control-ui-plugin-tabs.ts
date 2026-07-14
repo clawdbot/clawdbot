@@ -4,7 +4,7 @@ import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 
-export type ControlUiPluginTab = {
+type ControlUiPluginTab = {
   pluginId: string;
   id: string;
   label: string;
@@ -21,7 +21,7 @@ type ControlUiDescriptorEntry = {
 };
 
 /** Pure projection of tab descriptors visible to the presented scopes. */
-export function projectControlUiPluginTabs(
+function projectControlUiPluginTabs(
   entries: readonly ControlUiDescriptorEntry[],
   scopes: readonly string[],
 ): ControlUiPluginTab[] {

@@ -1,0 +1,34 @@
+{
+  "name": "@openclaw/reef",
+  "version": "2026.7.2",
+  "description": "OpenClaw Reef channel plugin — guarded end-to-end encrypted claw-to-claw messaging",
+  "type": "module",
+  "dependencies": {
+    "@noble/ciphers": "2.2.0",
+    "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0",
+    "zod": "4.4.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "minHostVersion": ">=2026.7.2"
+    },
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "reef",
+      "label": "Reef",
+      "selectionLabel": "Reef",
+      "detailLabel": "Reef guarded claw channel",
+      "docsPath": "/channels/reef",
+      "docsLabel": "reef",
+      "blurb": "Guarded end-to-end encrypted claw messaging.",
+      "systemImage": "message.badge"
+    }
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  }
+}

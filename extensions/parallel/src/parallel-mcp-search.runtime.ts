@@ -31,7 +31,7 @@ type JsonRpcMessage = Record<string, unknown>;
 type McpToolPayload = Record<string, unknown>;
 
 /** ParallelSearchResponse-compatible shape consumed by the runtime normalizer. */
-export type ParallelMcpSearchResponse = {
+type ParallelMcpSearchResponse = {
   search_id?: unknown;
   session_id?: unknown;
   results: unknown[];

@@ -2,8 +2,6 @@
  * Activates curated Codex marketplace plugins and keeps require-active
  * marketplaces outside OpenClaw's install authority.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -19,7 +17,7 @@ import {
 import type { v2 } from "./protocol.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
-export type CodexPluginActivationReason =
+type CodexPluginActivationReason =
   | "already_active"
   | "installed"
   | "disabled"
@@ -29,7 +27,7 @@ export type CodexPluginActivationReason =
   | "refresh_failed";
 
 /** Human-readable diagnostic emitted during Codex plugin activation. */
-export type CodexPluginActivationDiagnostic = {
+type CodexPluginActivationDiagnostic = {
   message: string;
 };
 
@@ -45,7 +43,7 @@ export type CodexPluginActivationResult = {
 };
 
 /** Inputs for activating one resolved Codex plugin policy. */
-export type EnsureCodexPluginActivationParams = {
+type EnsureCodexPluginActivationParams = {
   identity: ResolvedCodexPluginPolicy;
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
@@ -55,7 +53,7 @@ export type EnsureCodexPluginActivationParams = {
 };
 
 /** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
-export type CodexPluginRuntimeRefreshResult = {
+type CodexPluginRuntimeRefreshResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 
@@ -150,7 +148,7 @@ export async function ensureCodexPluginActivation(
 }
 
 /** Forces Codex plugin, skill, hook, MCP, and app inventory refreshes after activation. */
-export async function refreshCodexPluginRuntimeState(params: {
+async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
@@ -198,89 +196,6 @@ export async function refreshCodexPluginRuntimeState(params: {
   return { diagnostics };
 }
 
-/** Ensures the Codex config enables app substrate support needed by plugin-owned apps. */
-export async function ensureCodexAppsSubstrateConfig(params: {
-  codexHome: string;
-  readFile?: (filePath: string, encoding: "utf8") => Promise<string>;
-  writeFile?: (filePath: string, content: string, encoding: "utf8") => Promise<void>;
-  mkdir?: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
-}): Promise<{ changed: boolean; configPath: string }> {
-  const readFile = params.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
-  const writeFile =
-    params.writeFile ??
-    ((filePath, content, encoding) => fs.writeFile(filePath, content, encoding));
-  const mkdir = params.mkdir ?? ((dirPath, options) => fs.mkdir(dirPath, options));
-  const configPath = path.join(params.codexHome, "config.toml");
-  let current = "";
-  try {
-    current = await readFile(configPath, "utf8");
-  } catch (error) {
-    if (!isEnoent(error)) {
-      throw error;
-    }
-  }
-
-  const next = upsertTomlBoolean(
-    upsertTomlBoolean(current, "features", "apps", true),
-    "apps._default",
-    "enabled",
-    true,
-  );
-  if (next === current) {
-    return { changed: false, configPath };
-  }
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, next, "utf8");
-  return { changed: true, configPath };
-}
-
-/** Upserts a boolean key in a TOML section while preserving the rest of the file. */
-export function upsertTomlBoolean(
-  source: string,
-  section: string,
-  key: string,
-  value: boolean,
-): string {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length > 0 && lines.at(-1) === "") {
-    lines.pop();
-  }
-  const sectionHeaderPattern = new RegExp(`^\\s*\\[${escapeRegExp(section)}\\]\\s*(?:#.*)?$`);
-  const anySectionPattern = /^\s*\[[^\]]+\]\s*(?:#.*)?$/;
-  const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
-  const desiredLine = `${key} = ${value ? "true" : "false"}`;
-  const sectionStart = lines.findIndex((line) => sectionHeaderPattern.test(line));
-  if (sectionStart === -1) {
-    const nextLines = [...lines];
-    if (nextLines.length > 0 && nextLines.at(-1)?.trim()) {
-      nextLines.push("");
-    }
-    nextLines.push(`[${section}]`, desiredLine);
-    return `${nextLines.join("\n")}\n`;
-  }
-
-  let sectionEnd = lines.length;
-  for (let index = sectionStart + 1; index < lines.length; index += 1) {
-    if (anySectionPattern.test(lines[index] ?? "")) {
-      sectionEnd = index;
-      break;
-    }
-  }
-  for (let index = sectionStart + 1; index < sectionEnd; index += 1) {
-    if (keyPattern.test(lines[index] ?? "")) {
-      if (lines[index] === desiredLine) {
-        return `${lines.join("\n")}\n`;
-      }
-      const nextLines = [...lines];
-      nextLines[index] = desiredLine;
-      return `${nextLines.join("\n")}\n`;
-    }
-  }
-  const nextLines = [...lines];
-  nextLines.splice(sectionEnd, 0, desiredLine);
-  return `${nextLines.join("\n")}\n`;
-}
-
 function activationFailure(
   identity: ResolvedCodexPluginPolicy,
   reason: CodexPluginActivationReason,
@@ -294,12 +209,4 @@ function activationFailure(
     installAttempted: false,
     diagnostics: [diagnostic, ...extraDiagnostics],
   };
-}
-
-function isEnoent(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -34,8 +34,6 @@ export type MusicGenerationRuntimeDeps = {
   log?: Pick<typeof log, "debug">;
 };
 
-export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
-
 /** List runtime-visible music generation providers for a config snapshot. */
 export function listRuntimeMusicGenerationProviders(
   params?: { config?: OpenClawConfig },

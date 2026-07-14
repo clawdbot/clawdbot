@@ -85,10 +85,9 @@ function shouldDeliverToolProgressImmediately(
   if (useOfficialC2cStream) {
     return true;
   }
+  // Absent streaming keeps tool progress buffered; a configured object opts in
+  // unless mode is "off". Legacy scalar spellings are doctor-migrated.
   const streaming = account.config?.streaming;
-  if (streaming === true) {
-    return true;
-  }
   return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
 }
 
@@ -687,13 +686,7 @@ export async function dispatchOutbound(
             replyOptions: {
               disableBlockStreaming: useOfficialC2cStream
                 ? true
-                : (() => {
-                    const s = account.config?.streaming;
-                    if (s === false) {
-                      return true;
-                    }
-                    return typeof s === "object" && s !== null && s.mode === "off";
-                  })(),
+                : account.config?.streaming?.mode === "off",
               ...(streamingController
                 ? {
                     onPartialReply: async (payload: { text?: string }) => {

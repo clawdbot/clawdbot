@@ -15,6 +15,10 @@ export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 
+// Shell bridges materialize complete stdout/stderr buffers in the gateway.
+// Bound sandbox-controlled output before it can exhaust the host heap.
+export const SANDBOX_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
+
 export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",

@@ -3,8 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import {
-  __testing as replyRunRegistryTesting,
   createReplyOperation,
+  testing as replyRunRegistryTesting,
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";

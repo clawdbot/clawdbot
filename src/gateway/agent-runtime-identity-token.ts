@@ -1,11 +1,12 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -45,12 +46,6 @@ function signPayload(secret: string, payload: string): string {
     .update("\0")
     .update(payload)
     .digest("base64url");
-}
-
-function signatureMatches(value: string, expected: string): boolean {
-  const valueBytes = Buffer.from(value);
-  const expectedBytes = Buffer.from(expected);
-  return valueBytes.length === expectedBytes.length && timingSafeEqual(valueBytes, expectedBytes);
 }
 
 function encodePayload(payload: AgentRuntimeIdentityTokenPayload): string {
@@ -205,7 +200,7 @@ export async function verifyAgentRuntimeIdentityToken(
     return undefined;
   }
   const sharedSecret = await readSharedAgentRuntimeIdentitySecret();
-  if (!sharedSecret || !signatureMatches(signature, signPayload(sharedSecret, payloadPart))) {
+  if (!sharedSecret || !safeEqualSecret(signature, signPayload(sharedSecret, payloadPart))) {
     return undefined;
   }
   const payload = decodePayload(payloadPart, nowMs ?? Date.now());

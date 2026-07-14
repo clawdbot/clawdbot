@@ -24,7 +24,6 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
-import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -202,10 +201,12 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)
@@ -361,7 +362,6 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
@@ -790,42 +790,6 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           globalFailureDestination: params.cfg.cron?.failureDestination,
-        });
-
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          await appendCronRunLog({
-            storePath,
-            entry: {
-              ts: Date.now(),
-              jobId: evt.jobId,
-              action: "finished",
-              status: evt.status,
-              error: evt.error,
-              summary: evt.summary,
-              diagnostics: evt.diagnostics,
-              delivered: evt.delivered,
-              deliveryStatus: evt.deliveryStatus,
-              deliveryError: evt.deliveryError,
-              failureNotificationDelivery: evt.failureNotificationDelivery,
-              delivery: evt.delivery,
-              sessionId: evt.sessionId,
-              sessionKey: evt.sessionKey,
-              runId: evt.runId,
-              runAtMs: evt.runAtMs,
-              durationMs: evt.durationMs,
-              nextRunAtMs: evt.nextRunAtMs,
-              triggerFired: evt.triggerFired,
-              model: evt.model,
-              provider: evt.provider,
-              usage: evt.usage,
-            },
-            opts: { keepLines: runLogPrune.keepLines },
-          });
-        }).catch((err: unknown) => {
-          cronLogger.warn(
-            { err: String(err), storePath, jobId: evt.jobId },
-            "cron: run log append failed",
-          );
         });
       }
     },

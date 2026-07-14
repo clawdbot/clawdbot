@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { runExec } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { fileExists } from "./fs.js";
 
-export type LocalAudioCandidate = {
+type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
   command: string;
   resolvedCommand?: string;
@@ -154,11 +155,7 @@ async function findBinary(
   checkExecutable: (filePath: string, platform: NodeJS.Platform) => Promise<boolean> = isExecutable,
 ): Promise<string | null> {
   const key = `${platform}\0${env.PATH ?? ""}\0${env.PATHEXT ?? ""}\0${name}`;
-  const cached = binaryCache.get(key);
-  if (cached) {
-    return await cached;
-  }
-  const lookup = (async () => {
+  return await getOrCreatePromise(binaryCache, key, async () => {
     const direct = name.trim();
     const candidates = binaryNames(direct, platform, env);
     if (direct.includes("/") || direct.includes("\\")) {
@@ -186,9 +183,7 @@ async function findBinary(
       }
     }
     return null;
-  })();
-  binaryCache.set(key, lookup);
-  return await lookup;
+  });
 }
 
 async function inspectLinkedLibraries(
@@ -196,11 +191,7 @@ async function inspectLinkedLibraries(
   platform: NodeJS.Platform,
 ): Promise<string | null> {
   const key = `${platform}\0${filePath}`;
-  const cached = libraryCache.get(key);
-  if (cached) {
-    return await cached;
-  }
-  const inspection = (async () => {
+  return await getOrCreatePromise(libraryCache, key, async () => {
     const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
     if (!command) {
       return null;
@@ -212,9 +203,7 @@ async function inspectLinkedLibraries(
     } catch {
       return null;
     }
-  })();
-  libraryCache.set(key, inspection);
-  return await inspection;
+  });
 }
 
 async function inspectWhisperBackend(params: {

@@ -75,7 +75,7 @@ function resolveExpiresAtFromEpochSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromEpochSeconds(value, { bufferMs: 5 * 60 * 1000 });
 }
 
-export function normalizeDomain(input: string): string | null {
+function normalizeDomain(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
@@ -116,7 +116,7 @@ function getBaseUrlFromToken(token: string): string | null {
   return `https://${apiHost}`;
 }
 
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
+function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
   // If we have a token, extract the base URL from proxy-ep
   if (token) {
     const urlFromToken = getBaseUrlFromToken(token);
@@ -508,7 +508,7 @@ async function enableAllGitHubCopilotModels(
  * @param options.onProgress - Optional progress callback
  * @param options.signal - Optional AbortSignal for cancellation
  */
-export async function loginGitHubCopilot(options: {
+async function loginGitHubCopilot(options: {
   onAuth: (url: string, instructions?: string) => void;
   onPrompt: (prompt: {
     message: string;

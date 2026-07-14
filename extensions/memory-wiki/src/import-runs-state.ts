@@ -6,6 +6,9 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import pMap from "p-map";
+
+const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
 
 type ChatGptImportRunEntry = {
   path: string;
@@ -471,13 +474,13 @@ export async function readLegacyMemoryWikiImportRunRecords(
       }
       throw error;
     });
-  const records = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map(async (entry) => {
-        const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
-        return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
-      }),
+  const records = await pMap(
+    entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")),
+    async (entry) => {
+      const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
+      return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
+    },
+    { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },
   );
   return records.filter((entry): entry is ChatGptImportRunRecord => entry !== null);
 }

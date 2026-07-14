@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
-import { testing, runSlackQaLive } from "./slack-live.runtime.js";
+import { runSlackQaLive, testing } from "./slack-live.runtime.js";
 
 function renderExpectedSlackChartAccessibleText(summaryText: string) {
   return [
@@ -112,9 +112,11 @@ describe("Slack live QA runtime helpers", () => {
           "slack-approval-plugin-native",
           "slack-codex-approval-exec-native",
           "slack-codex-approval-plugin-native",
+          "slack-channel-disabled-warning",
         ])
         .map((scenario) => scenario.id),
     ).toEqual([
+      "slack-channel-disabled-warning",
       "slack-progress-commentary-true",
       "slack-progress-commentary-false",
       "slack-progress-commentary-omitted",
@@ -143,6 +145,9 @@ describe("Slack live QA runtime helpers", () => {
     );
     expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-progress-commentary-true",
+    );
+    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
+      "slack-channel-disabled-warning",
     );
     expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
       "codex",
@@ -269,6 +274,7 @@ describe("Slack live QA runtime helpers", () => {
         driverBotUserId: "U999999999",
         overrides: {
           allowFrom: ["U_NEVER_ALLOWED"],
+          channelEnabled: false,
           users: ["U_NEVER_ALLOWED"],
         },
         sutAccountId: "sut",
@@ -279,7 +285,60 @@ describe("Slack live QA runtime helpers", () => {
 
     const account = cfg.channels?.slack?.accounts?.sut;
     expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
+    expect(account?.channels?.C123456789?.enabled).toBe(false);
     expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
+  });
+
+  it("configures and verifies the disabled-channel warning scenario", async () => {
+    const scenario = testing.findScenario(["slack-channel-disabled-warning"])[0];
+    expect(scenario?.configOverrides?.channelEnabled).toBe(false);
+
+    const run = scenario?.buildRun("U999999999");
+    const beforeRun = run && "beforeRun" in run ? run.beforeRun : undefined;
+    const afterNoReply = run && "afterNoReply" in run ? run.afterNoReply : undefined;
+    expect(beforeRun).toBeTypeOf("function");
+    expect(afterNoReply).toBeTypeOf("function");
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 12 })
+      .mockResolvedValueOnce({
+        lines: ["Slack channel denied by configuration channel_not_allowed channel_disabled"],
+      });
+    await beforeRun?.({
+      gateway: {
+        call,
+      },
+    } as never);
+    await expect(
+      afterNoReply?.({
+        gateway: {
+          call,
+        },
+      } as never),
+    ).resolves.toBe("structured disabled-channel warning observed");
+    expect(call).toHaveBeenNthCalledWith(
+      1,
+      "logs.tail",
+      { limit: 1, maxBytes: 32_000 },
+      { timeoutMs: 20_000 },
+    );
+    expect(call).toHaveBeenCalledWith(
+      "logs.tail",
+      { cursor: 12, limit: 200, maxBytes: 256_000 },
+      { timeoutMs: 20_000 },
+    );
+    await expect(
+      afterNoReply?.({
+        gateway: {
+          call: vi.fn(async () => ({
+            lines: [
+              "Slack channel denied by configuration channel_not_allowed",
+              "channel_disabled",
+            ],
+          })),
+        },
+      } as never),
+    ).rejects.toThrow("did not emit the structured warning");
   });
 
   it("builds the Slack progress commentary true, false, omitted, and dedupe configs", () => {

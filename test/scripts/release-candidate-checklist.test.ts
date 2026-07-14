@@ -12,6 +12,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
+  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -530,6 +531,16 @@ describe("release candidate checklist", () => {
     expect(() =>
       parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
     ).toThrow("--workflow-ref must be main");
+  });
+
+  it("keeps release validation context on the canonical release branch", () => {
+    expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
+
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain("target_context_ref: targetContextRef");
   });
 
   it("preserves the matching Tideclaw alpha workflow source", () => {

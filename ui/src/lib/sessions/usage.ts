@@ -4,7 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-export type SessionUsageQuery = {
+type SessionUsageQuery = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";

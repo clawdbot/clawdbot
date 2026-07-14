@@ -74,7 +74,7 @@ struct OnboardingWizardView: View {
     }
 
     private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .permissions || self.step == .welcome || self.step == .success
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -82,22 +82,19 @@ struct OnboardingWizardView: View {
     }
 
     private var connectPhase: OnboardingConnectPhase {
-        if self.connectingGateway != nil {
-            return .connecting(detail: self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
-        }
-        if let message = self.localConnectionFailure {
-            return .failedStatus(message: message, allowsRetry: false)
-        }
-        if let problem = self.currentProblem {
-            return .failed(problem)
-        }
-        if self.issue != .none {
-            let message = self.connectMessage
-                ?? (self.statusLine.isEmpty ? nil : self.statusLine)
-                ?? self.issueFallbackMessage
-            return .failedStatus(message: message, allowsRetry: true)
-        }
-        return .ready
+        let connectingDetail = self.connectingGateway == nil
+            ? nil
+            : (self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
+        let retryableFailure = self.issue == .none
+            ? nil
+            : self.connectMessage
+            ?? (self.statusLine.isEmpty ? nil : self.statusLine)
+            ?? self.issueFallbackMessage
+        return OnboardingConnectPhase.resolve(
+            problem: self.currentProblem,
+            connectingDetail: connectingDetail,
+            localFailure: self.localConnectionFailure,
+            retryableFailure: retryableFailure)
     }
 
     private var issueFallbackMessage: String {
@@ -106,6 +103,8 @@ struct OnboardingWizardView: View {
             ""
         case .tokenMissing:
             "Gateway auth token is missing."
+        case .passwordMissing:
+            self.connectMessage ?? self.statusLine
         case .unauthorized:
             "Gateway rejected credentials."
         case let .pairingRequired(requestId):
@@ -140,6 +139,8 @@ struct OnboardingWizardView: View {
                 switch self.step {
                 case .intro:
                     self.introStep
+                case .permissions:
+                    self.permissionsStep
                 case .welcome:
                     self.welcomeStep
                 case .success:
@@ -402,6 +403,10 @@ struct OnboardingWizardView: View {
         OnboardingIntroStep(onContinue: self.advanceFromIntro)
     }
 
+    private var permissionsStep: some View {
+        OnboardingPermissionsStep(onContinue: self.advanceFromPermissions)
+    }
+
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
@@ -556,8 +561,12 @@ struct OnboardingWizardView: View {
                     onShowDetails: {
                         self.showGatewayProblemDetails = true
                     })
-            } else if self.issue.needsAuthToken {
+            } else if self.issue == .unauthorized {
                 Text("Gateway rejected credentials. Scan a fresh setup code or update token/password.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            } else if self.issue.needsAuthCredentials {
+                Text(verbatim: self.connectMessage ?? self.statusLine)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -646,7 +655,7 @@ extension OnboardingWizardView {
         if self.issue.needsPairing || self.currentProblem?.needsPairingApproval == true {
             return "Gateway Approval"
         }
-        if self.issue.needsAuthToken || self.currentProblem != nil {
+        if self.issue.needsAuthCredentials || self.currentProblem != nil {
             return "Authentication"
         }
         return "Gateway Status"
@@ -1065,6 +1074,7 @@ extension OnboardingWizardView {
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
         let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
@@ -1075,7 +1085,7 @@ extension OnboardingWizardView {
             self.issue = .pairingRequired(requestId: mergedRequestId)
         } else if self.issue.needsPairing, !fallback.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
@@ -1086,8 +1096,19 @@ extension OnboardingWizardView {
             self.pairingRequestId = requestId
         }
 
-        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+        if self.issue.needsAuthCredentials || self.issue.needsPairing || problem?.pauseReconnect == true {
             self.step = .auth
+            // Focus only on the transition; repeated status updates must not steal an edited field.
+            if !wasOnAuthStep {
+                switch self.issue {
+                case .passwordMissing:
+                    self.focusedField = .gatewayPassword
+                case .tokenMissing:
+                    self.focusedField = .gatewayToken
+                default:
+                    break
+                }
+            }
         }
 
         if let problem {
@@ -1119,6 +1140,13 @@ extension OnboardingWizardView {
     }
 
     private func advanceFromIntro() {
+        self.statusLine = ""
+        self.navigate(to: .permissions)
+    }
+
+    private func advanceFromPermissions() {
+        // Marked here, not on the intro Continue: an interrupted first run must
+        // replay intro + permissions on relaunch instead of skipping them forever.
         OnboardingStateStore.markFirstRunIntroSeen()
         self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = ""
@@ -1126,7 +1154,9 @@ extension OnboardingWizardView {
     }
 
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
-        guard self.step != .intro else { return }
+        // The local-network prompt waits until pairing starts so it never stacks
+        // on top of the permission prompts users trigger on the permissions step.
+        guard self.step != .intro, self.step != .permissions else { return }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -1383,7 +1413,9 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting to \(gateway.name)…"
         self.statusLine = "Connecting to \(gateway.name)…"
         defer { self.connectingGateway = nil }
-        await self.gatewayController.connect(gateway)
+        if let message = await self.gatewayController.connectWithDiagnostics(gateway) {
+            self.setConnectionFailure(message)
+        }
     }
 
     private func selectMode(_ mode: OnboardingConnectionMode) {

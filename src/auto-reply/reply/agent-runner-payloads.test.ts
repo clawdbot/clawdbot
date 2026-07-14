@@ -412,7 +412,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("discord-only text");
   });
 
-  it("falls back to global text dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global text evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
@@ -425,7 +425,8 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
   it("dedupes final media only against message-tool media sent to the same route", async () => {
@@ -455,7 +456,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/discord-photo.jpg");
   });
 
-  it("falls back to global media dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global media evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
@@ -471,8 +472,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
       text: "photo",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
+      mediaUrl: "file:///tmp/photo.jpg",
     });
   });
 

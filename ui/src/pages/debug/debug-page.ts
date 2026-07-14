@@ -13,6 +13,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderDebug } from "./view.ts";
 
@@ -41,7 +42,14 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallError: string | null = null;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
-  private debugPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly polling = new PollController(
+    this,
+    DEBUG_POLL_INTERVAL_MS,
+    () => {
+      void this.loadDiagnostics();
+    },
+    false,
+  );
   private hasBoundGatewaySource = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
@@ -71,7 +79,6 @@ class DebugPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
     this.gatewaySource = null;
@@ -108,23 +115,10 @@ class DebugPage extends OpenClawLightDomElement {
 
   private syncPolling() {
     if (!this.connected || !this.client) {
-      this.stopPolling();
+      this.polling.stop();
       return;
     }
-    if (this.debugPollInterval !== null) {
-      return;
-    }
-    this.debugPollInterval = globalThis.setInterval(() => {
-      void this.loadDiagnostics();
-    }, DEBUG_POLL_INTERVAL_MS);
-  }
-
-  private stopPolling() {
-    if (this.debugPollInterval === null) {
-      return;
-    }
-    globalThis.clearInterval(this.debugPollInterval);
-    this.debugPollInterval = null;
+    this.polling.start();
   }
 
   private ensureInitialDebug() {

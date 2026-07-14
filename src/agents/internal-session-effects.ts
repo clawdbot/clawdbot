@@ -12,7 +12,7 @@ import { createSessionTranscriptHeader } from "../config/sessions/transcript-hea
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 
-export type InternalSessionEffectsTarget = Required<
+type InternalSessionEffectsTarget = Required<
   Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
 > & {
   sessionEntry: SessionEntry;

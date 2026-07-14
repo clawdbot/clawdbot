@@ -22,7 +22,6 @@ import {
 } from "./diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
@@ -33,7 +32,6 @@ describe("diagnostic-events", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
-    resetDiagnosticTraceContextForTest();
     vi.restoreAllMocks();
   });
 

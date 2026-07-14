@@ -119,7 +119,12 @@ internal fun CommandPalette(
               onClick = onDismiss,
             )
             Text(text = nativeString("Search"), style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-            CommandAvatar(text = "OC")
+            Box(
+              modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+              contentAlignment = Alignment.Center,
+            ) {
+              CommandAvatar(text = "OC")
+            }
           }
         }
 

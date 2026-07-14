@@ -9,12 +9,12 @@ import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-t
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
-export type ModelCatalogRouteMatcher = (
+type ModelCatalogRouteMatcher = (
   entry: ModelCatalogEntry,
   route: ProviderModelRouteCandidate,
 ) => boolean;
 
-export type ModelCatalogLogicalIdentity = { id: string; key: string };
+type ModelCatalogLogicalIdentity = { id: string; key: string };
 
 /** Provider-owned catalog equivalence and exact physical-route matching. */
 export type ModelCatalogRoutePolicy = {
@@ -33,7 +33,7 @@ export type ModelCatalogRouteProjection =
       policy: ModelCatalogRoutePolicy;
     };
 
-export type ModelCatalogLogicalOverrides = Partial<
+type ModelCatalogLogicalOverrides = Partial<
   Pick<ModelCatalogEntry, "name" | "contextWindow" | "contextTokens" | "reasoning" | "input">
 >;
 

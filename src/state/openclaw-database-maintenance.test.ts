@@ -133,6 +133,21 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("rejects a current global database with an unexpected unique index", () => {
+    const database = createGlobalDatabase();
+    try {
+      database.exec("CREATE UNIQUE INDEX idx_task_runs_unexpected_owner ON task_runs(owner_key);");
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow("unexpected unique index idx_task_runs_unexpected_owner");
+    } finally {
+      database.close();
+    }
+  });
+
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();
     try {
@@ -144,6 +159,28 @@ describe("OpenClaw database maintenance schema validation", () => {
           pathname: "agent.sqlite",
         }),
       ).toThrow("missing table auth_profile_store");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a current agent database with an unexpected trigger", () => {
+    const database = createAgentDatabase();
+    try {
+      database.exec(`
+        CREATE TRIGGER sessions_unexpected_delete_after_insert
+        AFTER INSERT ON sessions
+        BEGIN
+          DELETE FROM sessions WHERE session_key = NEW.session_key;
+        END;
+      `);
+
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).toThrow("unexpected trigger sessions_unexpected_delete_after_insert");
     } finally {
       database.close();
     }

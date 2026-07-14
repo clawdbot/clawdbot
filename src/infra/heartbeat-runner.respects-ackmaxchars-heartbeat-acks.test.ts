@@ -109,6 +109,7 @@ describe("runHeartbeatOnce ack handling", () => {
           cfg: params.cfg,
           accountId: undefined,
           audioAsVoice: undefined,
+          deliveryPartIndex: 0,
           deliveryQueueId: undefined,
           forceDocument: undefined,
           formatting: undefined,

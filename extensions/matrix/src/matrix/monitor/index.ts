@@ -2,7 +2,10 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelStreamingBlockEnabled,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -17,7 +20,6 @@ import {
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
-  MatrixConfig,
   MatrixStreamingConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -66,13 +68,20 @@ type MonitorMatrixOpts = {
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
+// Account entries are schema-open (accounts: z.record(z.unknown())), so
+// unmigrated account configs can still carry the retired scalar/boolean
+// spellings at runtime even though the root schema rejects them. Honor them
+// through the same deprecation window as the shared flat-key fallback in
+// src/channels/streaming.ts; doctor migrates the spellings to streaming.mode.
+type MatrixStreamingInput = MatrixStreamingConfig | MatrixStreamingMode | boolean | undefined;
+
 function isMatrixStreamingConfig(
-  streaming: MatrixConfig["streaming"],
+  streaming: MatrixStreamingInput,
 ): streaming is MatrixStreamingConfig {
   return Boolean(streaming && typeof streaming === "object" && !Array.isArray(streaming));
 }
 
-function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): MatrixStreamingMode {
+function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStreamingMode {
   if (streaming === true || streaming === "partial") {
     return "partial";
   }
@@ -94,7 +103,7 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
   return "off";
 }
 
-function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]): boolean {
+function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): boolean {
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
   }
@@ -104,7 +113,7 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   return streaming.preview?.toolProgress ?? true;
 }
 
-function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["streaming"]): boolean {
+function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
   return (
     resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
   );
@@ -299,7 +308,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
     accountConfig.streaming,
   );
-  const blockStreamingEnabled = accountConfig.blockStreaming === true;
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();

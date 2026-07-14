@@ -1,12 +1,9 @@
 // Nextcloud Talk type declarations define plugin contracts.
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type {
-  BlockStreamingCoalesceConfig,
-  DmConfig,
-  DmPolicy,
-  GroupPolicy,
-  SecretInput,
-} from "../runtime-api.js";
+  ChannelDeliveryStreamingConfig,
+  MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { DmConfig, DmPolicy, GroupPolicy, SecretInput } from "../runtime-api.js";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -70,12 +67,8 @@ export type NextcloudTalkAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Delivery streaming config: chunk mode plus block streaming controls. */
+  streaming?: ChannelDeliveryStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /** Media upload max size in MB. */

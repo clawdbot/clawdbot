@@ -1,7 +1,6 @@
 // Pinned mutation helper tests cover the Python helper that performs sandbox
 // filesystem mutations through directory file descriptors.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +8,6 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   buildPinnedWritePlan,
   SANDBOX_PINNED_MUTATION_PYTHON,
-  SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES,
 } from "./fs-bridge-mutation-helper.js";
 
 function runMutation(args: string[], input?: string) {
@@ -28,7 +26,7 @@ function runMutationWithSource(source: string, args: string[], input?: string) {
   });
 }
 
-function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
+function runWritePlan(args: string[], input?: string) {
   const plan = buildPinnedWritePlan({
     check: {
       target: {
@@ -54,7 +52,6 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
-    env,
   });
 }
 
@@ -68,10 +65,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect(err).toBeInstanceOf(Error);
   expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
-
-const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
-  existsSync(candidate),
-);
 
 const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
   "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
@@ -216,7 +209,6 @@ describe("sandbox pinned mutation helper", () => {
         const result = runWritePlan(
           ["write", workspace, "nested/deeper", "note.txt", "1"],
           "hello",
-          hasAbsolutePythonCandidate ? { PATH: "" } : undefined,
         );
 
         expect(result.status).toBe(0);

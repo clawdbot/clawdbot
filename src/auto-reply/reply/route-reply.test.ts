@@ -4,7 +4,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
   ChannelThreadingAdapter,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {

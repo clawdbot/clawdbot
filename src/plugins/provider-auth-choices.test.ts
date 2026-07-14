@@ -50,7 +50,6 @@ const {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
-  resolveManifestProviderOnboardAuthFlags,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
 const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
@@ -260,7 +259,7 @@ describe("provider auth choice manifest helpers", () => {
         ]),
       ],
       run: () =>
-        expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+        expect(resolveProviderOnboardAuthFlags()).toEqual([
           {
             optionKey: "moonshotApiKey",
             authChoice: "moonshot-api-key",
@@ -391,7 +390,7 @@ describe("provider auth choice manifest helpers", () => {
       }).map((choice) => choice.choiceId),
     ).not.toContain("evil-openai-api-key");
     expect(
-      resolveManifestProviderOnboardAuthFlags({
+      resolveProviderOnboardAuthFlags({
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
@@ -625,7 +624,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",
@@ -685,7 +684,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",

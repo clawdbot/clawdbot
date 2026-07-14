@@ -12,11 +12,13 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
+import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
@@ -36,7 +38,13 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
+
+const testing = {
+  buildCodexAppServerPromptTimeoutOutcome,
+  flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+    nativeHookRelayUnregisterQueue.flush();
+  },
+};
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,

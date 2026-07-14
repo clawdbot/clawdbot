@@ -7,13 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
-import {
-  resolveFailureDestination,
-  type CronFailureDeliveryPlan,
-  type CronFailureDestinationInput,
-  type CronDeliveryPlan,
-  resolveCronDeliveryPlan,
-} from "./delivery-plan.js";
+import { resolveFailureDestination, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
   type DeliveryTargetResolution,
@@ -21,19 +15,13 @@ import {
 import { resolveCronNotificationSessionKey } from "./session-target.js";
 import type { CronMessageChannel } from "./types.js";
 
-export {
-  resolveCronDeliveryPlan,
-  resolveFailureDestination,
-  type CronDeliveryPlan,
-  type CronFailureDeliveryPlan,
-  type CronFailureDestinationInput,
-};
+export { resolveCronDeliveryPlan, resolveFailureDestination };
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
 /** Channel target metadata used for cron announcements and failure notifications. */
-export type CronAnnounceTarget = {
+type CronAnnounceTarget = {
   channel?: string;
   to?: string;
   accountId?: string;

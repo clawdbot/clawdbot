@@ -6,6 +6,14 @@ import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js
 // channels use channel ids but keep a narrower alias for readability.
 export type PairingChannel = ChannelId;
 
+export type PairingRequestRecord = {
+  id: string;
+  code: string;
+  createdAt: string;
+  lastSeenAt: string;
+  meta?: Record<string, string>;
+};
+
 /** Reads approved ids from a channel/account allowFrom store. */
 export type ReadChannelAllowFromStoreForAccount = (params: {
   channel: PairingChannel;

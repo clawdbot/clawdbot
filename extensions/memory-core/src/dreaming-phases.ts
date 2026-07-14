@@ -29,7 +29,7 @@ import {
   type NarrativePhaseData,
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import { asRecord, formatErrorMessage } from "./dreaming-shared.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -70,26 +70,6 @@ type RemDreamingConfig = DreamingPhaseStorageConfig & {
   limit: number;
   minPatternStrength: number;
 };
-type RunPhaseIfTriggeredParams = {
-  cleanedBody: string;
-  trigger?: string;
-  workspaceDir?: string;
-  cfg?: DreamingHostConfig;
-  logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  eventText: string;
-} & (
-  | {
-      phase: "light";
-      config: LightDreamingConfig;
-    }
-  | {
-      phase: "rem";
-      config: RemDreamingConfig;
-    }
-);
-const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
-const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 export const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join(
@@ -132,34 +112,6 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
     endMarker: "<!-- openclaw:dreaming:rem:end -->",
   },
 ] as const;
-
-function resolveWorkspaces(params: {
-  cfg?: DreamingHostConfig;
-  fallbackWorkspaceDir?: string;
-}): string[] {
-  const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
-  const workspaceCandidates = params.cfg
-    ? resolveMemoryDreamingWorkspaces(
-        params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
-        {
-          primaryWorkspaceDir: fallbackWorkspaceDir,
-          primaryAgentId: "main",
-        },
-      ).map((entry) => entry.workspaceDir)
-    : [];
-  const seen = new Set<string>();
-  const workspaces = workspaceCandidates.filter((workspaceDir) => {
-    if (seen.has(workspaceDir)) {
-      return false;
-    }
-    seen.add(workspaceDir);
-    return true;
-  });
-  if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    workspaces.push(fallbackWorkspaceDir);
-  }
-  return workspaces;
-}
 
 function calculateLookbackCutoffMs(nowMs: number, lookbackDays: number): number {
   return nowMs - Math.max(0, lookbackDays) * 24 * 60 * 60 * 1000;
@@ -2017,79 +1969,3 @@ export async function runDreamingSweepPhases(params: {
     }
   }
 }
-
-async function runPhaseIfTriggered(
-  params: RunPhaseIfTriggeredParams,
-): Promise<{ handled: true; reason: string } | undefined> {
-  const hasEventToken = params.cleanedBody.trim().split(/\s+/).includes(params.eventText);
-  if (params.trigger !== "heartbeat" || !hasEventToken) {
-    return undefined;
-  }
-  if (!params.config.enabled) {
-    return { handled: true, reason: `memory-core: ${params.phase} dreaming disabled` };
-  }
-  const primaryWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
-  const workspaces = resolveWorkspaces({
-    cfg: params.cfg,
-    fallbackWorkspaceDir: primaryWorkspaceDir,
-  });
-  if (workspaces.length === 0) {
-    params.logger.warn(
-      `memory-core: ${params.phase} dreaming skipped because no memory workspace is available.`,
-    );
-    return { handled: true, reason: `memory-core: ${params.phase} dreaming missing workspace` };
-  }
-  if (params.config.limit === 0) {
-    params.logger.info(`memory-core: ${params.phase} dreaming skipped because limit=0.`);
-    return { handled: true, reason: `memory-core: ${params.phase} dreaming disabled by limit` };
-  }
-  for (const workspaceDir of workspaces) {
-    try {
-      if (params.phase === "light") {
-        await runLightDreaming({
-          workspaceDir,
-          cfg: params.cfg,
-          primaryWorkspaceDir,
-          config: params.config,
-          logger: params.logger,
-          subagent: params.subagent,
-        });
-      } else {
-        await runRemDreaming({
-          workspaceDir,
-          cfg: params.cfg,
-          primaryWorkspaceDir,
-          config: params.config,
-          logger: params.logger,
-          subagent: params.subagent,
-        });
-      }
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir,
-        phase: params.phase,
-        error: formatErrorMessage(err),
-        storageMode: params.config.storage.mode,
-        logger: params.logger,
-      });
-      params.logger.error(
-        `memory-core: ${params.phase} dreaming failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
-  return { handled: true, reason: `memory-core: ${params.phase} dreaming processed` };
-}
-
-export const testing = {
-  runPhaseIfTriggered,
-  previewRemDreaming,
-  readDailyIngestionState,
-  readSessionIngestionState,
-  // Exposed for the #80613 regression test that exercises CJK-aware dedupe.
-  dedupeEntries,
-  constants: {
-    LIGHT_SLEEP_EVENT_TEXT,
-    REM_SLEEP_EVENT_TEXT,
-  },
-};
-export { testing as __testing };

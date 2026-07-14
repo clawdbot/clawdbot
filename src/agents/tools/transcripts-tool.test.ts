@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
@@ -56,6 +57,345 @@ describe("transcripts tool", () => {
     await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
       "transcripts are disabled",
     );
+  });
+
+  it("cancels a pending live capture when the agent run is aborted", async () => {
+    const stateDir = await makeStateDir();
+    const controller = new AbortController();
+    const stop = vi.fn(async () => ({ ok: true, sessionId: "cancelled-meeting" }));
+    const start = vi.fn(async (request) => {
+      expect(request.abortSignal).not.toBe(controller.signal);
+      expect(request.abortSignal?.aborted).toBe(false);
+      controller.abort();
+      expect(request.abortSignal?.aborted).toBe(true);
+      return { ok: true, session: request.session };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "cancelled-meeting",
+        },
+        controller.signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts start aborted");
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "cancelled-meeting",
+        reason: "service-stop",
+      }),
+    );
+  });
+
+  it("keeps capturing after a successfully started agent run is later aborted", async () => {
+    const stateDir = await makeStateDir();
+    const controller = new AbortController();
+    let emitAfterStart: (() => Promise<void>) | undefined;
+    let startupSignal: AbortSignal | undefined;
+    const start = vi.fn(async (request) => {
+      startupSignal = request.abortSignal;
+      emitAfterStart = async () => {
+        await request.onUtterance({
+          text: "captured after the start action completed",
+          final: true,
+        });
+      };
+      return { ok: true, session: request.session };
+    });
+    const stop = vi.fn(async () => ({ ok: true, sessionId: "ongoing-meeting" }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        action: "start",
+        providerId: "proof-live",
+        sessionId: "ongoing-meeting",
+      },
+      controller.signal,
+      vi.fn(),
+    );
+    expect(startupSignal).not.toBe(controller.signal);
+    controller.abort();
+    expect(startupSignal?.aborted).toBe(false);
+    await emitAfterStart?.();
+
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "transcript.jsonl"),
+        "utf8",
+      ),
+    ).resolves.toContain("captured after the start action completed");
+    await tool.execute(
+      "call-2",
+      { action: "stop", sessionId: "ongoing-meeting" },
+      undefined,
+      vi.fn(),
+    );
+  });
+
+  it("drops late utterances and keeps repeated abort cleanup failures retryable", async () => {
+    const stateDir = await makeStateDir();
+    const controller = new AbortController();
+    let cleanupFailuresRemaining = 2;
+    const stop = vi.fn(async () =>
+      cleanupFailuresRemaining-- > 0
+        ? { ok: false, error: "voice cleanup failed" }
+        : { ok: true, sessionId: "cancelled-meeting-retry" },
+    );
+    const start = vi.fn(async (request) => {
+      controller.abort();
+      await request.onUtterance({
+        text: "captured after agent cancellation",
+        final: true,
+      });
+      return { ok: true, session: request.session };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "cancelled-meeting-retry",
+        },
+        controller.signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup failed");
+
+    await expect(
+      fs.readFile(
+        path.join(
+          stateDir,
+          "transcripts",
+          currentDateDir(),
+          "cancelled-meeting-retry",
+          "transcript.jsonl",
+        ),
+        "utf8",
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(stop).toHaveBeenCalledOnce();
+
+    await expect(
+      tool.execute(
+        "call-retry-start",
+        {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "cancelled-meeting-retry",
+        },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session already active: cancelled-meeting-retry");
+    expect(start).toHaveBeenCalledOnce();
+
+    await expect(
+      tool.execute(
+        "call-2",
+        { action: "stop", sessionId: "cancelled-meeting-retry" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts provider cleanup failed: voice cleanup failed");
+    expect(stop).toHaveBeenCalledTimes(2);
+
+    await tool.execute(
+      "call-3",
+      { action: "stop", sessionId: "cancelled-meeting-retry" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledTimes(3);
+  });
+
+  it("reserves a session id while provider startup is pending", async () => {
+    const stateDir = await makeStateDir();
+    let releaseStart: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const start = vi.fn(async (request) => {
+      await startGate;
+      return { ok: true as const, session: request.session };
+    });
+    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "shared-session" }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    const firstStart = tool.execute(
+      "call-1",
+      { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+      undefined,
+      vi.fn(),
+    );
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+    });
+
+    await expect(
+      tool.execute(
+        "call-2",
+        { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session already active: shared-session");
+    releaseStart?.();
+    await firstStart;
+    await tool.execute(
+      "call-3",
+      { action: "stop", sessionId: "shared-session" },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps thrown abort cleanup failures retryable", async () => {
+    const stateDir = await makeStateDir();
+    const controller = new AbortController();
+    let stopAttempts = 0;
+    const stop = vi.fn(async (_request: TranscriptStopRequest) => {
+      stopAttempts += 1;
+      if (stopAttempts === 1) {
+        throw new Error("voice cleanup threw");
+      }
+      return { ok: true as const, sessionId: "cancelled-meeting-thrown" };
+    });
+    const start = vi.fn(async (request) => {
+      await request.onUtterance({ text: "captured before abort", final: true });
+      controller.abort();
+      return { ok: true as const, session: request.session };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "cancelled-meeting-thrown",
+        },
+        controller.signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup threw");
+    await tool.execute(
+      "call-2",
+      { action: "stop", sessionId: "cancelled-meeting-thrown" },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(stop.mock.calls.map(([request]) => request.reason)).toEqual([
+      "service-stop",
+      "tool-stop",
+    ]);
+  });
+
+  it("keeps missing abort cleanup hooks visible until the provider can stop", async () => {
+    const stateDir = await makeStateDir();
+    const controller = new AbortController();
+    const start = vi.fn(async (request) => {
+      controller.abort();
+      return { ok: true as const, session: request.session };
+    });
+    const provider = {
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+    };
+    getTranscriptSourceProviderMock.mockReturnValue(provider);
+    const { tool } = await createHarness(stateDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "cancelled-meeting-no-stop",
+        },
+        controller.signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(
+      "transcripts start aborted; provider cleanup failed: transcripts provider proof-live cannot stop live capture",
+    );
+
+    await expect(
+      tool.execute(
+        "call-2",
+        { action: "stop", sessionId: "cancelled-meeting-no-stop" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(
+      "transcripts provider cleanup failed: transcripts provider proof-live cannot stop live capture",
+    );
+    const stop = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "cancelled-meeting-no-stop",
+    }));
+    getTranscriptSourceProviderMock.mockReturnValue({ ...provider, stop });
+    await tool.execute(
+      "call-3",
+      { action: "stop", sessionId: "cancelled-meeting-no-stop" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {
@@ -352,11 +692,13 @@ describe("transcripts tool", () => {
   it("auto-starts configured live meeting sources", async () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
+    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
+      stop,
     });
     const { service } = await createHarness(stateDir, {
       autoStart: [
@@ -402,6 +744,8 @@ describe("transcripts tool", () => {
         "utf8",
       ),
     ).resolves.toContain("Standup");
+    await service.stop();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("aborts pending auto-starts when the service stops", async () => {

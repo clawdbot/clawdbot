@@ -154,7 +154,7 @@ export function registerCronAddCommand(cron: Command) {
           nameArg: string | undefined,
           messageArg: string | undefined,
           opts: GatewayRpcOpts & Record<string, unknown>,
-          cmd?: Command,
+          cmd: Command,
         ) => {
           try {
             const hasScheduleFlag =
@@ -182,11 +182,6 @@ export function registerCronAddCommand(cron: Command) {
 
             const rawAgentId = normalizeOptionalString(opts.agent);
             const agentId = rawAgentId ? sanitizeAgentId(rawAgentId) : undefined;
-
-            const optionSource =
-              typeof cmd?.getOptionValueSource === "function"
-                ? (name: string) => cmd.getOptionValueSource(name)
-                : () => undefined;
 
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;
@@ -284,7 +279,7 @@ export function registerCronAddCommand(cron: Command) {
               };
             })();
 
-            const sessionSource = optionSource("session");
+            const sessionSource = cmd.getOptionValueSource("session");
             const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
             const inferredSessionTarget =
               payload.kind === "agentTurn" || payload.kind === "command" ? "isolated" : "main";
@@ -331,7 +326,7 @@ export function registerCronAddCommand(cron: Command) {
             const threadId = parseCronThreadIdOption(opts.threadId);
             const hasThreadId = typeof threadId === "number";
             const hasChatDeliveryTarget =
-              optionSource("channel") === "cli" ||
+              cmd.getOptionValueSource("channel") === "cli" ||
               typeof opts.to === "string" ||
               Boolean(accountId) ||
               hasThreadId;
@@ -408,7 +403,7 @@ export function registerCronAddCommand(cron: Command) {
               declarationKey,
               displayName,
               description,
-              ...(declarationKey && optionSource("disabled") !== "cli"
+              ...(declarationKey && cmd.getOptionValueSource("disabled") !== "cli"
                 ? {}
                 : { enabled: !opts.disabled }),
               deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,

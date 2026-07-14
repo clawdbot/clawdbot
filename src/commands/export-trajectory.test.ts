@@ -85,6 +85,27 @@ describe("exportTrajectoryCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it.each([
+    ["a discarded suffix", (encoded: string) => `${encoded}A`, "x"],
+    ["nonzero padding bits", (encoded: string) => `${encoded.slice(0, -1)}R`, "xy"],
+    ["surrounding whitespace", (encoded: string) => ` ${encoded} `, "xyz"],
+  ])(
+    "rejects a non-canonical base64url request with %s before looking up its session",
+    async (_case, makeNonCanonical, sessionKey) => {
+      const runtime = createRuntime();
+      const canonical = Buffer.from(JSON.stringify({ sessionKey }), "utf8").toString("base64url");
+      const requestJsonBase64 = makeNonCanonical(canonical);
+
+      await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Failed to decode trajectory export request: Encoded trajectory export request is invalid",
+      );
+      expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it("preserves direct options when an encoded request omits them", async () => {
     const runtime = createRuntime();
     const requestJsonBase64 = Buffer.from(

@@ -29,7 +29,8 @@ async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRou
 
 export const page = definePage({
   id: "nodes",
-  path: "/nodes",
+  path: "/settings/devices",
+  aliases: ["/nodes"],
   loader: loadNodesRouteData,
   component: () =>
     import("./nodes-page.ts").then(() => ({

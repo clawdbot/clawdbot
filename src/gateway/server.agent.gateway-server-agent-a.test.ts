@@ -2,7 +2,7 @@
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getActiveGatewayRootWorkCount,

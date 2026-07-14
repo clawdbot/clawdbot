@@ -107,11 +107,15 @@ export async function resolveHookModelSelection(params: {
   attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
+  modelSelectionLocked?: boolean;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
   let provider = params.provider;
   let modelId = params.modelId;
+  if (params.modelSelectionLocked === true) {
+    return { provider, modelId, beforeAgentStartResult: undefined };
+  }
   let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
   let beforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;

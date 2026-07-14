@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 
 type TranscriptsCliOptions = {
@@ -92,10 +93,6 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-}
-
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 async function readStoredSession(

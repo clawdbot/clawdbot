@@ -31,6 +31,7 @@ export async function processDiscordVoiceSegment(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   ownerAllowFrom?: string[];
+  ownerAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
   transcripts?: VoiceSessionEntry["transcripts"];
@@ -46,6 +47,7 @@ export async function processDiscordVoiceSegment(params: {
     cfg: params.cfg,
     discordConfig: params.discordConfig,
     ownerAllowFrom: params.ownerAllowFrom,
+    ownerAllowAll: params.ownerAllowAll,
     fetchGuildName: params.fetchGuildName,
     speakerContext: params.speakerContext,
   });
@@ -119,6 +121,7 @@ export async function processDiscordVoiceSegment(params: {
       runtime: params.runtime,
       context: ingress,
       ownerAllowFrom: params.ownerAllowFrom,
+      ownerAllowAll: params.ownerAllowAll,
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     });

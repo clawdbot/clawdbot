@@ -1,15 +1,12 @@
 // Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import {
-  getWindowsInstallRoots,
-  resetWindowsInstallRootsForTests,
-} from "../../../infra/windows-install-roots.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -39,6 +36,7 @@ vi.mock("../../../infra/windows-encoding.js", () => ({
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
+let getWindowsInstallRoots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStubChild(pid = 1234) {
@@ -132,12 +130,17 @@ describe("createChildAdapter", () => {
     });
   };
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    const accessSync = fs.accessSync.bind(fs);
+    vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
+      if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
+        throw new Error("registry lookup disabled for test");
+      }
+      return accessSync(filePath, mode);
+    });
+    ({ getWindowsInstallRoots } = await import("../../../infra/windows-install-roots.js"));
     ({ createChildAdapter } = await import("./child.js"));
-  });
-
-  beforeEach(() => {
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -158,6 +161,7 @@ describe("createChildAdapter", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }

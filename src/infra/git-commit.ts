@@ -24,7 +24,7 @@ const formatCommit = (value?: string | null) => {
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 
-export type CommitMetadataReaders = {
+type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
   readBuildInfoCommit?: () => string | null;
   readPackageJsonCommit?: () => string | null;
@@ -68,11 +68,6 @@ const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
   return commit;
 };
-
-const clearCachedGitCommits = () => {
-  cachedGitCommitBySearchDir.clear();
-};
-
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
   if (!packageRoot) {
     return undefined;
@@ -256,8 +251,4 @@ export const resolveCommitHash = (
   } catch {
     return cacheGitCommit(searchDir, null);
   }
-};
-
-export const testing = {
-  clearCachedGitCommits,
 };

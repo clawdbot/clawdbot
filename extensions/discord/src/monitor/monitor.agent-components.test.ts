@@ -16,12 +16,12 @@ import {
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import { resolveComponentInteractionContext } from "./agent-components-helpers.js";
+import { resolveComponentInteractionContext } from "./agent-components-context.js";
+import { resolveDiscordComponentOriginatingTo } from "./agent-components.dispatch.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
-  resolveDiscordComponentOriginatingTo,
-} from "./agent-components.js";
+} from "./agent-components.system-controls.js";
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({

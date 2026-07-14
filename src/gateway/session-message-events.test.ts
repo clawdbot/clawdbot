@@ -20,10 +20,7 @@ import {
 import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -566,7 +563,7 @@ describe("session.message websocket events", () => {
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      emitInternalSessionTranscriptUpdate({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "sess-main",
@@ -1249,6 +1246,7 @@ describe("session.message websocket events", () => {
       credentialHash: ["fanout", "credential", "hash"].join("-"),
       bundleHash: "f".repeat(64),
       sessionId,
+      runId: "run-fanout",
       ownerEpoch: 4,
       rpcSetVersion: 1,
       protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],

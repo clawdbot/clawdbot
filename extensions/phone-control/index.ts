@@ -1,5 +1,6 @@
 // Phone Control plugin entrypoint registers its OpenClaw integration.
 import { randomUUID } from "node:crypto";
+import milliseconds from "ms";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -10,6 +11,7 @@ import {
   normalizeStringEntries,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import prettyMilliseconds from "pretty-ms";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -94,38 +96,20 @@ function formatGroupList(): string {
 
 function parseDurationMs(input: string | undefined): number | null {
   const raw = normalizeOptionalLowercaseString(input);
-  if (!raw) {
+  if (!raw || !/^\d+(?:\.\d+)?(?:ms|s|m|h|d)$/.test(raw)) {
     return null;
   }
-  const m = raw.match(/^(\d+)(s|m|h|d)$/);
-  if (!m) {
-    return null;
-  }
-  const n = Number.parseInt(m[1] ?? "", 10);
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  const unit = m[2];
-  const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  const durationMs = n * mult;
-  return Number.isSafeInteger(durationMs) ? durationMs : null;
+  const durationMs = milliseconds(raw as Parameters<typeof milliseconds>[0]);
+  return Number.isSafeInteger(durationMs) && durationMs > 0 ? durationMs : null;
 }
 
 function formatDuration(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) {
-    return `${s}s`;
-  }
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    return `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  if (h < 48) {
-    return `${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  return `${d}d`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    compact: true,
+    hideYear: true,
+    secondsDecimalDigits: 0,
+  });
 }
 
 function openArmStateStore(api: OpenClawPluginApi) {

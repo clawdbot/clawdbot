@@ -3,7 +3,7 @@ import type { CronConfig } from "./types.cron.js";
 
 /** Default maximum number of cron jobs allowed to run at once. */
 export const DEFAULT_CRON_MAX_CONCURRENT_RUNS = 8;
-export const DEFAULT_CRON_TRIGGER_MIN_INTERVAL_MS = 30_000;
+const DEFAULT_CRON_TRIGGER_MIN_INTERVAL_MS = 30_000;
 
 /** Resolves cron concurrency config, flooring finite values and clamping to at least one. */
 export function resolveCronMaxConcurrentRuns(

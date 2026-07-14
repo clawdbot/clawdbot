@@ -151,6 +151,12 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
 
+/** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
+export type RuntimeAuthProfileStore = AuthProfileStore & {
+  runtimeLocalProfileIds?: string[];
+  runtimeInheritsMainState?: boolean;
+};
+
 /** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

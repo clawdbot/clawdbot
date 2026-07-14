@@ -300,7 +300,7 @@ describe("discord group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(
       resolveDiscordGroupRequireMention({ cfg: discordCfg, groupSpace: "guild1", groupId: "123" }),
@@ -376,7 +376,7 @@ describe("discord group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(
       resolveDiscordGroupRequireMention({

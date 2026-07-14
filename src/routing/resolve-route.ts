@@ -31,7 +31,7 @@ export type RoutePeer = {
   id: string;
 };
 
-export type ResolveAgentRouteInput = {
+type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
@@ -68,8 +68,6 @@ export type ResolvedAgentRoute = {
     | "binding.channel"
     | "default";
 };
-
-export { DEFAULT_ACCOUNT_ID } from "./session-key.js";
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;

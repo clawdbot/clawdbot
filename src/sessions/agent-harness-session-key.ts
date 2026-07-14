@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
-export const AGENT_HARNESS_SESSION_KEY_PREFIX = "harness:";
+const AGENT_HARNESS_SESSION_KEY_PREFIX = "harness:";
 export const AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE =
   "Session key namespace is reserved for agent harness-owned sessions.";
 export const AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE =

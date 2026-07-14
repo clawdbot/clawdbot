@@ -10,7 +10,7 @@ type ParsedExecApprovalCommand = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
+type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
 
 function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();

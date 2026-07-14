@@ -145,6 +145,14 @@ describe("Twilio SMS helpers", () => {
         form,
       }),
     ).toBe(false);
+    expect(
+      verifyTwilioSignature({
+        signature: signature.slice(0, -1),
+        url: "https://gateway.example.com/webhooks/sms",
+        authToken: "secret",
+        form,
+      }),
+    ).toBe(false);
   });
 
   it("preserves signed form values before signature verification", () => {

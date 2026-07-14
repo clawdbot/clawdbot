@@ -11,12 +11,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-export type ModelRouteObservation = {
+type ModelRouteObservation = {
   api?: ModelApi | null;
   baseUrl?: unknown;
 };
 
-export type DefaultModelAuthStatus = {
+type DefaultModelAuthStatus = {
   provider: string;
   model: string;
 } & (
@@ -112,7 +112,7 @@ function catalogRouteObservation(
   };
 }
 
-export type DefaultModelCatalogFacts = {
+type DefaultModelCatalogFacts = {
   found: boolean;
   observedRoutes?: readonly ModelRouteObservation[];
 };

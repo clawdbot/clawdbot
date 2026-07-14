@@ -276,6 +276,9 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Finalize control UI generated artifacts
+        run: node --import tsx scripts/control-ui-i18n.ts sync --write
+
       - name: Validate control UI locale refresh
         run: node --import tsx scripts/control-ui-i18n.ts check
 

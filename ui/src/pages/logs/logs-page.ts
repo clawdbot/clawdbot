@@ -14,6 +14,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
@@ -51,7 +52,14 @@ class LogsPage extends OpenClawLightDomElement {
   private logsCursor: number | null = null;
   private readonly logsLimit = 500;
   private readonly logsMaxBytes = 250_000;
-  private logsPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly polling = new PollController(
+    this,
+    LOGS_POLL_INTERVAL_MS,
+    () => {
+      void this.loadLogs({ quiet: true });
+    },
+    false,
+  );
   private logsScrollFrame: number | null = null;
   private contentScrollFrame: number | null = null;
   private hasBoundGatewaySource = false;
@@ -85,17 +93,16 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   override updated(changed: PropertyValues) {
+    const autoFollowEnabled = this.logsAutoFollow && changed.has("logsAutoFollow");
     if (
-      this.logsAutoFollow &&
-      this.logsAtBottom &&
-      (changed.has("logsEntries") || changed.has("logsAutoFollow"))
+      autoFollowEnabled ||
+      (this.logsAutoFollow && this.logsAtBottom && changed.has("logsEntries"))
     ) {
-      this.scheduleScroll(changed.has("logsAutoFollow"));
+      this.scheduleScroll(autoFollowEnabled);
     }
   }
 
   override disconnectedCallback() {
-    this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
     this.activeRequest = null;
@@ -150,23 +157,10 @@ class LogsPage extends OpenClawLightDomElement {
 
   private syncPolling() {
     if (!this.connected || !this.client) {
-      this.stopPolling();
+      this.polling.stop();
       return;
     }
-    if (this.logsPollInterval !== null) {
-      return;
-    }
-    this.logsPollInterval = globalThis.setInterval(() => {
-      void this.loadLogs({ quiet: true });
-    }, LOGS_POLL_INTERVAL_MS);
-  }
-
-  private stopPolling() {
-    if (this.logsPollInterval === null) {
-      return;
-    }
-    globalThis.clearInterval(this.logsPollInterval);
-    this.logsPollInterval = null;
+    this.polling.start();
   }
 
   private ensureInitialLogs() {

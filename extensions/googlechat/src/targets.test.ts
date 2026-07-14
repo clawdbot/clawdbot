@@ -1,5 +1,6 @@
 // Googlechat tests cover targets plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
@@ -43,22 +44,21 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
   };
 });
 
-vi.mock("gaxios", () => ({
-  Gaxios: class {
-    defaults: unknown;
-    interceptors = {
-      request: { add: vi.fn() },
-      response: { add: vi.fn() },
-    };
-
-    constructor(defaults?: unknown) {
-      this.defaults = defaults;
-      mocks.gaxiosCtor(defaults);
-    }
-  },
-}));
-
 vi.mock("google-auth-library", () => ({
+  gaxios: {
+    Gaxios: class {
+      defaults: unknown;
+      interceptors = {
+        request: { add: vi.fn() },
+        response: { add: vi.fn() },
+      };
+
+      constructor(defaults?: unknown) {
+        this.defaults = defaults;
+        mocks.gaxiosCtor(defaults);
+      }
+    },
+  },
   GoogleAuth: class {
     constructor(options?: unknown) {
       mocks.googleAuthCtor(options);
@@ -91,7 +91,6 @@ const { testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest 
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.doUnmock("gaxios");
   vi.doUnmock("google-auth-library");
   vi.doUnmock("./auth.js");
   vi.resetModules();
@@ -271,7 +270,7 @@ describe("googlechat group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/BBB" })).toBe(true);
@@ -704,6 +703,7 @@ describe("verifyGoogleChatRequest", () => {
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
       auditContext: "googlechat.auth.certs",
+      timeoutMs: 30_000,
     });
     expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
       "token",

@@ -25,7 +25,6 @@ vi.mock("../../infra/push-apns.js", () => ({
 }));
 
 import {
-  type ApnsPushResult,
   type ApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -35,6 +34,8 @@ import {
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
+
+type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 

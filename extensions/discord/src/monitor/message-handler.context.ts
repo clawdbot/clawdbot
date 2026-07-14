@@ -24,6 +24,7 @@ import {
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
 import {
   resolveReferencedReplyMediaList,
   resolveDiscordMessageText,
@@ -111,7 +112,6 @@ export async function buildDiscordMessageProcessContext(params: {
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
-  const groupSubject = isDirectMessage ? undefined : groupChannel;
   const senderName = sender.isPluralKit
     ? (sender.name ?? author.username)
     : (data.member?.nickname ?? author.globalName ?? author.username);
@@ -154,7 +154,6 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: route.sessionKey,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
-  const isRoomEvent = ctx.inboundEventKind === "room_event";
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -167,8 +166,10 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage &&
-    (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
+    (ctx.inboundEventKind === "room_event" ||
+      !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
+    removeDiscordReplayHistoryEntry(guildHistories, messageChannelId, message.id);
     combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
       limit: historyLimit,
@@ -269,7 +270,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     messageChannelId,
     isGuildMessage,
-    channelConfig: isRoomEvent ? null : channelConfig,
+    channelConfig: ctx.inboundEventKind === "room_event" ? null : channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
@@ -335,9 +336,7 @@ export async function buildDiscordMessageProcessContext(params: {
       tag: sender.tag,
       roles: memberRoleIds,
       displayLabel: senderLabel,
-      // PluralKit proxies post under a bot author but represent a human member,
-      // whose identity already replaced the sender fields here; only mark
-      // genuine (non-PluralKit) bot authors as bots.
+      // PluralKit replaces bot authors with human identity; mark only genuine non-PluralKit bots.
       isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
@@ -427,7 +426,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     extra: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
-      GroupSubject: groupSubject,
+      GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
       ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
       UntrustedStructuredContext: untrustedContext,
@@ -435,7 +434,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
-  if (isRoomEvent && shouldIncludeChannelHistory) {
+  if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
     await channelHistory.recordWithMedia({
       historyKey: messageChannelId,
       limit: historyLimit,

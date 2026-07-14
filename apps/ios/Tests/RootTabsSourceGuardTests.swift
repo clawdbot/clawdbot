@@ -176,7 +176,7 @@ struct RootTabsSourceGuardTests {
         #expect(sidebarDetail.contains("headerTitle: \"Cron Jobs\""))
         #expect(!sidebarDetail.contains("headerTitle: \"OpenClaw\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(agentOverviewSource.contains("title: self.headerTitle"))
+        #expect(agentOverviewSource.contains("title: .localized(self.headerTitle)"))
         #expect(!agentOverviewSource.contains("Text(\"OpenClaw\")"))
         #expect(docsSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(docsSource.contains("title: \"Docs\""))
@@ -261,7 +261,7 @@ struct RootTabsSourceGuardTests {
             settingsSource,
             from: "private struct AppearanceSettingsScreen: View",
             to: "extension SettingsProTab")
-        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
+        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
@@ -311,9 +311,10 @@ struct RootTabsSourceGuardTests {
         #expect(aboutDestination.contains("detailListCard"))
         #expect(aboutDestination.contains("SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
-        #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(aboutDestination
-            .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(aboutDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(aboutDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.iOSVersionStringForDisplay()))"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
@@ -323,12 +324,33 @@ struct RootTabsSourceGuardTests {
         #expect(supportSource.contains("ViewThatFits(in: .horizontal)"))
         #expect(supportSource.contains("Text(\"Unavailable\")"))
         #expect(supportSource.contains(".textCase(.uppercase)"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(diagnosticsDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.platformStringForDisplay()))"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Model\", value: .verbatim(DeviceInfoHelper.modelIdentifier()))"))
+    }
+
+    @Test func `settings exposes guarded installed and ClawHub skill management`() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let skillsSource = try String(contentsOf: Self.settingsSkillsSourceURL(), encoding: .utf8)
+
+        #expect(settingsSource.contains("title: \"Skills\""))
+        #expect(settingsSource.contains("route: .skills"))
+        #expect(skillsSource.contains("case installed"))
+        #expect(skillsSource.contains("case browse"))
+        #expect(skillsSource.contains("case setup"))
+        #expect(skillsSource.contains("case off"))
+        #expect(skillsSource.contains("method: \"skills.status\""))
+        #expect(skillsSource.contains("method: \"skills.search\""))
+        #expect(skillsSource.contains("method: \"skills.detail\""))
+        #expect(skillsSource.contains("method: \"skills.install\""))
+        #expect(skillsSource.contains("method: \"skills.update\""))
+        #expect(skillsSource.contains(".disabled(!self.warningExpanded || self.isInstalling)"))
+        #expect(skillsSource.contains("SkillManagementContract.installed"))
+        #expect(skillsSource.contains("ifCurrentRoute: route"))
+        #expect(skillsSource.contains("distinguishPreDispatchRouteChange: true"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -500,7 +522,8 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.newCardButton(expands: true)"))
         #expect(source.contains("Label(\"New Card\", systemImage: \"plus\")"))
         #expect(source.contains(".accessibilityHint(\"Opens card title and notes entry\")"))
-        #expect(source.contains(".accessibilityHint(self.createUnavailableMessage ?? \"Creates a workboard card\")"))
+        #expect(source.contains(
+            "self.createUnavailableMessage ?? String(localized: \"Creates a workboard card\"))"))
         #expect(source.contains("if await self.createCard()"))
         #expect(source.contains(".disabled(self.isCreatingCard)"))
         #expect(!source.contains("Button(\"Create\")"))
@@ -1748,6 +1771,13 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsChannelsDestination.swift")
+    }
+
+    private static func settingsSkillsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/SettingsSkillsDestination.swift")
     }
 
     private static func sharedChatPreviewSourceURL() -> URL {

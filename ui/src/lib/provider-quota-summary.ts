@@ -52,6 +52,8 @@ export type ProviderQuotaGroup = {
   providers: string[];
   displayName: string;
   plan?: string;
+  /** Account email the usage was fetched under, when known. */
+  accountEmail?: string;
   windows: QuotaLimitSummary[];
   budgets: QuotaBudgetSummary[];
 };
@@ -114,7 +116,12 @@ export function collectProviderQuotaGroups(
     const providerIds = [
       ...new Set([provider.provider, usage.providerId].filter((id): id is string => Boolean(id))),
     ];
-    const identity = JSON.stringify([provider.displayName, windows, budgets]);
+    const identity = JSON.stringify([
+      provider.displayName,
+      usage.accountEmail ?? null,
+      windows,
+      budgets,
+    ]);
     const existing = groups.find((group) => group.identity === identity);
     if (existing) {
       for (const id of providerIds) {
@@ -130,6 +137,7 @@ export function collectProviderQuotaGroups(
         providers: providerIds,
         displayName: provider.displayName,
         ...(usage.plan ? { plan: usage.plan } : {}),
+        ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
         windows,
         budgets,
       },

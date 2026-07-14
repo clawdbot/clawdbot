@@ -12,14 +12,15 @@ import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
-import { convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
+type OpenAIResponsesStreamEvent =
+  Parameters<typeof processResponsesStream>[0] extends AsyncIterable<infer Event> ? Event : never;
 
 async function* streamResponsesEvents(
   events: readonly OpenAIResponsesStreamEvent[],
@@ -117,7 +118,7 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
   }
 }
 
-describe("convertResponsesTools", () => {
+describe("convertResponsesToolPayload", () => {
   beforeEach(() => {
     // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
     // strict=true, proxy-like routes leave the flag unset.
@@ -144,7 +145,7 @@ describe("convertResponsesTools", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesTools(tools, { model: nativeOpenAIModel });
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
 
     expect(converted).toEqual([
       {
@@ -163,7 +164,7 @@ describe("convertResponsesTools", () => {
   });
 
   it("downgrades incompatible native Responses schemas to strict false", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "read_file",
@@ -177,7 +178,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    );
+    ).tools;
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -190,7 +191,7 @@ describe("convertResponsesTools", () => {
   });
 
   it("omits strict on proxy-like Responses routes but keeps schema normalization", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "lookup_weather",
@@ -199,7 +200,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    );
+    ).tools;
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -222,12 +223,14 @@ describe("convertResponsesTools", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
+      convertResponsesToolPayload([zeta, alpha]).tools.map(
+        (tool) => expectResponsesFunctionTool(tool).name,
+      ),
     ).toEqual(["alpha", "zeta"]);
   });
 
   it("skips unreadable schemas and preserves healthy native strict tools", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "broken",
@@ -246,7 +249,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    );
+    ).tools;
 
     expect(converted).toEqual([
       {

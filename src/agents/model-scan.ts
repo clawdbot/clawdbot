@@ -13,6 +13,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
 /**
@@ -411,43 +412,6 @@ function buildOpenRouterScanResult(params: {
   };
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<R>,
-  opts?: { onProgress?: (completed: number, total: number) => void },
-): Promise<R[]> {
-  const limit = Math.max(1, Math.floor(concurrency));
-  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
-  let nextIndex = 0;
-  let completed = 0;
-
-  const worker = async () => {
-    while (true) {
-      const current = nextIndex;
-      nextIndex += 1;
-      if (current >= items.length) {
-        return;
-      }
-      const item = items.at(current);
-      if (item === undefined) {
-        return;
-      }
-      results[current] = await fn(item, current);
-      completed += 1;
-      opts?.onProgress?.(completed, items.length);
-    }
-  };
-
-  if (items.length === 0) {
-    opts?.onProgress?.(0, 0);
-    return results;
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
-
 export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
@@ -514,49 +478,46 @@ export async function scanOpenRouterModels(
     total: filtered.length,
   });
 
-  return mapWithConcurrency(
+  let completed = 0;
+  return pMap(
     filtered,
-    concurrency,
     async (entry) => {
       const isFree = isFreeOpenRouterModel(entry);
+      let result: ModelScanResult;
       if (!probe) {
-        return buildOpenRouterScanResult({
+        result = buildOpenRouterScanResult({
           entry,
           isFree,
           tool: { ok: false, latencyMs: null, skipped: true },
           image: { ok: false, latencyMs: null, skipped: true },
         });
+      } else {
+        const model: OpenAIModel = {
+          ...baseModel,
+          id: entry.id,
+          name: entry.name || entry.id,
+          contextWindow: entry.contextLength ?? baseModel.contextWindow,
+          maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
+          input: parseModality(entry.modality),
+          reasoning: baseModel.reasoning,
+        };
+
+        const toolResult = await probeTool(model, apiKey, timeoutMs);
+        const imageResult = model.input?.includes("image")
+          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
+          : { ok: false, latencyMs: null, skipped: true };
+
+        result = buildOpenRouterScanResult({
+          entry,
+          isFree,
+          tool: toolResult,
+          image: imageResult,
+        });
       }
-
-      const model: OpenAIModel = {
-        ...baseModel,
-        id: entry.id,
-        name: entry.name || entry.id,
-        contextWindow: entry.contextLength ?? baseModel.contextWindow,
-        maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
-        input: parseModality(entry.modality),
-        reasoning: baseModel.reasoning,
-      };
-
-      const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input?.includes("image")
-        ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
-        : { ok: false, latencyMs: null, skipped: true };
-
-      return buildOpenRouterScanResult({
-        entry,
-        isFree,
-        tool: toolResult,
-        image: imageResult,
-      });
+      completed += 1;
+      options.onProgress?.({ phase: "probe", completed, total: filtered.length });
+      return result;
     },
-    {
-      onProgress: (completed, total) =>
-        options.onProgress?.({
-          phase: "probe",
-          completed,
-          total,
-        }),
-    },
+    { concurrency, stopOnError: true },
   );
 }

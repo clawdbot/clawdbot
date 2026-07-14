@@ -73,7 +73,7 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   document.body.append(provider);
   await page.updateComplete;
 
-  const note = page.querySelector(".profile-note");
+  const note = page.querySelector(".settings-empty");
   const englishNote = note?.textContent?.trim();
 
   await i18n.setLocale("de");

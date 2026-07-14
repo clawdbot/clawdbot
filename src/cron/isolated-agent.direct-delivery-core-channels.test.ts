@@ -2,7 +2,10 @@
 import "./isolated-agent.mocks.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+} from "../channels/plugins/types.public.js";
 import type { CliDeps } from "../cli/deps.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";

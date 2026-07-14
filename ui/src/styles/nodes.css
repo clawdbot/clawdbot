@@ -1,71 +1,96 @@
-/* Nodes page: unified paired-device / node inventory. */
+/* Nodes page: inventory-entry extras that the settings row primitives cannot
+   express — the device form-factor tile, inline Details disclosure, collapsed
+   older-pairing duplicates, and token action rows inside the disclosure. */
 
-.nodes-entry__head {
+/* Rows can grow multi-line (Details disclosure); keep tile/control pinned top. */
+.nodes-entry {
+  align-items: flex-start;
+}
+
+.nodes-entry__tile {
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: center;
+  flex: none;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--muted);
 }
 
-.nodes-entry__head .chip {
-  padding: 2px 10px;
+.nodes-entry__tile-icon {
+  display: flex;
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border-radius: 50%;
-}
-
-.status-dot--connected {
-  background: var(--ok);
-}
-
-.status-dot--offline {
-  background: var(--muted);
-}
-
-.nodes-entry--gateway {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+.nodes-entry__tile-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .nodes-entry__details {
-  margin-top: 8px;
+  margin-top: var(--space-1);
+  font-size: var(--control-ui-text-sm);
 }
 
 .nodes-entry__details > summary {
-  font-size: 12px;
   color: var(--muted);
   user-select: none;
+  cursor: pointer;
 }
 
 .nodes-entry__details > summary:hover {
   color: var(--fg);
 }
 
-.nodes-group {
-  display: flex;
-  flex-direction: column;
+.nodes-entry__details > .muted {
+  margin-top: var(--space-2);
+  overflow-wrap: anywhere;
 }
 
+.nodes-entry__token {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.nodes-entry__token-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+/* Older pairings collapse under the primary machine row; the wrapper sits
+   between .settings-row siblings, so it re-adds the hairline dividers. */
 .nodes-group__dups {
-  margin: 4px 0 8px;
-  padding-left: 14px;
-  border-left: 2px solid var(--border);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.nodes-group__dups + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .nodes-group__dups > summary {
-  font-size: 12px;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
-  padding: 4px 0;
   user-select: none;
+  cursor: pointer;
 }
 
 .nodes-group__dups > summary:hover {
   color: var(--fg);
 }
 
-.nodes-group__dups .list-item {
+.nodes-group__dups .settings-row {
   opacity: 0.75;
+  padding-left: var(--space-7);
 }

@@ -13,7 +13,6 @@ import { wrapPluginSystemContextSection } from "../../hook-system-context-bounda
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
@@ -543,7 +542,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
 
 describe("resolveEmbeddedAgentStreamFn", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
-    resetEmbeddedAgentBaseStreamFnCacheForTest();
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
     const session = {

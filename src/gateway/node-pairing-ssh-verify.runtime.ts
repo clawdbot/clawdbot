@@ -1,7 +1,7 @@
 // SSH probe execution for SSH-verified node pairing.
-// Kept as a narrow runtime boundary so gateway tests can mock the spawn
+// Kept as a narrow runtime boundary so gateway tests can mock the probe
 // without touching the eligibility/verification policy.
-import { spawn } from "node:child_process";
+import { runCommandWithTimeout } from "../process/exec.js";
 
 export type NodeIdentityProbeParams = {
   user: string;
@@ -67,59 +67,25 @@ export async function runNodeIdentityProbe(
   // Security: '--' prevents the user@host target from being read as an option.
   args.push("--", `${params.user}@${params.host}`, REMOTE_IDENTITY_COMMAND);
 
-  return await new Promise<NodeIdentityProbeResult>((resolve) => {
-    let settled = false;
-    const settle = (result: NodeIdentityProbeResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
+  try {
     // PATH-resolved `ssh` keeps Windows OpenSSH working; the gateway process
     // environment is operator-owned, so PATH lookup is not an injection risk.
-    const child = spawn("ssh", args, { stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(
-      () => {
-        try {
-          child.kill("SIGTERM");
-          setTimeout(() => child.kill("SIGKILL"), 1_500).unref();
-        } catch {
-          // Best-effort teardown; the probe already reports timeout.
-        }
-        settle({ status: "timeout" });
-      },
-      Math.max(250, params.timeoutMs),
-    );
-    timer.unref?.();
-
-    let stdout = "";
-    let stderr = "";
-    const append = (current: string, chunk: unknown): string =>
-      current.length >= MAX_PROBE_OUTPUT_BYTES
-        ? current
-        : (current + String(chunk)).slice(0, MAX_PROBE_OUTPUT_BYTES);
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout = append(stdout, chunk);
+    const result = await runCommandWithTimeout(["ssh", ...args], {
+      maxOutputBytes: MAX_PROBE_OUTPUT_BYTES,
+      outputCapture: "head",
+      timeoutMs: Math.max(250, params.timeoutMs),
     });
-    child.stderr?.on("data", (chunk) => {
-      stderr = append(stderr, chunk);
-    });
-    child.stdout?.on("error", () => {});
-    child.stderr?.on("error", () => {});
-    child.once("error", (error) => {
-      settle({ status: "spawn-error", message: error.message });
-    });
-    child.once("close", (code) => {
-      if (code === 0) {
-        settle({ status: "ok", stdout });
-      } else {
-        settle({ status: "failed", code, stderr });
-      }
-    });
-  });
+    if (result.termination === "timeout") {
+      return { status: "timeout" };
+    }
+    if (result.code === 0) {
+      return { status: "ok", stdout: result.stdout };
+    }
+    return { status: "failed", code: result.code, stderr: result.stderr };
+  } catch (error) {
+    return {
+      status: "spawn-error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

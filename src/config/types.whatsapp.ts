@@ -1,7 +1,7 @@
 // Defines WhatsApp channel configuration types.
 import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
-  BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -85,14 +85,10 @@ type WhatsAppSharedConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
+  /** Delivery streaming config: chunk mode plus block streaming controls. */
+  streaming?: ChannelDeliveryStreamingConfig;
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
   direct?: Record<string, WhatsAppDirectConfig>;

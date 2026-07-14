@@ -70,7 +70,7 @@ export function whatsappDefaultCanonicalScenarioIds(providerMode: string) {
     : [...WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS];
 }
 
-export type CanonicalScenarioPartition = {
+type CanonicalScenarioPartition = {
   canonical: string[];
   legacy: string[];
 };

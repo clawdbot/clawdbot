@@ -22,7 +22,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
-import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 

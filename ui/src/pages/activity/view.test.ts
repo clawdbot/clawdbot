@@ -92,7 +92,7 @@ describe("renderActivity", () => {
 
     expect(container.querySelector(".activity-page__title")).toBeNull();
     expect(container.querySelector(".activity-page__subtitle")).toBeNull();
-    expect(container.querySelector(".activity-toolbar__count")?.textContent?.trim()).toBe("1 of 1");
+    expect(container.querySelector(".activity-count")?.textContent?.trim()).toBe("1 of 1");
   });
 
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
@@ -105,6 +105,6 @@ describe("renderActivity", () => {
     const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
       (element) => element.textContent?.trim(),
     );
-    expect(meta).toContain("2m 0s");
+    expect(meta).toContain("2m");
   });
 });

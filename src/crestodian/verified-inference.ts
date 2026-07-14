@@ -46,7 +46,7 @@ import {
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-export type CrestodianConfiguredRouteIdentity = DistributiveOmit<
+type CrestodianConfiguredRouteIdentity = DistributiveOmit<
   CrestodianConfiguredRoute,
   "runConfig" | "authProfileId"
 >;
@@ -204,7 +204,7 @@ async function resolveAgentHarnessAuthBindingFingerprint(params: {
   return getRegisteredAgentHarness(params.harnessId)?.harness.authBinding?.fingerprint(input);
 }
 
-export function crestodianRouteIdentity(
+function crestodianRouteIdentity(
   route: CrestodianConfiguredRoute,
 ): CrestodianConfiguredRouteIdentity {
   const { runConfig: _runConfig, authProfileId: _authProfileId, ...identity } = route;

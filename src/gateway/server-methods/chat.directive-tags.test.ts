@@ -15,10 +15,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import {
-  buildPairingQrReplyChannelData,
-  setReplyPayloadMetadata,
-} from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -350,46 +347,37 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   };
 });
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) =>
-      (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
-      (hookName === "before_message_write" &&
-        (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null)),
-    runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
-      mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
-      if (mockState.beforeMessageWriteBlock) {
-        return { block: true };
-      }
-      if (mockState.beforeMessageWriteContent !== null) {
-        return {
-          message: {
-            ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
-            role: "user",
-            content: mockState.beforeMessageWriteContent,
-          },
-        };
-      }
-      return undefined;
-    },
-  }),
-}));
+vi.mock("../../plugins/hook-runner-global.js", () => {
+  const hasHooks = (hookName: string) =>
+    (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
+    (hookName === "before_message_write" &&
+      (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null));
+  return {
+    getGlobalHookRunner: () => ({
+      hasHooks,
+      runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
+        mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
+        if (mockState.beforeMessageWriteBlock) {
+          return { block: true };
+        }
+        if (mockState.beforeMessageWriteContent !== null) {
+          return {
+            message: {
+              ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
+              role: "user",
+              content: mockState.beforeMessageWriteContent,
+            },
+          };
+        }
+        return undefined;
+      },
+    }),
+    hasGlobalHooks: hasHooks,
+  };
+});
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile?: string;
-      target?: { agentId: string; sessionId: string; sessionKey: string };
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
-    },
-  ),
-  emitInternalSessionTranscriptUpdate: vi.fn(
     (update: {
       sessionFile?: string;
       target?: { agentId: string; sessionId: string; sessionKey: string };
@@ -2660,10 +2648,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         kind: "final",
         payload: {
           text: "Scan this QR code with the OpenClaw iOS app:",
-          channelData: buildPairingQrReplyChannelData({
-            setupCode,
-            expiresAtMs: Date.now() + 10 * 60_000,
-          }),
+          channelData: {
+            openclawPairingQr: {
+              setupCode,
+              expiresAtMs: Date.now() + 10 * 60_000,
+            },
+          },
           sensitiveMedia: true,
         },
       },
@@ -6859,6 +6849,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
 describe("chat.send operator UI client sender context", () => {
   it("does not inject sender identity fields for Control UI clients", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-control-ui-sender-");
     const respond = vi.fn();
     const context = createChatContext();
 

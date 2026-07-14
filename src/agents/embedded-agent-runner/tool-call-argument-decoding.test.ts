@@ -13,13 +13,13 @@ describe("decodeHtmlEntitiesInObject", () => {
         query: "Rock &amp; Roll &#65; &#39;ok&#39; &#x27;hex&#x27;",
         emoji: "ok &#x1F600;",
         args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
-        nested: { deep: "a &amp; b" },
+        nested: { deep: "a &amp; b &mdash; &copy;" },
       }),
     ).toEqual({
       query: "Rock & Roll A 'ok' 'hex'",
       emoji: "ok 😀",
       args: ['--flag="value"', "<input>"],
-      nested: { deep: "a & b" },
+      nested: { deep: "a & b — ©" },
     });
   });
 

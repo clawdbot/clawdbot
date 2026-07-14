@@ -20,12 +20,6 @@ import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import {
-  isLegacyPluginDependencyInstallStagePath,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  writePackageDistInventory,
-} from "../src/infra/package-dist-inventory.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
@@ -38,6 +32,12 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import {
+  isLegacyPluginDependencyInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import {
   listPluginSdkDistArtifacts,

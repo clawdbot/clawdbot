@@ -8,11 +8,15 @@ export function parseArgs(argv: unknown): {
   inputs: {
     provider: string;
     mode: string;
-    release_profile: string;
+    release_profile?: string;
     rerun_group: string;
     reuse_evidence: string;
   };
 };
+export function releaseProfileForTarget(
+  targetSha: string,
+  readPackageJson?: (sha: string) => string,
+): "beta" | "stable";
 export function releaseEvidenceVerificationArgs(parentRunId: unknown): string[];
 export function releaseEvidenceVerifierPath(worktreeRoot: unknown): string;
 export function resolveRemoteTargetRefSha(

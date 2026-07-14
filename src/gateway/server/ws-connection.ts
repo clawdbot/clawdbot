@@ -147,7 +147,7 @@ function isWsPayloadLimitError(err: unknown): boolean {
   return typeof message === "string" && /max payload size exceeded/i.test(message);
 }
 
-export type GatewayWsSharedHandlerParams = {
+type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;

@@ -2,11 +2,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Memory Core plugin module implements dreaming behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
-  DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT as DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE as DEFAULT_MEMORY_DREAMING_MIN_SCORE,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES as DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME as LEGACY_LIGHT_SLEEP_CRON_NAME,
@@ -410,7 +405,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   };
 }
 
-export async function reconcileShortTermDreamingCronJob(params: {
+async function reconcileShortTermDreamingCronJob(params: {
   cron: CronServiceLike | null;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
@@ -496,7 +491,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
   return { status: "updated", removed };
 }
 
-export async function runShortTermDreamingPromotionIfTriggered(params: {
+async function runShortTermDreamingPromotionIfTriggered(params: {
   cleanedBody: string;
   trigger?: string;
   workspaceDir?: string;
@@ -985,27 +980,3 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
   });
 }
-
-export const testing = {
-  buildManagedDreamingCronJob,
-  buildManagedDreamingPatch,
-  isManagedDreamingJob,
-  resolveCronServiceFromGatewayContext,
-  constants: {
-    MANAGED_DREAMING_CRON_NAME,
-    MANAGED_DREAMING_CRON_TAG,
-    DREAMING_SYSTEM_EVENT_TEXT,
-    DEFAULT_DREAMING_CRON_EXPR: DEFAULT_MEMORY_DREAMING_CRON_EXPR,
-    DEFAULT_DREAMING_LIMIT: DEFAULT_MEMORY_DREAMING_LIMIT,
-    DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
-    DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
-    DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
-    DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
-      DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-    DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
-    RUNTIME_CRON_RECONCILE_INTERVAL_MS,
-    STARTUP_CRON_RETRY_DELAY_MS,
-    STARTUP_CRON_RETRY_MAX_ATTEMPTS,
-  },
-};
-export { testing as __testing };

@@ -1,6 +1,7 @@
 // Covers message channel selection from explicit input, tool context fallback,
 // configured accounts, and missing official external plugin repair hints.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -50,16 +51,12 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
 }));
 
 type ChannelSelectionModule = typeof import("./channel-selection.js");
-type RuntimeModule = typeof import("../../runtime.js");
 
-let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
-let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
-  runtimeModule = await import("../../runtime.js");
-  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -92,15 +89,17 @@ describe("listConfiguredMessageChannels", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    errorSpy = vi.spyOn(runtimeModule.defaultRuntime, "error").mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.resolveOutboundChannelPlugin.mockReset();
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    testing.resetLoggedChannelSelectionErrors();
-    errorSpy.mockClear();
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
   });
 
   it.each([

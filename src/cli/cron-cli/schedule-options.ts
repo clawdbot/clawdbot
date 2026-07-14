@@ -1,7 +1,7 @@
 // Shared schedule option resolver for cron create/edit commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
-import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
+import { parseAt, parseCronStaggerMs, parsePositiveCronDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
   at?: unknown;
@@ -29,7 +29,7 @@ type NormalizedScheduleOptions = {
 };
 
 /** Normalized schedule edit request, including patch-only updates for cron metadata. */
-export type CronEditScheduleRequest =
+type CronEditScheduleRequest =
   | { kind: "direct"; schedule: CronSchedule }
   | { kind: "patch-existing-cron"; staggerMs: number | undefined; tz: string | undefined }
   | { kind: "none" };
@@ -169,7 +169,7 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
     return { kind: "at", at: atIso };
   }
   if (options.every) {
-    const everyMs = parseDurationMs(options.every);
+    const everyMs = parsePositiveCronDurationMs(options.every);
     if (!everyMs) {
       throw new Error("Invalid --every. Use a duration like 10m, 1h, or 1d.");
     }

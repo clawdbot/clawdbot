@@ -18,16 +18,8 @@ import {
 } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export {
-  extractEnvVarFromSourceLabel,
-  promptSecretRefForSetup,
-  resolveRefFallbackInput,
-  type SecretRefSetupPromptCopy,
-} from "./provider-auth-ref.js";
-export {
-  resolveSecretInputModeForEnvSelection,
-  type SecretInputModePromptCopy,
-} from "./provider-auth-mode.js";
+export { promptSecretRefForSetup } from "./provider-auth-ref.js";
+export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
@@ -111,7 +103,7 @@ export function normalizeSecretInputModeInput(
 }
 
 /** Applies a CLI-provided API key when its provider selector matches this auth method. */
-export async function maybeApplyApiKeyFromOption(params: {
+async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
   secretInputMode?: SecretInputMode;

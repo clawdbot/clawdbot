@@ -1090,7 +1090,7 @@ describe("plugin publication artifact", () => {
   it("caps publication JSON and tarball members before ZIP expansion", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
-    const oversizedManifest = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20);
+    const oversizedManifest = Buffer.alloc(4 * 1024 * 1024 + 1, 0x20);
 
     replaceArtifactZip(fixture, [
       { bytes: fixture.tarball, name: TARBALL_NAME },

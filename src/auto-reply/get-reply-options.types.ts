@@ -105,6 +105,8 @@ export type GetReplyOptions = {
   onTurnAdopted?: () => void | Promise<void>;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Current user turn is already durable; replay it without appending another copy. */
+  suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;

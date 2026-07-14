@@ -22,7 +22,7 @@ openclaw gateway restart
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
-openclaw workboard dispatch [--url <url>] [--token <token>] [--timeout <ms>] [--json]
+openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
 The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs; commands that accept a card id also accept an unambiguous id prefix (the compact text output shows the first 8 characters).
@@ -87,10 +87,11 @@ Text output prints the compact card line and notes. JSON output returns the full
 ```bash
 openclaw workboard dispatch
 openclaw workboard dispatch --json
+openclaw workboard dispatch --max-starts 10
 openclaw workboard dispatch --url http://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-`dispatch` first calls the running Gateway RPC method `workboard.cards.dispatch`, which uses the same subagent runtime as the dashboard dispatch action, so ready cards become task-tracked worker runs with linked session keys. Cards with an assigned agent use agent-scoped subagent session keys; unassigned cards keep an unscoped subagent key so the Gateway's configured default agent is preserved.
+`dispatch` first calls the running Gateway RPC method `workboard.cards.dispatch`, which uses the same subagent runtime as the dashboard dispatch action, so ready cards become task-tracked worker runs with linked session keys. `--max-starts` uses the additive `workboard.cards.dispatchWithOptions` method so an older Gateway rejects the option before starting any workers; restart the Gateway after upgrading before using the flag. Cards with an assigned agent use agent-scoped subagent session keys; unassigned cards keep an unscoped subagent key so the Gateway's configured default agent is preserved.
 
 The dispatch loop:
 
@@ -102,7 +103,7 @@ The dispatch loop:
 6. Starts a subagent worker run with bounded card context and the card claim token.
 7. Stores the worker run id, session key, task linkage when the Gateway task ledger reports it, execution status, and worker log on the card.
 
-Selection is conservative: one dispatch starts at most three workers by default, skips archived or already-claimed cards, and starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch.
+Selection is conservative: one dispatch starts at most three workers by default, skips archived or already-claimed cards, and starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap; the one-card-per-owner rule still applies, so the effective number of starts can be lower.
 
 If worker start fails after a card is claimed, Workboard blocks that card, clears the claim, and records the failure in card execution and worker-log metadata, keeping failed starts visible instead of silently returning the card to the queue.
 

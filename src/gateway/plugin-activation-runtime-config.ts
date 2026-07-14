@@ -136,3 +136,26 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
     }).config,
   });
 }
+
+/** Re-derives source-owned plugin activation and carries it into one reload candidate. */
+export function resolveGatewayReloadPluginActivationCandidate(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
+}): { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig } {
+  const activationConfig = applyPluginAutoEnable({
+    config: params.sourceConfig,
+    env: params.env,
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    discovery: params.discovery,
+  }).config;
+  return {
+    runtimeConfig: mergeActivationSectionsIntoRuntimeConfig({
+      runtimeConfig: params.runtimeConfig,
+      activationConfig,
+    }),
+    compareConfig: activationConfig,
+  };
+}

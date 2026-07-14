@@ -1,5 +1,5 @@
 // Trajectory path helpers resolve storage paths for trajectory artifacts.
-import fs from "node:fs";
+
 import path from "node:path";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
@@ -11,29 +11,9 @@ export const TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 
-type TrajectoryPointerOpenFlagConstants = Pick<
-  typeof fs.constants,
-  "O_CREAT" | "O_TRUNC" | "O_WRONLY"
-> &
-  Partial<Pick<typeof fs.constants, "O_NOFOLLOW">>;
-
 export function safeTrajectorySessionFileName(sessionId: string): string {
   const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
   return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
-}
-
-// Pointer files are overwritten atomically by callers. O_NOFOLLOW is optional
-// because some platforms do not expose it, but use it when Node provides it.
-export function resolveTrajectoryPointerOpenFlags(
-  constants: TrajectoryPointerOpenFlagConstants = fs.constants,
-): number {
-  const noFollow = constants.O_NOFOLLOW;
-  return (
-    constants.O_CREAT |
-    constants.O_TRUNC |
-    constants.O_WRONLY |
-    (typeof noFollow === "number" ? noFollow : 0)
-  );
 }
 
 function resolveContainedPath(baseDir: string, fileName: string): string {

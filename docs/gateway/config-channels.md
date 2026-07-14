@@ -129,7 +129,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000,
-      chunkMode: "length", // length | newline
+      streaming: { chunkMode: "length" }, // length | newline
       mediaMaxMb: 50,
       sendReadReceipts: true, // blue ticks (false in self-chat mode)
       groups: {
@@ -202,7 +202,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all | batched
       linkPreview: true,
-      streaming: "partial", // off | partial | block | progress (default: partial)
+      streaming: { mode: "partial" }, // off | partial | block | progress (default: partial)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
@@ -576,7 +576,7 @@ Check [npmjs.com/package/@openclaw/mattermost](https://www.npmjs.com/package/@op
         callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
       },
       textChunkLimit: 4000,
-      chunkMode: "length",
+      streaming: { chunkMode: "length" },
     },
   },
 }

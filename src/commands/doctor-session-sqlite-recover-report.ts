@@ -23,7 +23,7 @@ import type {
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 
-export type SessionSqliteRecoverTargetValidator = (
+type SessionSqliteRecoverTargetValidator = (
   target: SessionStoreTarget,
 ) => Promise<DoctorSessionSqliteTargetReport>;
 

@@ -24,7 +24,7 @@ export type RunMediaUnderstandingFileParams = {
   scopeContext?: MediaUnderstandingScopeContext;
 };
 
-export type MediaUnderstandingScopeContext = {
+type MediaUnderstandingScopeContext = {
   sessionKey?: string;
   channel?: string;
   chatType?: string;

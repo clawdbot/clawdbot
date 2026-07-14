@@ -17,11 +17,11 @@ const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
 const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
 const MIN_REVERSE_CHUNK_BYTES = 1024;
 
-export type TranscriptStreamOptions = {
+type TranscriptStreamOptions = {
   signal?: AbortSignal;
 };
 
-export type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
+type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
   /** Bytes read per reverse scan chunk. Clamped to [1KiB, 1MiB]. */
   chunkBytes?: number;
 };

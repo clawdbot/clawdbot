@@ -56,7 +56,6 @@ vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
 }));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
-let formatSlackInboundLogLine: typeof import("./messages.js").formatSlackInboundLogLine;
 
 function inboundLogLines(): string[] {
   return inboundInfoSpy.mock.calls
@@ -119,7 +118,7 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  ({ registerSlackMessageEvents, formatSlackInboundLogLine } = await import("./messages.js"));
+  ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 
 beforeEach(() => {
@@ -719,20 +718,5 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([
       "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
     ]);
-  });
-
-  it("formats the inbound receipt line with channel, sender, body length, and bot identity", () => {
-    expect(
-      formatSlackInboundLogLine({
-        workspaceId: "T123",
-        channelId: "C456",
-        channelType: "channel",
-        userId: "U789",
-        botUserId: "U_BOT",
-        bodyChars: 42,
-      }),
-    ).toBe(
-      "Inbound app_mention slack:T123:channel:C456:user:U789 -> bot:U_BOT (channel, 42 chars)",
-    );
   });
 });

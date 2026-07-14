@@ -26,15 +26,6 @@ import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
   ChannelSetupWizard,
-  ChannelSetupWizardAllowFrom,
-  ChannelSetupWizardAllowFromEntry,
-  ChannelSetupWizardCredential,
-  ChannelSetupWizardCredentialState,
-  ChannelSetupWizardEnvShortcut,
-  ChannelSetupWizardFinalize,
-  ChannelSetupWizardGroupAccess,
-  ChannelSetupWizardNote,
-  ChannelSetupWizardPrepare,
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";

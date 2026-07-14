@@ -3,7 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
-import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 

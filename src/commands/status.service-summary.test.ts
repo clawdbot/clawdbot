@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
-import type { GatewayServiceEnvArgs } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";

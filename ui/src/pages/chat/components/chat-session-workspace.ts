@@ -14,9 +14,14 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
@@ -185,7 +190,7 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
-export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
   }
@@ -700,7 +705,7 @@ export function createSessionWorkspaceProps(
     onToggleTerminal: state.terminalAvailable
       ? () => {
           window.dispatchEvent(
-            new CustomEvent("openclaw:terminal-toggle", {
+            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
               detail: { dock: "right", open: true },
             }),
           );
@@ -708,7 +713,7 @@ export function createSessionWorkspaceProps(
       : undefined,
     onToggleBrowser: state.browserPanelAvailable
       ? () => {
-          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
     onOpenDiff:
@@ -740,13 +745,12 @@ function formatWorkspaceFileSize(file: { size?: number }): string {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "";
   }
-  if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
-  }
-  return `${size} B`;
+  return formatByteSize(size, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0),
+  });
 }
 
 function renderWorkspaceArtifactSize(artifact: { sizeBytes?: number }): string {
@@ -770,7 +774,7 @@ function renderWorkspaceRailSection(
 
 /** Changed-file count shown on the collapsed-rail toggles (pane header /
  * floating opener); 0 until the workspace list has loaded. */
-export function sessionWorkspaceModifiedCount(
+function sessionWorkspaceModifiedCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;

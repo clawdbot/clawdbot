@@ -6,7 +6,7 @@ import {
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

@@ -16,7 +16,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackEventScope } from "../event-scope.js";
 
-export type SlackRoutingContextDeps = {
+type SlackRoutingContextDeps = {
   cfg: OpenClawConfig;
   teamId: string;
   threadInheritParent: boolean;
@@ -333,8 +333,3 @@ export function resolveSlackRoutingContext(params: {
     historyKey,
   };
 }
-
-export const testing = {
-  normalizeSlackRouteBindingConfig,
-};
-export { testing as __testing };

@@ -15,7 +15,7 @@ import {
 
 const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
 
-export function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): void {
   let url: URL;
   try {
     url = new URL(req.url ?? "/", "http://localhost");

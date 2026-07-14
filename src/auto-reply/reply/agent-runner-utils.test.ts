@@ -22,13 +22,20 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
-const {
-  buildThreadingToolContext,
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunExecutionParams,
-  resolveModelFallbackOptions,
-  resolveProviderScopedAuthProfile,
-} = await import("./agent-runner-utils.js");
+const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModelFallbackOptions } =
+  await import("./agent-runner-utils.js");
+const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
+const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
+  await import("./agent-runner-run-params.js");
+
+function buildEmbeddedRunBaseParams(
+  params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
+  });
+}
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {

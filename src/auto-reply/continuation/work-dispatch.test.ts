@@ -427,10 +427,8 @@ import {
   deleteSubagentSessionForCleanup,
   resetSubagentSessionCleanupForTests,
 } from "../../agents/subagent-session-cleanup.js";
-import {
-  resetGatewayWorkAdmission,
-  runWithGatewayRootWorkAdmission,
-} from "../../process/gateway-work-admission.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import { getReplyFromConfig } from "../reply/get-reply.js";
 import {
   DEFAULT_NO_OP_REARM_THRESHOLD,

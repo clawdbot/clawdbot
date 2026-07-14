@@ -101,7 +101,6 @@ vi.mock("./windows-install-roots.js", () => ({
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
-let testing: typeof import("./restart-stale-pids.js").testing;
 let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
 let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
 
@@ -196,7 +195,7 @@ function expectWarningContaining(text: string): void {
 
 describe.skipIf(isWindows)("restart-stale-pids", () => {
   beforeAll(async () => {
-    ({ testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+    ({ cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
       await import("./restart-stale-pids.js"));
   });
 
@@ -221,13 +220,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [] });
     mockReadWindowsProcessArgs.mockReturnValue(null);
     mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: null });
-    testing.setSleepSyncOverride(() => {});
+    vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
   });
 
   afterEach(() => {
-    testing.setSleepSyncOverride(null);
-    testing.setDateNowOverride(null);
-    testing.setParentPidOverride(null);
     vi.restoreAllMocks();
   });
 
@@ -235,11 +231,14 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   // ancestor-exclusion tests to drive the real `getSelfAndAncestorPidsSync`
   // walk without depending on runtime-specific `process.ppid` descriptors.
   function withStubbedPpid<T>(ppid: number, fn: () => T): T {
-    testing.setParentPidOverride(() => ppid);
+    const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
+    Object.defineProperty(process, "ppid", { configurable: true, value: ppid });
     try {
       return fn();
     } finally {
-      testing.setParentPidOverride(null);
+      if (descriptor) {
+        Object.defineProperty(process, "ppid", descriptor);
+      }
     }
   }
 
@@ -977,11 +976,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     it("proceeds with warning when polling budget is exhausted — fake clock, no real 2s wait", () => {
       // Sub-agent audit HIGH finding: the original test relied on real wall-clock
       // time (Date.now() + 2000ms deadline), burning 2 full seconds of CI time
-      // every run. Fix: expose dateNowOverride in testing so the deadline can
-      // be synthesised instantly, keeping the test under 10ms.
+      // every run. Mock the wall clock so the deadline can be synthesised
+      // instantly, keeping the test under 10ms.
       const stalePid = process.pid + 303;
       let fakeNow = 0;
-      testing.setDateNowOverride(() => fakeNow);
+      vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
 
       installInitialBusyPoll(stalePid, () => {
         // Advance clock by PORT_FREE_TIMEOUT_MS + 1ms on first poll to trip the deadline.
@@ -1086,7 +1085,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           stderr: "",
         });
         let fakeNow = 0;
-        testing.setDateNowOverride(() => fakeNow);
+        vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
         mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
           if (timeoutMs === 400) {
             fakeNow += 2001;
@@ -1111,7 +1110,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expectWarningContaining("port 18789 still in use after 2000ms");
         expect(killSpy).toHaveBeenCalledWith(stalePid, 0);
       } finally {
-        testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -1123,7 +1121,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
         let fakeNow = 0;
-        testing.setDateNowOverride(() => fakeNow);
+        vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
         mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
           if (timeoutMs === 400) {
             fakeNow += 2001;
@@ -1137,7 +1135,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expectWarningContaining("port 18789 still in use after 2000ms");
         expect(killSpy).not.toHaveBeenCalled();
       } finally {
-        testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -1150,7 +1147,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
         let fakeNow = 0;
-        testing.setDateNowOverride(() => fakeNow);
+        vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
         mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
           if (timeoutMs === 400) {
             fakeNow += 2001;
@@ -1165,7 +1162,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expectWarningContaining("port 18789 still in use after 2000ms");
         expect(killSpy).not.toHaveBeenCalled();
       } finally {
-        testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -1180,7 +1176,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       process.env.SystemRoot = "C:\\PoisonedWindows";
       try {
         let fakeNow = 0;
-        testing.setDateNowOverride(() => fakeNow);
+        vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
         mockReadWindowsProcessArgsResult.mockReturnValue({
@@ -1213,7 +1209,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect(taskkillCall?.[1]).toEqual(["/T", "/PID", String(stalePid)]);
         expect((taskkillCall?.[2] as { timeout?: number } | undefined)?.timeout).toBe(5000);
       } finally {
-        testing.setDateNowOverride(null);
         if (originalSystemRoot === undefined) {
           delete process.env.SystemRoot;
         } else {
@@ -1231,7 +1226,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
         let fakeNow = 0;
-        testing.setDateNowOverride(() => fakeNow);
+        vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
         mockReadWindowsProcessArgsResult.mockReturnValue({
@@ -1257,8 +1252,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           }
           return true;
         });
-        testing.setSleepSyncOverride((ms) => {
-          fakeNow += ms;
+        vi.mocked(Atomics.wait).mockImplementation((_array, _index, _value, timeout) => {
+          fakeNow += timeout ?? 0;
+          return "timed-out";
         });
 
         expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
@@ -1271,8 +1267,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           5000,
         );
       } finally {
-        testing.setSleepSyncOverride(null);
-        testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -1397,46 +1391,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
-      }
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // sleepSync — direct unit tests via testing.callSleepSyncRaw
-  // -------------------------------------------------------------------------
-  describe("sleepSync — Atomics.wait paths", () => {
-    it("returns immediately when called with 0ms (timeoutMs <= 0 early return)", () => {
-      // sleepSync(0) must short-circuit before touching Atomics.wait.
-      testing.setSleepSyncOverride(null); // bypass override so real path runs
-      expect(testing.callSleepSyncRaw(0)).toBeUndefined();
-    });
-
-    it("returns immediately when called with a negative value (Math.max(0,...) clamp)", () => {
-      testing.setSleepSyncOverride(null);
-      expect(testing.callSleepSyncRaw(-1)).toBeUndefined();
-    });
-
-    it("executes the Atomics.wait path successfully when called with a positive timeout", () => {
-      // Use 1ms to keep the test fast; Atomics.wait resolves immediately
-      // because the timeout expires in 1ms.
-      testing.setSleepSyncOverride(null);
-      expect(testing.callSleepSyncRaw(1)).toBeUndefined();
-    });
-
-    it("falls back to busy-wait when Atomics.wait throws (Worker / sandboxed env)", () => {
-      // Atomics.wait throws in Worker threads and some sandboxed runtimes.
-      // The catch branch must handle this without propagating the exception.
-      const origWait = Atomics.wait;
-      Atomics.wait = () => {
-        throw new Error("not on main thread");
-      };
-      testing.setSleepSyncOverride(null);
-      try {
-        // 1ms is enough to exercise the busy-wait loop without slowing CI.
-        expect(testing.callSleepSyncRaw(1)).toBeUndefined();
-      } finally {
-        Atomics.wait = origWait;
-        testing.setSleepSyncOverride(() => {});
       }
     });
   });

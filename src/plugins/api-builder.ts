@@ -4,7 +4,7 @@ import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
-export type BuildPluginApiParams = {
+type BuildPluginApiParams = {
   id: string;
   name: string;
   version?: string;

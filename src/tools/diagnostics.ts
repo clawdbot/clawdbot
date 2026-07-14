@@ -5,7 +5,7 @@
  * distinguish broken tool registration from intentionally hidden tools.
  */
 /** Stable contract error code emitted by the tool planner. */
-export type ToolPlanContractErrorCode = "duplicate-tool-name" | "missing-executor";
+type ToolPlanContractErrorCode = "duplicate-tool-name" | "missing-executor";
 
 /** Error thrown when a visible tool plan cannot be built from descriptors. */
 export class ToolPlanContractError extends Error {

@@ -203,7 +203,13 @@ the container normally.
 the canonical shared state database at
 `<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database
 path, is never invoked by normal Gateway operation, and is not part of
-`openclaw doctor --fix`.
+`openclaw doctor --fix`. The command acquires the same state ownership lock as
+Gateway startup and holds it through validation, checkpointing, `VACUUM`, and
+the final integrity checks. It refuses to run while a Gateway or another
+SQLite maintenance command owns that lock. The state lock remains active when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config Gateway singleton, so an
+operator shell does not need to inherit the Gateway service's environment for
+maintenance to detect it.
 
 Stop the Gateway and create a verified backup first:
 
@@ -293,8 +299,16 @@ transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-
 to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
 sizes. Compaction requires a regular file with the current agent schema, the
 selected agent's durable owner metadata, and no open handle in the doctor
-process. This is explicit offline maintenance: stop the Gateway first so normal
-writes cannot race the checkpoint or `VACUUM`.
+process. The destructive `import`, `compact`, `recover`, and `restore` modes
+hold the same state ownership lock as Gateway startup for their full operation;
+`inspect`, `dry-run`, and `validate` remain read-only and do not take it. Stop
+the Gateway first. Destructive modes fail instead of racing live writes or
+racing another maintenance command. A destructive `--session-sqlite-store`
+target must be inside the active state directory; set `OPENCLAW_STATE_DIR` to
+the store's owning state directory before maintaining another installation.
+Existing hard-linked targets are rejected because another path can share the
+same database inode outside the locked state directory. The same ownership
+checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts

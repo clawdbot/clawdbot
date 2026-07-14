@@ -19,6 +19,7 @@ import {
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
+  logInboundDrop,
   matchesMentionPatterns,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
@@ -26,7 +27,6 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
@@ -91,11 +91,10 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
-
 function isSignalReplySessionInitConflictError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
@@ -108,7 +107,6 @@ function formatAttachmentKindCount(kind: string, count: number): string {
   }
   return `${count} ${kind}${count > 1 ? "s" : ""}`;
 }
-
 function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefined>): string {
   const kindCounts = new Map<string, number>();
   for (const contentType of contentTypes) {
@@ -1074,7 +1072,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const nativeMentionFacts = resolveSignalMentionFacts(deps, rawMessage, dataMessage?.mentions);
+    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -1084,12 +1084,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         configuredGroupDefaultsToNoMention: true,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention: nativeMentionFacts.hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {

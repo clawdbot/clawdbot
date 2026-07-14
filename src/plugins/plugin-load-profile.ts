@@ -31,10 +31,10 @@ export function shouldProfilePluginLoader(): boolean {
  * scrapers see a deterministic field order regardless of object iteration
  * quirks.
  */
-export type PluginLoadProfileExtras = ReadonlyArray<readonly [string, number | string]>;
+type PluginLoadProfileExtras = ReadonlyArray<readonly [string, number | string]>;
 
 /** Per-call scope: which plugin and which source path the probe is for. */
-export type PluginLoadProfileScope = {
+type PluginLoadProfileScope = {
   pluginId?: string;
   source: string;
 };
@@ -44,11 +44,7 @@ export type PluginLoadProfileScope = {
  * emit a `[plugin-load-profile]` line that already includes the bound
  * `pluginId` and `source`. Build one with `createProfiler(scope)`.
  */
-export type PluginLoadProfiler = <T>(
-  phase: string,
-  run: () => T,
-  extras?: PluginLoadProfileExtras,
-) => T;
+type PluginLoadProfiler = <T>(phase: string, run: () => T, extras?: PluginLoadProfileExtras) => T;
 
 /**
  * Render a `[plugin-load-profile]` line. Exported so that callers needing

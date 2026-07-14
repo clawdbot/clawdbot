@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 /** Verifies that the scheduler seeks to in-window phase slots (#75487). */
 describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
@@ -48,7 +47,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   }
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

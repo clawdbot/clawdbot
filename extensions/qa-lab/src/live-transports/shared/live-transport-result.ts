@@ -1,7 +1,7 @@
 // Qa Lab plugin module implements shared live-transport result shapes.
 import type { QaEvidenceTiming } from "../../evidence-summary.js";
 
-export type LiveTransportRttMeasurement = {
+type LiveTransportRttMeasurement = {
   finalMatchedReplyRttMs: number;
   requestStartedAt: string;
   responseObservedAt: string;

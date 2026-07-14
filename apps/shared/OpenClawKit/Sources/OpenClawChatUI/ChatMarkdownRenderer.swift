@@ -236,6 +236,7 @@ struct ChatMarkdownProse {
         }
     }
 
+    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
     var inlineMathLatex: [String] {
         self.inlineContent?.compactMap { content in
             if case let .math(span) = content {

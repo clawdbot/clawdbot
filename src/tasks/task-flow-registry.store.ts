@@ -9,9 +9,7 @@ import {
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-export type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
-
-export type TaskFlowRegistryStore = {
+type TaskFlowRegistryStore = {
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
   saveSnapshot: (snapshot: TaskFlowRegistryStoreSnapshot) => void;
   upsertFlow?: (flow: TaskFlowRecord) => void;
@@ -35,7 +33,7 @@ export type TaskFlowRegistryObserverEvent =
       previous: TaskFlowRecord;
     };
 
-export type TaskFlowRegistryObservers = {
+type TaskFlowRegistryObservers = {
   // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskFlowRegistryStore.
   onEvent?: (event: TaskFlowRegistryObserverEvent) => void;
 };

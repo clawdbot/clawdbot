@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
@@ -15,7 +16,6 @@ import {
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
-  resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
 

@@ -935,11 +935,6 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
@@ -2127,4 +2122,3 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };

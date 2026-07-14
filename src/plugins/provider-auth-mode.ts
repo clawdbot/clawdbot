@@ -3,7 +3,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
 /** Prompt copy overrides for provider secret input mode selection. */
-export type SecretInputModePromptCopy = {
+type SecretInputModePromptCopy = {
   modeMessage?: string;
   plaintextLabel?: string;
   plaintextHint?: string;

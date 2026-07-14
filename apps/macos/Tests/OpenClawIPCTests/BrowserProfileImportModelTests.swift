@@ -29,7 +29,10 @@ private final class BrowserImportTransportStub {
     }
     """
 
-    func makeModel(isLocalMode: @escaping @MainActor () -> Bool = { true }) -> BrowserProfileImportModel {
+    func makeModel(
+        isOnboarded: @escaping @MainActor () -> Bool = { true },
+        isLocalMode: @escaping @MainActor () -> Bool = { true }) -> BrowserProfileImportModel
+    {
         BrowserProfileImportModel(
             transport: { [weak self] request in
                 guard let self else { throw StubError() }
@@ -50,7 +53,7 @@ private final class BrowserImportTransportStub {
                     return Data(#"{"ok":true}"#.utf8)
                 }
             },
-            isOnboarded: { true },
+            isOnboarded: isOnboarded,
             isLocalMode: isLocalMode)
     }
 
@@ -123,6 +126,55 @@ struct BrowserProfileImportModelTests {
             message: "Switch this Mac app to a local Gateway before importing browser cookies."))
         #expect(model.phase == .hidden)
         #expect(stub.requests.isEmpty)
+    }
+
+    @Test func `automatic offer request waits for onboarding and local mode`() async {
+        let stub = BrowserImportTransportStub()
+        var isOnboarded = false
+        var isLocalMode = false
+        let model = stub.makeModel(
+            isOnboarded: { isOnboarded },
+            isLocalMode: { isLocalMode })
+
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        isOnboarded = true
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        isLocalMode = true
+        #expect(await model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 1)
+    }
+
+    @Test func `failed automatic status request stays retryable`() async {
+        let stub = BrowserImportTransportStub()
+        stub.failingPaths = ["/system-profile-import/status"]
+        let model = stub.makeModel()
+
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        stub.failingPaths = []
+        #expect(await model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 2)
+    }
+
+    @Test func `automatic offer does not apply after its inline browser closes`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        var shouldApply = true
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+
+        let request = Task {
+            await model.requestAutomaticOfferIfEligible(while: { shouldApply })
+        }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        shouldApply = false
+        gate.continuation?.resume()
+        #expect(await !request.value)
+        #expect(model.phase == .hidden)
     }
 
     @Test func `import success records counts and target`() async throws {
@@ -212,7 +264,7 @@ struct BrowserProfileImportModelTests {
         model._testSetPhase(.offering(forced))
 
         gate.continuation?.resume()
-        _ = await idle.value
+        #expect(await !idle.value)
         #expect(model.phase == .offering(forced))
     }
 

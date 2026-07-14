@@ -125,7 +125,7 @@ export type PluginRuntimeLoadContext = {
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
-export type PluginRuntimeResolvedLoadValues = Pick<
+type PluginRuntimeResolvedLoadValues = Pick<
   PluginLoadOptions,
   | "config"
   | "activationSourceConfig"
@@ -138,7 +138,7 @@ export type PluginRuntimeResolvedLoadValues = Pick<
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
-export type PluginRuntimeLoadContextOptions = {
+type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

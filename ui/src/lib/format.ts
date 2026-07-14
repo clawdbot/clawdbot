@@ -11,6 +11,7 @@ import {
 } from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
 
+export { formatByteSize } from "@openclaw/normalization-core";
 export { formatRelativeTimestamp, formatTimeAgo, formatDurationCompact, formatDurationHuman };
 
 export function formatUnknownText(

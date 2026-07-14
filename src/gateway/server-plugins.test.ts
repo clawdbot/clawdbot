@@ -5,7 +5,8 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -381,7 +382,7 @@ beforeEach(() => {
   pluginRuntimeLoaderLogger.error.mockClear();
   pluginRuntimeLoaderLogger.debug.mockClear();
   handleGatewayRequest.mockReset();
-  runtimeModule.clearGatewaySubagentRuntime();
+  clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -404,7 +405,7 @@ beforeEach(() => {
 
 afterEach(() => {
   serverPluginsModule.clearFallbackGatewayContext();
-  runtimeModule.clearGatewaySubagentRuntime();
+  clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
 
@@ -950,6 +951,34 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedParams()).toStrictEqual({});
     expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+  });
+
+  test("projects effective node-command policy into the plugin node runtime", async () => {
+    const command = "agent.cli.claude.run.v1";
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext({
+      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-policy",
+          connId: "conn-policy",
+          platform: "linux",
+          commands: [command],
+        }),
+      },
+    } as unknown as GatewayRequestContext);
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, {
+        nodes: [{ nodeId: "node-policy", connected: true, commands: [command] }],
+      });
+    });
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.nodes.list({ connected: true });
+
+    expect(result.nodes[0]?.commands).toEqual([command]);
+    expect(result.nodes[0]?.invocableCommands).toEqual([]);
   });
 
   test("lets trusted official plugin runtime request admin scope for browser proxy", async () => {

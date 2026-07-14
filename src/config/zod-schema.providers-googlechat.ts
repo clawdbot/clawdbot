@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
 import {
-  BlockStreamingCoalesceSchema,
+  ChannelDeliveryStreamingConfigSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -15,7 +15,7 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 
 /** DM policy schema for Google Chat accounts. */
-export const GoogleChatDmSchema = z
+const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional().default("pairing"),
@@ -41,7 +41,7 @@ export const GoogleChatDmSchema = z
     });
   });
 
-export const GoogleChatGroupSchema = z
+const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -51,7 +51,7 @@ export const GoogleChatGroupSchema = z
   })
   .strict();
 
-export const GoogleChatAccountSchema = z
+const GoogleChatAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -81,9 +81,7 @@ export const GoogleChatAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z

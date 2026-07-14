@@ -22,8 +22,6 @@ import type {
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-
 type ReplyDispatchErrorHandler = (
   err: unknown,
   info: ReplyDispatchRuntimeInfo,

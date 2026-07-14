@@ -47,7 +47,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 ## Before You PR
 
-- Use **Node 24** for source checkouts when possible. OpenClaw also supports Node 22.19+, but older Node 22 minors such as 22.17 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Test locally with your OpenClaw instance
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
 - When ClawSweeper, Codex, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.

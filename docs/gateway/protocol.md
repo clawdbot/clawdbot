@@ -176,12 +176,15 @@ verifies a hash-at-rest, short-lived credential bound to the environment, bundle
 hash, owner epoch, RPC-set version, expiry, and one nullable session; it
 separately checks the current version and feature set. Success returns minimal
 `worker-hello-ok`; feature negotiation is independent of the general protocol
-version. Frames stay under 64 KiB. The closed allowlist contains
-`worker.heartbeat`, `worker.transcript.commit`, and `worker.live-event`.
-Transcript commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
-compare-and-swap, and durable sequence replay; the gateway generates transcript
-entry and parent IDs through the normal session writer. Ownership and expiry are
-rechecked on each RPC.
+version. Frames stay under 64 KiB, except a negotiated `worker.inference.start`
+frame may be up to 25 MiB. The closed allowlist contains `worker.heartbeat`,
+`worker.transcript.commit`, `worker.live-event`, `worker.inference.start`, and
+`worker.inference.cancel`.
+
+Transcript commits use owner-epoch fencing, a gateway-owned session binding,
+base-leaf compare-and-swap, and durable sequence replay; the gateway generates
+transcript entry and parent IDs through the normal session writer. Ownership and
+expiry are rechecked on each RPC.
 
 ### Client capabilities
 
@@ -275,11 +278,11 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                              | Required scopes                       |
-| -------------------------------------------------------------- | ------------------------------------- |
-| none                                                           | `operator.pairing`                    |
-| non-exec commands                                              | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                             | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                          | `operator.pairing`                    |
+| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 ### Caps/commands/permissions (node)
 
@@ -512,13 +515,14 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
     - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key.
+    - `sessions.dispatch` (`operator.admin`) moves an existing local OpenClaw session with a session-owned managed worktree to a configured cloud-worker profile. Pass `{ key, profileId, agentId? }`. The method is absent when no worker profile is configured, closes local turn admission before draining active work, and returns only after placement reaches `active` worker ownership. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
@@ -929,8 +933,8 @@ third-party clients.
 | `MIN_PROBE_PROTOCOL_VERSION`              | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`requestTimeoutMs`)                                                              |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`backoffMs`)                                                                     |
-| Max reconnect backoff                     | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`scheduleReconnect`)                                                             |
+| Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
 | Fast-retry clamp after device-token close | `250` ms                                              | `packages/gateway-client/src/client.ts`                                                                                   |
 | Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                                                           |
 | `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                                                |
