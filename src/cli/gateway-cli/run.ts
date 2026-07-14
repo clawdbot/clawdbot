@@ -39,7 +39,11 @@ import {
   HOSTING_PROFILE_ENV,
   parseHostingProfileId,
 } from "../../hosting/profiles.js";
-import { INCARNATION_ID_ENV, RUNTIME_ID_ENV } from "../../hosting/runtime-activation.js";
+import {
+  INCARNATION_ID_ENV,
+  resolveRuntimeActivationIdentity,
+  RUNTIME_ID_ENV,
+} from "../../hosting/runtime-activation.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -723,6 +727,13 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const incarnationId = toOptionString(opts.incarnationId);
   if (incarnationId !== undefined) {
     process.env[INCARNATION_ID_ENV] = incarnationId;
+  }
+  try {
+    resolveRuntimeActivationIdentity({ env: process.env });
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    defaultRuntime.exit(1);
+    return;
   }
   if (opts.cliBackendLogs || opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/cli-backend"]);

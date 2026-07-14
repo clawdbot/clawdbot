@@ -193,6 +193,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("checks workspace readiness by emitted condition type", () => {
+    const client = readFileSync("scripts/e2e/hosting-profiles-client.mjs", "utf8");
+
+    expect(client).toContain('condition("WorkspaceWritable")');
+    expect(client).not.toContain('condition("openclaw.workspace-writable")');
+  });
+
   it("plans package-backed Compose and package artifact proofs", () => {
     const plan = planFor({
       selectedLaneNames: ["compose-setup", "docker-package-install"],

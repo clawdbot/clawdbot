@@ -1493,6 +1493,24 @@ describe("gateway run option collisions", () => {
     expect(process.env.OPENCLAW_INCARNATION_ID).toBe("pod-7f9c");
     expect(startGatewayServer).toHaveBeenCalledOnce();
   });
+  it("rejects invalid activation identity before destructive startup work", async () => {
+    await expect(
+      runGatewayCli([
+        "gateway",
+        "run",
+        "--runtime-id",
+        "contains spaces",
+        "--force",
+        "--allow-unconfigured",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Invalid OPENCLAW_RUNTIME_ID: expected 1-128 characters using letters, numbers, '.', '_', ':', '/', or '-'.",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+  });
   it("rejects unsupported hosting profiles before gateway startup", async () => {
     await expect(
       runGatewayCli(["gateway", "run", "--hosting-profile", "custom-host", "--allow-unconfigured"]),

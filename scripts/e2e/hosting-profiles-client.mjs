@@ -27,8 +27,8 @@ if (scenario === "local") {
   assert.equal(condition("ProfileSelected").requirement, "required");
   assert.equal(condition("ConfigLoaded").requirement, "required");
   assert.equal(condition("GatewayResponding").requirement, "required");
-  assert.equal(condition("openclaw.workspace-writable").status, "True");
-  assert.equal(condition("openclaw.workspace-writable").requirement, "required");
+  assert.equal(condition("WorkspaceWritable").status, "True");
+  assert.equal(condition("WorkspaceWritable").requirement, "required");
   assert.equal(condition("RuntimeActivationIdentified").status, "True");
   assert.equal(condition("PluginsLoaded").requirement, "advisory");
   assert.deepEqual(body.failures, []);
@@ -93,16 +93,16 @@ if (scenario === "local") {
   assert.equal(response.status, 200);
   assertSelectedProfile("local");
   assert.equal(body.ready, true);
-  assert.equal(condition("openclaw.workspace-writable").status, "True");
-  assert.equal(condition("openclaw.workspace-writable").reason, "WorkspaceWritable");
+  assert.equal(condition("WorkspaceWritable").status, "True");
+  assert.equal(condition("WorkspaceWritable").reason, "WorkspaceWritable");
   assert.deepEqual(body.failures, []);
 } else if (scenario === "workspace-full") {
   assert.equal(response.status, 503);
   assertSelectedProfile("local");
   assert.equal(body.ready, false);
-  assert.equal(condition("openclaw.workspace-writable").status, "False");
-  assert.equal(condition("openclaw.workspace-writable").requirement, "required");
-  assert.equal(condition("openclaw.workspace-writable").reason, "WorkspaceStorageFull");
+  assert.equal(condition("WorkspaceWritable").status, "False");
+  assert.equal(condition("WorkspaceWritable").requirement, "required");
+  assert.equal(condition("WorkspaceWritable").reason, "WorkspaceStorageFull");
   assert.ok(body.failures.includes("WorkspaceStorageFull"));
 } else {
   throw new Error(`unknown hosting profile scenario: ${scenario}`);
