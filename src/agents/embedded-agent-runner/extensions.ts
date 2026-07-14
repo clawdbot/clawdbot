@@ -52,9 +52,18 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
+  agentId?: string,
+  sessionId?: string,
+  sessionKey?: string,
   runId?: string,
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -179,6 +188,9 @@ export function buildEmbeddedExtensionFactories(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
   runId?: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -209,6 +221,14 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(
+      params.sessionManager,
+      params.agentId,
+      params.sessionId,
+      params.sessionKey,
+      params.runId,
+    ),
+  );
   return factories;
 }

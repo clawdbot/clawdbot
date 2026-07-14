@@ -35,6 +35,8 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
+    agentId: "main",
+    sessionKey: "agent:main:main",
   });
 
   return { factories, sessionManager };
@@ -141,6 +143,8 @@ describe("buildEmbeddedExtensionFactories", () => {
       provider: "litellm",
       modelId: "claude-sonnet-4-6",
       model: { api: "anthropic-messages", contextWindow: 200_000 } as Model,
+      agentId: "main",
+      sessionKey: "agent:main:main",
     });
 
     expect(factories).toContain(contextPruningExtension);
