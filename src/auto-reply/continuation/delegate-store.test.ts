@@ -134,6 +134,11 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
 
 import { getDiagnosticContinuationQueueMetrics } from "../../logging/diagnostic-continuation-queues.js";
 import {
+  consumeStagedPostCompactionDelegates as consumeSessionPostCompactionDelegates,
+  requeueReleasedPostCompactionDelegate as requeueSessionPostCompactionDelegate,
+  stagePostCompactionDelegate as stageSessionPostCompactionDelegate,
+} from "../continuation-delegate-store.js";
+import {
   CONTINUATION_DELEGATE_CONTROLLER_ID,
   CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
   cancelPendingDelegates,
@@ -141,6 +146,7 @@ import {
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
   failStagedPostCompactionDelegatesForCleanup,
+  finalizeStagedPostCompactionDelegates,
   hasRecoverablePendingDelegate,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
@@ -506,6 +512,22 @@ describe("delegate store — TaskFlow-backed", () => {
     });
     expect(second?.queueDepthHistory.map((point) => point.totalQueued)).toEqual([4, 3]);
   });
+
+  it("resets the sole diagnostic sample clock and bounded history", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    enqueuePendingDelegate("session-diagnostics-reset", { task: "queued" });
+
+    expect(getDiagnosticContinuationQueueMetrics(1_000)?.queueDepthHistory).toHaveLength(1);
+    expect(getDiagnosticContinuationQueueMetrics(2_000)?.queueDepthHistory).toHaveLength(2);
+
+    resetDelegateStoreForTests();
+    const afterReset = getDiagnosticContinuationQueueMetrics(3_000);
+    expect(afterReset?.intervalMs).toBeUndefined();
+    expect(afterReset?.queueDepthHistory).toEqual([
+      expect.objectContaining({ sampledAt: 3_000, totalQueued: 1 }),
+    ]);
+  });
 });
 
 describe("post-compaction delegate staging", () => {
@@ -574,6 +596,125 @@ describe("post-compaction delegate staging", () => {
     expect(expectDefined(regular.at(0), "regular delegate").task).toBe("regular");
     expect(postCompact).toHaveLength(1);
     expect(expectDefined(postCompact.at(0), "post-compaction delegate").task).toBe("post-compact");
+  });
+});
+
+describe("session post-compaction delegate contract", () => {
+  it("persists the exact controller identity and JSON projection", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(25_000);
+
+    stageSessionPostCompactionDelegate("session-adapter-json", {
+      task: "rehydrate exact state",
+      createdAt: 20_000,
+      firstArmedAt: 10_000,
+      silent: true,
+      silentWake: true,
+      targetSessionKey: "agent:main:root",
+      traceparent: VALID_TRACEPARENT,
+      traceparentProvenance: "internal",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    const flow = expectDefined([...mockFlows.values()].at(0), "staged flow");
+    expect(flow.controllerId).toBe("core/continuation-post-compaction");
+    expect(flow.controllerId).toBe(CONTINUATION_POST_COMPACTION_CONTROLLER_ID);
+    expect(flow.status).toBe("queued");
+    expect(flow.revision).toBe(0);
+    expect(flow.stateJson).toEqual({
+      kind: "continuation_delegate",
+      task: "rehydrate exact state",
+      postCompaction: true,
+      firstArmedAt: 10_000,
+      targetSessionKey: "agent:main:root",
+      traceparent: VALID_TRACEPARENT,
+      traceparentProvenance: "internal",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+  });
+
+  it("claims in stage order and returns the session adapter flags and revision handles", () => {
+    for (const [task, createdAt] of [
+      ["first", 100],
+      ["second", 200],
+      ["third", 300],
+    ] as const) {
+      stageSessionPostCompactionDelegate("session-adapter-order", {
+        task,
+        createdAt,
+        silent: false,
+        silentWake: false,
+      });
+    }
+
+    const claimed = consumeSessionPostCompactionDelegates("session-adapter-order");
+    expect(claimed.map((delegate) => delegate.task)).toEqual(["first", "second", "third"]);
+    expect(claimed).toEqual(
+      claimed.map((delegate, index) =>
+        expect.objectContaining({
+          task: ["first", "second", "third"][index],
+          createdAt: [100, 200, 300][index],
+          firstArmedAt: [100, 200, 300][index],
+          silent: true,
+          silentWake: true,
+          flowId: expect.any(String),
+          expectedRevision: 1,
+        }),
+      ),
+    );
+    expect(consumeSessionPostCompactionDelegates("session-adapter-order")).toEqual([]);
+  });
+
+  it("requeues only the expected revision and clears release-only state", () => {
+    stageSessionPostCompactionDelegate("session-adapter-requeue", {
+      task: "next compaction",
+      createdAt: 100,
+    });
+    const delegate = expectDefined(
+      consumeSessionPostCompactionDelegates("session-adapter-requeue", {
+        claimFor: "next-seam-persist",
+      }).at(0),
+      "claimed session delegate",
+    );
+    const claimedFlow = expectDefined(mockFlows.get(delegate.flowId!), "claimed flow");
+    expect(claimedFlow.stateJson).toMatchObject({
+      awaitingNextCompaction: true,
+      releasedAt: expect.any(Number),
+    });
+
+    expect(requeueSessionPostCompactionDelegate(delegate)).toBe(true);
+    const requeuedFlow = expectDefined(mockFlows.get(delegate.flowId!), "requeued flow");
+    expect(requeuedFlow.status).toBe("queued");
+    expect(requeuedFlow.revision).toBe(2);
+    expect(requeuedFlow.stateJson).not.toHaveProperty("releasedAt");
+    expect(requeuedFlow.stateJson).not.toHaveProperty("awaitingNextCompaction");
+
+    const rereleased = expectDefined(
+      consumeSessionPostCompactionDelegates("session-adapter-requeue").at(0),
+      "re-released delegate",
+    );
+    expect(rereleased.expectedRevision).toBe(3);
+    expect(requeueSessionPostCompactionDelegate(delegate)).toBe(false);
+  });
+
+  it("finalizes exactly the claimed flow ids after durable handoff", () => {
+    stageSessionPostCompactionDelegate("session-adapter-finalize", {
+      task: "first",
+      createdAt: 100,
+    });
+    stageSessionPostCompactionDelegate("session-adapter-finalize", {
+      task: "second",
+      createdAt: 200,
+    });
+    const claimed = consumeSessionPostCompactionDelegates("session-adapter-finalize");
+    const first = expectDefined(claimed.at(0), "first claim");
+    const second = expectDefined(claimed.at(1), "second claim");
+
+    expect(finalizeStagedPostCompactionDelegates([first.flowId])).toBe(1);
+    expect(mockFlows.get(first.flowId!)?.status).toBe("succeeded");
+    expect(mockFlows.get(second.flowId!)?.status).toBe("running");
+    expect(finalizeStagedPostCompactionDelegates([first.flowId])).toBe(0);
+    expect(finalizeStagedPostCompactionDelegates([second.flowId])).toBe(1);
   });
 });
 
