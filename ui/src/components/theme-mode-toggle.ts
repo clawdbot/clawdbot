@@ -10,6 +10,20 @@ export type ThemeModeChangeDetail = {
   element: HTMLElement;
 };
 
+const MODE_ORDER: ThemeMode[] = ["system", "light", "dark"];
+
+function getNextMode(current: ThemeMode, direction: "next" | "prev"): ThemeMode {
+  const currentIndex = MODE_ORDER.indexOf(current);
+  if (currentIndex === -1) {
+    return MODE_ORDER[0];
+  }
+  const nextIndex =
+    direction === "next"
+      ? (currentIndex + 1) % MODE_ORDER.length
+      : (currentIndex - 1 + MODE_ORDER.length) % MODE_ORDER.length;
+  return MODE_ORDER[nextIndex];
+}
+
 export class ThemeModeToggle extends LitElement {
   override createRenderRoot() {
     return this;
@@ -35,34 +49,47 @@ export class ThemeModeToggle extends LitElement {
     );
   };
 
+  private readonly handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? "next" : "prev";
+    const nextMode = getNextMode(this.mode, direction);
+    this.handleModeChange(nextMode, event);
+  };
+
   override render() {
-    const options: Array<{ id: ThemeMode; labelKey: string }> = [
-      { id: "system", labelKey: "common.system" },
-      { id: "light", labelKey: "common.light" },
-      { id: "dark", labelKey: "common.dark" },
+    const options: Array<{ id: ThemeMode; labelKey: string; icon: string }> = [
+      { id: "system", labelKey: "common.system", icon: icons.monitor },
+      { id: "light", labelKey: "common.light", icon: icons.sun },
+      { id: "dark", labelKey: "common.dark", icon: icons.moon },
     ];
 
+    const activeIndex = options.findIndex((option) => option.id === this.mode);
+
     return html`
-      <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
-        ${options.map((option) => {
+      <div
+        class="topbar-theme-mode"
+        role="group"
+        aria-label=${t("common.colorMode")}
+        @keydown=${this.handleKeyDown}
+      >
+        ${options.map((option, index) => {
           const label = t(option.labelKey);
           const tooltip = t("common.colorModeOption", { mode: label });
+          const isActive = option.id === this.mode;
           return html`
             <openclaw-tooltip .content=${tooltip}>
               <button
                 type="button"
-                class="topbar-theme-mode__btn ${option.id === this.mode
-                  ? "topbar-theme-mode__btn--active"
-                  : ""}"
+                class="topbar-theme-mode__btn ${isActive ? "topbar-theme-mode__btn--active" : ""}"
                 aria-label=${tooltip}
-                aria-pressed=${option.id === this.mode}
+                aria-pressed=${isActive}
+                tabindex=${index === activeIndex ? "0" : "-1"}
                 @click=${(event: Event) => this.handleModeChange(option.id, event)}
               >
-                ${option.id === "system"
-                  ? icons.monitor
-                  : option.id === "light"
-                    ? icons.sun
-                    : icons.moon}
+                ${option.icon}
               </button>
             </openclaw-tooltip>
           `;
