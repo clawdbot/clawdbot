@@ -101,6 +101,7 @@ type CopilotApiModelEntry = {
   vendor?: string;
   preview?: boolean;
   model_picker_enabled?: boolean;
+  supported_endpoints?: string[];
   capabilities?: {
     type?: string;
     family?: string;
@@ -129,9 +130,20 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
 function resolveCopilotApiForVendor(
   vendor: string | undefined,
   modelId: string,
+  supportedEndpoints?: string[],
 ): "anthropic-messages" | "openai-completions" | "openai-responses" {
   if (vendor && vendor.toLowerCase() === "anthropic") {
     return "anthropic-messages";
+  }
+  if (Array.isArray(supportedEndpoints)) {
+    const hasResponses = supportedEndpoints.some((ep) => ep.includes("responses"));
+    const hasCompletions = supportedEndpoints.some((ep) => ep.includes("completions"));
+    if (hasResponses && !hasCompletions) {
+      return "openai-responses";
+    }
+    if (hasCompletions) {
+      return "openai-completions";
+    }
   }
   return resolveCopilotTransportApi(modelId);
 }
@@ -205,7 +217,7 @@ function mapCopilotApiModelToDefinition(
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
-  const api = resolveCopilotApiForVendor(entry.vendor, id);
+  const api = resolveCopilotApiForVendor(entry.vendor, id, entry.supported_endpoints);
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
   const definition: CopilotCatalogModel = {
