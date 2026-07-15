@@ -3566,22 +3566,21 @@ export async function runReplyAgent(replyParams: {
                     `[continuation] Ignoring continue_work election(s) disabled during chain-state reservation for session ${sessionKey}`,
                   );
                 } else {
-                  const reservedSchedulingConfig = {
-                    ...liveSchedulingConfig,
-                    maxChainLength: Math.min(
-                      liveSchedulingConfig.maxChainLength,
-                      reservation.reservedCount,
-                    ),
-                  };
+                  const reservedRequestCount = Math.max(
+                    0,
+                    reservation.reservedCount - reservation.prior.count,
+                  );
+                  const reservedWorkRequests = workRequests.slice(0, reservedRequestCount);
+                  const unreservedRequestCount = workRequests.length - reservedWorkRequests.length;
                   let batchResult:
                     | Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>
                     | undefined;
                   try {
-                    batchResult = await scheduleContinuationWorkBatch({
+                    const scheduledBatch = await scheduleContinuationWorkBatch({
                       sessionKey,
                       chainState: reservation.reserved,
-                      requests: workRequests,
-                      config: reservedSchedulingConfig,
+                      requests: reservedWorkRequests,
+                      config: liveSchedulingConfig,
                       // Same-session own-turn continue_work has no spawning lineage; leave
                       // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
                       // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
@@ -3589,6 +3588,11 @@ export async function runReplyAgent(replyParams: {
                       originTurnId: followupRun.run.sessionId,
                       log: (message) => defaultRuntime.log(message),
                     });
+                    batchResult = {
+                      ...scheduledBatch,
+                      cappedCount: scheduledBatch.cappedCount + unreservedRequestCount,
+                      capped: scheduledBatch.capped || unreservedRequestCount > 0,
+                    };
                   } catch (err) {
                     defaultRuntime.log(
                       `[continuation] continue_work scheduling failed after durable reservation for session ${sessionKey}: ${String(err)}`,
