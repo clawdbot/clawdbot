@@ -7350,8 +7350,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalled();
     const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
-    expect(callArgs.continueWorkOpts).toBeDefined();
-    expect(typeof (callArgs.continueWorkOpts as any).requestContinuation).toBe("function");
+    const continueWorkOpts = requireRecord(callArgs.continueWorkOpts, "continueWorkOpts");
+    expect(typeof continueWorkOpts.requestContinuation).toBe("function");
   });
 
   it("passes resolved continuation config into followup continue_delegate dispatch", async () => {

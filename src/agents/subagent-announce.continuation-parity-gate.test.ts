@@ -88,7 +88,11 @@ import {
   retainContinuationTimerRef,
   registerContinuationTimerHandle,
 } from "../auto-reply/continuation/state.js";
-import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveStorePath,
@@ -106,7 +110,7 @@ function makeConfig(
     enabled?: boolean;
     crossSessionTargeting?: "disabled" | "enabled";
   } = {},
-) {
+): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" as const },
     agents: {
@@ -161,7 +165,7 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
 
   beforeEach(async () => {
     await writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:parity-next",
@@ -262,7 +266,7 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
 
   it("dispatches exactly once for [[CONTINUE_DELEGATE: task | target=agent:main:other]]", async () => {
     // Enable cross-session targeting so the target directive is not rejected
-    setRuntimeConfigSnapshot(makeConfig({ crossSessionTargeting: "enabled" }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ crossSessionTargeting: "enabled" }));
     const params = buildParityParams(
       "[[CONTINUE_DELEGATE: targeted research | target=agent:main:other]]",
     );
@@ -340,7 +344,7 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
   // -- 8. Feature-gate control: continuationEnabled=false --
 
   it("does NOT dispatch when continuationEnabled=false even with bracket in findings", async () => {
-    setRuntimeConfigSnapshot(makeConfig({ enabled: false }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ enabled: false }));
     const params = buildParityParams("[[CONTINUE_DELEGATE: should not fire]]");
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
@@ -360,7 +364,7 @@ describe("#974: announce path is the sole dispatch route (no-double-fire guard)"
 
   beforeEach(async () => {
     await writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:double-fire-check",

@@ -160,10 +160,16 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the indexed-access and test-file policies", () => {
+  it("keeps lint overrides limited to the browser-route, indexed-access, and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
     expect(config.overrides).toEqual([
+      {
+        files: ["extensions/browser/src/browser/routes/*.ts"],
+        rules: {
+          "oxc/no-async-endpoint-handlers": "off",
+        },
+      },
       {
         files: [
           "packages/markdown-core/**/*.ts",

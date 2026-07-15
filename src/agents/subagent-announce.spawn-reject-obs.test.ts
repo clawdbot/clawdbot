@@ -88,7 +88,11 @@ import {
   consumePendingDelegates,
   markPendingDelegateFailed,
 } from "../auto-reply/continuation/delegate-store.js";
-import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
@@ -96,7 +100,7 @@ import * as subagentSpawn from "./subagent-spawn.js";
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 
-function makeConfig() {
+function makeConfig(): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" as const },
     agents: {
@@ -161,7 +165,7 @@ describe("subagent-announce chain-delegate rejection observability (PR #889 / #8
 
   beforeEach(() => {
     writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     mockedConsumePendingDelegates.mockReturnValue([]);
@@ -215,7 +219,7 @@ describe("subagent-announce tool-delegate rejection observability (PR #889 / #87
 
   beforeEach(() => {
     writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     mockedConsumePendingDelegates.mockReset().mockReturnValue([]);

@@ -2,7 +2,12 @@ import AjvModule from "ajv";
 import { describe, expect, it } from "vitest";
 import { AgentParamsSchema } from "./agent.js";
 import { internalProtocolField, stripInternalProtocolFields } from "./internal-fields.js";
-const Ajv = (AjvModule as any).default ?? AjvModule;
+
+function hasDefaultExport<T extends object>(value: T): value is T & { default: T } {
+  return "default" in value && typeof value.default === "function";
+}
+
+const Ajv = hasDefaultExport(AjvModule) ? AjvModule.default : AjvModule;
 
 const ajv = new Ajv({ allErrors: true });
 const validate = ajv.compile(AgentParamsSchema);

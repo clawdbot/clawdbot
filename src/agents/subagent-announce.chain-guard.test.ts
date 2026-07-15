@@ -71,7 +71,11 @@ import {
   markPendingDelegateFailed,
   stagePostCompactionDelegate,
 } from "../auto-reply/continuation/delegate-store.js";
-import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import {
   listSessionEntries,
@@ -92,7 +96,7 @@ function makeConfig(
     enabled?: boolean;
     crossSessionTargeting?: "disabled" | "enabled";
   } = {},
-) {
+): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" as const },
     agents: {
@@ -159,7 +163,7 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
   beforeEach(async () => {
     // Write empty session store so loadSessionEntryByKey finds no entries
     await writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:chain-next",
@@ -258,7 +262,7 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
   });
 
   it("respects custom maxChainLength from config at the exact boundary", async () => {
-    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }));
 
     const params = buildChainShardParams(2);
     await runSubagentAnnounceFlow(params);
@@ -272,7 +276,7 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
   });
 
   it("respects custom maxChainLength from config after the boundary is reached", async () => {
-    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }));
 
     const params = buildChainShardParams(3);
     await runSubagentAnnounceFlow(params);
@@ -356,7 +360,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
 
   beforeEach(async () => {
     await writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 10 }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 10 }));
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:tool-chain-next",
@@ -425,7 +429,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
 
   it("allows tool delegate at maxChainLength (next hop = maxChainLength, off-by-one fix)", async () => {
     // With maxChainLength=5: childChainHop=4, nextToolHop=5 = maxChainLength → allowed (> not >=)
-    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 5 }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 5 }));
     mockedConsumePendingDelegates.mockReturnValue([{ task: "tool task exactly at boundary" }]);
 
     const params = buildToolDelegateParams(4);
@@ -532,7 +536,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
   });
 
   it("respects custom maxChainLength for tool delegates", async () => {
-    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }) as any);
+    setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 3 }));
     mockedConsumePendingDelegates.mockReturnValue([{ task: "tool task at custom boundary" }]);
 
     // hop 2 → next=3 = maxChainLength → allowed
@@ -572,7 +576,7 @@ describe("announce-path post-compaction routing (stage at seam, skip spawn)", ()
 
   beforeEach(async () => {
     await writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig() as any);
+    setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:should-not-spawn",
