@@ -1146,6 +1146,20 @@ describe("agentLoop tool termination", () => {
     expect(endEvent).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",
+      result: {
+        details: {
+          ok: false,
+          status: "rejected",
+          errors: [
+            {
+              code: "invalid_arguments",
+              class: "recoverable",
+              retry: "after_argument_change",
+              next_safe_action: "correct_arguments_before_call",
+            },
+          ],
+        },
+      },
     });
   });
 

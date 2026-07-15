@@ -922,9 +922,10 @@ async function prepareToolCall(
   try {
     validatedArgs = validateToolArguments(tool, preparedToolCall);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       kind: "immediate",
-      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      result: createArgumentValidationErrorToolResult(message),
       isError: true,
       errorKind: "argument-validation",
     };
@@ -1089,6 +1090,23 @@ function createErrorToolResult(message: string): AgentToolResult<unknown> {
     content: [{ type: "text", text: message }],
     details: {},
   };
+}
+
+function createArgumentValidationErrorToolResult(message: string): AgentToolResult<unknown> {
+  const details = {
+    ok: false,
+    status: "rejected",
+    errors: [
+      {
+        code: "invalid_arguments",
+        class: "recoverable",
+        message,
+        retry: "after_argument_change",
+        next_safe_action: "correct_arguments_before_call",
+      },
+    ],
+  };
+  return { content: [{ type: "text", text: JSON.stringify(details) }], details };
 }
 
 async function emitToolExecutionEnd(
