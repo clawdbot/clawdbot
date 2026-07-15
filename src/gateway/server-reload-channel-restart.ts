@@ -13,9 +13,9 @@ function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): bo
   return path === `channels.${channel}.channelConfigUpdatedAt`;
 }
 
-function isChannelAccountConfigReloadPath(path: string, channel: ChannelKind): boolean {
-  const accountPrefix = `channels.${channel}.accounts`;
-  return path === accountPrefix || path.startsWith(`${accountPrefix}.`);
+function isChannelPath(path: string, channel: ChannelKind): boolean {
+  const channelPrefix = `channels.${channel}`;
+  return path === channelPrefix || path.startsWith(`${channelPrefix}.`);
 }
 
 function shouldIncludeKnownAccountsForAccountIndexReload(
@@ -24,7 +24,9 @@ function shouldIncludeKnownAccountsForAccountIndexReload(
 ): boolean {
   return (
     changedPaths.some((path) => isChannelAccountIndexReloadPath(path, channel)) &&
-    !changedPaths.some((path) => isChannelAccountConfigReloadPath(path, channel))
+    !changedPaths.some(
+      (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
+    )
   );
 }
 
