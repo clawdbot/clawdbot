@@ -1,9 +1,11 @@
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/data.ts";
 import "./tasks-page.ts";
+import { renderTasks } from "./view.ts";
 
 type TasksPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -297,6 +299,45 @@ describe("TasksPage concurrent refresh events", () => {
     await pending;
 
     expect(refresh.page.tasks.map((task) => task.id)).toEqual(["task-after-reconnect"]);
+  });
+});
+
+describe("Tasks view cancellation rendering", () => {
+  it("renders cancellation state by taskId when the row id differs", () => {
+    const task: TaskSummary = {
+      id: "row-id",
+      taskId: "cancel-id",
+      status: "running",
+      runtime: "subagent",
+      title: "Map codebase",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderTasks({
+        basePath: "",
+        agentId: "main",
+        mainKey: "main",
+        connected: true,
+        canCancel: true,
+        loading: false,
+        error: null,
+        tasks: [task],
+        cancellingTaskIds: new Set(["cancel-id"]),
+        sessionRow: () => undefined,
+        onCancel: () => {},
+        onNavigateToChat: () => {},
+      })}`,
+      container,
+    );
+
+    const cancel = container.querySelector<HTMLButtonElement>(
+      '[data-task-id="row-id"] button[aria-label="Cancel Map codebase"]',
+    );
+    expect(cancel?.disabled).toBe(true);
+    expect(cancel?.textContent?.trim()).toBe("Cancelling…");
   });
 });
 
