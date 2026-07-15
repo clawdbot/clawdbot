@@ -431,6 +431,44 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 
+  it("advances the returned chain only for accepted staged spawns", async () => {
+    const sessionKey = "session-chain-advances-on-accept";
+    mockState.spawnSubagentDirect
+      .mockResolvedValueOnce({ status: "forbidden", error: "policy rejected" })
+      .mockResolvedValueOnce({ status: "accepted" });
+
+    const result = await dispatchStagedPostCompactionDelegates(
+      [{ task: "rejected hop" }, { task: "accepted hop" }],
+      sessionKey,
+      { agentSessionKey: sessionKey },
+      {
+        chainState: {
+          currentChainCount: 0,
+          chainStartedAt: 1_700_000_000_000,
+          accumulatedChainTokens: 25,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      dispatched: 1,
+      failed: 1,
+      chainState: {
+        currentChainCount: 1,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 25,
+      },
+    });
+    expect(mockState.spawnSubagentDirect).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        task: expect.stringContaining("[continuation:chain-hop:1]"),
+        continuationChainState: expect.objectContaining({ count: 1, tokens: 25 }),
+      }),
+      { agentSessionKey: sessionKey },
+    );
+  });
+
   it("counts non-accepted spawn statuses as failed, not dispatched", async () => {
     const sessionKey = "session-post-compact-rejected";
 

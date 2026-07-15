@@ -207,6 +207,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import {
+  dispatchStagedPostCompactionDelegates,
   dispatchToolDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
@@ -648,6 +649,45 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
   });
 
+  it("atomically replaces an existing hedge without leaking its timer ref", async () => {
+    const sessionKey = "session-hedge-replace";
+    enqueuePendingDelegate(sessionKey, { task: "later deferred work", delayMs: 60_000 });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    enqueuePendingDelegate(sessionKey, { task: "earlier deferred work", delayMs: 10_000 });
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_100);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ task: expect.stringContaining("earlier deferred work") }),
+      expect.anything(),
+    );
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(48_900);
+    await vi.runAllTimersAsync();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentDirectMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ task: expect.stringContaining("later deferred work") }),
+      expect.anything(),
+    );
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
+  });
+
   it("surfaces hedge dispatch failures and re-arms a retry instead of orphaning queued delegates", async () => {
     const sessionKey = "session-hedge-failure";
 
@@ -674,7 +714,14 @@ describe("hedge timer ref/handle cleanup", () => {
       { sessionKey, trusted: true },
     );
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
-    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+
+    listTaskFlowsShouldThrow = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.runAllTimersAsync();
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
   });
   it("does not carry current-turn reserved delegate slots into hedge-fired dispatch", async () => {
     const sessionKey = "session-hedge-reserved-slot";
@@ -2567,6 +2614,41 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(flowId).toBeDefined();
     return flowId as string;
   }
+
+  it("partitions accepted, forbidden, error, and thrown staged outcomes without advancing transient hops", async () => {
+    const sessionKey = "agent:main:subagent:pc-direct-partitions";
+    for (const task of ["accepted", "forbidden", "error", "thrown"]) {
+      stagePostCompactionTaskFlowDelegate(sessionKey, { task, stagedAt: Date.now() });
+    }
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    expect(claimed).toHaveLength(4);
+    const [accepted, forbidden, transient, thrown] = claimed;
+    expect(accepted?.flowId).toBeDefined();
+    expect(forbidden?.flowId).toBeDefined();
+    expect(transient?.flowId).toBeDefined();
+    expect(thrown?.flowId).toBeDefined();
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "accepted" })
+      .mockResolvedValueOnce({ status: "forbidden", error: "blocked" })
+      .mockResolvedValueOnce({ status: "error", error: "busy" })
+      .mockRejectedValueOnce(new Error("transport unavailable"));
+
+    const result = await dispatchStagedPostCompactionDelegates(claimed, sessionKey, {
+      agentSessionKey: sessionKey,
+    });
+
+    expect(result).toMatchObject({
+      dispatched: 1,
+      failed: 3,
+      dispatchedFlowIds: [accepted?.flowId],
+      terminalRejectedFlowIds: [forbidden?.flowId],
+      transientFailedFlowIds: [transient?.flowId, thrown?.flowId],
+      chainState: { currentChainCount: 1 },
+    });
+    expect(mockFlows.get(forbidden?.flowId as string)).toMatchObject({ status: "failed" });
+    expect(mockFlows.get(transient?.flowId as string)).toMatchObject({ status: "running" });
+    expect(mockFlows.get(thrown?.flowId as string)).toMatchObject({ status: "running" });
+  });
 
   it("requeues awaiting-next-compaction running rows on startup recovery", async () => {
     const sessionKey = "agent:main:subagent:pc-next-seam-startup-requeue";

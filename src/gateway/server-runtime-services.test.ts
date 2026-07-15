@@ -385,6 +385,33 @@ describe("server-runtime-services", () => {
     });
   });
 
+  it("runs delegate, staged, then work recovery in startup order", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    hoisted.recoverPendingContinuationDelegates.mockImplementationOnce(async () => {
+      order.push("delegate");
+      return { sessions: 0, dispatched: 0, rejected: 0 };
+    });
+    hoisted.requeueAwaitingNextCompactionDelegates.mockImplementationOnce(async () => {
+      order.push("requeue-next-seam");
+      return { requeued: 0 };
+    });
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockImplementationOnce(async () => {
+      order.push("staged");
+      return { sessions: 0, dispatched: 0, failed: 0 };
+    });
+    hoisted.recoverPendingContinuationWork.mockImplementationOnce(async () => {
+      order.push("work");
+      return { sessions: 0, dispatched: 0, failed: 0, reaped: 0 };
+    });
+
+    activateScheduledServicesForTest();
+    await vi.advanceTimersByTimeAsync(1_400);
+    await vi.dynamicImportSettled();
+
+    expect(order).toEqual(["delegate", "requeue-next-seam", "staged", "work"]);
+  });
+
   it("starts cron and records memory when post-ready maintenance fails", async () => {
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
