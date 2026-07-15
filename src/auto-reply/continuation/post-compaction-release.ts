@@ -12,10 +12,10 @@
  *   3. Consume staged post-compaction delegates and dispatch them with
  *      silentAnnounce + wakeOnReturn + drainsContinuationDelegateQueue.
  *
- * Lazy imports for `lazy.runtime` and `delegate-dispatch` are preserved here:
+ * Lazy imports for `lazy.runtime` and staged delegate dispatch are preserved here:
  * lazy.runtime owns per-process singleton state and must not be statically
- * imported anywhere in src/ (boundary rule); delegate-dispatch is heavy and
- * is loaded only when delegates are actually staged.
+ * imported anywhere in src/ (boundary rule); staged dispatch is loaded only
+ * when delegates are actually staged.
  */
 
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -105,7 +105,7 @@ export async function releasePostCompactionLifecycle(
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {
     const { dispatchStagedPostCompactionDelegates } =
-      await import("./delegate-dispatch-recovery.js");
+      await import("./post-compaction-staged-dispatch.js");
     const result = await dispatchStagedPostCompactionDelegates(
       stagedDelegates,
       sessionKey,
