@@ -24,7 +24,7 @@ export function readStreamingSandboxHttpResponse(params: {
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
-    const finalize = async (status: "completed" | "failed", exitCode: number | null) => {
+    const finalizeOnClose = async (status: "completed" | "failed", exitCode: number | null) => {
       await params.finalizeExec?.({
         status,
         exitCode,
@@ -32,14 +32,16 @@ export function readStreamingSandboxHttpResponse(params: {
         token: params.execSpec.finalizeToken,
       });
     };
-    const fail = (message: string, exitCode: number | null) => {
+    const finalizeAfterClose = (status: "completed" | "failed", exitCode: number | null) => {
+      void finalizeOnClose(status, exitCode).catch((error: unknown) => {
+        embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+      });
+    };
+    const fail = (message: string, exitCode: number | null, terminateChild = exitCode === null) => {
       if (failed) {
         return;
       }
       failed = true;
-      void finalize("failed", exitCode).catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-      });
       if (headerResolved) {
         sendHttpBodyDelta(params.socket, {
           requestId: params.requestId,
@@ -48,9 +50,12 @@ export function readStreamingSandboxHttpResponse(params: {
           done: true,
           error: message,
         });
-        return;
+      } else {
+        reject(new Error(message));
       }
-      reject(new Error(message));
+      if (terminateChild) {
+        params.child.kill("SIGTERM");
+      }
     };
     params.child.stdout.on("data", (chunk: Buffer) => {
       stdoutBuffer += chunk.toString("utf8");
@@ -91,6 +96,7 @@ export function readStreamingSandboxHttpResponse(params: {
         fail(
           `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
           null,
+          false,
         );
       }
     });
@@ -122,28 +128,27 @@ export function readStreamingSandboxHttpResponse(params: {
     params.child.once("close", (code) => {
       const exitCode = code ?? 1;
       if (streamFailure) {
-        void finalize("failed", exitCode).catch((error: unknown) => {
-          embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-        });
+        finalizeAfterClose("failed", exitCode);
         return;
       }
       if (failed) {
+        finalizeAfterClose("failed", exitCode);
         return;
       }
       if (childFailure) {
-        fail(childFailure, exitCode);
+        fail(childFailure, exitCode, false);
+        finalizeAfterClose("failed", exitCode);
         return;
       }
       if (exitCode === 0) {
-        void finalize("completed", exitCode).catch((error: unknown) => {
-          embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-        });
+        finalizeAfterClose("completed", exitCode);
         if (!headerResolved) {
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;
       }
-      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`, exitCode);
+      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`, exitCode, false);
+      finalizeAfterClose("failed", exitCode);
     });
   });
 }

@@ -239,4 +239,51 @@ describe("sandbox exec-server pipe survival", () => {
 
     socket.close();
   });
+
+  it("streaming HTTP request defers malformed-output finalization until child close", async () => {
+    const finalizeExec = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          "process.on('SIGTERM',function(){});process.stdout.write('not-json\\n');setTimeout(function(){},300000)",
+        ],
+        env: { PATH: process.env.PATH, TMPDIR },
+        stdinMode: "pipe-closed" as const,
+      }),
+      finalizeExec,
+    });
+    const client = createClient();
+    const env = await ensureCodexSandboxExecServerEnvironment({
+      client: client as unknown as CodexAppServerClient,
+      sandbox,
+    });
+    expect(env).toBeDefined();
+    const socket = await openSocket(execServerUrlFromClient(client));
+    collectNotifications(socket);
+
+    const requestPromise = rpc(socket, "http/request", {
+      requestId: "http-pipe-malformed-1",
+      method: "GET",
+      url: "https://example.com/",
+      streamResponse: true,
+    });
+
+    await expect(requestPromise).rejects.toThrow();
+    const child = spawnedChildren.at(-1);
+    expect(child).toBeDefined();
+
+    // Malformed stdout settles the request and asks the helper to terminate,
+    // but close remains the only backend finalization owner.
+    expect(finalizeExec).not.toHaveBeenCalled();
+
+    child!.kill("SIGKILL");
+    await vi.waitFor(() => {
+      expect(finalizeExec).toHaveBeenCalledTimes(1);
+    });
+    expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+
+    socket.close();
+  });
 });
