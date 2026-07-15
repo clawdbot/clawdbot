@@ -230,15 +230,20 @@ export async function detectMime(opts: {
     .filter((mime): mime is string => Boolean(mime));
   const headerMime = mimeHints[0];
   const sniffed = await sniffMime(opts.buffer);
+  // Signed APKs may be sniffed as JARs when META-INF/MANIFEST.MF appears before
+  // classes*.dex. Treat that result like a generic ZIP only for an .apk path.
   const sniffedGenericContainer =
-    sniffed === "application/octet-stream" || sniffed === "application/zip";
+    sniffed === "application/octet-stream" ||
+    sniffed === "application/zip" ||
+    (sniffed === "application/java-archive" &&
+      extMime === "application/vnd.android.package-archive");
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension or known container metadata (e.g. XLSX vs ZIP).
   const specificExtMime =
     extMime && extMime !== sniffed && !extMime.startsWith("image/") ? extMime : undefined;
   const genericContainerMime =
-    sniffed === "application/zip"
+    sniffed === "application/zip" || sniffed === "application/java-archive"
       ? [extMime, ...mimeHints].find((mime) => mime && isZipContainerMime(mime))
       : sniffed === "application/octet-stream"
         ? (specificExtMime ?? mimeHints.find((mime) => mime !== "application/octet-stream"))

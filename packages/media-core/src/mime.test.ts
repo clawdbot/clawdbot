@@ -100,6 +100,19 @@ describe("mime detection", () => {
       expected: "application/vnd.android.package-archive",
     },
     {
+      name: "prefers APK extension mapping over signed APK sniffed as JAR",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n");
+        zip.file("classes.dex", "dex");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/signed.apk",
+        };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
       name: "does not let image extensions override generic zip bytes",
       input: async () => {
         const zip = new JSZip();
