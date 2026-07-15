@@ -683,6 +683,92 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
   });
 
+  it("does not schedule beyond the durable reservation when the live chain limit increases", async () => {
+    vi.useFakeTimers();
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-limit-increased-after-reservation",
+      config: {
+        agents: {
+          defaults: {
+            continuation: {
+              enabled: true,
+              minDelayMs: 0,
+              maxDelayMs: 1_000,
+              defaultDelayMs: 1_000,
+              maxChainLength: 1,
+            },
+          },
+        },
+      },
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    let persistedEntry = run.sessionEntry;
+    let persistenceCalls = 0;
+    patchSessionEntryMock.mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        persistenceCalls += 1;
+        if (persistenceCalls === 2) {
+          throw new Error("session database unavailable during reconciliation");
+        }
+        const patch = update(persistedEntry);
+        setRuntimeConfigSnapshot({
+          ...run.followupRun.run.config,
+          agents: {
+            ...run.followupRun.run.config.agents,
+            defaults: {
+              ...run.followupRun.run.config.agents?.defaults,
+              continuation: {
+                ...run.followupRun.run.config.agents?.defaults?.continuation,
+                maxChainLength: 2,
+              },
+            },
+          },
+        });
+        if (!patch) {
+          return null;
+        }
+        persistedEntry = { ...persistedEntry, ...patch };
+        return persistedEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "durably reserved election",
+        delaySeconds: 1,
+      });
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "election beyond durable reservation",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Working on it" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+    const sessionStore = { [run.sessionKey]: run.sessionEntry };
+
+    await runWorkTurn(
+      run,
+      sessionStore,
+      "Working on it",
+      false,
+      "/tmp/openclaw-continuation-work-live-limit-increase.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
+    expect(persistedEntry.continuationChainCount).toBe(1);
+    expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
+  });
+
   it("keeps hedge-fired delegates recoverable when chain-state persistence fails", async () => {
     vi.useFakeTimers();
     const run = createContinuationRun({
