@@ -30,7 +30,7 @@ run_scenario() {
   local container_name="openclaw-hosting-profiles-${scenario}-$$"
   local auth_args=(-e "OPENCLAW_GATEWAY_TOKEN=$TOKEN")
   local profile_args=()
-  local runtime_args=()
+  local runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,size=8m")
   local gateway_setup=""
   CONTAINER_NAMES+=("$container_name")
   if [ -n "$profile" ]; then
@@ -53,6 +53,7 @@ run_scenario() {
     "${auth_args[@]}" \
     "${profile_args[@]}" \
     "${runtime_args[@]}" \
+    -e "OPENCLAW_WORKSPACE_DIR=/tmp/hosting-profile-workspace" \
     -e "OPENCLAW_SKIP_CHANNELS=1" \
     -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
     -e "OPENCLAW_SKIP_CRON=1" \
