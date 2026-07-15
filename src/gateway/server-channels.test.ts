@@ -2925,6 +2925,39 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("does not keep no-restart caller handoffs in the known-account safety net", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, { manual: false, restartPending: false });
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
   it("does not include known accounts on ordinary caller-owned restarts", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(

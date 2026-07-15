@@ -3482,7 +3482,10 @@ describe("gateway channel hot reload handlers", () => {
 
     await withChannelReloadsEnabled(() => applyHotReload(createChannelReloadPlan(["discord"]), {}));
 
-    expect(channels.stop).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(channels.start).not.toHaveBeenCalled();
     expect(logChannels.info).toHaveBeenCalledWith(
       "stopping discord channel before suppressed hot reload",
@@ -5755,7 +5758,10 @@ describe("gateway plugin hot reload handlers", () => {
       restoreChannelReloadEnv();
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop:discord", "registry:replace"]);
     expect(logChannels.info).toHaveBeenCalledWith(

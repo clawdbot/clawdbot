@@ -463,7 +463,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
-            await params.stopChannel(channel, undefined, { manual: false });
+            const stopOptions = getChannelAutostartSuppression()
+              ? { manual: false, restartPending: false }
+              : { manual: false };
+            await params.stopChannel(channel, undefined, stopOptions);
             if (isPluginReloadAborted()) {
               pluginReloadAborted = true;
             }
