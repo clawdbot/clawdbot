@@ -561,6 +561,38 @@ hosted snapshot or bundled fallback result without failing the command. Pinned
 refreshes fail unless they accept a fresh hosted payload, and successful hosted
 refreshes fail if OpenClaw cannot persist the validated snapshot.
 
+The built-in `clawhub-public` profile expects payload identity
+`clawhub-official`. OpenClaw will bundle ClawHub's production public key after
+ClawHub generates and hands off that key. Until then, staging and private
+deployments can inject both `OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID` and
+`OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY`; setting only one fails closed before
+fetch. Public keys must come from a trusted release or operator channel, not
+from a key endpoint on the feed host.
+
+Custom signed profiles require an expected `feedId` as well as local trust
+anchors:
+
+```json5
+{
+  marketplaces: {
+    feeds: {
+      acme: {
+        url: "https://packages.acme.example/openclaw/feed",
+        feedId: "acme-plugins",
+        verification: {
+          mode: "signed",
+          keys: [{ keyId: "acme-2026", publicKey: "<Ed25519 public key>" }],
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw verifies the DSSE envelope and then requires the decoded payload ID to
+match `feedId`, preventing a valid document for one feed from being replayed
+through another profile.
+
 ## Related
 
 - [Building plugins](/plugins/building-plugins)

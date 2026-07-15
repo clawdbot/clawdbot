@@ -11,6 +11,8 @@ import {
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
+  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV,
+  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV,
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
@@ -160,6 +162,7 @@ function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): HostedC
     feeds: {
       acme: {
         url: "https://packages.acme.example/openclaw/feed",
+        feedId: "openclaw-official-external-plugins",
         verification: {
           mode: "signed",
           keys: [{ keyId, publicKey: publicKeyPem }],
@@ -343,6 +346,68 @@ describe("official external plugin catalog", () => {
         entries: [],
       }),
     ).toBe(true);
+  });
+
+  it("verifies the default ClawHub profile with injected trust anchors", async () => {
+    const feed = {
+      ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-signed" }),
+      id: "clawhub-official",
+    };
+    const signed = signedHostedCatalogFeed({ feed });
+    const fetchImpl = vi.fn(async () => new Response(signed.body, { status: 200 }));
+
+    const result = await loadHostedCatalog({
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
+          signed.publicKeyPem,
+      },
+      fetchImpl,
+      snapshotStore: null,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.source).toBe("hosted");
+    expect(result.feed?.id).toBe("clawhub-official");
+    expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
+  });
+
+  it("rejects a valid default-profile envelope for a different feed identity", async () => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/replayed" }),
+    });
+
+    const result = await loadHostedCatalog({
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
+          signed.publicKeyPem,
+      },
+      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    expect(result.error).toContain(
+      'feed id "openclaw-official-external-plugins" did not match expected "clawhub-official"',
+    );
+  });
+
+  it("fails closed before fetch when default ClawHub trust env is incomplete", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    const result = await loadHostedCatalog({
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+      },
+      fetchImpl,
+      snapshotStore: null,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    expect(result.error).toContain("requires both key id and public key env vars");
   });
 
   it("loads schema-v2 marketplace entries and gates installs by state and trust", async () => {
@@ -1194,7 +1259,7 @@ describe("official external plugin catalog", () => {
   it("enforces hosted checksum and response-size limits", async () => {
     const validBody = JSON.stringify({
       schemaVersion: 1,
-      id: "openclaw-official-external-plugins",
+      id: "clawhub-official",
       generatedAt: "2026-06-22T00:00:01.000Z",
       sequence: 1,
       entries: [],
@@ -1245,7 +1310,7 @@ describe("official external plugin catalog", () => {
     const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
     const body = JSON.stringify({
       schemaVersion: 1,
-      id: "openclaw-official-external-plugins",
+      id: "clawhub-official",
       generatedAt: "2026-06-22T00:00:01.000Z",
       sequence: 1,
       entries: [],
