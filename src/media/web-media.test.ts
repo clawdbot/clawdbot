@@ -1087,6 +1087,12 @@ describe("loadWebMedia", () => {
       contentType: "application/x-7z-compressed",
     },
     {
+      label: "APK",
+      fileName: "archive.apk",
+      body: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      contentType: "application/vnd.android.package-archive",
+    },
+    {
       label: "JSON",
       fileName: "data.json",
       body: '{"ok":true}\n',

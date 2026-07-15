@@ -684,6 +684,37 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
+    it("allows host-local APK attachments when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-apk-"));
+      try {
+        const outsidePath = path.join(tempDir, "build.apk");
+        await fs.writeFile(outsidePath, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("build.apk");
+        expect(payload.contentType).toBe("application/vnd.android.package-archive");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("hydrates validated host-local text attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 

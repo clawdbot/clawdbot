@@ -88,6 +88,18 @@ describe("mime detection", () => {
       expected: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     },
     {
+      name: "prefers APK extension mapping over generic zip",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("classes.dex", "dex");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/build.apk",
+        };
+      },
+      expected: "application/vnd.android.package-archive",
+    },
+    {
       name: "does not let image extensions override generic zip bytes",
       input: async () => {
         const zip = new JSZip();
@@ -439,6 +451,7 @@ describe("extensionForMime", () => {
     { mime: "video/x-flv", expected: ".flv" },
     { mime: "video/x-ms-wmv", expected: ".wmv" },
     { mime: "video/quicktime", expected: ".mov" },
+    { mime: "application/vnd.android.package-archive", expected: ".apk" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "application/yaml", expected: ".yaml" },
     { mime: "text/plain", expected: ".txt" },
