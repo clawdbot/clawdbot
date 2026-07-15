@@ -37,7 +37,7 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: mockState.enqueueSystemEvent,
 }));
 
-import { dispatchStagedPostCompactionDelegates } from "./delegate-dispatch-recovery.js";
+import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
 
 const SPOOFED_DELEGATE_TASK = [
   "do important continuation work",

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,7 +209,6 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import {
-  dispatchStagedPostCompactionDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
   requeueAwaitingNextCompactionDelegates,
@@ -223,6 +223,7 @@ import {
   stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store.js";
+import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 
@@ -509,14 +510,15 @@ describe("trusted delegate task echoes", () => {
   });
 
   it("keeps every prompt-facing delegate task echo behind the sanitizer helper", () => {
-    const sourceFiles = ["./delegate-dispatch.ts", "./delegate-dispatch-recovery.ts"].map((path) =>
-      ts.createSourceFile(
-        path,
-        readFileSync(new URL(path, import.meta.url), "utf8"),
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TS,
-      ),
+    const sourceFiles = ["./delegate-dispatch.ts", "./post-compaction-staged-dispatch.ts"].map(
+      (sourcePath) =>
+        ts.createSourceFile(
+          sourcePath,
+          readFileSync(new URL(sourcePath, import.meta.url), "utf8"),
+          ts.ScriptTarget.Latest,
+          true,
+          ts.ScriptKind.TS,
+        ),
     );
     const taskReferences: ts.Expression[] = [];
     const visit = (node: ts.Node): void => {
@@ -564,6 +566,147 @@ describe("trusted delegate task echoes", () => {
         );
       }),
     ).toBe(true);
+  });
+});
+
+describe("delegate dispatch ownership graph", () => {
+  const moduleFiles = [
+    "src/auto-reply/continuation/delegate-dispatch.ts",
+    "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
+    "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
+    "src/auto-reply/continuation/post-compaction-release.ts",
+    "src/gateway/server-runtime-services.ts",
+  ] as const;
+
+  type ModuleFile = (typeof moduleFiles)[number];
+  type ImportKind = "dynamic-import" | "static-export" | "static-import";
+  type OwnershipEdge = { from: ModuleFile; kind: ImportKind; to: ModuleFile };
+
+  function resolveStaticString(expression: ts.Expression): string | undefined {
+    if (ts.isStringLiteralLike(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      return expression.text;
+    }
+    if (ts.isParenthesizedExpression(expression)) {
+      return resolveStaticString(expression.expression);
+    }
+    if (
+      ts.isBinaryExpression(expression) &&
+      expression.operatorToken.kind === ts.SyntaxKind.PlusToken
+    ) {
+      const left = resolveStaticString(expression.left);
+      const right = resolveStaticString(expression.right);
+      return left === undefined || right === undefined ? undefined : left + right;
+    }
+    if (ts.isTemplateExpression(expression)) {
+      let value = expression.head.text;
+      for (const span of expression.templateSpans) {
+        const substitution = resolveStaticString(span.expression);
+        if (substitution === undefined) {
+          return undefined;
+        }
+        value += substitution + span.literal.text;
+      }
+      return value;
+    }
+    return undefined;
+  }
+
+  function resolveCoveredModule(from: ModuleFile, specifier: string): ModuleFile | undefined {
+    if (!specifier.startsWith(".")) {
+      return undefined;
+    }
+    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier));
+    const sourcePath = resolved.endsWith(".js") ? `${resolved.slice(0, -3)}.ts` : resolved;
+    return moduleFiles.find((candidate) => candidate === sourcePath);
+  }
+
+  function collectOwnershipEdges(): OwnershipEdge[] {
+    const edges: OwnershipEdge[] = [];
+    for (const from of moduleFiles) {
+      const sourceUrl =
+        from === "src/gateway/server-runtime-services.ts"
+          ? new URL("../../gateway/server-runtime-services.ts", import.meta.url)
+          : new URL(`./${path.posix.basename(from)}`, import.meta.url);
+      const sourceFile = ts.createSourceFile(
+        from,
+        readFileSync(sourceUrl, "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS,
+      );
+      const recordEdge = (specifier: string, kind: ImportKind): void => {
+        const to = resolveCoveredModule(from, specifier);
+        if (to) {
+          edges.push({ from, kind, to });
+        }
+      };
+      const visit = (node: ts.Node): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+          recordEdge(node.moduleSpecifier.text, "static-import");
+        } else if (
+          ts.isExportDeclaration(node) &&
+          node.moduleSpecifier &&
+          ts.isStringLiteralLike(node.moduleSpecifier)
+        ) {
+          recordEdge(node.moduleSpecifier.text, "static-export");
+        } else if (
+          ts.isCallExpression(node) &&
+          node.expression.kind === ts.SyntaxKind.ImportKeyword
+        ) {
+          const argument = node.arguments[0];
+          const specifier = argument ? resolveStaticString(argument) : undefined;
+          if (specifier === undefined) {
+            throw new Error(
+              `${from} contains a dynamic import that the ownership guard cannot resolve`,
+            );
+          }
+          recordEdge(specifier, "dynamic-import");
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    return edges.toSorted((left, right) =>
+      `${left.from}\0${left.to}\0${left.kind}`.localeCompare(
+        `${right.from}\0${right.to}\0${right.kind}`,
+      ),
+    );
+  }
+
+  it("keeps live, recovery, neutral staged dispatch, release, and gateway edges one-way", () => {
+    const edges = collectOwnershipEdges();
+    const recoveryModule = "src/auto-reply/continuation/delegate-dispatch-recovery.ts";
+    const recoveryImporters = edges.filter((edge) => edge.to === recoveryModule);
+
+    expect(recoveryImporters).toEqual([
+      {
+        from: "src/gateway/server-runtime-services.ts",
+        kind: "dynamic-import",
+        to: recoveryModule,
+      },
+    ]);
+    expect(edges).toEqual([
+      {
+        from: "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
+        kind: "static-import",
+        to: "src/auto-reply/continuation/delegate-dispatch.ts",
+      },
+      {
+        from: "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
+        kind: "static-import",
+        to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
+      },
+      {
+        from: "src/auto-reply/continuation/post-compaction-release.ts",
+        kind: "dynamic-import",
+        to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
+      },
+      {
+        from: "src/gateway/server-runtime-services.ts",
+        kind: "dynamic-import",
+        to: recoveryModule,
+      },
+    ]);
   });
 });
 
