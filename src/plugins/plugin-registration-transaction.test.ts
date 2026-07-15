@@ -84,6 +84,103 @@ describe("plugin registration transaction", () => {
     });
   });
 
+  it("deep-clones nested objects in arrays so mutations do not leak through rollback (#106647)", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "test-plugin",
+      name: "Test Plugin",
+      source: "test-source",
+      origin: "global" as const,
+      enabled: true,
+      status: "loaded" as const,
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: [],
+      embeddingProviderIds: [],
+      speechProviderIds: [],
+      realtimeTranscriptionProviderIds: [],
+      realtimeVoiceProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      transcriptSourceProviderIds: [],
+      imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
+      musicGenerationProviderIds: [],
+      webFetchProviderIds: [],
+      webSearchProviderIds: [],
+      migrationProviderIds: [],
+      memoryEmbeddingProviderIds: [],
+      agentHarnessIds: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServiceIds: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: false,
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    // Mutate a nested property on the PluginRecord that was captured in the snapshot
+    registry.plugins[0]!.status = "error";
+    registry.plugins[0]!.enabled = false;
+
+    transaction.rollback();
+
+    // After rollback, the original values should be restored
+    expect(registry.plugins[0]!.status).toBe("loaded");
+    expect(registry.plugins[0]!.enabled).toBe(true);
+  });
+
+  it("deep-clones Map values so nested mutations do not leak through rollback (#106647)", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.workerProviders.set("test-worker", {
+      pluginId: "test-plugin",
+      pluginName: "Test",
+      provider: { id: "worker-1" } as import("./types.js").WorkerProvider,
+      source: "test-source",
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    // Mutate a property on the Map value
+    const entry = registry.workerProviders.get("test-worker")!;
+    entry.pluginName = "Mutated";
+
+    transaction.rollback();
+
+    // After rollback, the original value should be restored
+    expect(registry.workerProviders.get("test-worker")!.pluginName).toBe("Test");
+  });
+
+  it("preserves functions by reference in cloned objects (#106647)", () => {
+    const registry = createEmptyPluginRegistry();
+    const myResolver = () => "resolved";
+    registry.hostedMediaResolvers.push({
+      pluginId: "test-plugin",
+      resolver: myResolver,
+      source: "test-source",
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    // Push a new entry during the transaction
+    registry.hostedMediaResolvers.push({
+      pluginId: "another-plugin",
+      resolver: () => "another",
+      source: "another-source",
+    });
+
+    transaction.rollback();
+
+    // After rollback, the array should be restored to the snapshot
+    expect(registry.hostedMediaResolvers).toHaveLength(1);
+    // The original resolver function reference should be preserved
+    expect(registry.hostedMediaResolvers[0]!.resolver).toBe(myResolver);
+  });
+
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {
     const registry = createEmptyPluginRegistry();
     const activePromptBuilder = () => ["active"];

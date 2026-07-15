@@ -86,17 +86,41 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreSessionDiscussionProvider(state.sessionDiscussionProvider);
 }
 
+function deepCloneRegistryValue<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (value instanceof Map) {
+    return new Map([...value].map(([k, v]) => [k, deepCloneRegistryValue(v)])) as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepCloneRegistryValue(item)) as unknown as T;
+  }
+  if (value instanceof Date) {
+    return new Date(value) as unknown as T;
+  }
+  const cloned: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const val = (value as Record<string, unknown>)[key];
+    cloned[key] = typeof val === "function" ? val : deepCloneRegistryValue(val);
+  }
+  return cloned as unknown as T;
+}
+
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([key, value]) => {
       if (Array.isArray(value)) {
-        return [key, [...value]];
+        return [key, value.map((item) => deepCloneRegistryValue(item))];
       }
       if (value instanceof Map) {
-        return [key, new Map(value as ReadonlyMap<unknown, unknown>)];
+        return [key, new Map([...value].map(([k, v]) => [k, deepCloneRegistryValue(v)]))];
       }
       if (value && typeof value === "object") {
-        return [key, { ...value }];
+        return [key, deepCloneRegistryValue(value)];
       }
       return [key, value];
     }),
