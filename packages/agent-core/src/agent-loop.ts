@@ -349,7 +349,7 @@ function createRepeatedToolErrorAssistantMessage(
     api: config.model.api,
     provider: config.model.provider,
     model: config.model.id,
-    usage: EMPTY_USAGE,
+    usage: createFailureMessage(config.model, errorMessage, false).usage,
     stopReason: "error",
     errorMessage,
     errorCode: "repeated_tool_error",

@@ -1640,6 +1640,8 @@ export async function runReplyAgent(replyParams: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  const continuationFeatureEnabled = resolveLiveContinuationRuntimeConfig(cfg).enabled;
+  const postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[] = [];
   let preflightCompactionApplied;
 
   try {
