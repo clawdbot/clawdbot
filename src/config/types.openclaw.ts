@@ -26,7 +26,7 @@ import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 export type HostingConfig = {
-  /** Built-in hosting profile selected for runtime readiness. Defaults to local. */
+  /** Optional built-in hosting profile selected for runtime readiness. */
   profile?: import("../hosting/profiles.js").HostingProfileId;
 };
 

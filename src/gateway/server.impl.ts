@@ -41,6 +41,16 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
+import {
+  buildHostingProfileConditions,
+  requiredCriteriaForHostingProfile,
+  resolveHostingProfile,
+} from "../hosting/profiles.js";
+import {
+  resolveRuntimeActivationIdentity,
+  type RuntimeActivationIdentity,
+} from "../hosting/runtime-activation.js";
 import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import {
   listDevicePairing,
@@ -48,12 +58,6 @@ import {
   resolveEffectiveOperatorDeviceIdentity,
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
-import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
-import {
-  buildHostingProfileConditions,
-  requiredCriteriaForHostingProfile,
-  resolveHostingProfile,
-} from "../hosting/profiles.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -122,8 +126,8 @@ import {
 import { isLoopbackHost } from "./net.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
-import { clearNodeWakeState } from "./node-wake-state.js";
 import type { NodeSession } from "./node-registry.js";
+import { clearNodeWakeState } from "./node-wake-state.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,
@@ -575,6 +579,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Runtime identity reported through readiness and status. */
+  runtimeActivationIdentity?: RuntimeActivationIdentity;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
@@ -1302,25 +1308,41 @@ export async function startGatewayServer(
   });
   const resolveSelectedReadiness = createSelectedReadinessResolver();
   let readinessRuntimeSnapshot = { config: cfgAtStart, registry: pluginRegistry };
+  const resolveNodeModeReadiness = createNodeModeReadinessEvidenceResolver();
+  let listConnectedNodesForReadiness: () => NodeSession[] = () => [];
   const evaluateRuntimeReadiness = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = readinessRuntimeSnapshot;
       const profile = resolveHostingProfile({ config: snapshot.config, env: process.env });
       const auth = getResolvedAuth();
-      const profileConditions = buildHostingProfileConditions(profile, {
-        bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
-        bindHost,
-        port,
-        authMode: auth.mode,
-        trustedProxyUserHeader: auth.trustedProxy?.userHeader,
-        trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
-      });
-      const additionalConditions = await resolveSelectedReadiness({
-        config: snapshot.config,
-        registry: snapshot.registry,
-        env: process.env,
-        additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
-      });
+      const [nodeMode, additionalConditions] = await Promise.all([
+        profile === "node-mode"
+          ? resolveNodeModeReadiness({
+              config: snapshot.config,
+              connectedNodes: listConnectedNodesForReadiness(),
+            })
+          : Promise.resolve(undefined),
+        resolveSelectedReadiness({
+          config: snapshot.config,
+          registry: snapshot.registry,
+          env: process.env,
+          additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
+        }),
+      ]);
+      const profileConditions = profile
+        ? buildHostingProfileConditions(
+            profile,
+            {
+              bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
+              bindHost,
+              port,
+              authMode: auth.mode,
+              trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+              trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
+            },
+            nodeMode,
+          )
+        : [];
       if (snapshot !== readinessRuntimeSnapshot) {
         continue;
       }
@@ -1328,6 +1350,7 @@ export async function startGatewayServer(
         configLoaded: true,
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
+        activation: runtimeActivationIdentity,
         additionalConditions: [...profileConditions, ...additionalConditions],
       });
     }
@@ -1524,6 +1547,7 @@ export async function startGatewayServer(
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
   });
+  listConnectedNodesForReadiness = () => nodeRegistry.listConnected();
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,

@@ -113,12 +113,13 @@ run_scenario() {
   fi
 }
 
-run_scenario local "" loopback 200
+run_scenario unprofiled "" loopback 200
+run_scenario local local loopback 200
 run_scenario container-ready container lan 200
 run_scenario container-loopback container loopback 503
 run_scenario reverse-proxy-ready reverse-proxy loopback 200
 run_scenario reverse-proxy-auth-missing reverse-proxy loopback 503
 run_scenario node-not-ready node-mode loopback 503
-run_scenario workspace-ready "" loopback 200
+run_scenario workspace-ready local loopback 200
 
 echo "Hosting profiles Docker E2E passed"
