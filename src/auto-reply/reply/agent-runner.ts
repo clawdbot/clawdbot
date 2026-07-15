@@ -1640,6 +1640,12 @@ export async function runReplyAgent(replyParams: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  type ContinuationChainPatch = {
+    continuationChainCount: number;
+    continuationChainStartedAt: number;
+    continuationChainTokens: number;
+    continuationChainId: string | undefined;
+  };
   const persistContinuationChainState = async (params: {
     count: number;
     startedAt: number;
@@ -1647,9 +1653,13 @@ export async function runReplyAgent(replyParams: {
     chainId?: string;
     clearChainId?: boolean;
     required?: boolean;
-  }): Promise<{ chainId: string | undefined }> => {
+    update?: (
+      entry: SessionEntry,
+      proposed: ContinuationChainPatch,
+    ) => Partial<SessionEntry> | null;
+  }): Promise<{ chainId: string | undefined; entry: SessionEntry | undefined }> => {
     if (!sessionKey) {
-      return { chainId: undefined };
+      return { chainId: undefined, entry: undefined };
     }
     const previousCount = activeSessionEntry?.continuationChainCount ?? 0;
     const chainId = params.clearChainId
@@ -1668,9 +1678,11 @@ export async function runReplyAgent(replyParams: {
     let persistedEntry: SessionEntry | undefined;
     if (storePath) {
       try {
-        const persisted = await patchSessionEntry({ storePath, sessionKey }, () => patch, {
-          preserveActivity: true,
-        });
+        const persisted = await patchSessionEntry(
+          { storePath, sessionKey },
+          (entry) => (params.update ? params.update(entry, patch) : patch),
+          { preserveActivity: true },
+        );
         if (!persisted) {
           throw new Error("session entry was not found");
         }
@@ -1684,15 +1696,27 @@ export async function runReplyAgent(replyParams: {
         }
       }
     }
-    const nextEntry = persistedEntry ?? inMemoryEntry;
+    let nextEntry = persistedEntry;
+    if (!nextEntry && inMemoryEntry) {
+      const inMemoryPatch = params.update ? params.update(inMemoryEntry, patch) : patch;
+      if (inMemoryPatch) {
+        Object.assign(inMemoryEntry, inMemoryPatch);
+      }
+      nextEntry = inMemoryEntry;
+    }
+    if (!nextEntry && params.required) {
+      throw new Error(`session entry was not available for ${sessionKey}`);
+    }
     if (nextEntry) {
-      Object.assign(nextEntry, patch);
       activeSessionEntry = nextEntry;
       if (activeSessionStore) {
         activeSessionStore[sessionKey] = nextEntry;
       }
     }
-    return { chainId };
+    return {
+      chainId: nextEntry?.continuationChainId ?? chainId,
+      entry: nextEntry,
+    };
   };
   const resetContinuationChainForFreshTurn = async (): Promise<void> => {
     if (
@@ -3403,46 +3427,80 @@ export async function runReplyAgent(replyParams: {
               );
               bracketTokensAccumulated = false;
             } else {
-              const priorChainState = {
-                count: currentChainCount,
-                startedAt: activeSessionEntry?.continuationChainStartedAt ?? chainStartedAt,
-                tokens: previousChainTokens,
-                ...(activeSessionEntry?.continuationChainId
-                  ? { chainId: activeSessionEntry.continuationChainId }
-                  : { clearChainId: true }),
-              };
-              const reservedChainCount = Math.min(
-                schedulingConfig.maxChainLength,
-                currentChainCount + workRequests.length,
-              );
-              const restorePriorChainState = async (): Promise<boolean> => {
-                try {
-                  await persistContinuationChainState({
-                    ...priorChainState,
-                    required: true,
-                  });
-                  return true;
-                } catch (err) {
-                  defaultRuntime.log(
-                    `[continuation] Failed to roll back continue_work chain reservation for session ${sessionKey}: ${String(err)}`,
-                  );
-                  enqueueSystemEvent(
-                    "[continuation] continue_work chain-state rollback failed; the reserved budget remains fail-closed.",
-                    { sessionKey, trusted: true },
-                  );
-                  return false;
-                }
-              };
-              let reservationPersisted = false;
+              let reservation:
+                | {
+                    prior: {
+                      count: number;
+                      startedAt: number | undefined;
+                      tokens: number;
+                      chainId: string | undefined;
+                    };
+                    reserved: ChainState;
+                    reservedCount: number;
+                  }
+                | undefined;
               try {
-                await persistContinuationChainState({
-                  count: reservedChainCount,
+                let prior:
+                  | {
+                      count: number;
+                      startedAt: number | undefined;
+                      tokens: number;
+                      chainId: string | undefined;
+                    }
+                  | undefined;
+                const persisted = await persistContinuationChainState({
+                  count: currentChainCount + workRequests.length,
                   startedAt: chainStartedAt,
                   tokens: accumulatedChainTokens,
                   chainId: workChainId,
                   required: true,
+                  update: (entry, proposed) => {
+                    const persistedCount = entry.continuationChainCount ?? 0;
+                    const persistedTokens = entry.continuationChainTokens ?? 0;
+                    const persistedChainId =
+                      persistedCount > 0 && entry.continuationChainId
+                        ? entry.continuationChainId
+                        : proposed.continuationChainId;
+                    const persistedStartedAt =
+                      persistedCount > 0
+                        ? (entry.continuationChainStartedAt ?? proposed.continuationChainStartedAt)
+                        : proposed.continuationChainStartedAt;
+                    prior = {
+                      count: persistedCount,
+                      startedAt: entry.continuationChainStartedAt,
+                      tokens: persistedTokens,
+                      chainId: entry.continuationChainId,
+                    };
+                    return {
+                      continuationChainCount: Math.min(
+                        schedulingConfig.maxChainLength,
+                        persistedCount + workRequests.length,
+                      ),
+                      continuationChainStartedAt: persistedStartedAt,
+                      continuationChainTokens: persistedTokens + turnTokens,
+                      continuationChainId: persistedChainId,
+                    };
+                  },
                 });
-                reservationPersisted = true;
+                if (!prior || !persisted.entry) {
+                  throw new Error("continuation chain reservation did not return session state");
+                }
+                reservation = {
+                  prior,
+                  reserved: {
+                    currentChainCount: prior.count,
+                    chainStartedAt:
+                      persisted.entry.continuationChainStartedAt ??
+                      prior.startedAt ??
+                      chainStartedAt,
+                    accumulatedChainTokens:
+                      persisted.entry.continuationChainTokens ?? prior.tokens + turnTokens,
+                    ...(persisted.entry.continuationChainId
+                      ? { chainId: persisted.entry.continuationChainId }
+                      : {}),
+                  },
+                  reservedCount: persisted.entry.continuationChainCount ?? prior.count,
+                };
               } catch (err) {
                 bracketTokensAccumulated = false;
                 enqueueSystemEvent(
@@ -3453,7 +3511,52 @@ export async function runReplyAgent(replyParams: {
                   `[continuation] Skipping continue_work scheduling after chain-state persistence failure for session ${sessionKey}: ${String(err)}`,
                 );
               }
-              if (reservationPersisted) {
+              if (reservation) {
+                const restorePriorChainState = async (): Promise<boolean> => {
+                  let rolledBack = false;
+                  try {
+                    await persistContinuationChainState({
+                      count: reservation.prior.count,
+                      startedAt: reservation.prior.startedAt ?? chainStartedAt,
+                      tokens: reservation.prior.tokens,
+                      ...(reservation.prior.chainId
+                        ? { chainId: reservation.prior.chainId }
+                        : { clearChainId: true }),
+                      required: true,
+                      update: (entry) => {
+                        if (
+                          entry.continuationChainId !== reservation.reserved.chainId ||
+                          (entry.continuationChainCount ?? 0) !== reservation.reservedCount
+                        ) {
+                          return {};
+                        }
+                        rolledBack = true;
+                        return {
+                          continuationChainCount: reservation.prior.count,
+                          continuationChainStartedAt: reservation.prior.startedAt,
+                          continuationChainTokens: Math.max(
+                            reservation.prior.tokens,
+                            (entry.continuationChainTokens ?? 0) - turnTokens,
+                          ),
+                          continuationChainId: reservation.prior.chainId,
+                        };
+                      },
+                    });
+                    if (!rolledBack) {
+                      throw new Error("session chain advanced after reservation");
+                    }
+                    return true;
+                  } catch (err) {
+                    defaultRuntime.log(
+                      `[continuation] Failed to roll back continue_work chain reservation for session ${sessionKey}: ${String(err)}`,
+                    );
+                    enqueueSystemEvent(
+                      "[continuation] continue_work chain-state rollback failed; the reserved budget remains fail-closed.",
+                      { sessionKey, trusted: true },
+                    );
+                    return false;
+                  }
+                };
                 if (!resolveLiveContinuationRuntimeConfig(cfg).enabled) {
                   if (await restorePriorChainState()) {
                     bracketTokensAccumulated = false;
@@ -3468,12 +3571,7 @@ export async function runReplyAgent(replyParams: {
                   try {
                     batchResult = await scheduleContinuationWorkBatch({
                       sessionKey,
-                      chainState: {
-                        currentChainCount,
-                        chainStartedAt,
-                        accumulatedChainTokens,
-                        chainId: workChainId,
-                      },
+                      chainState: reservation.reserved,
                       requests: workRequests,
                       config: schedulingConfig,
                       // Same-session own-turn continue_work has no spawning lineage; leave
@@ -3505,6 +3603,25 @@ export async function runReplyAgent(replyParams: {
                         ...(batchResult.chainState.chainId
                           ? { chainId: batchResult.chainState.chainId }
                           : {}),
+                        update: (entry, proposed) => {
+                          if (entry.continuationChainId !== reservation.reserved.chainId) {
+                            return {};
+                          }
+                          return {
+                            ...proposed,
+                            continuationChainCount:
+                              (entry.continuationChainCount ?? 0) === reservation.reservedCount
+                                ? proposed.continuationChainCount
+                                : Math.max(
+                                    entry.continuationChainCount ?? 0,
+                                    proposed.continuationChainCount,
+                                  ),
+                            continuationChainTokens: Math.max(
+                              entry.continuationChainTokens ?? 0,
+                              proposed.continuationChainTokens,
+                            ),
+                          };
+                        },
                       });
                     }
                     // Surface cap-dropped elections so a partial fan-out is not silent:

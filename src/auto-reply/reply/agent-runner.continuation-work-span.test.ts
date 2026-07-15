@@ -552,26 +552,35 @@ describe("runReplyAgent :: continuation.work span", () => {
       sessionKey: "continuation-work-disabled-during-reservation",
     });
     loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    patchSessionEntryMock.mockImplementationOnce(
+    let persistedEntry = run.sessionEntry;
+    let persistenceCalls = 0;
+    patchSessionEntryMock.mockImplementation(
       async (
         _scope: unknown,
         update: (entry: SessionEntry) => Partial<SessionEntry> | null,
       ): Promise<SessionEntry | null> => {
-        const patch = update(run.sessionEntry);
-        setRuntimeConfigSnapshot({
-          ...run.followupRun.run.config,
-          agents: {
-            ...run.followupRun.run.config.agents,
-            defaults: {
-              ...run.followupRun.run.config.agents?.defaults,
-              continuation: {
-                ...run.followupRun.run.config.agents?.defaults?.continuation,
-                enabled: false,
+        const patch = update(persistedEntry);
+        persistenceCalls += 1;
+        if (persistenceCalls === 1) {
+          setRuntimeConfigSnapshot({
+            ...run.followupRun.run.config,
+            agents: {
+              ...run.followupRun.run.config.agents,
+              defaults: {
+                ...run.followupRun.run.config.agents?.defaults,
+                continuation: {
+                  ...run.followupRun.run.config.agents?.defaults?.continuation,
+                  enabled: false,
+                },
               },
             },
-          },
-        });
-        return patch ? { ...run.sessionEntry, ...patch } : null;
+          });
+        }
+        if (!patch) {
+          return null;
+        }
+        persistedEntry = { ...persistedEntry, ...patch };
+        return persistedEntry;
       },
     );
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -591,9 +600,77 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
     expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
     expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
-    expect(sessionStore[run.sessionKey].continuationChainCount).toBe(0);
-    expect(sessionStore[run.sessionKey].continuationChainTokens).toBe(0);
-    expect(sessionStore[run.sessionKey].continuationChainId).toBeUndefined();
+    const storedEntry = sessionStore[run.sessionKey];
+    expect(storedEntry).toBeDefined();
+    if (!storedEntry) {
+      throw new Error("expected persisted session entry");
+    }
+    expect(storedEntry.continuationChainCount).toBe(0);
+    expect(storedEntry.continuationChainTokens).toBe(0);
+    expect(storedEntry.continuationChainId).toBeUndefined();
+  });
+
+  it("preserves child-token updates committed while a work reservation is active", async () => {
+    vi.useFakeTimers();
+    const chainId = "00000000-0000-4000-8000-000000000010";
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-concurrent-token-accounting",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1,
+        continuationChainTokens: 10,
+        continuationChainId: chainId,
+      },
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    let persistedEntry = run.sessionEntry;
+    let persistenceCalls = 0;
+    patchSessionEntryMock.mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        persistenceCalls += 1;
+        if (persistenceCalls === 2) {
+          persistedEntry = {
+            ...persistedEntry,
+            continuationChainTokens: (persistedEntry.continuationChainTokens ?? 0) + 7,
+          };
+        }
+        const patch = update(persistedEntry);
+        if (!patch) {
+          return null;
+        }
+        persistedEntry = { ...persistedEntry, ...patch };
+        return persistedEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+    });
+    const sessionStore = { [run.sessionKey]: run.sessionEntry };
+
+    await runWorkTurn(
+      run,
+      sessionStore,
+      "Working on it\nCONTINUE_WORK:1",
+      true,
+      "/tmp/openclaw-continuation-work-concurrent-token-accounting.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    const storedEntry = sessionStore[run.sessionKey];
+    expect(storedEntry).toBeDefined();
+    if (!storedEntry) {
+      throw new Error("expected persisted session entry");
+    }
+    expect(storedEntry.continuationChainCount).toBe(2);
+    expect(storedEntry.continuationChainTokens).toBe(22);
+    expect(storedEntry.continuationChainId).toBe(chainId);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
   });
 
   it("suppresses continue_work tool callbacks from incomplete non-replay-safe turns", async () => {
