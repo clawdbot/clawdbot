@@ -432,6 +432,36 @@ describe("fetchChatUsers", () => {
     expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
   });
 
+  it("falls back when the user_list body exceeds the byte cap", async () => {
+    const httpsGet = vi.mocked(https.get);
+    const warns: string[] = [];
+    // Single oversized Buffer: over 1 MiB cap without multi-write/destroy races.
+    const oversized = Buffer.alloc(1 * 1024 * 1024 + 1, 0x78);
+    const overflowUrl =
+      "https://overflow-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2";
+    httpsGet.mockImplementation(((_url, _opts, callback) => {
+      const res = createMockResponseEmitter(200);
+      process.nextTick(() => {
+        callback?.(res);
+        res.end(oversized);
+      });
+      return createMockRequestEmitter();
+    }) as MockRequestHandler);
+
+    const userId = await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: overflowUrl,
+      mutableWebhookUsername: "anyone",
+      log: {
+        warn: (...args: unknown[]) => {
+          warns.push(args.map(String).join(" "));
+        },
+      },
+    });
+
+    expect(userId).toBeUndefined();
+    expect(warns.some((line) => line.includes("exceeded"))).toBe(true);
+  });
+
   it("verifies TLS by default for user_list lookups", async () => {
     mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
     const freshUrl =
