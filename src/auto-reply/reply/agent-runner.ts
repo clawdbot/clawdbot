@@ -3557,7 +3557,8 @@ export async function runReplyAgent(replyParams: {
                     return false;
                   }
                 };
-                if (!resolveLiveContinuationRuntimeConfig(cfg).enabled) {
+                const liveSchedulingConfig = resolveLiveContinuationRuntimeConfig(cfg);
+                if (!liveSchedulingConfig.enabled) {
                   if (await restorePriorChainState()) {
                     bracketTokensAccumulated = false;
                   }
@@ -3573,7 +3574,7 @@ export async function runReplyAgent(replyParams: {
                       sessionKey,
                       chainState: reservation.reserved,
                       requests: workRequests,
-                      config: schedulingConfig,
+                      config: liveSchedulingConfig,
                       // Same-session own-turn continue_work has no spawning lineage; leave
                       // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
                       // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
@@ -3684,6 +3685,7 @@ export async function runReplyAgent(replyParams: {
             startedAt: nextState.chainStartedAt,
             tokens: nextState.accumulatedChainTokens,
             ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+            required: true,
           });
         },
       });

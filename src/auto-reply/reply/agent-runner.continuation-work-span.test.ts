@@ -31,6 +31,7 @@ import {
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
+import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
 import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -257,6 +258,7 @@ afterEach(() => {
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetContinuationTracer();
+  resetDelegateDispatchHedgesForTests();
   resetTaskFlowRegistryForTests({ persist: false });
 });
 
@@ -608,6 +610,109 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(storedEntry.continuationChainCount).toBe(0);
     expect(storedEntry.continuationChainTokens).toBe(0);
     expect(storedEntry.continuationChainId).toBeUndefined();
+  });
+
+  it("uses hot-reloaded continuation limits after durable reservation", async () => {
+    vi.useFakeTimers();
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-limits-reloaded-after-reservation",
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    let persistedEntry = run.sessionEntry;
+    let persistenceCalls = 0;
+    patchSessionEntryMock.mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        const patch = update(persistedEntry);
+        persistenceCalls += 1;
+        if (persistenceCalls === 1) {
+          setRuntimeConfigSnapshot({
+            ...run.followupRun.run.config,
+            agents: {
+              ...run.followupRun.run.config.agents,
+              defaults: {
+                ...run.followupRun.run.config.agents?.defaults,
+                continuation: {
+                  ...run.followupRun.run.config.agents?.defaults?.continuation,
+                  maxChainLength: 1,
+                },
+              },
+            },
+          });
+        }
+        if (!patch) {
+          return null;
+        }
+        persistedEntry = { ...persistedEntry, ...patch };
+        return persistedEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "first reserved election",
+        delaySeconds: 1,
+      });
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "second election rejected by live limit",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Working on it" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+    const sessionStore = { [run.sessionKey]: run.sessionEntry };
+
+    await runWorkTurn(
+      run,
+      sessionStore,
+      "Working on it",
+      false,
+      "/tmp/openclaw-continuation-work-live-limits.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
+    expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
+  });
+
+  it("keeps hedge-fired delegates recoverable when chain-state persistence fails", async () => {
+    vi.useFakeTimers();
+    const run = createContinuationRun({
+      sessionKey: "continuation-delegate-hedge-persistence-failure",
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    patchSessionEntryMock.mockRejectedValueOnce(new Error("session database unavailable"));
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      enqueuePendingDelegate(run.sessionKey, {
+        task: "persist before terminalizing this delayed delegate",
+        delayMs: 1_000,
+      });
+      return {
+        payloads: [{ text: "Working on it" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Working on it",
+      false,
+      "/tmp/openclaw-continuation-delegate-hedge-persist.json",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([{ status: "running" }]);
   });
 
   it("preserves child-token updates committed while a work reservation is active", async () => {
