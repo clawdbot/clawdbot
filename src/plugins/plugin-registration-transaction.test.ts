@@ -84,7 +84,7 @@ describe("plugin registration transaction", () => {
     });
   });
 
-  it("deep-clones nested objects in arrays so mutations do not leak through rollback (#106647)", () => {
+  it("isolates PluginRecord metadata mutations in arrays through shallow record cloning (#106647)", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push({
       id: "test-plugin",
@@ -134,7 +134,7 @@ describe("plugin registration transaction", () => {
     expect(registry.plugins[0]!.enabled).toBe(true);
   });
 
-  it("deep-clones Map values so nested mutations do not leak through rollback (#106647)", () => {
+  it("isolates Map entry metadata mutations through shallow record cloning (#106647)", () => {
     const registry = createEmptyPluginRegistry();
     registry.workerProviders.set("test-worker", {
       pluginId: "test-plugin",
@@ -179,6 +179,46 @@ describe("plugin registration transaction", () => {
     expect(registry.hostedMediaResolvers).toHaveLength(1);
     // The original resolver function reference should be preserved
     expect(registry.hostedMediaResolvers[0]!.resolver).toBe(myResolver);
+  });
+
+  it("preserves class instances and their prototypes by reference in cloned records (#106647)", () => {
+    const registry = createEmptyPluginRegistry();
+
+    class TestProvider {
+      id = "provider-1";
+      label = "Test Provider";
+      chat(model: string) {
+        return `chat-${model}`;
+      }
+      listModels() {
+        return ["model-a"];
+      }
+      start() {}
+      stop() {}
+    }
+    const providerInstance = new TestProvider();
+
+    registry.providers.push({
+      pluginId: "test-plugin",
+      pluginName: "Test",
+      provider: providerInstance as import("./types.js").ProviderPlugin,
+      source: "test-source",
+    });
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    // Mutate metadata during transaction
+    registry.providers[0]!.pluginName = "Mutated";
+
+    transaction.rollback();
+
+    // After rollback, metadata is restored
+    expect(registry.providers[0]!.pluginName).toBe("Test");
+    // The provider instance is the same object reference (not a plain-object copy)
+    expect(registry.providers[0]!.provider).toBe(providerInstance);
+    // Class prototype is intact — methods are callable
+    expect(registry.providers[0]!.provider.chat("gpt-5")).toBe("chat-gpt-5");
+    expect(Object.getPrototypeOf(registry.providers[0]!.provider)).toBe(TestProvider.prototype);
   });
 
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {

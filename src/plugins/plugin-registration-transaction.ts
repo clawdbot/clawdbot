@@ -86,41 +86,53 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreSessionDiscussionProvider(state.sessionDiscussionProvider);
 }
 
-function deepCloneRegistryValue<T>(value: T): T {
-  if (value === null || value === undefined) {
-    return value;
-  }
-  if (typeof value !== "object") {
-    return value;
-  }
+/**
+ * Shallow-clone a registration record so metadata mutations do not leak
+ * through rollback, while preserving opaque plugin-owned instances
+ * (providers, services, channels, harnesses, resolvers) by reference.
+ *
+ * A generic recursive deep-clone would convert every plugin-owned object
+ * into a plain object, losing prototypes, internal slots, symbols, and
+ * shared identity.  Shallow-cloning is correct here because the mutable
+ * fields on registration records are primitives (strings, numbers,
+ * booleans, Dates), and the opaque fields are class instances that the
+ * registry must not reconstitute.
+ */
+function cloneRegistryEntry(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => cloneRegistryEntry(item));
   if (value instanceof Map) {
-    return new Map([...value].map(([k, v]) => [k, deepCloneRegistryValue(v)])) as unknown as T;
+    return new Map([...value].map(([k, v]) => [k, cloneRegistryEntry(v)]));
   }
-  if (Array.isArray(value)) {
-    return value.map((item) => deepCloneRegistryValue(item)) as unknown as T;
-  }
-  if (value instanceof Date) {
-    return new Date(value) as unknown as T;
-  }
+  if (value instanceof Date) return new Date(value);
+  // Shallow-clone so primitive metadata fields become independent copies
+  // while opaque plugin-owned objects stay by reference.
   const cloned: Record<string, unknown> = {};
   for (const key of Object.keys(value)) {
     const val = (value as Record<string, unknown>)[key];
-    cloned[key] = typeof val === "function" ? val : deepCloneRegistryValue(val);
+    if (val instanceof Date) {
+      cloned[key] = new Date(val);
+    } else if (Array.isArray(val)) {
+      cloned[key] = [...val];
+    } else {
+      cloned[key] = val;
+    }
   }
-  return cloned as unknown as T;
+  return cloned;
 }
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([key, value]) => {
       if (Array.isArray(value)) {
-        return [key, value.map((item) => deepCloneRegistryValue(item))];
+        return [key, value.map((item) => cloneRegistryEntry(item))];
       }
       if (value instanceof Map) {
-        return [key, new Map([...value].map(([k, v]) => [k, deepCloneRegistryValue(v)]))];
+        return [key, new Map([...value].map(([k, v]) => [k, cloneRegistryEntry(v)]))];
       }
       if (value && typeof value === "object") {
-        return [key, deepCloneRegistryValue(value)];
+        return [key, cloneRegistryEntry(value)];
       }
       return [key, value];
     }),
