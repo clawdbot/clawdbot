@@ -151,6 +151,7 @@ function describeTelegramMessageTool({
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
+      actions: ["poll"],
       visibility: "all-configured",
     });
   }

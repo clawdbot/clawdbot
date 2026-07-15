@@ -229,6 +229,51 @@ describe("message action capability checks", () => {
     ).toEqual(["read", "list-pins"]);
   });
 
+  it("filters action-scoped schema properties against the allowed action set", () => {
+    const pollSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-poll-schema",
+        label: "Demo Poll Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "poll"],
+          schema: {
+            actions: ["poll"],
+            properties: {
+              pollDurationSeconds: Type.Optional(Type.Number()),
+            },
+            visibility: "all-configured",
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-poll-schema", source: "test", plugin: pollSchemaPlugin },
+      ]),
+    );
+
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-poll-schema",
+        allowedActions: ["send"],
+      }),
+    ).not.toHaveProperty("pollDurationSeconds");
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-poll-schema",
+        allowedActions: ["send", "poll"],
+      }),
+    ).toHaveProperty("pollDurationSeconds");
+  });
+
   it("keeps unscoped current-channel schema conservative for cross-channel actions", () => {
     const unscopedSchemaPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({

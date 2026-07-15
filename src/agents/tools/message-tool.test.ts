@@ -1129,6 +1129,7 @@ describe("message tool schema scoping", () => {
     toolSchema: () => [
       {
         properties: createTelegramPollExtraToolSchemas(),
+        actions: ["poll"],
         visibility: "all-configured",
       },
     ],
@@ -1224,6 +1225,31 @@ describe("message tool schema scoping", () => {
     const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("poll");
+  });
+
+  it("omits Telegram poll extras when the message action allowlist is send-only", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        tools: {
+          message: {
+            actions: {
+              allow: ["send"],
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties.pollDurationSeconds).toBeUndefined();
+    expect(properties.pollAnonymous).toBeUndefined();
+    expect(properties.pollPublic).toBeUndefined();
   });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {

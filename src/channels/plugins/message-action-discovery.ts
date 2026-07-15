@@ -321,12 +321,25 @@ function mergeToolSchemaProperties(
 }
 
 export function resolveChannelMessageToolSchemaProperties(
-  params: ChannelMessageActionDiscoveryParams,
+  params: ChannelMessageActionDiscoveryParams & {
+    allowedActions?: readonly string[];
+  },
 ): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
   const seenPluginIds = new Set<string>();
+  const allowedActions = params.allowedActions ? new Set(params.allowedActions) : null;
+
+  const contributionIsAllowed = (contribution: ChannelMessageToolSchemaContribution): boolean => {
+    if (!allowedActions || !Array.isArray(contribution.actions)) {
+      return true;
+    }
+    if (contribution.actions.length === 0) {
+      return true;
+    }
+    return contribution.actions.some((action) => allowedActions.has(action));
+  };
 
   for (const plugin of listChannelPlugins()) {
     if (!plugin.actions) {
@@ -339,6 +352,9 @@ export function resolveChannelMessageToolSchemaProperties(
       context: discoveryBase,
       includeSchema: true,
     }).schemaContributions) {
+      if (!contributionIsAllowed(contribution)) {
+        continue;
+      }
       const visibility = contribution.visibility ?? "current-channel";
       if (currentChannel) {
         if (visibility === "all-configured" || plugin.id === currentChannel) {
@@ -358,6 +374,9 @@ export function resolveChannelMessageToolSchemaProperties(
         context: discoveryBase,
         includeSchema: true,
       }).schemaContributions) {
+        if (!contributionIsAllowed(contribution)) {
+          continue;
+        }
         const visibility = contribution.visibility ?? "current-channel";
         if (visibility === "all-configured" || currentActions.pluginId === currentChannel) {
           mergeToolSchemaProperties(properties, contribution.properties);

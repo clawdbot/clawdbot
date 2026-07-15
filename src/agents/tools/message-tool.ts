@@ -792,12 +792,13 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
   const includePresentation = resolveIncludePresentation(params);
   const includeDeliveryPin = resolveIncludeDeliveryPin(params);
   const includeBestEffort = resolveIncludeBestEffort(params);
-  const extraProperties = resolveChannelMessageToolSchemaProperties(
-    buildMessageActionDiscoveryInput(
+  const extraProperties = resolveChannelMessageToolSchemaProperties({
+    ...buildMessageActionDiscoveryInput(
       params,
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
-  );
+    allowedActions: actions,
+  });
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includePresentation,
     includeDeliveryPin,
