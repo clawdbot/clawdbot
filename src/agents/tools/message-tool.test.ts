@@ -385,6 +385,49 @@ async function executeSend(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("strips empty strict-provider defaults before dispatching a send", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "123",
+        message: "hello",
+        accountId: "",
+        attachments: [],
+        caption: "",
+        gatewayToken: "",
+        gatewayUrl: "",
+        media: "",
+        replyTo: "",
+        targets: [],
+        threadId: "",
+        silent: false,
+      },
+    });
+
+    expect(call?.params).toMatchObject({
+      action: "send",
+      channel: "telegram",
+      target: "123",
+      message: "hello",
+      silent: false,
+    });
+    for (const key of [
+      "accountId",
+      "attachments",
+      "caption",
+      "gatewayToken",
+      "gatewayUrl",
+      "media",
+      "replyTo",
+      "targets",
+      "threadId",
+    ]) {
+      expect(call?.params).not.toHaveProperty(key);
+    }
+  });
+
   it("advertises timeoutMs as a positive integer", () => {
     const tool = createMessageTool();
     expect(getToolProperties(tool).timeoutMs).toMatchObject({ type: "integer", minimum: 1 });

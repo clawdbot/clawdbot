@@ -554,6 +554,20 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeBestEffort: false,
 });
 
+const EMPTY_SEND_ARRAY_PARAM_KEYS = new Set(["attachments", "targets"]);
+
+function stripStrictProviderSendDefaults(params: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(params)) {
+    if (key !== "message" && typeof value === "string" && value.trim().length === 0) {
+      delete params[key];
+      continue;
+    }
+    if (Array.isArray(value) && value.length === 0 && EMPTY_SEND_ARRAY_PARAM_KEYS.has(key)) {
+      delete params[key];
+    }
+  }
+}
+
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
@@ -980,6 +994,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      // Strict-schema providers may materialize every optional property with
+      // an empty default. Treat those values as omitted for sends: an empty
+      // replyTo/threadId/media/etc. has no user intent and channel adapters
+      // correctly reject it as malformed (observed with Telegram + OpenAI).
+      // Keep message="" because a media-only send legitimately has no text,
+      // and preserve false/zero values because they can carry real intent.
+      if (action === "send") {
+        stripStrictProviderSendDefaults(params);
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
