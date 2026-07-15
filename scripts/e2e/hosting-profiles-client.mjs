@@ -75,6 +75,15 @@ if (scenario === "local") {
   assert.ok(body.failures.includes("ControlledTargetsDisconnected"));
   assert.ok(body.failures.includes("CommandApprovalMissing"));
   assert.ok(body.failures.includes("ControlChannelUnavailable"));
+} else if (scenario === "node-unapproved") {
+  assert.equal(response.status, 503);
+  assertSelectedProfile("node-mode");
+  assert.equal(body.ready, false);
+  assert.equal(condition("NodePairingReady").status, "False");
+  assert.equal(condition("NodePairingReady").reason, "NodePairingPending");
+  assert.equal(condition("ControlledTargetsReady").status, "False");
+  assert.equal(condition("CommandApprovalReady").status, "False");
+  assert.equal(condition("ControlChannelReady").status, "False");
 } else if (scenario === "node-ready") {
   assert.equal(response.status, 200);
   assertSelectedProfile("node-mode");
