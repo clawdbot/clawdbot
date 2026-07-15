@@ -71,6 +71,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
+  isMissingProviderAuthError: () => false,
   resolveModelAuthMode: () => "api-key",
 }));
 
@@ -374,6 +375,67 @@ describe("runReplyAgent :: continuation.work span", () => {
     // transition; emitter consumes the same id (no re-derivation)
     expect(typeof attrs["chain.id"]).toBe("string");
     expect(attrs["chain.id"] as string).toMatch(UUID_REGEX);
+  });
+
+  it("uses a hot-reloaded continuation enablement value at the next enforcement point", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const staleChainId = "00000000-0000-4000-8000-000000000001";
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-hot-reload",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        continuationChainCount: 2,
+        continuationChainStartedAt: 1,
+        continuationChainTokens: 50,
+        continuationChainId: staleChainId,
+      },
+      config: {
+        agents: {
+          defaults: {
+            continuation: {
+              enabled: false,
+              minDelayMs: 0,
+              maxDelayMs: 1_000,
+              defaultDelayMs: 1_000,
+              maxChainLength: 2,
+            },
+          },
+        },
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      setRuntimeConfigSnapshot({
+        ...run.followupRun.run.config,
+        agents: {
+          ...run.followupRun.run.config.agents,
+          defaults: {
+            ...run.followupRun.run.config.agents?.defaults,
+            continuation: {
+              ...run.followupRun.run.config.agents?.defaults?.continuation,
+              enabled: true,
+            },
+          },
+        },
+      });
+      return {
+        payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Working on it\nCONTINUE_WORK:1",
+    );
+
+    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(1);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+    expect(run.sessionEntry.continuationChainId).not.toBe(staleChainId);
   });
 
   it("suppresses continue_work tool callbacks from incomplete non-replay-safe turns", async () => {

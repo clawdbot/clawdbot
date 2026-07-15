@@ -41,6 +41,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
+  isMissingProviderAuthError: () => false,
   resolveModelAuthMode: () => "api-key",
 }));
 
@@ -103,12 +104,18 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   markSubagentRunTerminated: () => 0,
 }));
 
-// The stale-delegate drain in the finally throws here. The fix must contain it.
 vi.mock("../continuation/delegate-store.js", async (importOriginal) => {
-  const original = await importOriginal<Record<string, unknown>>();
+  const original = await importOriginal<
+    Record<string, unknown> & {
+      consumePendingDelegates: (...args: unknown[]) => unknown;
+    }
+  >();
   return {
     ...original,
-    consumePendingDelegates: (...args: unknown[]) => consumePendingDelegatesMock(...args),
+    consumePendingDelegates: (...args: unknown[]) => {
+      consumePendingDelegatesMock(...args);
+      return original.consumePendingDelegates(...args);
+    },
   };
 });
 
@@ -120,11 +127,6 @@ beforeEach(() => {
   runEmbeddedAgentMock.mockReset();
   runWithModelFallbackMock.mockReset();
   consumePendingDelegatesMock.mockReset();
-  // If the finally ever regressed to claiming queued delegates, this would throw
-  // and surface — but with the #1144 fix it must never be called at all.
-  consumePendingDelegatesMock.mockImplementation(() => {
-    throw new Error("finally must not claim queued delegates (#1144)");
-  });
   runWithModelFallbackMock.mockImplementation(
     async ({
       provider,
@@ -242,10 +244,9 @@ describe("runReplyAgent :: finally does not claim queued delegates (#1144 / I4)"
       }),
     ).resolves.not.toThrow();
 
-    // #1144: the finally must NOT claim queued delegates. Its only prior caller
-    // of the shim consumePendingDelegates was this cleanup, so a call here would
-    // strand matured queued delegates in `running`. It must not be invoked.
-    expect(consumePendingDelegatesMock).not.toHaveBeenCalled();
+    // Normal post-turn dispatch claims once. A second call would be the
+    // forbidden finally cleanup claim that strands rows in `running`.
+    expect(consumePendingDelegatesMock).toHaveBeenCalledTimes(1);
     // The dispatch-idle safety-net still fires.
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });

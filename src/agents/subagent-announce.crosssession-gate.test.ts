@@ -51,6 +51,7 @@ vi.mock("./model-fallback.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  isMissingProviderAuthError: () => false,
   resolveModelAuthMode: () => "api-key",
 }));
 
