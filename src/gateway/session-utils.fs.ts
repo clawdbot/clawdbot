@@ -1749,6 +1749,9 @@ function readRecentMessagesFromTranscript(
     const readLen = Math.min(size, readBytes);
     const buf = Buffer.alloc(readLen);
     const bytesRead = readFileWindowFullySync(fd, buf, readStart);
+    if (bytesRead <= 0) {
+      return [];
+    }
 
     const chunk = buf.toString("utf-8", 0, bytesRead);
     const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
