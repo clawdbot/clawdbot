@@ -88,6 +88,7 @@ function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): 
   }
 }
 
+/** @internal One-way recovery classifier for persist-before-terminal failures. */
 export class DelegateTerminalChainStatePersistError extends Error {
   readonly originalError: unknown;
 

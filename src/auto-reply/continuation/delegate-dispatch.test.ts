@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock TaskFlow registry — delegate-store resolves it transitively.
@@ -508,20 +509,61 @@ describe("trusted delegate task echoes", () => {
   });
 
   it("keeps every prompt-facing delegate task echo behind the sanitizer helper", () => {
-    const source = readFileSync(new URL("./delegate-dispatch.ts", import.meta.url), "utf8");
-    const enqueueCalls = source.match(/enqueueSystemEvent\([\s\S]*?\n\s*\);/g) ?? [];
-    const taskEchoCalls = enqueueCalls.filter((call) => /\.task\b/.test(call));
+    const sourceFiles = ["./delegate-dispatch.ts", "./delegate-dispatch-recovery.ts"].map((path) =>
+      ts.createSourceFile(
+        path,
+        readFileSync(new URL(path, import.meta.url), "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS,
+      ),
+    );
+    const taskReferences: ts.Expression[] = [];
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isPropertyAccessExpression(node) && node.name.text === "task") ||
+        (ts.isElementAccessExpression(node) &&
+          ts.isStringLiteralLike(node.argumentExpression) &&
+          node.argumentExpression.text === "task")
+      ) {
+        taskReferences.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    for (const sourceFile of sourceFiles) {
+      const enqueueCalls: ts.CallExpression[] = [];
+      const collectEnqueueCalls = (node: ts.Node): void => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "enqueueSystemEvent"
+        ) {
+          enqueueCalls.push(node);
+        }
+        ts.forEachChild(node, collectEnqueueCalls);
+      };
+      collectEnqueueCalls(sourceFile);
+      for (const call of enqueueCalls) {
+        const eventArgument = call.arguments[0];
+        if (eventArgument) {
+          visit(eventArgument);
+        }
+      }
+    }
 
-    expect(taskEchoCalls).toHaveLength(11);
-    expect(taskEchoCalls).toEqual(
-      expect.arrayContaining([expect.stringContaining("formatDelegateTaskForSystemEvent(")]),
-    );
-    expect(taskEchoCalls.every((call) => call.includes("formatDelegateTaskForSystemEvent("))).toBe(
-      true,
-    );
-    expect(taskEchoCalls).not.toEqual(
-      expect.arrayContaining([expect.stringMatching(/\$\{(?:delegate|dropped)\.task\}/)]),
-    );
+    expect(taskReferences).toHaveLength(11);
+    expect(
+      taskReferences.every((taskReference) => {
+        const parent = taskReference.parent;
+        return (
+          ts.isCallExpression(parent) &&
+          parent.arguments.length === 1 &&
+          parent.arguments[0] === taskReference &&
+          ts.isIdentifier(parent.expression) &&
+          parent.expression.text === "formatDelegateTaskForSystemEvent"
+        );
+      }),
+    ).toBe(true);
   });
 });
 
