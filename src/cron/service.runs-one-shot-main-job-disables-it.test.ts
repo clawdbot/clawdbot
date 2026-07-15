@@ -22,7 +22,7 @@ import {
   installCronTestHooks,
 } from "./service.test-harness.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 

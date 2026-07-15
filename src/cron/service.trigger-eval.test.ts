@@ -5,7 +5,7 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronServiceDeps, CronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
