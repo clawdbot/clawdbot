@@ -3575,32 +3575,41 @@ export async function runReplyAgent(replyParams: {
                   let batchResult:
                     | Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>
                     | undefined;
-                  try {
-                    const scheduledBatch = await scheduleContinuationWorkBatch({
-                      sessionKey,
-                      chainState: reservation.reserved,
-                      requests: reservedWorkRequests,
-                      config: liveSchedulingConfig,
-                      // Same-session own-turn continue_work has no spawning lineage; leave
-                      // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
-                      // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
-                      originRunId: runId,
-                      originTurnId: followupRun.run.sessionId,
-                      log: (message) => defaultRuntime.log(message),
-                    });
+                  if (reservedWorkRequests.length === 0) {
                     batchResult = {
-                      ...scheduledBatch,
-                      cappedCount: scheduledBatch.cappedCount + unreservedRequestCount,
-                      capped: scheduledBatch.capped || unreservedRequestCount > 0,
+                      scheduledCount: 0,
+                      cappedCount: unreservedRequestCount,
+                      capped: unreservedRequestCount > 0,
+                      chainState: reservation.reserved,
                     };
-                  } catch (err) {
-                    defaultRuntime.log(
-                      `[continuation] continue_work scheduling failed after durable reservation for session ${sessionKey}: ${String(err)}`,
-                    );
-                    enqueueSystemEvent(
-                      "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.",
-                      { sessionKey, trusted: true },
-                    );
+                  } else {
+                    try {
+                      const scheduledBatch = await scheduleContinuationWorkBatch({
+                        sessionKey,
+                        chainState: reservation.reserved,
+                        requests: reservedWorkRequests,
+                        config: liveSchedulingConfig,
+                        // Same-session own-turn continue_work has no spawning lineage; leave
+                        // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
+                        // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
+                        originRunId: runId,
+                        originTurnId: followupRun.run.sessionId,
+                        log: (message) => defaultRuntime.log(message),
+                      });
+                      batchResult = {
+                        ...scheduledBatch,
+                        cappedCount: scheduledBatch.cappedCount + unreservedRequestCount,
+                        capped: scheduledBatch.capped || unreservedRequestCount > 0,
+                      };
+                    } catch (err) {
+                      defaultRuntime.log(
+                        `[continuation] continue_work scheduling failed after durable reservation for session ${sessionKey}: ${String(err)}`,
+                      );
+                      enqueueSystemEvent(
+                        "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.",
+                        { sessionKey, trusted: true },
+                      );
+                    }
                   }
                   if (batchResult) {
                     if (batchResult.scheduledCount === 0) {

@@ -33,6 +33,7 @@ import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
 import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
 import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { enqueuePendingWork } from "../continuation/work-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
@@ -767,6 +768,100 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
     expect(persistedEntry.continuationChainCount).toBe(1);
     expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
+  });
+
+  it("preserves parked work when concurrency leaves no newly reserved scheduling slots", async () => {
+    vi.useFakeTimers();
+    const chainId = "00000000-0000-4000-8000-000000000011";
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-zero-new-reservation",
+      config: {
+        agents: {
+          defaults: {
+            continuation: {
+              enabled: true,
+              minDelayMs: 0,
+              maxDelayMs: 1_000,
+              defaultDelayMs: 1_000,
+              maxChainLength: 1,
+            },
+          },
+        },
+      },
+    });
+    const existingWork = enqueuePendingWork({
+      sessionKey: run.sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 1,
+      chainStartedAt: 1,
+      accumulatedChainTokens: 0,
+      reason: "preserve existing parked work",
+      chainId,
+      anchorPending: true,
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    });
+    if (!existingWork?.flowId) {
+      throw new Error("expected existing parked continuation work");
+    }
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    let persistedEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1,
+      continuationChainTokens: 0,
+      continuationChainId: chainId,
+    };
+    patchSessionEntryMock.mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        const patch = update(persistedEntry);
+        if (!patch) {
+          return null;
+        }
+        persistedEntry = { ...persistedEntry, ...patch };
+        return persistedEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "concurrently capped election",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Working on it" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Working on it",
+      false,
+      "/tmp/openclaw-continuation-work-zero-new-reservation.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([
+      { flowId: existingWork.flowId, status: "queued" },
+    ]);
+    expect(persistedEntry.continuationChainCount).toBe(1);
+    expect(persistedEntry.continuationChainTokens).toBe(0);
   });
 
   it("keeps hedge-fired delegates recoverable when chain-state persistence fails", async () => {
