@@ -14,8 +14,8 @@ const facts = {
 };
 
 describe("resolveHostingProfile", () => {
-  it("defaults to local and honors startup precedence", () => {
-    expect(resolveHostingProfile()).toBe("local");
+  it("preserves baseline readiness when unset and honors startup precedence", () => {
+    expect(resolveHostingProfile()).toBeUndefined();
     expect(
       resolveHostingProfile({
         config: { hosting: { profile: "local" } },

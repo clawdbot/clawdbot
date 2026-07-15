@@ -74,6 +74,7 @@ export async function prepareGatewayLifecycle(params: {
     broadcast,
     cfgAtStart,
     pluginRuntime,
+    nodeReadiness,
     authRateLimiter,
     nodeReapprovalCoordinator,
     channelManager,
@@ -179,6 +180,7 @@ export async function prepareGatewayLifecycle(params: {
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
   });
+  nodeReadiness.listConnected = () => nodeRegistry.listConnected();
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,

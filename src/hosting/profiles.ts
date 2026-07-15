@@ -7,7 +7,6 @@ import { WORKSPACE_WRITABLE_CRITERION_ID } from "../readiness/selection.js";
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 export type HostingProfileId = (typeof HOSTING_PROFILE_IDS)[number];
 
-export const DEFAULT_HOSTING_PROFILE: HostingProfileId = "local";
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
 
 export type HostingProfileDescriptor = {
@@ -19,7 +18,7 @@ export type HostingProfileDescriptor = {
 const STANDARD_HOSTING_PROFILES: Record<HostingProfileId, HostingProfileDescriptor> = {
   local: {
     id: "local",
-    description: "Default local or foreground Gateway.",
+    description: "Local or foreground Gateway.",
     requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
   },
   container: {
@@ -79,12 +78,11 @@ export function resolveHostingProfile(
     env?: NodeJS.ProcessEnv;
     override?: unknown;
   } = {},
-): HostingProfileId {
+): HostingProfileId | undefined {
   return (
     resolveExplicitHostingProfile(params.override, "gateway startup override") ??
     resolveExplicitHostingProfile(params.env?.[HOSTING_PROFILE_ENV], HOSTING_PROFILE_ENV) ??
-    resolveExplicitHostingProfile(params.config?.hosting?.profile, "hosting.profile") ??
-    DEFAULT_HOSTING_PROFILE
+    resolveExplicitHostingProfile(params.config?.hosting?.profile, "hosting.profile")
   );
 }
 

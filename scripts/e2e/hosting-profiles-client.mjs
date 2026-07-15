@@ -9,9 +9,13 @@ const response = await fetch(url);
 const body = await response.json();
 
 function condition(type) {
-  const value = body.conditions?.find((entry) => entry.type === type);
+  const value = findCondition(type);
   assert.ok(value, `missing ${type} condition: ${JSON.stringify(body)}`);
   return value;
+}
+
+function findCondition(type) {
+  return body.conditions?.find((entry) => entry.type === type);
 }
 
 function assertSelectedProfile(profile) {
@@ -20,7 +24,15 @@ function assertSelectedProfile(profile) {
   assert.match(selected.message, new RegExp(`\\b${profile}\\b`));
 }
 
-if (scenario === "local") {
+if (scenario === "unprofiled") {
+  assert.equal(response.status, 200);
+  assert.equal(body.ready, true);
+  assert.equal(findCondition("ProfileSelected"), undefined);
+  assert.equal(findCondition("WorkspaceWritable"), undefined);
+  assert.equal(condition("ConfigLoaded").requirement, "required");
+  assert.equal(condition("GatewayResponding").requirement, "required");
+  assert.deepEqual(body.failures, []);
+} else if (scenario === "local") {
   assert.equal(response.status, 200);
   assertSelectedProfile("local");
   assert.equal(body.ready, true);
