@@ -208,12 +208,11 @@ import {
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import {
   dispatchStagedPostCompactionDelegates,
-  dispatchToolDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
   requeueAwaitingNextCompactionDelegates,
-  resetDelegateDispatchHedgesForTests,
-} from "./delegate-dispatch.js";
+} from "./delegate-dispatch-recovery.js";
+import { dispatchToolDelegates, resetDelegateDispatchHedgesForTests } from "./delegate-dispatch.js";
 import {
   cancelPendingDelegates,
   claimStagedPostCompactionTaskFlowDelegates,

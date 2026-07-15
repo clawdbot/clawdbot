@@ -70,7 +70,7 @@ vi.mock("./server-restart-sentinel.js", () => ({
   recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
 }));
 
-vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
+vi.mock("../auto-reply/continuation/delegate-dispatch-recovery.js", () => ({
   recoverPendingContinuationDelegates: hoisted.recoverPendingContinuationDelegates,
   requeueAwaitingNextCompactionDelegates: hoisted.requeueAwaitingNextCompactionDelegates,
   recoverAndReleaseStagedPostCompactionDelegates:

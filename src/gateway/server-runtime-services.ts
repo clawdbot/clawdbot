@@ -278,12 +278,12 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
   const recoveryArmedAt = Date.now();
   const timer = setTimeout(() => {
     void (async () => {
-      const [delegateModule, workModule] = await Promise.all([
-        import("../auto-reply/continuation/delegate-dispatch.js"),
+      const [delegateRecoveryModule, workModule] = await Promise.all([
+        import("../auto-reply/continuation/delegate-dispatch-recovery.js"),
         import("../auto-reply/continuation/work-dispatch.js"),
       ]);
       const delegateLog = params.log.child("continuation-delegate-recovery");
-      const delegateSummary = await delegateModule.recoverPendingContinuationDelegates({
+      const delegateSummary = await delegateRecoveryModule.recoverPendingContinuationDelegates({
         queuedCreatedAtOrBefore: recoveryArmedAt,
         includeRunningUpdatedAtOrBefore: recoveryArmedAt,
       });
@@ -303,7 +303,7 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
       // The boot-time cutoff excludes rows a live release claimed after startup,
       // so recovery cannot double-drive an actively-releasing delegate.
       const awaitingNextCompactionRequeue =
-        await delegateModule.requeueAwaitingNextCompactionDelegates({
+        await delegateRecoveryModule.requeueAwaitingNextCompactionDelegates({
           runningUpdatedAtOrBefore: recoveryArmedAt,
         });
       if (awaitingNextCompactionRequeue.requeued > 0) {
@@ -312,7 +312,7 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
         );
       }
       const postCompactionRecovery =
-        await delegateModule.recoverAndReleaseStagedPostCompactionDelegates({
+        await delegateRecoveryModule.recoverAndReleaseStagedPostCompactionDelegates({
           runningUpdatedAtOrBefore: recoveryArmedAt,
         });
       if (

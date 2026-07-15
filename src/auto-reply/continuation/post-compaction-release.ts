@@ -104,7 +104,8 @@ export async function releasePostCompactionLifecycle(
   const stagedDelegates = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {
-    const { dispatchStagedPostCompactionDelegates } = await import("./delegate-dispatch.js");
+    const { dispatchStagedPostCompactionDelegates } =
+      await import("./delegate-dispatch-recovery.js");
     const result = await dispatchStagedPostCompactionDelegates(
       stagedDelegates,
       sessionKey,
