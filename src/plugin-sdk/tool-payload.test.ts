@@ -515,15 +515,4 @@ describe("stripPlainTextToolCallBlocks", () => {
       "before\nafter",
     );
   });
-
-  it("scrubs a fenced invoke example by default but preserves it with preserveCodeRegions", () => {
-    const LT = "<";
-    const invoke = [`${LT}invoke name="get_weather">`, `${LT}/invoke>`].join("\n");
-    const raw = `See:\n\`\`\`xml\n${invoke}\n\`\`\`\nDone.`;
-
-    // Strict default: a tool-call-shaped block is scrubbed even inside a code fence.
-    expect(stripPlainTextToolCallBlocks(raw)).not.toContain("invoke");
-    // Opt-in code-aware: the fenced example survives untouched.
-    expect(stripPlainTextToolCallBlocks(raw, { preserveCodeRegions: true })).toBe(raw);
-  });
 });

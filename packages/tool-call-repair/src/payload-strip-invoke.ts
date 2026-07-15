@@ -3,6 +3,7 @@ import { findCodeRegions, isInsideCode } from "@openclaw/normalization-core";
 import {
   consumeLineBreak,
   consumeStructuralLineBreakAfterHorizontalWhitespace,
+  DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -10,8 +11,6 @@ import {
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
 import type { NormalizedPlainTextToolCallParseOptions, PlainTextToolCallBlock } from "./payload.js";
-
-const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 
 /** Advances the write cursor past a stripped block, consuming one trailing line break. */
 export function advancePastStrippedBlock(text: string, blockEnd: number): number {

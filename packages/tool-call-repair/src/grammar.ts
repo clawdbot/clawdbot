@@ -7,6 +7,9 @@ export const HARMONY_MESSAGE_MARKER = "<|message|>";
 /** Harmony stream marker that may close a serialized tool-call payload. */
 export const HARMONY_CALL_MARKER = "<|call|>";
 
+/** Default cap on the serialized payload size accepted for one repaired tool call. */
+export const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
+
 /** Tool names in bracket/plain-text repairs intentionally match provider-safe ids only. */
 export function isPlainTextToolNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_-]/.test(char));

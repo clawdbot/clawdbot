@@ -1,6 +1,7 @@
 // Tool Call Repair module implements payload behavior.
 import {
   consumeStructuralLineBreakAfterHorizontalWhitespace,
+  DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
   END_TOOL_REQUEST,
   HARMONY_CALL_MARKER,
   HARMONY_CHANNEL_MARKER,
@@ -47,7 +48,6 @@ export type NormalizedPlainTextToolCallParseOptions = Omit<
   "allowedToolNames"
 > & { allowedToolNames?: ReadonlySet<string> };
 
-const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
 const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
 
