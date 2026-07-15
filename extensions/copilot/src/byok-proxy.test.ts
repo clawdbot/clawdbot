@@ -307,6 +307,73 @@ describe("createCopilotByokProxy", () => {
       }
     },
   );
+  it("rejects oversized request bodies before forwarding upstream", async () => {
+    const resolvedProvider = resolveCopilotProvider({
+      model: {
+        provider: "custom-proxy",
+        api: "openai-responses",
+        id: "proxy-model",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    const proxy = await createCopilotByokProxy(resolvedProvider);
+
+    try {
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
+        method: "POST",
+        body: "x".repeat(16 * 1024 * 1024 + 1),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe("Payload too large");
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      await proxy?.close();
+    }
+  });
+
+  it("returns 413 for chunked request bodies that overflow the streaming limit", async () => {
+    const resolvedProvider = resolveCopilotProvider({
+      model: {
+        provider: "custom-proxy",
+        api: "openai-responses",
+        id: "proxy-model",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    const proxy = await createCopilotByokProxy(resolvedProvider);
+
+    try {
+      // ReadableStream forces chunked transfer-encoding (no content-length),
+      // so the declared-length gate passes and the streaming reader catches
+      // the overflow mid-stream. The proxy must deliver a proper 413 response
+      // instead of tearing down the shared socket.
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new ReadableStream({
+          start(controller) {
+            const chunkSize = 1024 * 1024;
+            const totalBytes = 16 * 1024 * 1024 + 1;
+            let sent = 0;
+            while (sent < totalBytes) {
+              const size = Math.min(chunkSize, totalBytes - sent);
+              controller.enqueue(new Uint8Array(size));
+              sent += size;
+            }
+            controller.close();
+          },
+        }),
+        duplex: "half",
+      } as RequestInit);
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe("Payload too large");
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      await proxy?.close();
+    }
+  });
 
   it("accepts Azure SDK paths that are rebuilt from the proxy origin", async () => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({

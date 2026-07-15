@@ -5,9 +5,13 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-ingress";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
+const PROXY_MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+const PROXY_REQUEST_BODY_TIMEOUT_MS = 30_000;
 
 type CopilotByokProxyHandle = {
   close: () => Promise<void>;
@@ -115,7 +119,17 @@ async function handleProxyRequest(
       res.end("Not found");
       return;
     }
-    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+    if (isProxyRequestBodyTooLarge(req)) {
+      res.writeHead(413);
+      res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
+      req.resume();
+      return;
+    }
+    const body =
+      req.method === "GET" || req.method === "HEAD" ? undefined : await readGuardedBody(req, res);
+    if (res.writableEnded) {
+      return;
+    }
     guarded = await fetchWithSsrFGuard({
       url: url.toString(),
       init: {
@@ -210,12 +224,51 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
   );
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | undefined> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function isProxyRequestBodyTooLarge(req: IncomingMessage): boolean {
+  const header = req.headers["content-length"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== "string") {
+    return false;
   }
-  return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  const declaredLength = Number.parseInt(raw, 10);
+  return Number.isFinite(declaredLength) && declaredLength > PROXY_MAX_REQUEST_BODY_BYTES;
+}
+
+async function readGuardedBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Buffer | undefined> {
+  const guard = installRequestBodyLimitGuard(req, res, {
+    maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
+    timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
+    responseFormat: "text",
+  });
+  if (guard.isTripped()) {
+    return undefined;
+  }
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    if (guard.isTripped()) {
+      return undefined;
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  } catch (error) {
+    if (guard.isTripped()) {
+      return undefined;
+    }
+    throw error;
+  } finally {
+    guard.dispose();
+  }
+}
+
+function toFetchBody(body: Buffer): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(body.byteLength);
+  copy.set(body);
+  return copy;
 }
 
 function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
