@@ -45,7 +45,7 @@ const findSchema = Type.Object({
     description: "File glob, e.g. **/*.ts.",
   }),
   path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
+  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
 });
 const DEFAULT_LIMIT = 1000;
 
@@ -192,6 +192,13 @@ export function createFindToolDefinition(
 
         void (async () => {
           try {
+            // Reject finite non-integer limits (e.g. 5.5) that bypass schema
+            // validation via direct execute calls. Non-finite values keep the
+            // established fallback-to-default behavior.
+            if (limit !== undefined && Number.isFinite(limit) && !Number.isInteger(limit)) {
+              settle(() => reject(new Error("Limit must be an integer")));
+              return;
+            }
             const searchPath = resolveToCwd(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const ops = customOps ?? defaultFindOperations;
