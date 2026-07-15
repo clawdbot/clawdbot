@@ -76,7 +76,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const timestamp = taskTimestampMs(task.updatedAt ?? task.createdAt);
   const detail = taskDetail(task);
   const title = taskTitle(task);
-  const cancelling = props.cancellingTaskIds.has(task.id);
+  const cancelling = props.cancellingTaskIds.has(task.taskId);
   return html`
     <div class="list-item" data-task-id=${task.id}>
       <div class="list-main">
