@@ -451,7 +451,7 @@ describe("Google speech provider", () => {
         target: "audio-file",
         timeoutMs: 5_000,
       }),
-    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    ).rejects.toThrow("Google TTS response returned malformed audio base64");
     expect(requestSequence).toHaveBeenCalledTimes(2);
   });
 

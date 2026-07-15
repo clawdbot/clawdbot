@@ -1122,6 +1122,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
 
+  it("accepts valid base64url Google Live audio", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const pcm24k = Buffer.from([251, 255, 254, 250]);
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: pcm24k.toString("base64url"),
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
+  });
+
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
