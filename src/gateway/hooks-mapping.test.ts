@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
@@ -11,7 +12,11 @@ const hooksTempDirs: string[] = [];
 afterAll(() => {
   cleanupTempDirs(hooksTempDirs);
 });
-import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
+import {
+  applyHookMappings,
+  commitHookTransformMappingReload,
+  resolveHookMappings,
+} from "./hooks-mapping.js";
 
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
@@ -50,6 +55,11 @@ describe("hooks mapping", () => {
       url: baseUrl,
       path: "gmail",
     });
+  }
+
+  function acceptHookMappings(mappings: ReturnType<typeof resolveHookMappings>) {
+    commitHookTransformMappingReload();
+    return mappings;
   }
 
   function expectAgentMessage(
@@ -117,6 +127,16 @@ describe("hooks mapping", () => {
       url: new URL("http://127.0.0.1:18789/hooks/skip"),
       path: "skip",
     });
+  }
+
+  async function waitForFile(filePath: string) {
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(filePath)) {
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${filePath}`);
+      }
+      await delay(10);
+    }
   }
 
   async function applyGmailTransformSessionKey(params: {
@@ -634,6 +654,241 @@ describe("hooks mapping", () => {
     expect(resultB?.ok).toBe(true);
     if (resultB?.ok && resultB.action?.kind === "wake") {
       expect(resultB.action.text).toBe("from-B");
+    }
+  });
+
+  it("uses one transform module instance per mapping reload", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-generation-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "same-generation.mjs");
+    fs.writeFileSync(
+      modPath,
+      [
+        "globalThis.__openclawHookTransformInstance = (globalThis.__openclawHookTransformInstance ?? 0) + 1;",
+        "const instance = globalThis.__openclawHookTransformInstance;",
+        'export function transformA() { return { kind: "wake", text: `A-${instance}` }; }',
+        'export function transformB() { return { kind: "wake", text: `B-${instance}` }; }',
+      ].join("\n"),
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "testA" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "same-generation.mjs", export: "transformA" },
+          },
+          {
+            match: { path: "testB" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "same-generation.mjs", export: "transformB" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const resultA = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testA"),
+      path: "testA",
+    });
+    const resultB = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testB"),
+      path: "testB",
+    });
+
+    expect(resultA?.ok).toBe(true);
+    expect(resultB?.ok).toBe(true);
+    let instanceA: string | undefined;
+    let instanceB: string | undefined;
+    if (resultA?.ok && resultA.action?.kind === "wake") {
+      instanceA = resultA.action.text.match(/^A-(.+)$/)?.[1];
+    }
+    if (resultB?.ok && resultB.action?.kind === "wake") {
+      instanceB = resultB.action.text.match(/^B-(.+)$/)?.[1];
+    }
+    expect(instanceA).toBeDefined();
+    expect(instanceB).toBe(instanceA);
+  });
+
+  it("reloads a transform when the module file changes", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-reload-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "reloadable.mjs");
+    fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "before" });');
+
+    const resolveMappings = () =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "reloadable" },
+              action: "agent",
+              messageTemplate: "unused",
+              transform: { module: "reloadable.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      );
+    const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
+      applyHookMappings(mappings, {
+        payload: {},
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
+        path: "reloadable",
+      });
+
+    let acceptedMappings = acceptHookMappings(resolveMappings());
+    const first = await applyMappings(acceptedMappings);
+    expect(first?.ok).toBe(true);
+    if (first?.ok && first.action?.kind === "wake") {
+      expect(first.action.text).toBe("before");
+    }
+
+    fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "after" });');
+    const nextTime = new Date(Date.now() + 5_000);
+    fs.utimesSync(modPath, nextTime, nextTime);
+
+    acceptedMappings = acceptHookMappings(resolveMappings());
+    const second = await applyMappings(acceptedMappings);
+    expect(second?.ok).toBe(true);
+    if (second?.ok && second.action?.kind === "wake") {
+      expect(second.action.text).toBe("after");
+    }
+  });
+
+  it("does not invalidate the active transform cache while resolving a rejected reload", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-rejected-reload-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "reloadable.mjs");
+    fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "accepted" });');
+
+    const resolveMappings = () =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "reloadable" },
+              action: "agent",
+              messageTemplate: "unused",
+              transform: { module: "reloadable.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      );
+    const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
+      applyHookMappings(mappings, {
+        payload: {},
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
+        path: "reloadable",
+      });
+
+    const acceptedMappings = acceptHookMappings(resolveMappings());
+    const accepted = await applyMappings(acceptedMappings);
+    expect(accepted?.ok).toBe(true);
+    if (accepted?.ok && accepted.action?.kind === "wake") {
+      expect(accepted.action.text).toBe("accepted");
+    }
+
+    fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "candidate" });');
+    const nextTime = new Date(Date.now() + 5_000);
+    fs.utimesSync(modPath, nextTime, nextTime);
+
+    const rejectedCandidateMappings = resolveMappings();
+    expect(rejectedCandidateMappings).toHaveLength(1);
+
+    const stillAccepted = await applyMappings(acceptedMappings);
+    expect(stillAccepted?.ok).toBe(true);
+    if (stillAccepted?.ok && stillAccepted.action?.kind === "wake") {
+      expect(stillAccepted.action.text).toBe("accepted");
+    }
+
+    const newlyAccepted = await applyMappings(acceptHookMappings(rejectedCandidateMappings));
+    expect(newlyAccepted?.ok).toBe(true);
+    if (newlyAccepted?.ok && newlyAccepted.action?.kind === "wake") {
+      expect(newlyAccepted.action.text).toBe("candidate");
+    }
+  });
+
+  it("does not let an older in-flight transform import repopulate the reload cache", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-overlap-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "reloadable.mjs");
+    const oldStartedPath = path.join(configDir, "old-started");
+    const releaseOldPath = path.join(configDir, "release-old");
+    fs.writeFileSync(
+      modPath,
+      [
+        'import fs from "node:fs";',
+        'import { setTimeout as delay } from "node:timers/promises";',
+        `fs.writeFileSync(${JSON.stringify(oldStartedPath)}, "started");`,
+        `while (!fs.existsSync(${JSON.stringify(releaseOldPath)})) { await delay(10); }`,
+        'export default () => ({ kind: "wake", text: "old" });',
+      ].join("\n"),
+    );
+
+    const resolveMappings = () =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "reloadable" },
+              action: "agent",
+              messageTemplate: "unused",
+              transform: { module: "reloadable.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      );
+    const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
+      applyHookMappings(mappings, {
+        payload: {},
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
+        path: "reloadable",
+      });
+
+    let acceptedMappings = acceptHookMappings(resolveMappings());
+    const oldImport = applyMappings(acceptedMappings);
+    await waitForFile(oldStartedPath);
+
+    fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "new" });');
+    const nextTime = new Date(Date.now() + 5_000);
+    fs.utimesSync(modPath, nextTime, nextTime);
+
+    acceptedMappings = acceptHookMappings(resolveMappings());
+    const afterReload = await applyMappings(acceptedMappings);
+    expect(afterReload?.ok).toBe(true);
+    if (afterReload?.ok && afterReload.action?.kind === "wake") {
+      expect(afterReload.action.text).toBe("new");
+    }
+
+    fs.writeFileSync(releaseOldPath, "go");
+    const olderResult = await oldImport;
+    expect(olderResult?.ok).toBe(true);
+    if (olderResult?.ok && olderResult.action?.kind === "wake") {
+      expect(olderResult.action.text).toBe("old");
+    }
+
+    const final = await applyMappings(acceptedMappings);
+    expect(final?.ok).toBe(true);
+    if (final?.ok && final.action?.kind === "wake") {
+      expect(final.action.text).toBe("new");
     }
   });
 
