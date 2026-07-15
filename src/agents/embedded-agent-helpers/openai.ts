@@ -396,6 +396,25 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
 }
 
 /**
+ * Extracts the Responses `phase` (commentary/final_answer) from a v1 textSignature, if present.
+ * Used when dropping the paired msg_* id so phase metadata can be preserved independently.
+ */
+function extractTextSignaturePhase(signature: string): "commentary" | "final_answer" | undefined {
+  if (!signature.startsWith("{")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(signature) as { v?: unknown; phase?: unknown };
+    if (parsed.v === 1 && (parsed.phase === "commentary" || parsed.phase === "final_answer")) {
+      return parsed.phase;
+    }
+  } catch {
+    // Not a structured signature; nothing to preserve.
+  }
+  return undefined;
+}
+
+/**
  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
  * without the required following item, or stale encrypted reasoning after a model route switch.
  *
@@ -428,6 +447,7 @@ export function downgradeOpenAIReasoningBlocks(
     }
 
     let changed = false;
+    let droppedReplayableReasoning = false;
     type AssistantContentBlock = (typeof assistantMsg.content)[number];
 
     const nextContent: AssistantContentBlock[] = [];
@@ -449,6 +469,7 @@ export function downgradeOpenAIReasoningBlocks(
       }
       if (options.dropReplayableReasoning) {
         changed = true;
+        droppedReplayableReasoning = true;
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
@@ -468,7 +489,29 @@ export function downgradeOpenAIReasoningBlocks(
       continue;
     }
 
-    out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+    // When a replayable reasoning (rs_*) item is dropped after a model/fallback
+    // switch, its paired assistant message id (msg_*) must be dropped too. The
+    // Responses transport replays msg_* from a text block textSignature, so an
+    // orphaned msg_* without its rs_* makes providers like Azure reject the next
+    // turn (issue #88019). Drop the id from the signature, but keep any phase
+    // metadata (commentary/final_answer) so the Responses phase contract survives.
+    const finalContent = droppedReplayableReasoning
+      ? nextContent.map((contentBlock) => {
+          if (!contentBlock || typeof contentBlock !== "object") {
+            return contentBlock;
+          }
+          if (contentBlock.type !== "text" || contentBlock.textSignature === undefined) {
+            return contentBlock;
+          }
+          const phase = extractTextSignaturePhase(contentBlock.textSignature);
+          const { textSignature: _droppedTextSignature, ...rest } = contentBlock;
+          return phase !== undefined
+            ? { ...rest, textSignature: JSON.stringify({ v: 1, phase }) }
+            : rest;
+        })
+      : nextContent;
+
+    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
   }
 
   return anyChanged ? out : messages;

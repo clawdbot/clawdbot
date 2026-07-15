@@ -192,6 +192,29 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("message");
   });
 
+  it("assigns distinct ids to multiple id-less text blocks after a reasoning drop", async () => {
+    const assistantWithTwoTexts = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "commentary" },
+        { type: "text", text: "final" },
+      ],
+    });
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithTwoTexts,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
+
+    const messageIds = extractInputMessages(input).map((item) => item.id);
+    expect(messageIds).toHaveLength(2);
+    expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(messageIds).size).toBe(2);
+  });
+
   it.each(["commentary", "final_answer"] as const)(
     "replays assistant message phase metadata for %s",
     async (phase) => {
@@ -223,4 +246,37 @@ describe("openai-responses reasoning replay", () => {
       expect(replayedMessage?.phase).toBe(phase);
     },
   );
+
+  it("replays a synthetic id while preserving phase for id-less text signatures", async () => {
+    const assistantWithPhaseOnly = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        {
+          type: "text",
+          text: "commentary",
+          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "final",
+          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+        },
+      ],
+    });
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithPhaseOnly,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
+
+    const messages = extractInputMessages(input);
+    expect(messages).toHaveLength(2);
+    const ids = messages.map((item) => item.id);
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(2);
+    expect(messages.map((item) => item.phase)).toEqual(["commentary", "final_answer"]);
+  });
 });

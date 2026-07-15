@@ -747,6 +747,96 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     );
   });
 
+  it("drops the paired message id when replayable reasoning is dropped", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
+          },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any, { dropReplayableReasoning: true })).toEqual(
+      [{ role: "assistant", content: [{ type: "text", text: "answer" }] }],
+    );
+  });
+
+  it("keeps the paired message id when reasoning is preserved", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
+          },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("drops paired message ids across every text block when reasoning is dropped", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: JSON.stringify({ id: "rs_1", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "commentary",
+            textSignature: JSON.stringify({ v: 1, id: "msg_a", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "final",
+            textSignature: JSON.stringify({ v: 1, id: "msg_b", phase: "final_answer" }),
+          },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any, { dropReplayableReasoning: true })).toEqual(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "commentary",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "final",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+    );
+  });
+
   it("drops orphaned reasoning blocks without following content", () => {
     const input = [
       {

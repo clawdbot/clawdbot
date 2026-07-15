@@ -1,5 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { AssistantMessage, ThinkingContent, UserMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  ThinkingContent,
+  UserMessage,
+  Usage,
+} from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -973,6 +978,108 @@ describe("sanitizeSessionHistory", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
+  });
+
+  it("drops the paired assistant message id when reasoning is dropped after a model switch", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-3-7",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_test", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_test" }),
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId: "gpt-5.4",
+      sessionManager,
+    });
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
+  });
+
+  it("preserves phase metadata when dropping the paired message id after a model switch", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-3-7",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_test", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "thinking out loud",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "final answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId: "gpt-5.4",
+      sessionManager,
+    });
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking out loud",
+            textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "final answer",
+            textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+          },
+        ],
         usage: makeZeroUsageSnapshot(),
       },
     ]);

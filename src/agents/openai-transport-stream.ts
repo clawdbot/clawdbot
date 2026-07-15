@@ -984,17 +984,24 @@ function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: "commentary" | "final_answer" } | undefined {
+): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        return parsed.phase === "commentary" || parsed.phase === "final_answer"
-          ? { id: parsed.id, phase: parsed.phase }
-          : { id: parsed.id };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
+        }
+        return undefined;
       }
     } catch {
       // Keep legacy plain-string behavior below.
@@ -1102,6 +1109,7 @@ function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -1139,9 +1147,21 @@ function convertResponsesMessages(
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
-          let msgId = shouldReplayResponsesItemIds
-            ? (textSignature?.id ?? `msg_${msgIndex}`)
-            : undefined;
+          let msgId: string | undefined;
+          if (shouldReplayResponsesItemIds) {
+            if (textSignature?.id) {
+              msgId = textSignature.id;
+            } else {
+              // Reasoning-dropped/model-switch replay strips textSignature, which can
+              // leave several text blocks in one assistant turn without ids. msgIndex
+              // is per-message, so disambiguate fallbacks to avoid duplicate item ids.
+              msgId =
+                textFallbackOrdinal === 0
+                  ? `msg_${msgIndex}`
+                  : `msg_${msgIndex}_${textFallbackOrdinal}`;
+              textFallbackOrdinal += 1;
+            }
+          }
           msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
