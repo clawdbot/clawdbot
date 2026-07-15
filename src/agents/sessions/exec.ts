@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
@@ -39,6 +40,10 @@ type OutputCapture = {
   text: string;
   truncatedChars: number;
 };
+
+function decodeCapturedOutput(decoder: StringDecoder, chunk: Buffer | string): string {
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : `${decoder.end()}${chunk}`;
+}
 
 function clampMaxOutputChars(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -87,6 +92,8 @@ export async function execCommand(
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -113,6 +120,16 @@ export async function execCommand(
       }
       if (options?.signal) {
         options.signal.removeEventListener("abort", killProcess);
+      }
+      const stdoutBeforeFlush = stdout.truncatedChars;
+      stdout = appendCapturedOutput(stdout, stdoutDecoder.end(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stdout.truncatedChars > stdoutBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stdout";
+      }
+      const stderrBeforeFlush = stderr.truncatedChars;
+      stderr = appendCapturedOutput(stderr, stderrDecoder.end(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stderr.truncatedChars > stderrBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stderr";
       }
       if (outputLimitExceeded) {
         stderr = appendCapturedOutput(
@@ -164,7 +181,12 @@ export async function execCommand(
 
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
-      stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);
+      stdout = appendCapturedOutput(
+        stdout,
+        decodeCapturedOutput(stdoutDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stdout.truncatedChars > before) {
         markOutputLimitExceeded("stdout");
       }
@@ -172,7 +194,12 @@ export async function execCommand(
 
     proc.stderr?.on("data", (data) => {
       const before = stderr.truncatedChars;
-      stderr = appendCapturedOutput(stderr, data, maxOutputChars, truncateOutput);
+      stderr = appendCapturedOutput(
+        stderr,
+        decodeCapturedOutput(stderrDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stderr.truncatedChars > before) {
         markOutputLimitExceeded("stderr");
       }
