@@ -246,7 +246,7 @@ describe("handleQaInbound", () => {
       expect(output).not.toContain(paragraphSeparator);
       expect(output).toContain("dispatch\\u000d\\u000aforged\\u2029next");
       expect(output).toContain("cleanup\\u000aforged\\u001b[31m\\u009b32m\\u2028next");
-      expect(output).toContain("[object Undefined]");
+      expect(output).toContain("reply dispatch failed: undefined");
     } finally {
       warn.mockRestore();
     }

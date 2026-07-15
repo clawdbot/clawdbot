@@ -44,9 +44,23 @@ async function installPluginFromDir({ dirPath, ...params }: InstallPluginFromDir
   return await installPluginFromPath({ path: dirPath, ...params });
 }
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
-}));
+type RunCommandWithTimeout = typeof runCommandWithTimeout;
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn<RunCommandWithTimeout>());
+
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  return {
+    ...actual,
+    runCommandWithTimeout: new Proxy(runCommandWithTimeoutMock, {
+      apply(target, thisArg, args: Parameters<RunCommandWithTimeout>) {
+        if (args[0][0] === process.execPath) {
+          return Reflect.apply(actual.runCommandWithTimeout, thisArg, args);
+        }
+        return Reflect.apply(target, thisArg, args);
+      },
+    }),
+  };
+});
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(),
