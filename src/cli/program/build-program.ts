@@ -7,7 +7,7 @@ import { OpenClawCommand } from "./openclaw-command.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext } from "./program-context.js";
 
-export function buildProgram() {
+export function buildProgram(argv: string[] = process.argv) {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
@@ -18,8 +18,6 @@ export function buildProgram() {
     throw err;
   });
   const ctx = createProgramContext();
-  const argv = process.argv;
-
   setProgramContext(program, ctx);
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);

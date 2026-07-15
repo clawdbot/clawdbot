@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
 import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
+import { isPluginYieldingBuiltinCommandRoot } from "../command-registration-policy.js";
 import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
@@ -27,6 +28,12 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
           pluginSdkResolution: renderOptions.pluginSdkResolution,
         })
       : [];
+  const pluginDescriptorNames = new Set(pluginDescriptors.map((descriptor) => descriptor.name));
+  const subCliEntries = getSubCliEntriesCore().filter(
+    (descriptor) =>
+      !isPluginYieldingBuiltinCommandRoot(descriptor.name) ||
+      !pluginDescriptorNames.has(descriptor.name),
+  );
   configureProgramHelp(
     program,
     {
@@ -48,7 +55,7 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     program,
     collectUniqueCommandDescriptors([
       getCoreCliCommandDescriptors(),
-      getSubCliEntriesCore(),
+      subCliEntries,
       pluginDescriptors,
     ]),
   );

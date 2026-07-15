@@ -20,6 +20,14 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
+const { authAction, registerAuthCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("auth").action(action);
+  });
+  return { authAction: action, registerAuthCli: register };
+});
+
 const { registerQaLabCli } = vi.hoisted(() => ({
   registerQaLabCli: vi.fn((program: Command) => {
     const qa = program.command("qa");
@@ -88,6 +96,7 @@ vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../gateway-cli.js", () => ({ registerGatewayCli }));
 vi.mock("../gateway-cli/run-command.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
+vi.mock("../auth-cli.js", () => ({ registerAuthCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../exec-approvals-cli.js", () => ({ registerExecApprovalsCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
@@ -128,6 +137,8 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    registerAuthCli.mockClear();
+    authAction.mockClear();
     registerQaLabCli.mockClear();
     loadPrivateQaCliModule.mockClear();
     registerCapabilityCli.mockClear();
@@ -203,6 +214,13 @@ describe("registerSubCliCommands", () => {
       "list",
     ]);
     expect(nodesAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers the plugin-yielding auth placeholder for primary auth invocations", () => {
+    const program = createRegisteredProgram(["node", "openclaw", "auth", "list"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).not.toContain("auth");
+    expect(registerAuthCli).not.toHaveBeenCalled();
   });
 
   it("registers the infer placeholder and dispatches through the capability registrar", async () => {

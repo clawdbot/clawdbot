@@ -3082,7 +3082,6 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
-    ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
@@ -3099,6 +3098,60 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("uses the core auth shortcut when no plugin owns the auth root", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(["node", "openclaw", "auth", "list"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "auth" },
+    );
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, "auth", [
+      "node",
+      "openclaw",
+      "auth",
+      "list",
+    ]);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "auth", "list"]);
+  });
+
+  it("lets an installed plugin-owned auth root win over the core auth shortcut", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [] as Array<{ name: () => string; aliases: () => string[] }>,
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      program.commands.push({ name: () => "auth", aliases: () => [] });
+      return {};
+    });
+
+    await runCli(["node", "openclaw", "auth", "login"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "auth" },
+    );
+    expect(registerSubCliByNameMock).not.toHaveBeenCalledWith(program, "auth", [
+      "node",
+      "openclaw",
+      "auth",
+      "login",
+    ]);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "auth", "login"]);
   });
 
   it("routes incidental logs to stderr throughout --json startup and dispatch", async () => {

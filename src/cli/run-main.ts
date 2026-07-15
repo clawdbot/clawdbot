@@ -28,6 +28,7 @@ import {
   normalizeRootNoColorArgv,
 } from "./argv.js";
 import {
+  isPluginYieldingBuiltinCommandRoot,
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
@@ -908,6 +909,15 @@ async function resolvePluginMachineOutput(params: {
   return descriptor ? resolvesMachineOutput(descriptor, params.argv) : false;
 }
 
+function hasProgramCommand(program: CommanderCommand, primary: string | null): boolean {
+  return (
+    primary !== null &&
+    program.commands.some(
+      (command) => command.name() === primary || command.aliases().includes(primary),
+    )
+  );
+}
+
 async function isPluginCliRoot(params: {
   primary: string;
   config: OpenClawConfig;
@@ -1534,7 +1544,7 @@ async function runCliWithPreparedOutputMode(
           import("../runtime.js"),
         ]),
       );
-      const program = await startupTrace.measure("build-program", () => buildProgram());
+      const program = await startupTrace.measure("build-program", () => buildProgram(parseArgv));
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
       // These log the error and exit gracefully instead of crashing without trace.
@@ -1569,50 +1579,64 @@ async function runCliWithPreparedOutputMode(
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.
       const { primary } = invocation;
+      let pluginCliRegistrationPromise: Promise<OpenClawConfig | null> | null = null;
+      const registerPluginCliCommandsForPrimary = () => {
+        pluginCliRegistrationPromise ??= startupTrace.measure(
+          "register-plugin-commands",
+          async () => {
+            const [
+              { registerPluginCliCommandsFromValidatedConfig },
+              { resolveCliStartupPolicy },
+            ] = await Promise.all([
+              import("../plugins/cli.js"),
+              import("./command-startup-policy.js"),
+            ]);
+            const startupPolicy = resolveCliStartupPolicy({
+              argv: parseArgv,
+              commandPath: invocation.commandPath,
+              jsonOutputMode: suppressStartupProgress,
+            });
+            return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
+              registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+                mode: "lazy",
+                primary,
+                skipPluginValidation: startupPolicy.skipConfigGuard,
+              }),
+            );
+          },
+        );
+        return pluginCliRegistrationPromise;
+      };
       if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
         await startupTrace.measure("register-primary", async () => {
-          const { getProgramContext } = await import("./program/program-context.js");
-          const ctx = getProgramContext(program);
-          if (ctx) {
-            const { registerCoreCliByName } = await import("./program/command-registry.js");
-            await registerCoreCliByName(program, ctx, primary, parseArgv);
+          if (isPluginYieldingBuiltinCommandRoot(primary)) {
+            await registerPluginCliCommandsForPrimary();
           }
-          const { registerSubCliByName } = await import("./program/register.subclis.js");
-          await registerSubCliByName(program, primary, parseArgv);
+          if (!hasProgramCommand(program, primary)) {
+            const { getProgramContext } = await import("./program/program-context.js");
+            const ctx = getProgramContext(program);
+            if (ctx) {
+              const { registerCoreCliByName } = await import("./program/command-registry.js");
+              await registerCoreCliByName(program, ctx, primary, parseArgv);
+            }
+            const { registerSubCliByName } = await import("./program/register.subclis.js");
+            await registerSubCliByName(program, primary, parseArgv);
+          }
         });
       }
 
-      const hasBuiltinPrimary =
-        primary !== null &&
-        program.commands.some(
-          (command) => command.name() === primary || command.aliases().includes(primary),
-        );
+      const hasBuiltinPrimary = hasProgramCommand(program, primary);
       const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
         argv: parseArgv,
         primary,
         hasBuiltinPrimary,
       });
-      if (!shouldSkipPluginRegistration) {
-        const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
-            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
-          const startupPolicy = resolveCliStartupPolicy({
-            argv: parseArgv,
-            commandPath: invocation.commandPath,
-            jsonOutputMode: suppressStartupProgress,
-          });
-          return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-            mode: "lazy",
-            primary,
-            skipPluginValidation: startupPolicy.skipConfigGuard,
-          });
-        });
+      if (!shouldSkipPluginRegistration && !pluginCliRegistrationPromise) {
+        const config = await registerPluginCliCommandsForPrimary();
         if (config) {
           if (
             primary &&
-            !program.commands.some(
-              (command) => command.name() === primary || command.aliases().includes(primary),
-            )
+            !hasProgramCommand(program, primary)
           ) {
             const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await loadManifestCommandAliasesRuntimeModule();

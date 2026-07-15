@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
+import { isPluginYieldingBuiltinCommandRoot } from "../command-registration-policy.js";
 import {
   shouldEagerRegisterSubcommands,
   shouldRegisterPrimarySubcommandOnly,
@@ -354,9 +355,16 @@ export async function registerSubCliByNameCore(
 
 export function registerSubCliCommandsCore(program: Command, argv: string[] = process.argv) {
   const { primary } = resolveCliArgvInvocation(argv);
-  registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
+  const registerPrimaryOnly = Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv));
+  const entries =
+    primary && isPluginYieldingBuiltinCommandRoot(primary)
+      ? resolveSubCliCommandGroups(argv).filter(
+          (entry) => !entry.placeholders.some((placeholder) => placeholder.name === primary),
+        )
+      : resolveSubCliCommandGroups(argv);
+  registerCommandGroups(program, entries, {
     eager: shouldEagerRegisterSubcommands(),
     primary,
-    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),
+    registerPrimaryOnly,
   });
 }
