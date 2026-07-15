@@ -40,6 +40,8 @@ run_scenario() {
     auth_args=()
     gateway_setup='node "$entry" config set --batch-json '\''[{"path":"gateway.auth.mode","value":"trusted-proxy"},{"path":"gateway.auth.trustedProxy.userHeader","value":"x-forwarded-user"},{"path":"gateway.trustedProxies","value":["127.0.0.1"]}]'\'' >/dev/null;'
   elif [ "$scenario" = "node-not-ready" ]; then
+    # Trusted-CIDR approval admits the device connection but deliberately leaves its command
+    # surface pending, unlike silent same-host or SSH-verified approval.
     gateway_setup='node "$entry" config set gateway.nodes.pairing.autoApproveCidrs '\''["127.0.0.1"]'\'' --strict-json >/dev/null;'
   elif [ "$scenario" = "workspace-ready" ]; then
     runtime_args=(--tmpfs "/tmp/hosting-profile-workspace:rw,size=1m")
@@ -74,6 +76,14 @@ run_scenario() {
   if [ "$scenario" = "node-not-ready" ]; then
     docker_e2e_docker_cmd exec -d "$container_name" bash -lc \
       'set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry="$(openclaw_e2e_resolve_entrypoint)"; exec node "$entry" node run --host 127.0.0.1 --port 18789 --node-id hosting-profile-node --display-name "Hosting Profile Node" >/tmp/hosting-profiles-node.log 2>&1'
+    if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
+      "node scripts/e2e/hosting-profiles-client.mjs node-unapproved http://127.0.0.1:$PORT/readyz >/dev/null 2>&1"; then
+      docker_e2e_tail_container_file_if_running "$container_name" /tmp/hosting-profiles.log 120
+      docker_e2e_tail_container_file_if_running "$container_name" /tmp/hosting-profiles-node.log 120
+      exit 1
+    fi
+    docker_e2e_docker_cmd exec "$container_name" bash -lc \
+      'set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry="$(openclaw_e2e_resolve_entrypoint)"; pending="$(node "$entry" nodes pending --json)"; request_id="$(node -e "const requests=JSON.parse(process.argv[1]); process.stdout.write(requests[0]?.requestId ?? \"\")" "$pending")"; test -n "$request_id"; node "$entry" nodes approve "$request_id" --json >/dev/null'
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
       "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz 200 1000"; then
       docker_e2e_tail_container_file_if_running "$container_name" /tmp/hosting-profiles.log 120
