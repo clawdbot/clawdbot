@@ -28,10 +28,7 @@ import {
   type StartSpanOptions,
   type Tracer,
 } from "../../infra/continuation-tracer.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
 import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
@@ -39,11 +36,6 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
-
-// Suppress unused-import diagnostic — registerMemoryFlushPlanResolver is
-// imported because some siblings register a stub; not strictly required
-// here, kept for parity with the misc.runreplyagent harness.
-void registerMemoryFlushPlanResolver;
 
 const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();

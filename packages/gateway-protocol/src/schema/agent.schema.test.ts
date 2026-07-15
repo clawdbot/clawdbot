@@ -3,12 +3,31 @@ import { describe, expect, it } from "vitest";
 import { AgentParamsSchema } from "./agent.js";
 import { internalProtocolField, stripInternalProtocolFields } from "./internal-fields.js";
 
-function hasDefaultExport<T extends object>(value: T): value is T & { default: T } {
-  return "default" in value && typeof value.default === "function";
+type ValidateFunction = ((value: unknown) => boolean) & { errors?: unknown };
+type AjvConstructor = new (options: { allErrors: boolean }) => {
+  compile: (schema: object) => ValidateFunction;
+};
+
+function isAjvConstructor(value: unknown): value is AjvConstructor {
+  return typeof value === "function";
 }
 
-const Ajv = hasDefaultExport(AjvModule) ? AjvModule.default : AjvModule;
+function resolveAjvConstructor(value: unknown): AjvConstructor {
+  if (isAjvConstructor(value)) {
+    return value;
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "default" in value &&
+    isAjvConstructor(value.default)
+  ) {
+    return value.default;
+  }
+  throw new TypeError("Ajv module did not expose a constructor");
+}
 
+const Ajv = resolveAjvConstructor(AjvModule);
 const ajv = new Ajv({ allErrors: true });
 const validate = ajv.compile(AgentParamsSchema);
 

@@ -19,10 +19,7 @@ import {
   type StartSpanOptions,
   type Tracer,
 } from "../../infra/continuation-tracer.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import {
   dispatchToolDelegates,
   resetDelegateDispatchHedgesForTests,
@@ -36,8 +33,6 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
-
-void registerMemoryFlushPlanResolver;
 
 const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();

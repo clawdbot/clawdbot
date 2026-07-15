@@ -12,10 +12,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
@@ -25,8 +22,6 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
-
-void registerMemoryFlushPlanResolver;
 
 const runEmbeddedAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
