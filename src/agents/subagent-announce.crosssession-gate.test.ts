@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue.js";
-import { __testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { TemplateContext } from "../auto-reply/templating.js";
 import {

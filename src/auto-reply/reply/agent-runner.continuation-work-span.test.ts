@@ -37,7 +37,7 @@ import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal
 import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Suppress unused-import diagnostic — registerMemoryFlushPlanResolver is

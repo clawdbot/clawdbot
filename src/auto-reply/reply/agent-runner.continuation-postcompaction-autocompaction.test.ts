@@ -23,7 +23,7 @@ import { stagedPostCompactionDelegateCount } from "../continuation/delegate-stor
 import { resetContinuationStateForTests } from "../continuation/state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 void registerMemoryFlushPlanResolver;

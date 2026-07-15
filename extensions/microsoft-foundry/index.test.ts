@@ -31,8 +31,10 @@ import {
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+type RunExec = (typeof import("openclaw/plugin-sdk/process-runtime"))["runExec"];
+
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn<RunExec>());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -43,8 +45,17 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    execFile: execFileMock,
     execFileSync: execFileSyncMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+    "openclaw/plugin-sdk/process-runtime",
+  );
+  return {
+    ...actual,
+    runExec: runExecMock,
   };
 });
 
@@ -245,69 +256,41 @@ function buildFoundryRuntimeAuthContext(
 }
 
 function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      const respond = () =>
-        callback(
-          null,
-          JSON.stringify({
-            accessToken: params.accessToken,
-            expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
-          }),
-          "",
-        );
-      if (params.delayMs) {
-        setTimeout(respond, params.delayMs);
-        return;
-      }
-      respond();
-    },
-  );
+  runExecMock.mockImplementationOnce(async () => {
+    if (params.delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, params.delayMs));
+    }
+    return {
+      stdout: JSON.stringify({
+        accessToken: params.accessToken,
+        expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
+      }),
+      stderr: "",
+    };
+  });
 }
 
 function mockAzureCliTokenRaw(stdout: string) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      callback(null, stdout, "");
-    },
-  );
+  runExecMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
 function mockAzureCliLoginFailure(delayMs?: number) {
-  execFileMock.mockImplementationOnce(
-    (
-      _file: unknown,
-      _args: unknown,
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      const respond = () => {
-        callback(new Error("az failed"), "", defaultAzureCliLoginError);
-      };
-      if (delayMs) {
-        setTimeout(respond, delayMs);
-        return;
-      }
-      respond();
-    },
-  );
+  runExecMock.mockImplementationOnce(async () => {
+    if (delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw Object.assign(new Error("az failed"), {
+      stdout: "",
+      stderr: defaultAzureCliLoginError,
+    });
+  });
 }
 
 describe("microsoft-foundry plugin", () => {
   beforeEach(() => {
     resetFoundryRuntimeAuthCaches();
-    execFileMock.mockReset();
     execFileSyncMock.mockReset();
+    runExecMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
   });
@@ -396,7 +379,7 @@ describe("microsoft-foundry plugin", () => {
 
     await getAccessTokenResultAsync({ scope: FOUNDRY_ANTHROPIC_SCOPE });
 
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
+    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -466,7 +449,7 @@ describe("microsoft-foundry plugin", () => {
       mode: "authorization-bearer",
       token: "test-token",
     });
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
+    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
     );
   });
@@ -516,7 +499,7 @@ describe("microsoft-foundry plugin", () => {
         auth: { mode: "header", headerName, value: "profile-api-key" },
       },
     });
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(runExecMock).not.toHaveBeenCalled();
   });
 
   it("uses active model routing when Entra metadata points at another deployment", async () => {
@@ -547,7 +530,7 @@ describe("microsoft-foundry plugin", () => {
     );
 
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/anthropic");
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
+    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -595,11 +578,11 @@ describe("microsoft-foundry plugin", () => {
 
     expect(gptPrepared.apiKey).toBe("gpt-token");
     expect(claudePrepared.apiKey).toBe("claude-token");
-    expect(execFileMock).toHaveBeenCalledTimes(2);
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
+    expect(runExecMock).toHaveBeenCalledTimes(2);
+    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
     );
-    expect(execFileMock.mock.calls[1]?.[1]).toEqual(
+    expect(runExecMock.mock.calls[1]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -617,7 +600,7 @@ describe("microsoft-foundry plugin", () => {
 
     const prepared = requireRuntimeAuthResult(await prepareRuntimeAuth(runtimeContext));
     expect(prepared.apiKey).toBe("retry-token");
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(runExecMock).toHaveBeenCalledTimes(2);
   });
 
   it("dedupes concurrent Entra token refreshes for the same profile", async () => {
@@ -633,7 +616,7 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
     ]);
 
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(runExecMock).toHaveBeenCalledTimes(1);
     expect(requireRuntimeAuthResult(first).apiKey).toBe("deduped-token");
     expect(requireRuntimeAuthResult(second).apiKey).toBe("deduped-token");
   });
@@ -652,13 +635,13 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
     ]);
     expect(failed.every((result) => result.status === "rejected")).toBe(true);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(runExecMock).toHaveBeenCalledTimes(1);
 
     const [first, second] = await Promise.all([
       prepareRuntimeAuth(runtimeContext),
       prepareRuntimeAuth(runtimeContext),
     ]);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(runExecMock).toHaveBeenCalledTimes(2);
     expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
     expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
   });
@@ -675,7 +658,7 @@ describe("microsoft-foundry plugin", () => {
     expect(first.apiKey).toBe("soon-expiring-token");
     const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
     expect(second.apiKey).toBe("fresh-token");
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(runExecMock).toHaveBeenCalledTimes(2);
   });
 
   it("bounds Entra token fallback expiry when the process clock is invalid", async () => {
@@ -711,7 +694,7 @@ describe("microsoft-foundry plugin", () => {
     const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
 
     expect(second.apiKey).toBe("refreshed-token");
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(runExecMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
@@ -1849,13 +1832,8 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps bounded Azure CLI error details UTF-16 safe", async () => {
     const prefix = "x".repeat(299);
-    execFileMock.mockImplementationOnce(
-      (
-        _file: unknown,
-        _args: unknown,
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => callback(new Error("az failed"), "", `${prefix}😀tail`),
+    runExecMock.mockRejectedValueOnce(
+      Object.assign(new Error("az failed"), { stdout: "", stderr: `${prefix}😀tail` }),
     );
 
     await expect(getAccessTokenResultAsync()).rejects.toMatchObject({
