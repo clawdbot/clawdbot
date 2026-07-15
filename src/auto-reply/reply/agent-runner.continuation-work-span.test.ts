@@ -49,6 +49,8 @@ const compactState = vi.hoisted(() => ({
 }));
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
+const patchSessionEntryMock = vi.hoisted(() => vi.fn());
+const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -91,6 +93,18 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
+
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadSessionEntry: (...args: Parameters<typeof actual.loadSessionEntry>) => {
+      const implementation = loadSessionEntryMock.getMockImplementation();
+      return implementation ? loadSessionEntryMock(...args) : actual.loadSessionEntry(...args);
+    },
+    patchSessionEntry: (...args: unknown[]) => patchSessionEntryMock(...args),
+  };
+});
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
@@ -214,6 +228,19 @@ beforeEach(() => {
     childSessionKey: "agent:main:subagent:spawned",
     runId: "run-spawned",
   });
+  patchSessionEntryMock
+    .mockReset()
+    .mockImplementation(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        const entry = { sessionId: "session", updatedAt: Date.now() } satisfies SessionEntry;
+        const patch = update(entry);
+        return patch ? { ...entry, ...patch } : null;
+      },
+    );
+  loadSessionEntryMock.mockReset();
   runWithModelFallbackMock.mockImplementation(
     async ({ provider, model, run }: RunWithModelFallbackParams) => ({
       result: await run(provider, model),
@@ -304,6 +331,7 @@ async function runWorkTurn(
   sessionStore: Record<string, SessionEntry>,
   _payloadText: string,
   isContinuationWake = false,
+  storePath?: string,
 ): Promise<unknown> {
   setRuntimeConfigSnapshot(run.followupRun.run.config);
   return runReplyAgent({
@@ -319,6 +347,7 @@ async function runWorkTurn(
     sessionCtx: run.sessionCtx,
     sessionEntry: run.sessionEntry,
     sessionStore,
+    ...(storePath ? { storePath } : {}),
     sessionKey: run.sessionKey,
     defaultModel: "anthropic/claude-opus-4-6",
     resolvedVerboseLevel: "off",
@@ -342,7 +371,6 @@ describe("runReplyAgent :: continuation.work span", () => {
       payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
       meta: { agentMeta: { usage: { input: 2, output: 3 } } },
     });
-
     await runWorkTurn(
       run,
       { [run.sessionKey]: run.sessionEntry },
@@ -428,6 +456,144 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(1);
     expect(run.sessionEntry.continuationChainCount).toBe(1);
     expect(run.sessionEntry.continuationChainId).not.toBe(staleChainId);
+  });
+
+  it("does not arm continue_work after enablement is disabled at the scheduling seam", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-disabled-before-schedule",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const continuation = run.followupRun.run.config.agents?.defaults?.continuation;
+      if (!continuation) {
+        throw new Error("expected continuation config");
+      }
+      let enabledReads = 0;
+      Object.defineProperty(continuation, "enabled", {
+        configurable: true,
+        get: () => {
+          enabledReads += 1;
+          if (enabledReads === 2) {
+            queueMicrotask(() => {
+              setRuntimeConfigSnapshot({
+                ...run.followupRun.run.config,
+                agents: {
+                  ...run.followupRun.run.config.agents,
+                  defaults: {
+                    ...run.followupRun.run.config.agents?.defaults,
+                    continuation: {
+                      ...continuation,
+                      enabled: false,
+                    },
+                  },
+                },
+              });
+            });
+          }
+          return true;
+        },
+      });
+      return {
+        payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Working on it\nCONTINUE_WORK:1",
+    );
+
+    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
+    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
+  });
+
+  it("does not arm continue_work when durable chain-state reservation fails", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-persistence-failure",
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    patchSessionEntryMock.mockRejectedValueOnce(new Error("session database unavailable"));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+    });
+    const sessionStore = { [run.sessionKey]: run.sessionEntry };
+
+    await runWorkTurn(
+      run,
+      sessionStore,
+      "Working on it\nCONTINUE_WORK:1",
+      false,
+      "/tmp/openclaw-continuation-work-persistence-failure.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
+    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
+    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
+  });
+
+  it("rolls back the reservation when continuation is disabled during persistence", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-disabled-during-reservation",
+    });
+    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
+    patchSessionEntryMock.mockImplementationOnce(
+      async (
+        _scope: unknown,
+        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
+      ): Promise<SessionEntry | null> => {
+        const patch = update(run.sessionEntry);
+        setRuntimeConfigSnapshot({
+          ...run.followupRun.run.config,
+          agents: {
+            ...run.followupRun.run.config.agents,
+            defaults: {
+              ...run.followupRun.run.config.agents?.defaults,
+              continuation: {
+                ...run.followupRun.run.config.agents?.defaults?.continuation,
+                enabled: false,
+              },
+            },
+          },
+        });
+        return patch ? { ...run.sessionEntry, ...patch } : null;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+    });
+    const sessionStore = { [run.sessionKey]: run.sessionEntry };
+
+    await runWorkTurn(
+      run,
+      sessionStore,
+      "Working on it\nCONTINUE_WORK:1",
+      false,
+      "/tmp/openclaw-continuation-work-disable-reservation.json",
+    );
+
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
+    expect(sessionStore[run.sessionKey].continuationChainCount).toBe(0);
+    expect(sessionStore[run.sessionKey].continuationChainTokens).toBe(0);
+    expect(sessionStore[run.sessionKey].continuationChainId).toBeUndefined();
   });
 
   it("suppresses continue_work tool callbacks from incomplete non-replay-safe turns", async () => {

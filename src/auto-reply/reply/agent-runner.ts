@@ -1645,16 +1645,19 @@ export async function runReplyAgent(replyParams: {
     startedAt: number;
     tokens: number;
     chainId?: string;
+    clearChainId?: boolean;
+    required?: boolean;
   }): Promise<{ chainId: string | undefined }> => {
     if (!sessionKey) {
       return { chainId: undefined };
     }
     const previousCount = activeSessionEntry?.continuationChainCount ?? 0;
-    const chainId =
-      params.chainId ??
-      (previousCount > 0 && activeSessionEntry?.continuationChainId
-        ? activeSessionEntry.continuationChainId
-        : generateChainId());
+    const chainId = params.clearChainId
+      ? undefined
+      : (params.chainId ??
+        (previousCount > 0 && activeSessionEntry?.continuationChainId
+          ? activeSessionEntry.continuationChainId
+          : generateChainId()));
     const patch = {
       continuationChainCount: params.count,
       continuationChainStartedAt: params.startedAt,
@@ -1662,28 +1665,31 @@ export async function runReplyAgent(replyParams: {
       continuationChainId: chainId,
     };
     const inMemoryEntry = activeSessionEntry ?? activeSessionStore?.[sessionKey];
-    if (inMemoryEntry) {
-      Object.assign(inMemoryEntry, patch);
-      activeSessionEntry = inMemoryEntry;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = inMemoryEntry;
-      }
-    }
+    let persistedEntry: SessionEntry | undefined;
     if (storePath) {
       try {
         const persisted = await patchSessionEntry({ storePath, sessionKey }, () => patch, {
           preserveActivity: true,
         });
-        if (persisted) {
-          activeSessionEntry = persisted;
-          if (activeSessionStore) {
-            activeSessionStore[sessionKey] = persisted;
-          }
+        if (!persisted) {
+          throw new Error("session entry was not found");
         }
+        persistedEntry = persisted;
       } catch (err) {
         defaultRuntime.log(
           `Failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
         );
+        if (params.required) {
+          throw err;
+        }
+      }
+    }
+    const nextEntry = persistedEntry ?? inMemoryEntry;
+    if (nextEntry) {
+      Object.assign(nextEntry, patch);
+      activeSessionEntry = nextEntry;
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = nextEntry;
       }
     }
     return { chainId };
@@ -2969,7 +2975,9 @@ export async function runReplyAgent(replyParams: {
     // happens before the bracket cap-gate because the chain/cost caps are
     // re-applied at release time inside dispatchPostCompactionDelegates, and
     // the tool form also skips the bracket cap-gate.
+    const continuationRuntimeConfig = resolveLiveContinuationRuntimeConfig(cfg);
     if (
+      continuationRuntimeConfig.enabled &&
       effectiveContinuationSignal &&
       sessionKey &&
       effectiveContinuationSignal.kind === "delegate" &&
@@ -3001,7 +3009,7 @@ export async function runReplyAgent(replyParams: {
         `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${taskEcho}`,
         { sessionKey, trusted: true },
       );
-    } else if (effectiveContinuationSignal && sessionKey) {
+    } else if (continuationRuntimeConfig.enabled && effectiveContinuationSignal && sessionKey) {
       const {
         maxChainLength,
         defaultDelayMs,
@@ -3009,7 +3017,7 @@ export async function runReplyAgent(replyParams: {
         maxDelayMs,
         costCapTokens,
         crossSessionTargeting,
-      } = resolveLiveContinuationRuntimeConfig(cfg);
+      } = continuationRuntimeConfig;
 
       const currentChainCount = activeSessionEntry?.continuationChainCount ?? 0;
       const allocatedChainHop = currentChainCount + pendingDelegateCount(sessionKey);
@@ -3388,41 +3396,129 @@ export async function runReplyAgent(replyParams: {
             const workChainId = activeSessionEntry?.continuationChainId ?? generateChainId();
             const { scheduleContinuationWorkBatch } =
               await import("../continuation/lazy.runtime.js");
-            const batchResult = await scheduleContinuationWorkBatch({
-              sessionKey,
-              chainState: {
-                currentChainCount,
-                chainStartedAt,
-                accumulatedChainTokens,
-                chainId: workChainId,
-              },
-              requests: workRequests,
-              config: resolveLiveContinuationRuntimeConfig(cfg),
-              // Same-session own-turn continue_work has no spawning lineage; leave
-              // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
-              // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
-              originRunId: runId,
-              originTurnId: followupRun.run.sessionId,
-              log: (message) => defaultRuntime.log(message),
-            });
-            if (batchResult.scheduledCount > 0) {
-              await persistContinuationChainState({
-                count: batchResult.chainState.currentChainCount,
-                startedAt: batchResult.chainState.chainStartedAt,
-                tokens: batchResult.chainState.accumulatedChainTokens,
-                ...(batchResult.chainState.chainId
-                  ? { chainId: batchResult.chainState.chainId }
-                  : {}),
-              });
-            }
-            // Surface cap-dropped elections so a partial fan-out is not silent:
-            // the tool already told the model each call was "scheduled". Only
-            // emit for multi-election turns to keep single-work behavior intact.
-            if (batchResult.cappedCount > 0 && workRequests.length > 1) {
-              enqueueSystemEvent(
-                `[continuation] ${batchResult.cappedCount} of ${workRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
-                { sessionKey, trusted: true },
+            const schedulingConfig = resolveLiveContinuationRuntimeConfig(cfg);
+            if (!schedulingConfig.enabled) {
+              defaultRuntime.log(
+                `[continuation] Ignoring continue_work election(s) disabled before scheduling for session ${sessionKey}`,
               );
+              bracketTokensAccumulated = false;
+            } else {
+              const priorChainState = {
+                count: currentChainCount,
+                startedAt: activeSessionEntry?.continuationChainStartedAt ?? chainStartedAt,
+                tokens: previousChainTokens,
+                ...(activeSessionEntry?.continuationChainId
+                  ? { chainId: activeSessionEntry.continuationChainId }
+                  : { clearChainId: true }),
+              };
+              const reservedChainCount = Math.min(
+                schedulingConfig.maxChainLength,
+                currentChainCount + workRequests.length,
+              );
+              const restorePriorChainState = async (): Promise<boolean> => {
+                try {
+                  await persistContinuationChainState({
+                    ...priorChainState,
+                    required: true,
+                  });
+                  return true;
+                } catch (err) {
+                  defaultRuntime.log(
+                    `[continuation] Failed to roll back continue_work chain reservation for session ${sessionKey}: ${String(err)}`,
+                  );
+                  enqueueSystemEvent(
+                    "[continuation] continue_work chain-state rollback failed; the reserved budget remains fail-closed.",
+                    { sessionKey, trusted: true },
+                  );
+                  return false;
+                }
+              };
+              let reservationPersisted = false;
+              try {
+                await persistContinuationChainState({
+                  count: reservedChainCount,
+                  startedAt: chainStartedAt,
+                  tokens: accumulatedChainTokens,
+                  chainId: workChainId,
+                  required: true,
+                });
+                reservationPersisted = true;
+              } catch (err) {
+                bracketTokensAccumulated = false;
+                enqueueSystemEvent(
+                  "[continuation] continue_work election(s) were not scheduled because chain state could not be persisted.",
+                  { sessionKey, trusted: true },
+                );
+                defaultRuntime.log(
+                  `[continuation] Skipping continue_work scheduling after chain-state persistence failure for session ${sessionKey}: ${String(err)}`,
+                );
+              }
+              if (reservationPersisted) {
+                if (!resolveLiveContinuationRuntimeConfig(cfg).enabled) {
+                  if (await restorePriorChainState()) {
+                    bracketTokensAccumulated = false;
+                  }
+                  defaultRuntime.log(
+                    `[continuation] Ignoring continue_work election(s) disabled during chain-state reservation for session ${sessionKey}`,
+                  );
+                } else {
+                  let batchResult:
+                    | Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>
+                    | undefined;
+                  try {
+                    batchResult = await scheduleContinuationWorkBatch({
+                      sessionKey,
+                      chainState: {
+                        currentChainCount,
+                        chainStartedAt,
+                        accumulatedChainTokens,
+                        chainId: workChainId,
+                      },
+                      requests: workRequests,
+                      config: schedulingConfig,
+                      // Same-session own-turn continue_work has no spawning lineage; leave
+                      // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
+                      // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
+                      originRunId: runId,
+                      originTurnId: followupRun.run.sessionId,
+                      log: (message) => defaultRuntime.log(message),
+                    });
+                  } catch (err) {
+                    defaultRuntime.log(
+                      `[continuation] continue_work scheduling failed after durable reservation for session ${sessionKey}: ${String(err)}`,
+                    );
+                    enqueueSystemEvent(
+                      "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.",
+                      { sessionKey, trusted: true },
+                    );
+                  }
+                  if (batchResult) {
+                    if (batchResult.scheduledCount === 0) {
+                      if (await restorePriorChainState()) {
+                        bracketTokensAccumulated = false;
+                      }
+                    } else {
+                      await persistContinuationChainState({
+                        count: batchResult.chainState.currentChainCount,
+                        startedAt: batchResult.chainState.chainStartedAt,
+                        tokens: batchResult.chainState.accumulatedChainTokens,
+                        ...(batchResult.chainState.chainId
+                          ? { chainId: batchResult.chainState.chainId }
+                          : {}),
+                      });
+                    }
+                    // Surface cap-dropped elections so a partial fan-out is not silent:
+                    // the tool already told the model each call was "scheduled". Only
+                    // emit for multi-election turns to keep single-work behavior intact.
+                    if (batchResult.cappedCount > 0 && workRequests.length > 1) {
+                      enqueueSystemEvent(
+                        `[continuation] ${batchResult.cappedCount} of ${workRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
+                        { sessionKey, trusted: true },
+                      );
+                    }
+                  }
+                }
+              }
             }
           }
         }
