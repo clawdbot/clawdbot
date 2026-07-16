@@ -1523,6 +1523,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
       structuredAttachments: "all",
     }),
+    sandboxWorkspaceDir: input.sandboxRoot,
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -2084,7 +2085,7 @@ export async function runMessageAction(
   }
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
-    mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
+    mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId, input.sandboxRoot),
   });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
     cfg,

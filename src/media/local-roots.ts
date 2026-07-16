@@ -58,12 +58,39 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
-/** Adds the active agent workspace to the default media roots without exposing all agent state. */
+/**
+ * Adds the active agent workspace to the default media roots without exposing
+ * all agent state.
+ *
+ * @param sandboxWorkspaceDir - When provided, replaces the broad sandboxes
+ *   parent with the exact active sandbox workspace path. This prevents
+ *   cross-session media access via the shared sandboxes/ parent directory.
+ *   Only callers with sandbox context (message-action-runner) pass this;
+ *   other callers (control-ui, send) omit it for backward compatibility.
+ */
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
+  sandboxWorkspaceDir?: string,
 ): readonly string[] {
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
+  // Agent-scoped roots must never include the broad sandboxes parent.
+  // Every <stateDir>/sandboxes/<session> directory belongs to a specific
+  // session; the shared parent would authorize cross-session file access.
+  // Callers with sandbox context supply the exact active workspace path;
+  // other callers should not access sandbox directories at all.
+  const sandboxesIdx = roots.findIndex(
+    (r) => path.resolve(r) === path.join(resolveStateDir(), "sandboxes"),
+  );
+  if (sandboxesIdx !== -1) {
+    roots.splice(sandboxesIdx, 1);
+  }
+  if (sandboxWorkspaceDir) {
+    const normalizedSandbox = path.resolve(sandboxWorkspaceDir);
+    if (!roots.includes(normalizedSandbox)) {
+      roots.push(normalizedSandbox);
+    }
+  }
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;
@@ -107,8 +134,13 @@ export function getAgentScopedMediaLocalRootsForSources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   mediaSources?: readonly string[];
+  sandboxWorkspaceDir?: string;
 }): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const roots = getAgentScopedMediaLocalRoots(
+    params.cfg,
+    params.agentId,
+    params.sandboxWorkspaceDir,
+  );
   if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
     return roots;
   }

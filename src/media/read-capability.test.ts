@@ -6,7 +6,6 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
-import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -40,10 +39,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
-      "/tmp/media-workspace",
-    ]);
+    expect(result.localRoots).toContain("/tmp/media-workspace");
     expect(typeof result.readFile).toBe("function");
     expect(result.workspaceDir).toBe("/tmp/media-workspace");
   });
@@ -56,10 +52,8 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
-      "/tmp/explicit-workspace",
-    ]);
+    expect(result.localRoots).toContain("/tmp/explicit-workspace");
+    expect(result.localRoots).not.toContain("/tmp/media-workspace");
     expect(typeof result.readFile).toBe("function");
     expect(result.workspaceDir).toBe("/tmp/explicit-workspace");
   });
