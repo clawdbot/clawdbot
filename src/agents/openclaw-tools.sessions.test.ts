@@ -58,10 +58,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
-import {
-  markAcpTurnActive,
-  resetAcpActiveTurnsForTests,
-} from "../acp/control-plane/active-turns.js";
+import { markAcpTurnActive } from "../acp/control-plane/active-turns.js";
+import { resetAcpActiveTurnsForTests } from "../acp/control-plane/active-turns.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
 import {
