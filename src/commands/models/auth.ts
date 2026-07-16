@@ -23,6 +23,7 @@ import {
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
+import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import {
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
@@ -822,7 +823,10 @@ export async function modelsAuthClearCooldownCommand(
   }
 
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
-  await clearAuthProfileCooldown({ store, profileId, agentDir: ownerAgentDir });
+  await clearAuthProfileCooldown({ store, profileId, agentDir });
+  if (resolveAuthStorePath(ownerAgentDir) !== resolveAuthStorePath(agentDir)) {
+    await clearAuthProfileCooldown({ store, profileId, agentDir: ownerAgentDir });
+  }
   const refreshedStore = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
   if (hasAuthProfileFailureState(refreshedStore.usageStats?.[profileId])) {
     throw new Error(

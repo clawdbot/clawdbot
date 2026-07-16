@@ -440,7 +440,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     );
   });
 
-  it("clears inherited profile state in the owning main store", async () => {
+  it("clears inherited profile state in both the selected and owning main stores", async () => {
     const store = {
       version: 1,
       profiles: {
@@ -464,7 +464,13 @@ describe("modelsAuthClearCooldownCommand", () => {
       agentDir: "/tmp/openclaw/agents/worker",
       profileId,
     });
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledTimes(2);
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(1, {
+      store,
+      profileId,
+      agentDir: "/tmp/openclaw/agents/worker",
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(2, {
       store,
       profileId,
       agentDir: undefined,
