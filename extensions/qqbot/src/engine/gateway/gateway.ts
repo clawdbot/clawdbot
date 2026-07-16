@@ -29,6 +29,10 @@ import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipelin
 import { createInteractionHandler } from "./interaction-handler.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
+import {
+  generateSessionConflictErrorId,
+  isReplySessionInitConflictError,
+} from "./reply-session-conflict.js";
 import type {
   CoreGatewayContext,
   GatewayAccount,
@@ -230,31 +234,14 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
-
-      // When shared-core retry (#105754) has exhausted, surface a terminal
-      // notice to the user so the silent-message-loss path is closed.
-      if (isReplySessionInitConflictError(err)) {
-        const errorId = generateSessionConflictErrorId();
-        const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
-        log?.error(
-          `reply session init conflict exhausted — ` +
-            `messageId=${event.messageId} ` +
-            `senderId=${event.senderId} ` +
-            `groupOpenid=${event.groupOpenid ?? ""} ` +
-            `errorId=${errorId}`,
-        );
-        try {
-          await senderSendText(buildDeliveryTarget(event), terminalText, accountToCreds(account), {
-            msgId: event.messageId,
-          });
-        } catch (sendErr) {
-          log?.error(
-            `terminal_notice_failed — errorId=${errorId} ` +
-              `messageId=${event.messageId}: ` +
-              `${sendErr instanceof Error ? sendErr.message : String(sendErr)}`,
-          );
-        }
-      }
+      await sendReplySessionConflictTerminalNotice(err, {
+        event,
+        account,
+        log,
+        senderSendText,
+        buildDeliveryTargetFn: buildDeliveryTarget,
+        accountToCredsFn: accountToCreds,
+      });
       if (event.turnAdoptionLifecycle) {
         throw err;
       }
@@ -353,17 +340,57 @@ async function startTypingForEvent(
   }
 }
 
-// ============ reply-session-init conflict helpers ============
+// ============ terminal notice for exhausted session-init conflicts ============
 
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
-
-function isReplySessionInitConflictError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
+/** Dependencies injected to keep the function testable without a full gateway. */
+export interface SessionConflictTerminalNoticeDeps {
+  event: QueuedMessage;
+  account: GatewayAccount;
+  log?: EngineLogger;
+  senderSendText: typeof senderSendText;
+  buildDeliveryTargetFn: typeof buildDeliveryTarget;
+  accountToCredsFn: typeof accountToCreds;
 }
 
-function generateSessionConflictErrorId(): string {
-  const buf = new Uint32Array(2);
-  crypto.getRandomValues(buf);
-  return buf[0]!.toString(16).padStart(8, "0").slice(0, 8);
+/**
+ * When shared-core retry ([#105754]) has exhausted, surface a best-effort
+ * terminal notice to the QQ user.  The notice is deliberately terse and
+ * carries an 8-char hex error reference for log correlation.  No internal
+ * error text, session keys, or stack traces are exposed.
+ *
+ * If the terminal notice itself fails to send, the failure is logged at
+ * ``terminal_notice_failed`` and the message is not marked delivered.
+ * QQBot currently has no durable-spool / replay-claim system — that is
+ * deferred to a follow-up PR.
+ */
+export async function sendReplySessionConflictTerminalNotice(
+  error: unknown,
+  deps: SessionConflictTerminalNoticeDeps,
+): Promise<void> {
+  if (!isReplySessionInitConflictError(error)) {
+    return;
+  }
+  const { event, account, log, senderSendText, buildDeliveryTargetFn, accountToCredsFn } = deps;
+  const errorId = generateSessionConflictErrorId();
+  const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
+
+  log?.error(
+    `reply session init conflict exhausted — ` +
+      `messageId=${event.messageId} ` +
+      `senderId=${event.senderId} ` +
+      `groupOpenid=${event.groupOpenid ?? ""} ` +
+      `errorId=${errorId}`,
+  );
+
+  try {
+    await senderSendText(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
+      msgId: event.messageId,
+    });
+  } catch (sendErr) {
+    log?.error(
+      `terminal_notice_failed — errorId=${errorId} ` +
+        `messageId=${event.messageId}: ` +
+        `${sendErr instanceof Error ? sendErr.message : String(sendErr)}`,
+    );
+  }
 }

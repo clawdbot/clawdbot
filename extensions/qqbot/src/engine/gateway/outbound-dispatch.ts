@@ -42,6 +42,7 @@ import {
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
+import { isReplySessionInitConflictError } from "./reply-session-conflict.js";
 import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
   GatewayAccount,
@@ -769,18 +770,6 @@ export async function dispatchOutbound(
   if (dispatchError !== undefined && isReplySessionInitConflictError(dispatchError)) {
     throw dispatchError;
   }
-}
-
-// ============ reply-session-init conflict detection ============
-// ReplySessionInitConflictError is not exported through the plugin SDK.
-// Match the message pattern produced by the shared core's
-// `ReplySessionInitConflictError` constructor (session.ts:1067).
-
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
-
-function isReplySessionInitConflictError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
 }
 
 // ============ ctxPayload builder ============

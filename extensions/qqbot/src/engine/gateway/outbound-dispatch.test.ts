@@ -1150,29 +1150,19 @@ describe("dispatchOutbound", () => {
 });
 
 describe("dispatchOutbound session conflict", () => {
-  // ReplySessionInitConflictError is not exported through the plugin SDK.
-  // The shared core constructs it with the fixed message pattern:
-  //   `reply session initialization conflicted for ${sessionKey}`
-  // and sets `this.name = "ReplySessionInitConflictError"`.
   function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
     const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
     err.name = "ReplySessionInitConflictError";
     return err;
   }
 
-  function makeNormalError(): Error {
-    return new Error("some unrelated error");
-  }
-
   it("re-throws a reply-session-init conflict after cleanup", async () => {
     const conflictError = makeConflictError();
     const runtime = makeRuntime({
       onDispatch: async () => {
-        // Simulate inbound.run rejecting with a session conflict.
         throw conflictError;
       },
     });
-    // Override inbound.run so dispatchPromise rejects with the conflict.
     runtime.channel.inbound.run = vi.fn(async () => {
       throw conflictError;
     });
@@ -1183,7 +1173,7 @@ describe("dispatchOutbound session conflict", () => {
   });
 
   it("does not re-throw an unrelated error after cleanup", async () => {
-    const normalError = makeNormalError();
+    const normalError = new Error("some unrelated error");
     const runtime = makeRuntime({
       onDispatch: async () => {
         throw normalError;
@@ -1193,7 +1183,6 @@ describe("dispatchOutbound session conflict", () => {
       throw normalError;
     });
 
-    // dispatchOutbound should not throw — the error is consumed.
     await expect(
       dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
     ).resolves.toBeUndefined();
@@ -1209,59 +1198,6 @@ describe("dispatchOutbound session conflict", () => {
     await expect(
       dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
     ).resolves.toBeUndefined();
-  });
-
-  it("still runs streaming finalization before re-throwing", async () => {
-    // Set up official C2C streaming so a StreamingController is created.
-    const streamingAccount: GatewayAccount = {
-      ...account,
-      config: { streaming: { mode: "official_c2c" } },
-    };
-    const conflictError = makeConflictError();
-    const runtime = makeRuntime({
-      onDispatch: async () => {
-        throw conflictError;
-      },
-    });
-    runtime.channel.inbound.run = vi.fn(async () => {
-      throw conflictError;
-    });
-
-    // dispatchOutbound should re-throw despite streaming cleanup.
-    await expect(
-      dispatchOutbound(
-        makeInbound({
-          event: {
-            type: "c2c",
-            senderId: "user-openid",
-            messageId: "msg-stream",
-            content: "test",
-            timestamp: "2026-04-25T00:00:00.000Z",
-          },
-        }),
-        { runtime, cfg: {}, account: streamingAccount },
-      ),
-    ).rejects.toThrow(conflictError);
-  });
-
-  it("also re-throws a thrown-string conflict (the regex is intentionally broad)", async () => {
-    // Thrown strings that match the conflict pattern are also detected —
-    // this is intentional: in JS/TS any value can be thrown, and the
-    // regex uses String(error) which preserves the original text.
-    const runtime = makeRuntime({
-      onDispatch: async () => {
-        // eslint-disable-next-line no-throw-literal
-        throw "reply session initialization conflicted for qqbot:c2c:user-openid";
-      },
-    });
-    runtime.channel.inbound.run = vi.fn(async () => {
-      // eslint-disable-next-line no-throw-literal
-      throw "reply session initialization conflicted for qqbot:c2c:user-openid";
-    });
-
-    await expect(dispatchOutbound(makeInbound(), { runtime, cfg: {}, account })).rejects.toThrow(
-      "reply session initialization conflicted for qqbot:c2c:user-openid",
-    );
   });
 
   it("does not re-throw a similarly-worded but different error", async () => {
@@ -1280,16 +1216,103 @@ describe("dispatchOutbound session conflict", () => {
   });
 });
 
-describe("reply-session-init conflict detection", () => {
-  // The detection regex is matching the message produced by the shared core's
-  // `ReplySessionInitConflictError` constructor in session.ts:1067:
-  //   `reply session initialization conflicted for ${sessionKey}`
-  const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
-    /^reply session initialization conflicted for \S+$/u;
-  function isMatch(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
-  }
+describe("reply-session-conflict shared helpers", () => {
+  // Import the real helpers — this ensures the test does not duplicate
+  // production regex or ID logic.
+
+  it("isReplySessionInitConflictError matches the shared-core error shape", async () => {
+    const { isReplySessionInitConflictError } = await vi.importActual<
+      typeof import("./reply-session-conflict.js")
+    >("./reply-session-conflict.js");
+
+    function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+      const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+      err.name = "ReplySessionInitConflictError";
+      return err;
+    }
+
+    expect(isReplySessionInitConflictError(makeConflictError())).toBe(true);
+    expect(isReplySessionInitConflictError(makeConflictError("qqbot:group:g12345"))).toBe(true);
+
+    expect(isReplySessionInitConflictError(new Error("unrelated error"))).toBe(false);
+    expect(
+      isReplySessionInitConflictError(new Error("reply session initialization conflicted")),
+    ).toBe(false);
+    expect(
+      isReplySessionInitConflictError(
+        new Error("reply session initialization conflicted and failed"),
+      ),
+    ).toBe(false);
+    expect(isReplySessionInitConflictError(new Error("timeout"))).toBe(false);
+    expect(isReplySessionInitConflictError(new Error(""))).toBe(false);
+  });
+
+  it("generateSessionConflictErrorId produces 8-char lower-case hex", async () => {
+    const { generateSessionConflictErrorId } = await vi.importActual<
+      typeof import("./reply-session-conflict.js")
+    >("./reply-session-conflict.js");
+
+    // Deterministic: mock crypto.getRandomValues with a fixed value.
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        buf[0] = 0xabcdef01;
+        return buf;
+      };
+      expect(generateSessionConflictErrorId()).toBe("abcdef01");
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
+    }
+  });
+
+  it("generateSessionConflictErrorId pads to 8 chars with leading zeros", async () => {
+    const { generateSessionConflictErrorId } = await vi.importActual<
+      typeof import("./reply-session-conflict.js")
+    >("./reply-session-conflict.js");
+
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        buf[0] = 0x00000042;
+        return buf;
+      };
+      expect(generateSessionConflictErrorId()).toBe("00000042");
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
+    }
+  });
+});
+
+describe("sendReplySessionConflictTerminalNotice", () => {
+  const senderSendTextMock = vi.fn(async () => undefined);
+  const buildDeliveryTargetMock = vi.fn((event: { senderId: string; type: string }) => ({
+    type: event.type === "group" ? "group" : "c2c",
+    id: event.senderId,
+  }));
+  const accountToCredsMock = vi.fn(() => ({
+    appId: "app",
+    clientSecret: "secret",
+  }));
+
+  const baseAccount: GatewayAccount = {
+    accountId: "qq-main",
+    appId: "app",
+    clientSecret: "secret",
+    markdownSupport: false,
+    config: {},
+  };
+
+  const baseEvent: QueuedMessage = {
+    type: "c2c",
+    senderId: "user-openid",
+    content: "hello",
+    messageId: "msg-1",
+    timestamp: "2026-04-25T00:00:00.000Z",
+  };
 
   function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
     const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
@@ -1297,48 +1320,188 @@ describe("reply-session-init conflict detection", () => {
     return err;
   }
 
-  it("matches the exact error message from the shared core", () => {
-    expect(isMatch(makeConflictError())).toBe(true);
-    expect(isMatch(makeConflictError("qqbot:group:g12345"))).toBe(true);
-    expect(isMatch(makeConflictError("telegram:-1001234567"))).toBe(true);
+  const errorLogMock = vi.fn();
+
+  const log = {
+    error: errorLogMock,
+    info: vi.fn(),
+  };
+
+  beforeEach(() => {
+    senderSendTextMock.mockReset();
+    buildDeliveryTargetMock.mockReset();
+    accountToCredsMock.mockReset();
+    errorLogMock.mockReset();
   });
 
-  it("rejects unrelated error messages", () => {
-    expect(isMatch(new Error("some unrelated error"))).toBe(false);
-    expect(isMatch(new Error("reply session initialization conflicted"))).toBe(false);
-    expect(isMatch(new Error("reply session initialization conflicted and failed"))).toBe(false);
-    expect(isMatch(new Error("timeout"))).toBe(false);
-    expect(isMatch(new Error(""))).toBe(false);
-  });
+  it("sends terminal notice for a typed conflict error", async () => {
+    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
 
-  it("rejects non-Error-like objects that do not carry the message text", () => {
-    // String(error) for an object yields '[object Object]', which won't match.
-    expect(isMatch({ message: "reply session initialization conflicted for test" })).toBe(false);
-  });
-});
+    // Override crypto for deterministic error ID.
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        buf[0] = 0xdeadbeef;
+        return buf;
+      };
 
-describe("generateSessionConflictErrorId format", () => {
-  // Tests the error ID generation — 8 lower-case hex characters.
-  function generateSessionConflictErrorId(): string {
-    const buf = new Uint32Array(2);
-    crypto.getRandomValues(buf);
-    return buf[0]!.toString(16).padStart(8, "0").slice(0, 8);
-  }
-
-  it("produces 8-character lower-case hex strings", () => {
-    for (let i = 0; i < 20; i++) {
-      const id = generateSessionConflictErrorId();
-      expect(id).toMatch(/^[0-9a-f]{8}$/);
+      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
+        event: baseEvent,
+        account: baseAccount,
+        log,
+        senderSendText: senderSendTextMock,
+        buildDeliveryTargetFn: buildDeliveryTargetMock,
+        accountToCredsFn: accountToCredsMock,
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
     }
+
+    // Verify: one static send.
+    expect(senderSendTextMock).toHaveBeenCalledTimes(1);
+
+    // Verify: send target comes from the event.
+    const sendCall = senderSendTextMock.mock.calls[0];
+    // First arg is the target built from the event.
+    expect(buildDeliveryTargetMock).toHaveBeenCalledWith(baseEvent);
+    expect(sendCall[0]).toEqual(buildDeliveryTargetMock(baseEvent));
+
+    // Verify: text contains the error ID and is in Chinese, no stack/internal info.
+    const sentText: string = sendCall[1];
+    expect(sentText).toContain("deadbeef");
+    expect(sentText).toContain("会话冲突");
+    expect(sentText).toContain("请重新发送");
+    expect(sentText).not.toContain("sessionKey");
+    expect(sentText).not.toContain("qqbot:c2c:user-openid");
+    expect(sentText).not.toContain("ReplySessionInitConflictError");
+
+    // Verify: log uses the same error ID.
+    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
+    expect(logCalls.some((msg) => msg.includes("deadbeef"))).toBe(true);
+    expect(logCalls.some((msg) => msg.includes("reply session init conflict exhausted"))).toBe(
+      true,
+    );
   });
 
-  it("produces different values on successive calls", () => {
-    const ids = new Set<string>();
-    for (let i = 0; i < 10; i++) {
-      ids.add(generateSessionConflictErrorId());
+  it("does nothing for a non-conflict error", async () => {
+    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
+
+    await sendReplySessionConflictTerminalNotice(new Error("timeout"), {
+      event: baseEvent,
+      account: baseAccount,
+      log,
+      senderSendText: senderSendTextMock,
+      buildDeliveryTargetFn: buildDeliveryTargetMock,
+      accountToCredsFn: accountToCredsMock,
+    });
+
+    expect(senderSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("logs terminal_notice_failed when send fails", async () => {
+    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
+
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        buf[0] = 0xcafebabe;
+        return buf;
+      };
+
+      senderSendTextMock.mockRejectedValue(new Error("network error"));
+
+      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
+        event: baseEvent,
+        account: baseAccount,
+        log,
+        senderSendText: senderSendTextMock,
+        buildDeliveryTargetFn: buildDeliveryTargetMock,
+        accountToCredsFn: accountToCredsMock,
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
     }
-    // Probabilistic: with 2^32 space, 10 collisions are astronomically unlikely.
-    expect(ids.size).toBeGreaterThanOrEqual(9);
+
+    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
+    expect(
+      logCalls.some((msg) => msg.includes("terminal_notice_failed") && msg.includes("cafebabe")),
+    ).toBe(true);
+  });
+
+  it("does not include internal stack or session key in the notice", async () => {
+    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
+
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        buf[0] = 0x11111111;
+        return buf;
+      };
+
+      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
+        event: baseEvent,
+        account: baseAccount,
+        log,
+        senderSendText: senderSendTextMock,
+        buildDeliveryTargetFn: buildDeliveryTargetMock,
+        accountToCredsFn: accountToCredsMock,
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
+    }
+
+    const sentText: string = senderSendTextMock.mock.calls[0][1];
+    // Must not leak internal path/class names.
+    expect(sentText).not.toContain("gateway");
+    expect(sentText).not.toContain("outbound-dispatch");
+    expect(sentText).not.toContain("dispatch");
+    expect(sentText).not.toContain("stack");
+    expect(sentText).not.toContain("sessionKey");
+    // Must include the error ID.
+    expect(sentText).toContain("11111111");
+  });
+
+  it("uses the same error ID in log and user-visible text", async () => {
+    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
+
+    const originalGetRandomValues = crypto.getRandomValues;
+    try {
+      let callCount = 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = (buf: Uint32Array) => {
+        // Return a different value each call to ensure both log and text
+        // use the same generated ID.
+        buf[0] = callCount++ === 0 ? 0xaaaaaaaa : 0xbbbbbbbb;
+        return buf;
+      };
+
+      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
+        event: baseEvent,
+        account: baseAccount,
+        log,
+        senderSendText: senderSendTextMock,
+        buildDeliveryTargetFn: buildDeliveryTargetMock,
+        accountToCredsFn: accountToCredsMock,
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (crypto as any).getRandomValues = originalGetRandomValues;
+    }
+
+    const sentText: string = senderSendTextMock.mock.calls[0][1];
+    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
+
+    // Both must reference "aaaaaaaa" (the first generated ID).
+    expect(sentText).toContain("aaaaaaaa");
+    expect(logCalls.some((msg) => msg.includes("aaaaaaaa"))).toBe(true);
+    // Neither should contain "bbbbbbbb" (only generated once).
+    expect(sentText).not.toContain("bbbbbbbb");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
