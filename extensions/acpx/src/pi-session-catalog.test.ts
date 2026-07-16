@@ -641,6 +641,41 @@ describe("Pi session catalog", () => {
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBeUndefined();
   });
 
+  it("keeps the Pi session read safety limit when the file grows after preflight", async () => {
+    const directory = await createPiStore();
+    const file = path.join(directory, "session.jsonl");
+    await listLocalPiSessionPage({ limit: 20 });
+
+    let emittedBytes = 0;
+    const oversizedBytes = 33 * 1024 * 1024;
+    const actualOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
+      if (target !== file || flags !== "r") {
+        return await actualOpen(target, flags);
+      }
+      return {
+        stat: async () => ({ isFile: () => true, size: 128 }),
+        read: async (buffer: Buffer, offset: number, length: number) => {
+          const bytesRead = Math.min(length, oversizedBytes - emittedBytes);
+          if (bytesRead <= 0) {
+            return { bytesRead: 0, buffer };
+          }
+          buffer.fill(0x20, offset, offset + bytesRead);
+          emittedBytes += bytesRead;
+          return { bytesRead, buffer };
+        },
+        close: async () => {},
+      } as Awaited<ReturnType<typeof fs.open>>;
+    });
+    try {
+      await expect(
+        readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
+      ).rejects.toThrow("32 MiB read safety limit");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("auto-detects the store and honors the node-local Web UI switch", async () => {
     const directory = await createPiStore();
     const binDirectory = await installFakePi();

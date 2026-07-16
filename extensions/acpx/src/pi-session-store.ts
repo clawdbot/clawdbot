@@ -342,6 +342,49 @@ async function readAppendProof(
   }
 }
 
+async function readPiSessionFileWithinLimit(file: string): Promise<string> {
+  const handle = await fs.open(file, "r");
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error("Pi session is not a file");
+    }
+    if (stats.size > MAX_SESSION_BYTES) {
+      throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+    }
+    const readLimit = MAX_SESSION_BYTES + 1;
+    let storage = Buffer.allocUnsafe(Math.min(Math.max(stats.size, 1), readLimit));
+    let totalBytes = 0;
+    let position = 0;
+    while (totalBytes <= MAX_SESSION_BYTES) {
+      if (totalBytes === storage.length) {
+        const next = Buffer.allocUnsafe(
+          Math.min(readLimit, Math.max(storage.length * 2, totalBytes + 1)),
+        );
+        storage.copy(next, 0, 0, totalBytes);
+        storage = next;
+      }
+      const { bytesRead } = await handle.read(
+        storage,
+        totalBytes,
+        storage.length - totalBytes,
+        position,
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      position += bytesRead;
+      if (totalBytes > MAX_SESSION_BYTES) {
+        throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+      }
+    }
+    return storage.subarray(0, totalBytes).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function cachedPrefixIsUnchanged(candidate: PiFileCandidate, cached: CachedSummary) {
   if (cached.identity !== candidate.identity || cached.size >= candidate.size) {
     return false;
@@ -531,14 +574,7 @@ export async function readPiSessionById(
       throw new Error("Pi session was not found");
     }
     try {
-      const stats = await fs.stat(file);
-      if (!stats.isFile()) {
-        throw new Error("Pi session is not a file");
-      }
-      if (stats.size > MAX_SESSION_BYTES) {
-        throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
-      }
-      const entries = parsePiJsonLines(await fs.readFile(file, "utf8"));
+      const entries = parsePiJsonLines(await readPiSessionFileWithinLimit(file));
       if (entries[0]?.type === "session" && entries[0].id === threadId) {
         return entries;
       }
