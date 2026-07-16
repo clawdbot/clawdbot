@@ -9,9 +9,7 @@ export function isReservedNonPluginCommandRoot(primary: string | null | undefine
   return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);
 }
 
-export function isPluginYieldingBuiltinCommandRoot(
-  primary: string | null | undefined,
-): boolean {
+export function isPluginYieldingBuiltinCommandRoot(primary: string | null | undefined): boolean {
   return typeof primary === "string" && PLUGIN_YIELDING_BUILTIN_COMMAND_ROOTS.has(primary);
 }
 
