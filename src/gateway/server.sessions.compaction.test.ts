@@ -25,7 +25,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   embeddedRunMock,
