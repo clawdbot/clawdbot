@@ -19,10 +19,7 @@ import {
   type Tracer,
 } from "../infra/continuation-tracer.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
-import {
-  abortEmbeddedAgentRun,
-  isEmbeddedAgentRunActive,
-} from "./embedded-agent-runner/runs.js";
+import { abortEmbeddedAgentRun, isEmbeddedAgentRunActive } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "./embedded-agent-runner/runs.test-support.js";
 
 const runEmbeddedAgentMock = vi.fn();

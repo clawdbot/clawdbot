@@ -211,7 +211,9 @@ describe("subagent registry archive behavior", () => {
       endedAt: Date.now() - 1,
       archiveAtMs: Date.now(),
     });
-    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReturnValueOnce(true).mockReturnValue(false);
+    hasLiveOrRecentlyDispatchedContinuationWorkMock
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
 
     await mod.testing.sweepOnceForTests();
 

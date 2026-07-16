@@ -69,7 +69,8 @@ async function getReleaseQueuedCompactionCompletion() {
 }
 
 async function getReleaseQueuedCompactionTolerant() {
-  return (await import("./agent-runner-post-compaction-release.js")).releaseQueuedCompactionTolerant;
+  return (await import("./agent-runner-post-compaction-release.js"))
+    .releaseQueuedCompactionTolerant;
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
