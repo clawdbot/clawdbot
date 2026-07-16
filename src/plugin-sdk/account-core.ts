@@ -3,13 +3,15 @@ import { resolveUserPath } from "../utils.js";
 
 export {
   DEFAULT_ACCOUNT_ID,
-  listCombinedAccountIds,
-  listConfiguredAccountIds,
   normalizeAccountId,
   normalizeOptionalAccountId,
-  resolveListedDefaultAccountId,
 } from "./account-id.js";
-export { resolveMergedAccountConfig } from "./account-resolution.js";
+export {
+  listCombinedAccountIds,
+  listConfiguredAccountIds,
+  resolveListedDefaultAccountId,
+  resolveMergedAccountConfig,
+} from "./account-resolution.js";
 export { resolveUserPath };
 export type { OpenClawConfig };
 
