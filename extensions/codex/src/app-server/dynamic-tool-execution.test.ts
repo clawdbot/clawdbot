@@ -356,6 +356,66 @@ describe("dynamic tool execution helpers", () => {
     });
   });
 
+  it("keeps timeout disposition when a cooperative tool rejects on abort", async () => {
+    vi.useFakeTimers();
+    const onAgentToolResult = vi.fn();
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout-abort-race",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "hello" },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn(
+          (_call, options) =>
+            new Promise<never>((_resolve, reject) => {
+              options?.signal?.addEventListener(
+                "abort",
+                () => reject(new Error("cooperative abort")),
+                { once: true },
+              );
+            }),
+        ),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      onAgentToolResult,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await response;
+    expect(result).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+        },
+      ],
+    });
+    expect(result.diagnosticTerminalReason).toBe("timed_out");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "message",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+          },
+        ],
+        details: {
+          status: "timed_out",
+          error: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+        },
+      },
+      isError: true,
+    });
+  });
+
   it("marks a timeout during pre-execution hooks as unstarted", async () => {
     vi.useFakeTimers();
     const observeToolTerminal = vi.fn(() => ({

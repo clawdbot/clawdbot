@@ -171,13 +171,30 @@ describe("plugin SDK surface report", () => {
     }
   });
 
-  it("rejects deprecated export growth by public entrypoint", () => {
-    const budgetConfig = readPluginSdkSurfaceBudgets({
+  it("rejects deprecated export budget mismatches by public entrypoint", () => {
+    const lowBudgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
+    });
+    const highBudgetConfig = readPluginSdkSurfaceBudgets({
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 3 }),
+    });
+
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, lowBudgetConfig)).toContain(
+      "public deprecated exports in core 2 != 1",
+    );
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, highBudgetConfig)).toContain(
+      "public deprecated exports in core 2 != 3",
+    );
+  });
+
+  it("rejects wildcard reexport budget mismatches", () => {
+    const wildcardReexports = readCurrentPublicSurfaceCounts().wildcardReexports;
+    const budgetConfig = readPluginSdkSurfaceBudgets({
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS: String(wildcardReexports + 1),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      "public deprecated exports in core 2 > 1",
+      `public wildcard reexports ${wildcardReexports} != ${wildcardReexports + 1}`,
     );
   });
 });

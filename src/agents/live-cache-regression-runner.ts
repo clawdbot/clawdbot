@@ -527,6 +527,17 @@ async function runAnthropicDisabledCacheLane(params: {
   }
 }
 
+export const testing = {
+  assertAgainstBaseline,
+  evaluateAgainstBaseline,
+  resolveLiveCacheProviderPool,
+  resolveCacheProbeMaxTokens,
+  isAnthropicToolProbeDrift,
+  shouldAcceptEmptyCacheProbe,
+  shouldRetryCacheProbeText,
+  shouldRetryBaselineFindings,
+};
+
 /** Runs all live prompt-cache lanes and returns hard regressions plus warn-only drift. */
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
