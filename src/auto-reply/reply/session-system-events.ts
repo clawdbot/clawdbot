@@ -6,6 +6,7 @@ import {
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -17,6 +18,7 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { defaultRuntime } from "../../runtime.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
@@ -127,6 +129,16 @@ export async function drainFormattedSystemEvents(params: {
   if (sessionStateTargets.length > 0) {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
+  const drainedContinuationCount = queued.filter((event) =>
+    event.text.startsWith("[continuation:"),
+  ).length;
+  const traceparent = queued.find((event) => event.traceparent)?.traceparent;
+  emitContinuationQueueDrainSpan({
+    drainedCount: queued.length,
+    drainedContinuationCount,
+    ...(traceparent ? { traceparent } : {}),
+    log: (message) => defaultRuntime.log(message),
+  });
   for (const event of queued) {
     const compacted = compactSystemEvent(event.text);
     if (!compacted) {

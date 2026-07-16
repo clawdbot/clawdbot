@@ -123,7 +123,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 595,
+  // #1172 replaces the raw system-event wildcard with explicit safe exports.
+  "infra-runtime": 600,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -221,29 +222,33 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +17: #1172 continuation tracing and safe legacy system-event exports.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10612,
+      10629,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +5: #1172 continuation tracer controls and safe legacy system-event producers.
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
-      5344,
+      5349,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +2: group scope encoder/key builder mirrored by deprecated compat.
+      // +7: #1172 explicitly enumerates the safe legacy system-event surface.
       // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
       // +77: five zero-consumer subpaths enter their removal window.
-      3339,
+      3346,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      209,
+      // #1172 replaces one unsafe legacy wildcard with explicit exports.
+      208,
       env,
     ),
   };
