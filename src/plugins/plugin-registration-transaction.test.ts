@@ -221,6 +221,107 @@ describe("plugin registration transaction", () => {
     expect(providerInstance.chat("gpt-5")).toBe("chat-gpt-5");
   });
 
+  it("preserves earlier class-backed plugin registrations when a later plugin fails and rolls back (loader scenario #106647)", () => {
+    const registry = createEmptyPluginRegistry();
+
+    // Simulate a real plugin provider with class-backed state (methods, prototypes)
+    class GoodProvider {
+      id = "good-provider";
+      label = "Good Provider";
+      chat(model: string) {
+        return `good-${model}`;
+      }
+      listModels() {
+        return ["good-model"];
+      }
+      start() {}
+      stop() {}
+    }
+    const goodProviderInstance = new GoodProvider();
+
+    // Transaction 1: "good-plugin" registers successfully (mirrors loader-runtime-candidate L492-507)
+    const tx1 = createPluginRegistrationTransaction({ registry });
+
+    registry.providers.push({
+      pluginId: "good-plugin",
+      pluginName: "Good Plugin",
+      provider: goodProviderInstance as unknown as import("./types.js").ProviderPlugin,
+      source: "good-source",
+    });
+    registry.plugins.push({
+      id: "good-plugin",
+      name: "Good Plugin",
+      source: "good-source",
+      origin: "global" as const,
+      enabled: true,
+      status: "loaded" as const,
+      toolNames: [],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: ["good-provider"],
+      embeddingProviderIds: [],
+      speechProviderIds: [],
+      realtimeTranscriptionProviderIds: [],
+      realtimeVoiceProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      transcriptSourceProviderIds: [],
+      imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
+      musicGenerationProviderIds: [],
+      webFetchProviderIds: [],
+      webSearchProviderIds: [],
+      migrationProviderIds: [],
+      memoryEmbeddingProviderIds: [],
+      agentHarnessIds: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServiceIds: [],
+      commands: [],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: false,
+    });
+
+    tx1.commit({ activate: true });
+
+    // Transaction 2: "bad-plugin" writes to registry then fails (mirrors loader-runtime-candidate L508-522)
+    const rollbackSideEffects = vi.fn();
+    const tx2 = createPluginRegistrationTransaction({
+      registry,
+      rollbackGlobalSideEffects: rollbackSideEffects,
+    });
+
+    registry.providers.push({
+      pluginId: "bad-plugin",
+      pluginName: "Bad Plugin",
+      provider: { id: "bad-provider" } as unknown as import("./types.js").ProviderPlugin,
+      source: "bad-source",
+    });
+    // Bad plugin's registration mutates the good plugin's metadata (simulating side effects)
+    registry.plugins[0]!.status = "error";
+    registry.providers[0]!.pluginName = "Corrupted";
+
+    // Bad plugin fails, loader calls rollback
+    tx2.rollback();
+
+    // After rollback: bad plugin's provider is gone
+    expect(registry.providers).toHaveLength(1);
+    expect(registry.providers[0]!.pluginId).toBe("good-plugin");
+
+    // Good plugin's metadata is restored
+    expect(registry.plugins[0]!.status).toBe("loaded");
+    expect(registry.providers[0]!.pluginName).toBe("Good Plugin");
+
+    // Good plugin's class-backed provider instance preserved by reference
+    expect(registry.providers[0]!.provider).toBe(goodProviderInstance);
+    expect(registry.providers[0]!.provider).toBeInstanceOf(GoodProvider);
+    expect(goodProviderInstance.chat("gpt-5")).toBe("good-gpt-5");
+
+    // rollbackGlobalSideEffects was called (loader contract)
+    expect(rollbackSideEffects).toHaveBeenCalledOnce();
+  });
+
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {
     const registry = createEmptyPluginRegistry();
     const activePromptBuilder = () => ["active"];
