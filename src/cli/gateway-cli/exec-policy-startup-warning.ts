@@ -11,6 +11,8 @@ import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/e
 import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
+const EXEC_APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
+
 function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
   return mode === "all";
 }
@@ -35,10 +37,7 @@ function buildSecurityClampRemediation(globalScope: ExecPolicyScopeSnapshot): st
   ) {
     return `Run "openclaw exec-policy set --security ${globalScope.security.requested}" to synchronize host approvals, or "openclaw exec-policy show" for details.`;
   }
-  const target = hostSecuritySourceIsDefaults(globalScope.security.hostSource)
-    ? `defaults.security=${globalScope.security.requested}`
-    : `the clamping host approval set to security=${globalScope.security.requested}`;
-  return `Run "openclaw approvals set --stdin" with ${target} to synchronize host approvals, or "openclaw exec-policy show" for details.`;
+  return `Run "openclaw exec-policy show" to inspect the clamping scope. See ${EXEC_APPROVALS_DOCS_URL} before changing host approvals.`;
 }
 
 export function buildGlobalExecPolicyClampWarning(params: {

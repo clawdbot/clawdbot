@@ -188,7 +188,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toContain("tools.exec.security=full is clamped to deny");
   });
 
-  it("uses approvals remediation for mode-based configs", () => {
+  it("uses diagnostic guidance for mode-based configs", () => {
     const warning = buildGlobalExecPolicyClampWarning({
       cfg: { tools: { exec: { mode: "full" } } },
       approvalsPath: "/tmp/openclaw-exec-approvals.json",
@@ -200,11 +200,13 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     });
 
     expect(warning).toContain("tools.exec.mode requests security=full is clamped to allowlist");
-    expect(warning).toContain("openclaw approvals set --stdin");
+    expect(warning).toContain('Run "openclaw exec-policy show" to inspect the clamping scope.');
+    expect(warning).toContain("https://docs.openclaw.ai/tools/exec-approvals");
+    expect(warning).not.toContain("openclaw approvals set --stdin");
     expect(warning).not.toContain("openclaw exec-policy set --security");
   });
 
-  it("uses approvals remediation when an agent approval clamps the global scope", () => {
+  it("uses diagnostic guidance when an agent approval clamps the global scope", () => {
     const warning = buildGlobalExecPolicyClampWarning({
       cfg: { tools: { exec: { security: "full" } } },
       approvalsPath: "/tmp/openclaw-exec-approvals.json",
@@ -216,7 +218,9 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     });
 
     expect(warning).toContain("agents.main.security");
-    expect(warning).toContain("openclaw approvals set --stdin");
+    expect(warning).toContain('Run "openclaw exec-policy show" to inspect the clamping scope.');
+    expect(warning).toContain("https://docs.openclaw.ai/tools/exec-approvals");
+    expect(warning).not.toContain("openclaw approvals set --stdin");
     expect(warning).not.toContain("openclaw exec-policy set --security");
   });
 
