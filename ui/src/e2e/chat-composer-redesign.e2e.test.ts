@@ -587,7 +587,6 @@ suite.define(() => {
   });
 
   it("explains model filtering in replace mode", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
@@ -617,7 +616,6 @@ suite.define(() => {
         .toBe("/settings/ai-agents?section=models#config-section-models");
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
