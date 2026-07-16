@@ -1,9 +1,0 @@
-{
-  "id": "whatsapp",
-  "channels": ["whatsapp"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

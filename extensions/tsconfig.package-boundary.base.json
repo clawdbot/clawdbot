@@ -1,6 +1,0 @@
-{
-  "extends": "./tsconfig.package-boundary.paths.json",
-  "compilerOptions": {
-    "ignoreDeprecations": "6.0"
-  }
-}

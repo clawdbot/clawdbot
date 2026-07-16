@@ -1,9 +1,0 @@
-{
-  "id": "qa-channel",
-  "channels": ["qa-channel"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

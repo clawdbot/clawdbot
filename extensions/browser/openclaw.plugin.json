@@ -1,9 +1,0 @@
-{
-  "id": "browser",
-  "enabledByDefault": true,
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}
