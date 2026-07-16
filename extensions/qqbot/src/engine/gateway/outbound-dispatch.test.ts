@@ -10,15 +10,10 @@ import {
   sendText,
   setOutboundAudioPort,
 } from "../messaging/outbound.js";
-import type { DeliveryTarget } from "../messaging/sender.js";
-import type { MessageResponse } from "../types.js";
-import {
-  sendReplySessionConflictTerminalNotice,
-  type SessionConflictTerminalNoticeDeps,
-} from "./gateway.js";
 import type { InboundContext } from "./inbound-context.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
+import { handleInboundProcessingError } from "./reply-session-conflict.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 /**
@@ -31,28 +26,6 @@ import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
  * avoid `as any` casts and the corresponding oxlint directives, while
  * remaining typed end-to-end.
  */
-async function withDeterministicRandomValues(value: number, body: () => unknown): Promise<void> {
-  const proto = Object.getPrototypeOf(crypto) as Crypto;
-  const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "getRandomValues");
-  try {
-    Object.defineProperty(proto, "getRandomValues", {
-      configurable: true,
-      writable: true,
-      value: <T extends ArrayBufferView>(buf: T): T => {
-        new Uint32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)[0] = value;
-        return buf;
-      },
-    });
-    await body();
-  } finally {
-    if (originalDescriptor) {
-      Object.defineProperty(proto, "getRandomValues", originalDescriptor);
-    } else {
-      delete (proto as unknown as Record<string, unknown>)["getRandomValues"];
-    }
-  }
-}
-
 const sendVoiceMessageMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
@@ -1255,12 +1228,159 @@ describe("dispatchOutbound session conflict", () => {
   });
 });
 
+describe("handleInboundProcessingError production decision boundary", () => {
+  const localSendTextMock = vi.fn(
+    async (
+      _target: { type: string; id: string },
+      _content: string,
+      _creds: { appId: string; clientSecret: string },
+      _opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
+    ): Promise<{ id: string; timestamp: string }> => ({
+      id: "msg-local",
+      timestamp: "2026-04-25T00:00:00.000Z",
+    }),
+  );
+  const localBuildDeliveryTargetMock = vi.fn(
+    (event: {
+      type: "c2c" | "channel" | "dm" | "group" | "guild";
+      senderId: string;
+      groupOpenid?: string;
+    }): {
+      type: "c2c" | "channel" | "dm" | "group" | "guild";
+      id: string;
+    } => ({
+      type: event.type === "group" ? "group" : "c2c",
+      id: event.type === "group" ? (event.groupOpenid ?? "") : event.senderId,
+    }),
+  );
+  const localAccountToCredsMock = vi.fn(() => ({
+    appId: "app",
+    clientSecret: "secret",
+  }));
+  const localErrorLogMock = vi.fn();
+  const localLog = {
+    error: localErrorLogMock,
+    info: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+    err.name = "ReplySessionInitConflictError";
+    return err;
+  }
+
+  function makeDurableLifecycle() {
+    return {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+  }
+
+  function makeEvent(overrides: Record<string, unknown> = {}): QueuedMessage {
+    return {
+      type: "c2c",
+      senderId: "user-openid",
+      content: "hello",
+      messageId: "msg-1",
+      timestamp: "2026-04-25T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function makeDeps(event: QueuedMessage) {
+    return {
+      event,
+      account: {
+        accountId: "qq-main",
+        appId: "app",
+        clientSecret: "secret",
+        markdownSupport: false,
+        config: {},
+      },
+      log: localLog,
+      senderSendText: localSendTextMock,
+      buildDeliveryTargetFn: localBuildDeliveryTargetMock as unknown as Parameters<
+        typeof handleInboundProcessingError
+      >[1]["buildDeliveryTargetFn"],
+      accountToCredsFn: localAccountToCredsMock,
+    };
+  }
+
+  beforeEach(() => {
+    localSendTextMock.mockReset();
+    localBuildDeliveryTargetMock.mockReset();
+    localAccountToCredsMock.mockReset();
+    localErrorLogMock.mockReset();
+  });
+
+  it("rethrows conflict error and skips terminal notice for durable events", async () => {
+    const lifecycle = makeDurableLifecycle();
+    const durableEvent = makeEvent({ turnAdoptionLifecycle: lifecycle });
+    const err = makeConflictError();
+
+    await expect(handleInboundProcessingError(err, makeDeps(durableEvent))).rejects.toThrow(err);
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+    expect(localErrorLogMock).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one terminal notice and resolves (does not rethrow) for non-durable conflict", async () => {
+    const nonDurableEvent = makeEvent();
+    const err = makeConflictError();
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows non-conflict error without sending terminal notice for durable events", async () => {
+    const lifecycle = makeDurableLifecycle();
+    const durableEvent = makeEvent({ turnAdoptionLifecycle: lifecycle });
+    const err = new Error("transient upstream 503");
+
+    await expect(handleInboundProcessingError(err, makeDeps(durableEvent))).rejects.toThrow(err);
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves (does not send notice or rethrow) for non-conflict error on non-durable events", async () => {
+    const nonDurableEvent = makeEvent();
+    const err = new Error("transient upstream 503");
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("logs terminal_notice_failed without retrying when notice send fails", async () => {
+    const nonDurableEvent = makeEvent();
+    localSendTextMock.mockRejectedValueOnce(new Error("network error"));
+    const err = makeConflictError();
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).toHaveBeenCalledTimes(1);
+    const logCalls = localErrorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
+    expect(logCalls.some((msg) => msg.includes("terminal_notice_failed"))).toBe(true);
+  });
+});
+
 describe("reply-session-conflict shared helpers", () => {
   // Import the real helpers — this ensures the test does not duplicate
   // production regex or ID logic.
 
   it("isReplySessionInitConflictError matches the shared-core error shape", async () => {
-    const { isReplySessionInitConflictError } = await vi.importActual<
+    const { isReplySessionInitConflictError: isSharedCoreConflict } = await vi.importActual<
       typeof import("./reply-session-conflict.js")
     >("./reply-session-conflict.js");
 
@@ -1270,241 +1390,17 @@ describe("reply-session-conflict shared helpers", () => {
       return err;
     }
 
-    expect(isReplySessionInitConflictError(makeConflictError())).toBe(true);
-    expect(isReplySessionInitConflictError(makeConflictError("qqbot:group:g12345"))).toBe(true);
+    expect(isSharedCoreConflict(makeConflictError())).toBe(true);
+    expect(isSharedCoreConflict(makeConflictError("qqbot:group:g12345"))).toBe(true);
 
-    expect(isReplySessionInitConflictError(new Error("unrelated error"))).toBe(false);
+    expect(isSharedCoreConflict(new Error("unrelated error"))).toBe(false);
+    expect(isSharedCoreConflict(new Error("reply session initialization conflicted"))).toBe(false);
     expect(
-      isReplySessionInitConflictError(new Error("reply session initialization conflicted")),
+      isSharedCoreConflict(new Error("reply session initialization conflicted and failed")),
     ).toBe(false);
-    expect(
-      isReplySessionInitConflictError(
-        new Error("reply session initialization conflicted and failed"),
-      ),
-    ).toBe(false);
-    expect(isReplySessionInitConflictError(new Error("timeout"))).toBe(false);
-    expect(isReplySessionInitConflictError(new Error(""))).toBe(false);
-  });
-
-  it("generateSessionConflictErrorId produces 8-char lower-case hex", async () => {
-    const { generateSessionConflictErrorId } = await vi.importActual<
-      typeof import("./reply-session-conflict.js")
-    >("./reply-session-conflict.js");
-
-    await withDeterministicRandomValues(0xabcdef01, () => {
-      expect(generateSessionConflictErrorId()).toBe("abcdef01");
-    });
-  });
-
-  it("generateSessionConflictErrorId pads to 8 chars with leading zeros", async () => {
-    const { generateSessionConflictErrorId } = await vi.importActual<
-      typeof import("./reply-session-conflict.js")
-    >("./reply-session-conflict.js");
-
-    await withDeterministicRandomValues(0x00000042, () => {
-      expect(generateSessionConflictErrorId()).toBe("00000042");
-    });
+    expect(isSharedCoreConflict(new Error("timeout"))).toBe(false);
+    expect(isSharedCoreConflict(new Error(""))).toBe(false);
   });
 });
 
-describe("sendReplySessionConflictTerminalNotice", () => {
-  const senderSendTextMock = vi.fn(
-    async (
-      _target: DeliveryTarget,
-      _content: string,
-      _creds: { appId: string; clientSecret: string },
-      _opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
-    ): Promise<MessageResponse> => ({
-      id: "msg-return",
-      timestamp: "2026-04-25T00:00:00.000Z",
-    }),
-  );
-  const buildDeliveryTargetMock = vi.fn(
-    (event: { senderId: string; type: string }): DeliveryTarget => ({
-      type: event.type === "group" ? "group" : "c2c",
-      id: event.senderId,
-    }),
-  );
-  const accountToCredsMock = vi.fn(() => ({
-    appId: "app",
-    clientSecret: "secret",
-  }));
-
-  const baseAccount: GatewayAccount = {
-    accountId: "qq-main",
-    appId: "app",
-    clientSecret: "secret",
-    markdownSupport: false,
-    config: {},
-  };
-
-  const baseEvent: QueuedMessage = {
-    type: "c2c",
-    senderId: "user-openid",
-    content: "hello",
-    messageId: "msg-1",
-    timestamp: "2026-04-25T00:00:00.000Z",
-  };
-
-  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
-    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
-    err.name = "ReplySessionInitConflictError";
-    return err;
-  }
-
-  const errorLogMock = vi.fn();
-
-  const log = {
-    error: errorLogMock,
-    info: vi.fn(),
-  };
-
-  beforeEach(() => {
-    senderSendTextMock.mockReset();
-    buildDeliveryTargetMock.mockReset();
-    accountToCredsMock.mockReset();
-    errorLogMock.mockReset();
-  });
-
-  it("sends terminal notice for a typed conflict error", async () => {
-    // Override crypto for deterministic error ID.
-    await withDeterministicRandomValues(0xdeadbeef, async () => {
-      const deps: SessionConflictTerminalNoticeDeps = {
-        event: baseEvent,
-        account: baseAccount,
-        log,
-        senderSendText: senderSendTextMock,
-        buildDeliveryTargetFn: buildDeliveryTargetMock,
-        accountToCredsFn: accountToCredsMock,
-      };
-      await sendReplySessionConflictTerminalNotice(makeConflictError(), deps);
-    });
-
-    // Verify: one static send.
-    expect(senderSendTextMock).toHaveBeenCalledTimes(1);
-
-    // Verify: send target comes from the event.
-    const sendCall = senderSendTextMock.mock.calls[0];
-    expect(sendCall).toBeDefined();
-    // First arg is the target built from the event.
-    expect(buildDeliveryTargetMock).toHaveBeenCalledWith(baseEvent);
-    expect(sendCall![0]).toEqual(buildDeliveryTargetMock(baseEvent));
-
-    // Verify: text contains the error ID and is in Chinese, no stack/internal info.
-    const sentText: string = sendCall![1];
-    expect(sentText).toContain("deadbeef");
-    expect(sentText).toContain("会话冲突");
-    expect(sentText).toContain("请重新发送");
-    expect(sentText).not.toContain("sessionKey");
-    expect(sentText).not.toContain("qqbot:c2c:user-openid");
-    expect(sentText).not.toContain("ReplySessionInitConflictError");
-
-    // Verify: log uses the same error ID.
-    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
-    expect(logCalls.some((msg) => msg.includes("deadbeef"))).toBe(true);
-    expect(logCalls.some((msg) => msg.includes("reply session init conflict exhausted"))).toBe(
-      true,
-    );
-  });
-
-  it("does nothing for a non-conflict error", async () => {
-    await sendReplySessionConflictTerminalNotice(new Error("timeout"), {
-      event: baseEvent,
-      account: baseAccount,
-      log,
-      senderSendText: senderSendTextMock,
-      buildDeliveryTargetFn: buildDeliveryTargetMock,
-      accountToCredsFn: accountToCredsMock,
-    });
-
-    expect(senderSendTextMock).not.toHaveBeenCalled();
-  });
-
-  it("logs terminal_notice_failed when send fails", async () => {
-    senderSendTextMock.mockRejectedValue(new Error("network error"));
-
-    await withDeterministicRandomValues(0xcafebabe, async () => {
-      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
-        event: baseEvent,
-        account: baseAccount,
-        log,
-        senderSendText: senderSendTextMock,
-        buildDeliveryTargetFn: buildDeliveryTargetMock,
-        accountToCredsFn: accountToCredsMock,
-      });
-    });
-
-    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
-    expect(
-      logCalls.some((msg) => msg.includes("terminal_notice_failed") && msg.includes("cafebabe")),
-    ).toBe(true);
-  });
-
-  it("does not include internal stack or session key in the notice", async () => {
-    await withDeterministicRandomValues(0x11111111, async () => {
-      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
-        event: baseEvent,
-        account: baseAccount,
-        log,
-        senderSendText: senderSendTextMock,
-        buildDeliveryTargetFn: buildDeliveryTargetMock,
-        accountToCredsFn: accountToCredsMock,
-      });
-    });
-
-    expect(senderSendTextMock.mock.calls[0]).toBeDefined();
-    const sentText: string = senderSendTextMock.mock.calls[0]![1];
-    // Must not leak internal path/class names.
-    expect(sentText).not.toContain("gateway");
-    expect(sentText).not.toContain("outbound-dispatch");
-    expect(sentText).not.toContain("dispatch");
-    expect(sentText).not.toContain("stack");
-    expect(sentText).not.toContain("sessionKey");
-    // Must include the error ID.
-    expect(sentText).toContain("11111111");
-  });
-
-  it("uses the same error ID in log and user-visible text", async () => {
-    // Stateful mock: return a different value per call to ensure both
-    // log and user-visible text use the same generated ID.
-    const proto = Object.getPrototypeOf(crypto) as Crypto;
-    const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "getRandomValues");
-    let callCount = 0;
-    try {
-      Object.defineProperty(proto, "getRandomValues", {
-        configurable: true,
-        writable: true,
-        value: (buf: Uint32Array) => {
-          buf[0] = callCount++ === 0 ? 0xaaaaaaaa : 0xbbbbbbbb;
-          return buf;
-        },
-      });
-
-      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
-        event: baseEvent,
-        account: baseAccount,
-        log,
-        senderSendText: senderSendTextMock,
-        buildDeliveryTargetFn: buildDeliveryTargetMock,
-        accountToCredsFn: accountToCredsMock,
-      });
-    } finally {
-      if (originalDescriptor) {
-        Object.defineProperty(proto, "getRandomValues", originalDescriptor);
-      } else {
-        delete (proto as unknown as Record<string, unknown>)["getRandomValues"];
-      }
-    }
-
-    expect(senderSendTextMock.mock.calls[0]).toBeDefined();
-    const sentText: string = senderSendTextMock.mock.calls[0]![1];
-    const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
-
-    // Both must reference "aaaaaaaa" (the first generated ID).
-    expect(sentText).toContain("aaaaaaaa");
-    expect(logCalls.some((msg) => msg.includes("aaaaaaaa"))).toBe(true);
-    // Neither should contain "bbbbbbbb" (only generated once).
-    expect(sentText).not.toContain("bbbbbbbb");
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

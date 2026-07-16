@@ -29,10 +29,7 @@ import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipelin
 import { createInteractionHandler } from "./interaction-handler.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
-import {
-  generateSessionConflictErrorId,
-  isReplySessionInitConflictError,
-} from "./reply-session-conflict.js";
+import { handleInboundProcessingError } from "./reply-session-conflict.js";
 import type {
   CoreGatewayContext,
   GatewayAccount,
@@ -234,7 +231,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
-      await sendReplySessionConflictTerminalNotice(err, {
+      await handleInboundProcessingError(err, {
         event,
         account,
         log,
@@ -242,9 +239,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         buildDeliveryTargetFn: buildDeliveryTarget,
         accountToCredsFn: accountToCreds,
       });
-      if (event.turnAdoptionLifecycle) {
-        throw err;
-      }
     } finally {
       inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {
@@ -341,70 +335,8 @@ async function startTypingForEvent(
 }
 
 // ============ terminal notice for exhausted session-init conflicts ============
-
-/** Dependencies injected to keep the function testable without a full gateway.
- *
- * The interface and function are kept exported because the test suite
- * imports them via `await import("./gateway.js")` to side-step module
- * evaluation side effects; the production caller (`handleMessage`) uses
- * them as module-local references. */
-export interface SessionConflictTerminalNoticeDeps {
-  event: QueuedMessage;
-  account: GatewayAccount;
-  log?: EngineLogger;
-  senderSendText: typeof senderSendText;
-  buildDeliveryTargetFn: typeof buildDeliveryTarget;
-  accountToCredsFn: typeof accountToCreds;
-}
-
-/**
- * When shared-core retry ([#105754]) has exhausted, surface a best-effort
- * terminal notice to the QQ user.  The notice is deliberately terse and
- * carries an 8-char hex error reference for log correlation.  No internal
- * error text, session keys, or stack traces are exposed.
- *
- * If the terminal notice itself fails to send, the failure is logged at
- * ``terminal_notice_failed`` and the session's inbound work completes with
- * no delivery.  QQBot currently has no durable ingress or replay mechanism
- * to automatically recover the original message — that is
- * deferred to a follow-up PR.
- */
-export async function sendReplySessionConflictTerminalNotice(
-  error: unknown,
-  deps: SessionConflictTerminalNoticeDeps,
-): Promise<void> {
-  if (!isReplySessionInitConflictError(error)) {
-    return;
-  }
-  const {
-    event,
-    account,
-    log,
-    senderSendText: senderSendTextFn,
-    buildDeliveryTargetFn,
-    accountToCredsFn,
-  } = deps;
-  const errorId = generateSessionConflictErrorId();
-  const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
-
-  log?.error(
-    `reply session init conflict exhausted — ` +
-      `messageId=${event.messageId} ` +
-      `senderId=${event.senderId} ` +
-      `groupOpenid=${event.groupOpenid ?? ""} ` +
-      `errorId=${errorId}`,
-  );
-
-  try {
-    await senderSendTextFn(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
-      msgId: event.messageId,
-    });
-  } catch (sendErr) {
-    const sendErrDetail = sendErr instanceof Error ? sendErr.message : String(sendErr);
-    log?.error(
-      `terminal_notice_failed — errorId=${errorId} ` +
-        `messageId=${event.messageId}: ` +
-        sendErrDetail,
-    );
-  }
-}
+//
+// The terminal-notice function and its dependency interface live in
+// ./reply-session-conflict.ts so they can be imported directly from tests
+// without re-exporting them from this file.  This keeps knip's production
+// graph clean (no test-only exports).

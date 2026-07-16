@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildQQBotMergedIngressLifecycle } from "./message-queue-ingress.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
+import { handleInboundProcessingError } from "./reply-session-conflict.js";
 import type { QQBotIngressLifecycle } from "./types.js";
 
 function groupMessage(messageId: string, lifecycle?: QQBotIngressLifecycle): QueuedMessage {
@@ -125,5 +126,42 @@ describe("QQBot message queue ingress lifecycle", () => {
     await stopping;
     expect(queued.abandoned).toHaveBeenCalledTimes(1);
     expect(queued.adopted).not.toHaveBeenCalled();
+  });
+
+  it("calls onAbandoned for a durable event when handleInboundProcessingError rethrows the exhausted conflict", async () => {
+    // Integration boundary test: the queue processor runs handleInboundProcessingError
+    // (the same decision function called by gateway.ts:handleMessage). When it sees an
+    // exhausted conflict on a durable event, it rethrows without sending a notice.
+    // The queue catch (message-queue.ts:269) then calls onAbandoned() so the durable
+    // claim can be replayed.
+    const tracked = testLifecycle();
+    const sendTextMock = vi.fn();
+    const queue = createMessageQueue({ accountId: "default", isAborted: () => false });
+
+    queue.startProcessor(async (msg) => {
+      const conflictErr = new Error(
+        "reply session initialization conflicted for qqbot:c2c:user-openid",
+      );
+      await handleInboundProcessingError(conflictErr, {
+        event: msg,
+        account: {
+          accountId: "qq-main",
+          appId: "app",
+          clientSecret: "secret",
+          markdownSupport: false,
+          config: {},
+        },
+        senderSendText: sendTextMock,
+        buildDeliveryTargetFn: (event) => ({ type: "c2c", id: event.senderId }),
+        accountToCredsFn: (acc) => ({ appId: acc.appId, clientSecret: acc.clientSecret }),
+      });
+    });
+
+    queue.enqueue(groupMessage("exhausted-conflict", tracked.lifecycle));
+
+    await vi.waitFor(() => expect(tracked.abandoned).toHaveBeenCalledTimes(1));
+    expect(tracked.adopted).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    await queue.stop();
   });
 });
