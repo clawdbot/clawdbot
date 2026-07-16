@@ -1148,4 +1148,197 @@ describe("dispatchOutbound", () => {
     }
   });
 });
+
+describe("dispatchOutbound session conflict", () => {
+  // ReplySessionInitConflictError is not exported through the plugin SDK.
+  // The shared core constructs it with the fixed message pattern:
+  //   `reply session initialization conflicted for ${sessionKey}`
+  // and sets `this.name = "ReplySessionInitConflictError"`.
+  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+    err.name = "ReplySessionInitConflictError";
+    return err;
+  }
+
+  function makeNormalError(): Error {
+    return new Error("some unrelated error");
+  }
+
+  it("re-throws a reply-session-init conflict after cleanup", async () => {
+    const conflictError = makeConflictError();
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        // Simulate inbound.run rejecting with a session conflict.
+        throw conflictError;
+      },
+    });
+    // Override inbound.run so dispatchPromise rejects with the conflict.
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw conflictError;
+    });
+
+    await expect(dispatchOutbound(makeInbound(), { runtime, cfg: {}, account })).rejects.toThrow(
+      conflictError,
+    );
+  });
+
+  it("does not re-throw an unrelated error after cleanup", async () => {
+    const normalError = makeNormalError();
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw normalError;
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw normalError;
+    });
+
+    // dispatchOutbound should not throw — the error is consumed.
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not re-throw when dispatchPromise resolves normally", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "ok" }, { kind: "final" });
+      },
+    });
+
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still runs streaming finalization before re-throwing", async () => {
+    // Set up official C2C streaming so a StreamingController is created.
+    const streamingAccount: GatewayAccount = {
+      ...account,
+      config: { streaming: { mode: "official_c2c" } },
+    };
+    const conflictError = makeConflictError();
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw conflictError;
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw conflictError;
+    });
+
+    // dispatchOutbound should re-throw despite streaming cleanup.
+    await expect(
+      dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "c2c",
+            senderId: "user-openid",
+            messageId: "msg-stream",
+            content: "test",
+            timestamp: "2026-04-25T00:00:00.000Z",
+          },
+        }),
+        { runtime, cfg: {}, account: streamingAccount },
+      ),
+    ).rejects.toThrow(conflictError);
+  });
+
+  it("also re-throws a thrown-string conflict (the regex is intentionally broad)", async () => {
+    // Thrown strings that match the conflict pattern are also detected —
+    // this is intentional: in JS/TS any value can be thrown, and the
+    // regex uses String(error) which preserves the original text.
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        // eslint-disable-next-line no-throw-literal
+        throw "reply session initialization conflicted for qqbot:c2c:user-openid";
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      // eslint-disable-next-line no-throw-literal
+      throw "reply session initialization conflicted for qqbot:c2c:user-openid";
+    });
+
+    await expect(dispatchOutbound(makeInbound(), { runtime, cfg: {}, account })).rejects.toThrow(
+      "reply session initialization conflicted for qqbot:c2c:user-openid",
+    );
+  });
+
+  it("does not re-throw a similarly-worded but different error", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw new Error("reply session initialization conflicted and failed");
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw new Error("reply session initialization conflicted and failed");
+    });
+
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("reply-session-init conflict detection", () => {
+  // The detection regex is matching the message produced by the shared core's
+  // `ReplySessionInitConflictError` constructor in session.ts:1067:
+  //   `reply session initialization conflicted for ${sessionKey}`
+  const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
+    /^reply session initialization conflicted for \S+$/u;
+  function isMatch(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
+  }
+
+  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+    err.name = "ReplySessionInitConflictError";
+    return err;
+  }
+
+  it("matches the exact error message from the shared core", () => {
+    expect(isMatch(makeConflictError())).toBe(true);
+    expect(isMatch(makeConflictError("qqbot:group:g12345"))).toBe(true);
+    expect(isMatch(makeConflictError("telegram:-1001234567"))).toBe(true);
+  });
+
+  it("rejects unrelated error messages", () => {
+    expect(isMatch(new Error("some unrelated error"))).toBe(false);
+    expect(isMatch(new Error("reply session initialization conflicted"))).toBe(false);
+    expect(isMatch(new Error("reply session initialization conflicted and failed"))).toBe(false);
+    expect(isMatch(new Error("timeout"))).toBe(false);
+    expect(isMatch(new Error(""))).toBe(false);
+  });
+
+  it("rejects non-Error-like objects that do not carry the message text", () => {
+    // String(error) for an object yields '[object Object]', which won't match.
+    expect(isMatch({ message: "reply session initialization conflicted for test" })).toBe(false);
+  });
+});
+
+describe("generateSessionConflictErrorId format", () => {
+  // Tests the error ID generation — 8 lower-case hex characters.
+  function generateSessionConflictErrorId(): string {
+    const buf = new Uint32Array(2);
+    crypto.getRandomValues(buf);
+    return buf[0]!.toString(16).padStart(8, "0").slice(0, 8);
+  }
+
+  it("produces 8-character lower-case hex strings", () => {
+    for (let i = 0; i < 20; i++) {
+      const id = generateSessionConflictErrorId();
+      expect(id).toMatch(/^[0-9a-f]{8}$/);
+    }
+  });
+
+  it("produces different values on successive calls", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 10; i++) {
+      ids.add(generateSessionConflictErrorId());
+    }
+    // Probabilistic: with 2^32 space, 10 collisions are astronomically unlikely.
+    expect(ids.size).toBeGreaterThanOrEqual(9);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

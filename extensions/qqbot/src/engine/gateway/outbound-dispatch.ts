@@ -711,9 +711,11 @@ export async function dispatchOutbound(
     },
   });
 
+  let dispatchError: unknown;
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
   } catch (error) {
+    dispatchError = error;
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -760,6 +762,25 @@ export async function dispatchOutbound(
       }
     }
   }
+
+  // Re-throw only reply-session-init conflicts so the gateway layer can
+  // surface a terminal notice to the user.  All other errors retain the
+  // same silent cleanup semantics that existed before this guard was added.
+  if (dispatchError !== undefined && isReplySessionInitConflictError(dispatchError)) {
+    throw dispatchError;
+  }
+}
+
+// ============ reply-session-init conflict detection ============
+// ReplySessionInitConflictError is not exported through the plugin SDK.
+// Match the message pattern produced by the shared core's
+// `ReplySessionInitConflictError` constructor (session.ts:1067).
+
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+
+function isReplySessionInitConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
 }
 
 // ============ ctxPayload builder ============

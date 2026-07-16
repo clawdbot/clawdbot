@@ -230,6 +230,31 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
+
+      // When shared-core retry (#105754) has exhausted, surface a terminal
+      // notice to the user so the silent-message-loss path is closed.
+      if (isReplySessionInitConflictError(err)) {
+        const errorId = generateSessionConflictErrorId();
+        const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
+        log?.error(
+          `reply session init conflict exhausted — ` +
+            `messageId=${event.messageId} ` +
+            `senderId=${event.senderId} ` +
+            `groupOpenid=${event.groupOpenid ?? ""} ` +
+            `errorId=${errorId}`,
+        );
+        try {
+          await senderSendText(buildDeliveryTarget(event), terminalText, accountToCreds(account), {
+            msgId: event.messageId,
+          });
+        } catch (sendErr) {
+          log?.error(
+            `terminal_notice_failed — errorId=${errorId} ` +
+              `messageId=${event.messageId}: ` +
+              `${sendErr instanceof Error ? sendErr.message : String(sendErr)}`,
+          );
+        }
+      }
       if (event.turnAdoptionLifecycle) {
         throw err;
       }
@@ -326,4 +351,19 @@ async function startTypingForEvent(
     log?.error(`sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`);
     return { keepAlive: null };
   }
+}
+
+// ============ reply-session-init conflict helpers ============
+
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+
+function isReplySessionInitConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
+}
+
+function generateSessionConflictErrorId(): string {
+  const buf = new Uint32Array(2);
+  crypto.getRandomValues(buf);
+  return buf[0]!.toString(16).padStart(8, "0").slice(0, 8);
 }
