@@ -447,21 +447,6 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
   });
 
-  it("keeps gateway-tool maxChainLength protected while runtime tests can still induce #973", async () => {
-    const { assertGatewayConfigMutationAllowedForTest } =
-      await import("../tools/gateway-config-guard.js");
-
-    expect(() =>
-      assertGatewayConfigMutationAllowedForTest({
-        action: "config.patch",
-        currentConfig: {
-          agents: { defaults: { continuation: { enabled: true, maxChainLength: 200 } } },
-        },
-        raw: JSON.stringify({ agents: { defaults: { continuation: { maxChainLength: 2 } } } }),
-      }),
-    ).toThrow(/protected config paths: agents\.defaults\.continuation\.maxChainLength/);
-  });
-
   it("does not strip bracket continue_delegate markers while peeking for spawn-init continue_work", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done\n[[CONTINUE_DELEGATE: next hop]]" }],

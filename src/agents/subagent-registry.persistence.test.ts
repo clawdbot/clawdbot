@@ -15,7 +15,7 @@ import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtim
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime.js";
+} from "../tasks/detached-task-runtime.test-support.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
@@ -300,7 +300,7 @@ describe("subagent registry persistence", () => {
     const persistError = new Error("disk full");
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      persistSubagentRunsToDisk: () => {
+      persistSubagentRunsToDiskOrThrow: () => {
         throw persistError;
       },
       runSubagentAnnounceFlow: announceSpy,

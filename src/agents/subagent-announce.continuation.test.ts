@@ -82,8 +82,8 @@ import {
 } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import {
+  applySessionEntryLifecycleMutation,
   listSessionEntries,
-  removeSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -98,8 +98,11 @@ import * as subagentSpawn from "./subagent-spawn.js";
  */
 async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveStorePath(undefined, { agentId: "main" });
-  for (const { sessionKey } of listSessionEntries({ agentId: "main", storePath })) {
-    await removeSessionEntry({ agentId: "main", sessionKey, storePath });
+  const removals = listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey }) => ({
+    sessionKey,
+  }));
+  if (removals.length > 0) {
+    await applySessionEntryLifecycleMutation({ agentId: "main", storePath, removals });
   }
   for (const [sessionKey, entry] of Object.entries(data)) {
     if (!entry || typeof entry !== "object") {
