@@ -112,6 +112,8 @@ function expectProfileErrorStateCleared(
 ) {
   expect(stats?.blockedUntil).toBeUndefined();
   expect(stats?.blockedReason).toBeUndefined();
+  expect(stats?.blockedSource).toBeUndefined();
+  expect(stats?.blockedModel).toBeUndefined();
   expect(stats?.blockedScope).toBeUndefined();
   expect(stats?.cooldownUntil).toBeUndefined();
   expect(stats?.cooldownClassification).toBeUndefined();
@@ -868,6 +870,11 @@ describe("clearAuthProfileCooldown", () => {
   it("clears all error state fields including disabledUntil and failureCounts", async () => {
     const store = makeStore({
       "anthropic:default": {
+        blockedUntil: Date.now() + 7_200_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+        blockedModel: "claude-sonnet-4-5",
+        blockedScope: "model",
         cooldownUntil: Date.now() + 60_000,
         cooldownClassification: "wham_token_expired",
         disabledUntil: Date.now() + 3_600_000,
