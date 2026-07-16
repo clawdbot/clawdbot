@@ -1,0 +1,42 @@
+{
+  "name": "@openclaw/plugin-sdk",
+  "version": "2026.3.14",
+  "description": "OpenClaw plugin SDK",
+  "type": "module",
+  "main": "../../../dist/plugin-sdk/index.js",
+  "types": "../../../dist/plugin-sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "../../../dist/plugin-sdk/index.d.ts",
+      "default": "../../../dist/plugin-sdk/index.js"
+    },
+    "./core": {
+      "types": "../../../dist/plugin-sdk/core.d.ts",
+      "default": "../../../dist/plugin-sdk/core.js"
+    },
+    "./compat": {
+      "types": "../../../dist/plugin-sdk/compat.d.ts",
+      "default": "../../../dist/plugin-sdk/compat.js"
+    },
+    "./web-media": {
+      "types": "../../../dist/plugin-sdk/web-media.d.ts",
+      "default": "../../../dist/plugin-sdk/web-media.js"
+    },
+    "./schema": {
+      "types": "../../../dist/plugin-sdk/schema.d.ts",
+      "default": "../../../dist/plugin-sdk/schema.js"
+    },
+    "./types": {
+      "types": "../../../dist/plugin-sdk/types.d.ts",
+      "default": "../../../dist/plugin-sdk/types.js"
+    }
+  },
+  "peerDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": false
+    }
+  }
+}
