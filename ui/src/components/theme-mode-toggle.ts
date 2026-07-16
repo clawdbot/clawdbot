@@ -57,6 +57,16 @@ export class ThemeModeToggle extends LitElement {
     const direction = event.key === "ArrowRight" ? "next" : "prev";
     const nextMode = getNextMode(this.mode, direction);
     this.handleModeChange(nextMode, event);
+
+    // Focus the newly selected button after mode change
+    requestAnimationFrame(() => {
+      const buttons = this.querySelectorAll<HTMLButtonElement>(".topbar-theme-mode__btn");
+      const options: ThemeMode[] = ["system", "light", "dark"];
+      const nextIndex = options.indexOf(nextMode);
+      if (nextIndex >= 0 && buttons[nextIndex]) {
+        buttons[nextIndex].focus();
+      }
+    });
   };
 
   override render() {
