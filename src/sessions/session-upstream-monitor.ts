@@ -6,7 +6,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -46,7 +46,7 @@ type SessionUpstreamMissingCounter = {
 };
 
 function currentProviders(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).map(
     (registration) => registration.provider,
   );
 }
