@@ -201,7 +201,7 @@ describe("plugin registration transaction", () => {
     registry.providers.push({
       pluginId: "test-plugin",
       pluginName: "Test",
-      provider: providerInstance as import("./types.js").ProviderPlugin,
+      provider: providerInstance as unknown as import("./types.js").ProviderPlugin,
       source: "test-source",
     });
 
@@ -217,8 +217,8 @@ describe("plugin registration transaction", () => {
     // The provider instance is the same object reference (not a plain-object copy)
     expect(registry.providers[0]!.provider).toBe(providerInstance);
     // Class prototype is intact — methods are callable
-    expect(registry.providers[0]!.provider.chat("gpt-5")).toBe("chat-gpt-5");
-    expect(Object.getPrototypeOf(registry.providers[0]!.provider)).toBe(TestProvider.prototype);
+    expect(registry.providers[0]!.provider).toBeInstanceOf(TestProvider);
+    expect(providerInstance.chat("gpt-5")).toBe("chat-gpt-5");
   });
 
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {

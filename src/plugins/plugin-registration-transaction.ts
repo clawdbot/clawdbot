@@ -99,13 +99,21 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
  * registry must not reconstitute.
  */
 function cloneRegistryEntry(value: unknown): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => cloneRegistryEntry(item));
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneRegistryEntry(item));
+  }
   if (value instanceof Map) {
     return new Map([...value].map(([k, v]) => [k, cloneRegistryEntry(v)]));
   }
-  if (value instanceof Date) return new Date(value);
+  if (value instanceof Date) {
+    return new Date(value);
+  }
   // Shallow-clone so primitive metadata fields become independent copies
   // while opaque plugin-owned objects stay by reference.
   const cloned: Record<string, unknown> = {};
