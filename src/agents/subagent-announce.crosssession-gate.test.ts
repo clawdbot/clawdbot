@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue.js";
-import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { TemplateContext } from "../auto-reply/templating.js";
 import {
@@ -20,10 +20,10 @@ import {
 } from "../infra/continuation-tracer.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
-  testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
 } from "./embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "./embedded-agent-runner/runs.test-support.js";
 
 const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();

@@ -13,10 +13,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -29,14 +29,14 @@ import {
   type Tracer,
 } from "../../infra/continuation-tracer.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
 import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
 import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import { enqueuePendingWork } from "../continuation/work-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();

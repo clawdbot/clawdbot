@@ -149,7 +149,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   beforeEach(async () => {
     const { resetContinuationWorkDispatchForTests } =
       await import("../../auto-reply/continuation/work-dispatch.js");
-    const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+    const { resetTaskFlowRegistryForTests } =
+      await import("../../tasks/task-runtime.test-helpers.js");
     resetContinuationWorkDispatchForTests();
     resetTaskFlowRegistryForTests({ persist: false });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-746-trap-"));
@@ -171,7 +172,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     vi.useRealTimers();
     const { resetContinuationWorkDispatchForTests } =
       await import("../../auto-reply/continuation/work-dispatch.js");
-    const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+    const { resetTaskFlowRegistryForTests } =
+      await import("../../tasks/task-runtime.test-helpers.js");
     resetContinuationWorkDispatchForTests();
     resetTaskFlowRegistryForTests({ persist: false });
     resetSystemEventsForTest();

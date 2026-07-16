@@ -3,10 +3,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createContinueDelegateTool } from "../../agents/tools/continue-delegate-tool.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -31,7 +31,7 @@ import {
 } from "../continuation/state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { testing as replyRunRegistryTesting } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();

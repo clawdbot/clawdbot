@@ -7585,7 +7585,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     } finally {
       const { resetContinuationWorkDispatchForTests } =
         await import("../continuation/work-dispatch.js");
-      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      const { resetTaskFlowRegistryForTests } =
+        await import("../../tasks/task-runtime.test-helpers.js");
       resetContinuationWorkDispatchForTests();
       resetTaskFlowRegistryForTests({ persist: false });
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -7671,7 +7672,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     } finally {
       const { resetContinuationWorkDispatchForTests } =
         await import("../continuation/work-dispatch.js");
-      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      const { resetTaskFlowRegistryForTests } =
+        await import("../../tasks/task-runtime.test-helpers.js");
       resetContinuationWorkDispatchForTests();
       resetTaskFlowRegistryForTests({ persist: false });
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -7767,7 +7769,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     } finally {
       const { resetContinuationWorkDispatchForTests } =
         await import("../continuation/work-dispatch.js");
-      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      const { resetTaskFlowRegistryForTests } =
+        await import("../../tasks/task-runtime.test-helpers.js");
       resetContinuationWorkDispatchForTests();
       resetTaskFlowRegistryForTests({ persist: false });
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -7843,7 +7846,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     } finally {
       const { resetContinuationWorkDispatchForTests } =
         await import("../continuation/work-dispatch.js");
-      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      const { resetTaskFlowRegistryForTests } =
+        await import("../../tasks/task-runtime.test-helpers.js");
       resetContinuationWorkDispatchForTests();
       resetTaskFlowRegistryForTests({ persist: false });
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -7928,7 +7932,8 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     } finally {
       const { resetContinuationWorkDispatchForTests } =
         await import("../continuation/work-dispatch.js");
-      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      const { resetTaskFlowRegistryForTests } =
+        await import("../../tasks/task-runtime.test-helpers.js");
       resetContinuationWorkDispatchForTests();
       resetTaskFlowRegistryForTests({ persist: false });
       await fs.rm(tmpDir, { recursive: true, force: true });
