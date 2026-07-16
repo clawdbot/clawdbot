@@ -44,6 +44,7 @@ import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveOperationalRunCompactionCount } from "./run-compaction-count.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -444,7 +445,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           : undefined,
       }),
     );
-    const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
+    const resultCompactionCount = resolveOperationalRunCompactionCount(result.meta);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
       result,

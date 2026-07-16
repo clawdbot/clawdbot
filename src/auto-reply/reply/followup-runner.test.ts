@@ -4664,7 +4664,7 @@ describe("createFollowupRunner compaction", () => {
     ).toBe(1);
   });
 
-  it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
+  it("tracks auto-compaction from current-turn metadata even when no compaction event is emitted", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-")),
       "sessions.json",
@@ -4685,9 +4685,10 @@ describe("createFollowupRunner compaction", () => {
       meta: {
         agentMeta: {
           sessionId: "session-rotated",
-          compactionCount: 2,
+          compactionCount: 7,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
+        contextManagement: { lastTurnCompactions: 2 },
       },
     });
 
@@ -4748,9 +4749,10 @@ describe("createFollowupRunner compaction", () => {
       meta: {
         agentMeta: {
           sessionId: "session-rotated",
-          compactionCount: 1,
+          compactionCount: 7,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
+        contextManagement: { lastTurnCompactions: 1 },
       },
     });
 

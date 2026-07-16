@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 
 const mocks = vi.hoisted(() => ({
   compactEmbeddedAgentSession: vi.fn(async () => ({
@@ -78,6 +79,7 @@ function createTurn(config: AgentTurnParams["followupRun"]["run"]["config"]): Ag
       enqueuedAt: Date.now(),
       run: {
         agentId: "main",
+        agentDir: "/agent",
         sessionId: "session-fallback",
         sessionKey: "agent:main:fallback",
         sessionFile: "session-fallback.jsonl",
@@ -92,12 +94,17 @@ function createTurn(config: AgentTurnParams["followupRun"]["run"]["config"]): Ag
     },
     sessionCtx: {},
     typingSignals: {
+      mode: "instant",
+      shouldStartImmediately: true,
+      shouldStartOnMessageStart: false,
+      shouldStartOnText: true,
       shouldStartOnReasoning: false,
       signalExecutionActivity: async () => undefined,
       signalMessageStart: async () => undefined,
       signalReasoningDelta: async () => undefined,
       signalRunStart: async () => undefined,
       signalTextDelta: async () => undefined,
+      signalToolStart: async () => undefined,
     },
     blockReplyPipeline: null,
     blockStreamingEnabled: false,
@@ -129,16 +136,36 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
     };
     mocks.compactEmbeddedAgentSession.mockClear();
     mocks.releaseQueuedCompactionTolerant.mockClear();
+    const onCompactionCount = vi.fn();
     mocks.runEmbeddedAgent.mockImplementationOnce(async (options: RunEmbeddedAgentParams) => {
       options.continueWorkOpts?.requestContinuation({
         reason: "continue after fallback",
         delaySeconds: 5,
       });
       await options.requestCompactionOpts?.triggerCompaction({
+        sessionKey: "agent:main:fallback",
+        sessionId: "session-fallback",
+        runId: "run-fallback",
+        diagId: "diag-fallback",
         trigger: "volitional",
+        reason: "test fallback compaction",
+        contextUsage: 0.75,
+        requestedAtMs: 1,
         traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
       });
-      return { payloads: [{ text: "done" }], meta: {} };
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "session-fallback",
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            compactionCount: 7,
+          },
+          contextManagement: { lastTurnCompactions: 1 },
+        },
+      };
     });
 
     const result = await runEmbeddedFallbackCandidate({
@@ -175,12 +202,9 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
         startPresentationWhileTyping: async () => undefined,
         blockReplyHandler: undefined,
       },
-      timing: {
-        logMilestoneIfSlow: vi.fn(),
-        measure: async (_name, run) => await run(),
-      } as never,
+      timing: createAgentTurnTimingTracker(),
       onLifecycleBackstop: vi.fn(),
-      onCompactionCount: vi.fn(),
+      onCompactionCount,
     });
 
     expect(mocks.compactEmbeddedAgentSession).toHaveBeenCalledWith(
@@ -191,6 +215,8 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
       }),
     );
     expect(mocks.releaseQueuedCompactionTolerant).toHaveBeenCalledOnce();
+    expect(onCompactionCount).toHaveBeenCalledOnce();
+    expect(onCompactionCount).toHaveBeenCalledWith(1);
     expect(result.continueWorkRequests).toEqual([
       { reason: "continue after fallback", delaySeconds: 5 },
     ]);

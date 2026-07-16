@@ -144,6 +144,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveOperationalRunCompactionCount } from "./run-compaction-count.js";
 import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -1585,10 +1586,7 @@ export function createFollowupRunner(params: {
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
-              const resultCompactionCount = Math.max(
-                0,
-                result.meta?.agentMeta?.compactionCount ?? 0,
-              );
+              const resultCompactionCount = resolveOperationalRunCompactionCount(result.meta);
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               continueWorkRequestsByResult.set(result, candidateContinueWorkRequests);
               return result;
