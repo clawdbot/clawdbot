@@ -322,12 +322,95 @@ describe("plugin registration transaction", () => {
     expect(rollbackSideEffects).toHaveBeenCalledOnce();
   });
 
-  it("restores the active PluginRecord's array fields after a failed registration (loader #106647)", () => {
+  it("restores the active PluginRecord's arrays and scalars after a failed registration (loader #106647)", () => {
     const registry = createEmptyPluginRegistry();
 
     // Simulate the loader pattern: record exists before transaction,
-    // register() mutates its id-collection arrays and the registry,
-    // then loader pushes record to registry.plugins.
+    // register() mutates its id-collection arrays, scalars, and the registry.
+    const record = {
+      id: "test-plugin",
+      name: "Test Plugin",
+      source: "test-source",
+      origin: "global" as const,
+      enabled: true,
+      status: "loaded" as const,
+      toolNames: [] as string[],
+      hookNames: [] as string[],
+      providerIds: [] as string[],
+      channelIds: [] as string[],
+      cliBackendIds: [] as string[],
+      embeddingProviderIds: [] as string[],
+      speechProviderIds: [] as string[],
+      realtimeTranscriptionProviderIds: [] as string[],
+      realtimeVoiceProviderIds: [] as string[],
+      mediaUnderstandingProviderIds: [] as string[],
+      transcriptSourceProviderIds: [] as string[],
+      imageGenerationProviderIds: [] as string[],
+      videoGenerationProviderIds: [] as string[],
+      musicGenerationProviderIds: [] as string[],
+      webFetchProviderIds: [] as string[],
+      webSearchProviderIds: [] as string[],
+      migrationProviderIds: [] as string[],
+      memoryEmbeddingProviderIds: [] as string[],
+      agentHarnessIds: [] as string[],
+      cliCommands: [] as string[],
+      services: [] as string[],
+      gatewayDiscoveryServiceIds: [] as string[],
+      commands: [] as string[],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: false,
+      memorySlotSelected: false,
+    };
+
+    const transaction = createPluginRegistrationTransaction({
+      registry,
+      activeRecord: record,
+    });
+
+    // During register(), plugin API mutates record arrays, scalars, and the registry
+    record.toolNames.push("bad-tool");
+    record.hookNames.push("bad-hook");
+    record.providerIds.push("bad-provider");
+    record.httpRoutes = 5;
+    record.hookCount = 3;
+    record.configSchema = true;
+    record.memorySlotSelected = true;
+    record.enabled = false;
+    registry.tools.push({
+      pluginId: "test-plugin",
+      factory: () => ({}) as unknown as import("./types.js").AnyAgentTool,
+      names: ["bad-tool"],
+      optional: false,
+      source: "test-source",
+    });
+
+    // Loader pushes record to registry.plugins (loader-runtime-candidate L505)
+    registry.plugins.push(record);
+
+    // Plugin fails, loader calls rollback (L509)
+    transaction.rollback();
+
+    // Registry snapshot correctly removes the record from plugins
+    expect(registry.plugins).toHaveLength(0);
+    expect(registry.tools).toHaveLength(0);
+
+    // Active record's array fields are restored
+    expect(record.toolNames).toEqual([]);
+    expect(record.hookNames).toEqual([]);
+    expect(record.providerIds).toEqual([]);
+
+    // Active record's scalar fields are restored
+    expect(record.httpRoutes).toBe(0);
+    expect(record.hookCount).toBe(0);
+    expect(record.configSchema).toBe(false);
+    expect(record.memorySlotSelected).toBe(false);
+    expect(record.enabled).toBe(true);
+  });
+
+  it("preserves runtime object identity on the active PluginRecord through rollback (#106647)", () => {
+    const registry = createEmptyPluginRegistry();
+
     const record = {
       id: "test-plugin",
       name: "Test Plugin",
@@ -363,38 +446,27 @@ describe("plugin registration transaction", () => {
       configSchema: false,
     };
 
+    // Plugin-owned runtime objects on the record must survive rollback by reference
+    const configUiHints = { myHint: { kind: "select" } };
+    (record as Record<string, unknown>)["configUiHints"] = configUiHints;
+
     const transaction = createPluginRegistrationTransaction({
       registry,
       activeRecord: record,
     });
 
-    // During register(), plugin API mutates record arrays and the registry
-    record.toolNames.push("bad-tool");
-    record.hookNames.push("bad-hook");
-    record.providerIds.push("bad-provider");
-    registry.tools.push({
-      pluginId: "test-plugin",
-      factory: () => ({}) as unknown as import("./types.js").AnyAgentTool,
-      names: ["bad-tool"],
-      optional: false,
-      source: "test-source",
-    });
+    // Mutate scalars and arrays during register()
+    record.httpRoutes = 5;
+    record.toolNames.push("tool-1");
 
-    // Loader pushes record to registry.plugins (loader-runtime-candidate L505)
-    registry.plugins.push(record);
-
-    // Plugin fails, loader calls rollback (L509)
     transaction.rollback();
 
-    // Registry snapshot correctly removes the record from plugins
-    expect(registry.plugins).toHaveLength(0);
-    expect(registry.tools).toHaveLength(0);
-
-    // Active record's array fields are restored — recordPluginError can safely
-    // re-push the record without stale ids from the failed registration.
+    // Scalars and arrays restored
+    expect(record.httpRoutes).toBe(0);
     expect(record.toolNames).toEqual([]);
-    expect(record.hookNames).toEqual([]);
-    expect(record.providerIds).toEqual([]);
+
+    // Runtime object preserved by reference identity
+    expect((record as Record<string, unknown>)["configUiHints"]).toBe(configUiHints);
   });
 
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {

@@ -152,25 +152,15 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
 }
 
 /**
- * Snapshot the active PluginRecord's array-valued fields so they can be
- * restored on rollback.  The record is not yet in the registry when the
- * transaction starts, but loader callers mutate the record's id-collection
- * arrays during register() and push the record to registry.plugins after
- * commit.  On rollback the registry snapshot correctly removes the record,
- * but recordPluginError later re-pushes it — with mutated arrays unless
- * we capture them here.
+ * Snapshot of the active PluginRecord's transaction-owned mutable fields.
+ * Captured with cloneRegistryEntry so arrays, Dates, and primitives become
+ * independent copies while runtime objects (configUiHints, configJsonSchema,
+ * contracts) stay by reference.
  */
-type ActiveRecordSnapshot = Record<string, readonly unknown[]>;
+type ActiveRecordSnapshot = Record<string, unknown>;
 
 function snapshotActiveRecord(record: PluginRecord): ActiveRecordSnapshot {
-  const snap: Record<string, unknown> = {};
-  for (const key of Object.keys(record)) {
-    const val = (record as Record<string, unknown>)[key];
-    if (Array.isArray(val)) {
-      snap[key] = [...val];
-    }
-  }
-  return snap as ActiveRecordSnapshot;
+  return cloneRegistryEntry(record) as ActiveRecordSnapshot;
 }
 
 function restoreActiveRecord(record: PluginRecord, snapshot: ActiveRecordSnapshot): void {
@@ -189,7 +179,8 @@ export function createPluginRegistrationTransaction(params: {
   rollbackGlobalSideEffects?: () => void;
   /** Active PluginRecord being registered by the caller (mutated during
    *  register() before being pushed to registry.plugins).  When set, its
-   *  mutable array fields are snapshotted and restored on rollback. */
+   *  mutable metadata fields (arrays, scalars, flags, Dates) are snapshotted
+   *  and restored on rollback while runtime objects keep their identity. */
   activeRecord?: PluginRecord;
 }): PluginRegistrationTransaction {
   const registrySnapshot = params.registry ? snapshotPluginRegistry(params.registry) : undefined;
