@@ -337,16 +337,16 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
  * Build params for a tool-delegate chain guard test.
  * The roundOneReply has NO bracket [[CONTINUE_DELEGATE:...]] so the bracket
  * path stays dormant and only tool delegates (from consumePendingDelegates)
- * are evaluated.
+ * are evaluated. The current chain hop is seeded through the durable SQLite
+ * session owner used by the production drain.
  */
-function buildToolDelegateParams(hopIndex: number): AnnounceFlowParams {
-  const taskPrefix = hopIndex > 0 ? `[continuation:chain-hop:${hopIndex}] ` : "";
-  return {
+async function buildToolDelegateParams(hopIndex: number): Promise<AnnounceFlowParams> {
+  const params: AnnounceFlowParams = {
     childSessionKey: `agent:main:subagent:tool-hop-${hopIndex}`,
     childRunId: `run-tool-hop-${hopIndex}`,
     requesterSessionKey: "agent:main:discord:dm:test-chain",
     requesterDisplayKey: "test-chain",
-    task: `${taskPrefix}Tool-delegated from sub-agent (depth 1): do research`,
+    task: "Tool-delegated from sub-agent (depth 1): do research",
     roundOneReply: "Research complete.", // no bracket delegate
     timeoutMs: 30_000,
     cleanup: "delete",
@@ -354,6 +354,14 @@ function buildToolDelegateParams(hopIndex: number): AnnounceFlowParams {
     silentAnnounce: true,
     wakeOnReturn: true,
   };
+  await writeSessionStore({
+    [params.childSessionKey]: {
+      continuationChainCount: hopIndex,
+      continuationChainStartedAt: Date.now(),
+      continuationChainTokens: 0,
+    },
+  });
+  return params;
 }
 
 const mockedConsumePendingDelegates = vi.mocked(consumePendingDelegates);
@@ -385,7 +393,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
       { task: "tool task at boundary minus one" },
     ]);
 
-    const params = buildToolDelegateParams(9);
+    const params = await buildToolDelegateParams(9);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -394,15 +402,15 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(spawnArgs.task).toContain("[continuation:chain-hop:10]");
-    expect(spawnArgs.task).toContain("Tool-delegated");
+    expect(spawnArgs.task).toContain("Delegated task");
   });
 
   it("rejects child tool-delegate fanout=all when cross-session targeting is disabled", async () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([
       { task: "tool task for all", fanoutMode: "all" },
     ]);
-    const params = buildToolDelegateParams(1);
-    drainSystemEventEntries(params.requesterSessionKey);
+    const params = await buildToolDelegateParams(1);
+    drainSystemEventEntries(params.childSessionKey);
 
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
@@ -410,7 +418,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     });
 
     expect(spawnSpy).not.toHaveBeenCalled();
-    expect(drainSystemEventEntries(params.requesterSessionKey).map((entry) => entry.text)).toEqual(
+    expect(drainSystemEventEntries(params.childSessionKey).map((entry) => entry.text)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("cross-session targeting is disabled by policy"),
       ]),
@@ -421,7 +429,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([
       { task: "tool task for tree", fanoutMode: "tree" },
     ]);
-    const params = buildToolDelegateParams(1);
+    const params = await buildToolDelegateParams(1);
 
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
@@ -438,7 +446,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 5 }));
     mockedConsumePendingDelegates.mockReturnValueOnce([{ task: "tool task exactly at boundary" }]);
 
-    const params = buildToolDelegateParams(4);
+    const params = await buildToolDelegateParams(4);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -454,7 +462,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
       { task: "matured delayed tool task", delayMs: 60_000 },
     ]);
 
-    const params = buildToolDelegateParams(1);
+    const params = await buildToolDelegateParams(1);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -469,7 +477,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     // childChainHop=10, nextToolHop=11 > maxChainLength(10) → rejected
     mockedConsumePendingDelegates.mockReturnValueOnce([{ task: "tool task beyond boundary" }]);
 
-    const params = buildToolDelegateParams(10);
+    const params = await buildToolDelegateParams(10);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -478,15 +486,14 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     expect(spawnSpy).not.toHaveBeenCalled();
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledWith(
       expect.objectContaining({ task: "tool task beyond boundary" }),
-      expect.stringContaining("chain length"),
-      "Delegate rejected",
+      expect.stringContaining("chain-capped"),
     );
   });
 
   it("rejects tool delegate well beyond maxChainLength", async () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([{ task: "tool task way beyond boundary" }]);
 
-    const params = buildToolDelegateParams(15);
+    const params = await buildToolDelegateParams(15);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -500,7 +507,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     const second = { task: "second over-cap delegate", flowId: "flow-2", expectedRevision: 4 };
     mockedConsumePendingDelegates.mockReturnValueOnce([first, second]);
 
-    const params = buildToolDelegateParams(10);
+    const params = await buildToolDelegateParams(10);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -509,13 +516,11 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     expect(spawnSpy).not.toHaveBeenCalled();
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledWith(
       first,
-      expect.stringContaining("chain length"),
-      "Delegate rejected",
+      expect.stringContaining("chain-capped"),
     );
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledWith(
       second,
-      expect.stringContaining("chain length"),
-      "Delegate rejected",
+      expect.stringContaining("chain-capped"),
     );
   });
 
@@ -527,7 +532,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
       error: "policy denied",
     });
 
-    const params = buildToolDelegateParams(1);
+    const params = await buildToolDelegateParams(1);
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -536,8 +541,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledWith(
       delegate,
-      expect.stringContaining("forbidden"),
-      "Delegate rejected",
+      expect.stringContaining("DELEGATE spawn forbidden"),
     );
   });
 
@@ -547,7 +551,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([delegate]);
 
     // hop 2 → next=3 = maxChainLength → allowed
-    const paramsAllow = buildToolDelegateParams(2);
+    const paramsAllow = await buildToolDelegateParams(2);
     await runSubagentAnnounceFlow(paramsAllow);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -558,7 +562,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([delegate]);
 
     // hop 3 → next=4 > maxChainLength → rejected
-    const paramsReject = buildToolDelegateParams(3);
+    const paramsReject = await buildToolDelegateParams(3);
     await runSubagentAnnounceFlow(paramsReject);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);

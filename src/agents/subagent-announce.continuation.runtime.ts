@@ -155,6 +155,7 @@ async function drainChildContinuationQueue(params: {
         agentThreadId: params.requesterOrigin?.threadId,
       },
       maxChainLength: config.maxChainLength,
+      config,
       ...(forceDispatch ? { dispatchQueuedRegardlessOfDelay: true } : {}),
       loadFreshChainState,
       persistChainState: async (advanced) => {
