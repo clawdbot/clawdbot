@@ -194,6 +194,7 @@ export const TARGET_KEYS = [
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.visibleReplies",
+  "messages.pairingTemplate",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",

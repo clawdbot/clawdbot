@@ -8,10 +8,11 @@ export function buildPairingReply(params: {
   channel: PairingChannel;
   idLine: string;
   code: string;
+  template?: string;
 }): string {
-  const { channel, idLine, code } = params;
+  const { channel, idLine, code, template } = params;
   const approveCommand = formatCliCommand(`openclaw pairing approve ${channel} ${code}`);
-  return [
+  const defaultReply = [
     "OpenClaw: access not configured.",
     "",
     idLine,
@@ -25,4 +26,17 @@ export function buildPairingReply(params: {
     approveCommand,
     "```",
   ].join("\n");
+  if (template === undefined) {
+    return defaultReply;
+  }
+  const variables = {
+    channel,
+    senderIdLine: idLine,
+    code,
+    approveCommand,
+  };
+  return template.replaceAll(
+    /\{(channel|senderIdLine|code|approveCommand)\}/g,
+    (_match, name: keyof typeof variables) => variables[name],
+  );
 }

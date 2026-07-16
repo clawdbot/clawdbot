@@ -3435,6 +3435,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Session
   - H2: Messages
   - H3: Response prefix
+  - H3: Pairing reply template
   - H3: Ack reaction
   - H3: Queue
   - H3: Inbound debounce

@@ -32,6 +32,8 @@ Pairing codes:
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
 - Pending DM pairing requests are capped at **3 per channel account**; additional requests are ignored until one expires or is approved.
 
+To customize the reply globally, set `messages.pairingTemplate`. The template can include the pairing code, sender identifier line, channel, and approval command. See [Pairing reply template](/gateway/config-agents#pairing-reply-template).
+
 ### Approve from the Control UI
 
 Open **Settings → Channels → DM access requests**. The queue combines pending
