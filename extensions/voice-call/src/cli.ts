@@ -1,6 +1,7 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -766,27 +767,34 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const initial = fs.readFileSync(file, "utf8");
-        const lines = initial.split("\n").filter(Boolean);
+        const initial = fs.readFileSync(file);
+        let decoder = new StringDecoder("utf8");
+        const initialLines = decoder.write(initial).split("\n");
+        let pendingLine = initialLines.pop() ?? "";
+        const lines = initialLines.filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
 
-        let offset = Buffer.byteLength(initial, "utf8");
+        let offset = initial.length;
         for (;;) {
           try {
             const stat = fs.statSync(file);
             if (stat.size < offset) {
               offset = 0;
+              decoder = new StringDecoder("utf8");
+              pendingLine = "";
             }
             if (stat.size > offset) {
               const fd = fs.openSync(file, "r");
               try {
                 const buf = Buffer.alloc(stat.size - offset);
-                fs.readSync(fd, buf, 0, buf.length, offset);
-                offset = stat.size;
-                const text = buf.toString("utf8");
-                for (const line of text.split("\n").filter(Boolean)) {
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+                offset += bytesRead;
+                const text = decoder.write(buf.subarray(0, bytesRead));
+                const completeLines = `${pendingLine}${text}`.split("\n");
+                pendingLine = completeLines.pop() ?? "";
+                for (const line of completeLines.filter(Boolean)) {
                   writeStdoutLine(line);
                 }
               } finally {
